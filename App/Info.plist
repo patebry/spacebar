@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key><string>__APP_ID__</string>
+	<key>CFBundleName</key><string>__APP_NAME__</string>
+	<key>CFBundleDisplayName</key><string>__APP_NAME__</string>
+	<key>CFBundleExecutable</key><string>__APP_EXE__</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleShortVersionString</key><string>__VERSION__</string>
+	<key>CFBundleVersion</key><string>__BUILD__</string>
+	<key>CFBundleIconFile</key><string>AppIcon</string>
+	<key>CFBundleDevelopmentRegion</key><string>en</string>
+	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key><string>__APP_ID__.settings</string>
+			<key>CFBundleURLSchemes</key><array><string>spacebar-md</string></array>
+		</dict>
+	</array>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key><string>net.daringfireball.markdown</string>
+			<key>UTTypeDescription</key><string>Markdown document</string>
+			<key>UTTypeConformsTo</key><array><string>public.plain-text</string></array>
+			<key>UTTypeReferenceURL</key><string>https://daringfireball.net/projects/markdown/</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key><array><string>md</string><string>markdown</string><string>mdown</string><string>mkd</string><string>mkdn</string></array>
+				<key>public.mime-type</key><array><string>text/markdown</string></array>
+			</dict>
+		</dict>
+	</array>
+	<key>LSMinimumSystemVersion</key><string>13.0</string>
+	<key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
+	<key>NSPrincipalClass</key><string>NSApplication</string>
+	<key>NSHighResolutionCapable</key><true/>
+	<key>NSHumanReadableCopyright</key><string>Quick Look for Markdown.</string>
+</dict>
+</plist>

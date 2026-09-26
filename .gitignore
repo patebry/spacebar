@@ -1,0 +1,5 @@
+vendor-build/
+build/
+.DS_Store
+__pycache__/
+.sign-id

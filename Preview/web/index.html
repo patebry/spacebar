@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src spacebar://bundle/app.js spacebar://bundle/vendor/; style-src spacebar: 'unsafe-inline'; img-src spacebar: https: data:; font-src spacebar:; base-uri spacebar:; form-action 'none'">
+<base id="base" href="spacebar://bundle/">
+<link rel="stylesheet" href="spacebar://bundle/base.css">
+<link rel="stylesheet" href="spacebar://bundle/style.css">
+<link rel="stylesheet" href="spacebar://bundle/themes.css">
+<link rel="stylesheet" href="spacebar://bundle/code.css">
+<script src="spacebar://bundle/vendor/markdown-it.min.js"></script>
+<script src="spacebar://bundle/vendor/katex.min.js"></script>
+<script src="spacebar://bundle/vendor/texmath.js"></script>
+<script src="spacebar://bundle/vendor/highlight.min.js"></script>
+<script src="spacebar://bundle/vendor/purify.min.js"></script>
+</head>
+<body>
+<nav id="sidebar" hidden></nav>
+<div id="toolbar">
+  <span id="status"></span><span id="stats"></span>
+  <button id="aa" type="button" title="Appearance" aria-haspopup="dialog" aria-expanded="false">Aa</button>
+  <button id="edit" type="button">Open in editor</button>
+  <div id="aa-pop" role="dialog" aria-label="Appearance" hidden>
+    <div class="pop-size">
+      <button id="aa-smaller" type="button" data-step="-1" title="Smaller text">A</button>
+      <span id="aa-size"></span>
+      <button id="aa-larger" type="button" data-step="1" title="Larger text">A</button>
+    </div>
+    <div class="pop-themes" id="aa-themes" role="radiogroup" aria-label="Theme"></div>
+    <div class="pop-seg" id="aa-width" role="radiogroup" aria-label="Width">
+      <button type="button" role="radio" data-key="width" data-value="narrow">Narrow</button>
+      <button type="button" role="radio" data-key="width" data-value="medium">Medium</button>
+      <button type="button" role="radio" data-key="width" data-value="wide">Wide</button>
+    </div>
+    <div class="pop-seg" id="aa-font" role="radiogroup" aria-label="Font">
+      <button type="button" role="radio" data-key="bodyFont" data-value="system">System</button>
+      <button type="button" role="radio" data-key="bodyFont" data-value="serif" class="serif">Serif</button>
+    </div>
+    <div class="pop-sep"></div>
+    <button id="aa-settings" type="button">Settings…</button>
+  </div>
+</div>
+<main id="doc"></main>
+<nav id="toc" aria-label="Contents" hidden></nav>
+<script src="spacebar://bundle/app.js"></script>
+</body>
+</html>

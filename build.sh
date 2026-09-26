@@ -1,0 +1,165 @@
+#!/bin/bash
+# Build, sign, install and register spacebar without an Xcode project.
+#   READ_ACCESS=abs-ro|abs-rw|none   sandbox file exception for files beside the document (default abs-ro)
+#   PROBE=1                   compile the key-event instrumentation in Preview/Probe.swift (test builds only)
+#   ARCHS="arm64 x86_64"      architectures to build (default both: a universal binary)
+#   NO_INSTALL=1              build and sign only, into build/; never touches ~/Applications or pluginkit (also
+#                             BUILD_ONLY=1 or --no-install). Used by CI.
+#   INSTALL_DIR=...           default ~/Applications
+#   VERSION=... BUILD_NUMBER=...  CFBundleShortVersionString (default 0.1.0) and CFBundleVersion (default 1)
+#   SIGN_ID=...               codesigning identity; default the name in .sign-id (untracked), else the first valid local
+#                             identity, else ad-hoc. SIGN_ID=- forces ad-hoc. A stable identity keeps TCC grants across rebuilds.
+set -euo pipefail
+cd "$(dirname "$0")"
+for arg in "$@"; do
+  case $arg in
+    --no-install) NO_INSTALL=1 ;;
+    *) echo "usage: ./build.sh [--no-install]" >&2; exit 2 ;;
+  esac
+done
+[ "${BUILD_ONLY:-0}" = 1 ] && NO_INSTALL=1
+
+APP_NAME=spacebar
+APP_ID=md.spacebar
+APPEX_ID=md.spacebar.preview
+FOLDERS_ID=md.spacebar.preview.folders
+APP_EXE=Spacebar
+APPEX_EXE=SpacebarPreview
+FOLDERS_EXE=SpacebarFolders
+WRITER_EXE=SpacebarWriter           # each appex embeds its own writer as <appex ID>.writer
+# Claimed only by this extension: `qlmanage -c $ROUTE_TYPE -p file` reaches it even where another extension claims markdown.
+ROUTE_TYPE=md.spacebar.qlmanage
+PREFERRED_SIGN_ID=$(head -n1 .sign-id 2>/dev/null || true)
+# Pre-rename installs, each "<app>:<appex> ...": unregistered and removed so two copies do not both claim markdown.
+LEGACY_INSTALLS=("MDPeek.app:MDPeekPreview" "spacebar.md.app:SpacebarPreview SpacebarFolders")
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+
+READ_ACCESS=${READ_ACCESS:-abs-ro}
+INSTALL_DIR=${INSTALL_DIR:-$HOME/Applications}
+ARCHS=${ARCHS:-arm64 x86_64}
+VERSION=${VERSION:-0.1.0}
+BUILD_NUMBER=${BUILD_NUMBER:-1}
+case $VERSION.$BUILD_NUMBER in *[!0-9.]*|.*|*..*) echo "VERSION and BUILD_NUMBER must be numeric, like 1.2.3 and 4" >&2; exit 2 ;; esac
+MIN_OS=13.0
+OUT=build
+APP=$OUT/$APP_NAME.app
+OBJ=$OUT/obj
+
+if [ -z "${SIGN_ID:-}" ]; then
+  identities=$(security find-identity -v -p codesigning 2>/dev/null || true)
+  if [ -n "$PREFERRED_SIGN_ID" ] && grep -qF "\"$PREFERRED_SIGN_ID\"" <<<"$identities"; then
+    SIGN_ID=$PREFERRED_SIGN_ID
+  else
+    SIGN_ID=$(sed -nE 's/^ *[0-9]+\) ([0-9A-F]{40}) ".*"$/\1/p' <<<"$identities" | head -1)
+    SIGN_ID=${SIGN_ID:--}
+  fi
+fi
+
+rm -rf "$OUT"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$OBJ"
+
+# compile <output> <swiftc args...>: one slice per architecture, joined with lipo.
+compile() {
+  local out=$1; shift
+  local slices=()
+  for arch in $ARCHS; do
+    local slice="$OBJ/$(basename "$out").$arch"
+    xcrun swiftc -swift-version 5 -O -target "$arch-apple-macos$MIN_OS" "$@" -o "$slice"
+    slices+=("$slice")
+  done
+  mkdir -p "$(dirname "$out")"
+  lipo -create "${slices[@]}" -output "$out"
+}
+
+# plist <template> <output> [appex ID] [appex executable] [display name] [content types]
+plist() {
+  sed -e "s#__APP_NAME__#$APP_NAME#g" -e "s#__APP_ID__#$APP_ID#g" -e "s#__APP_EXE__#$APP_EXE#g" -e "s#__MIN_OS__#$MIN_OS#g" -e "s#__VERSION__#$VERSION#g" -e "s#__BUILD__#$BUILD_NUMBER#g" \
+      -e "s#__APPEX_ID__#${3:-}#g" -e "s#__APPEX_EXE__#${4:-}#g" -e "s#__APPEX_DISPLAY__#${5:-}#g" -e "s#__CONTENT_TYPES__#${6:-}#g" \
+      -e "s#__WRITER_ID__#${3:-}.writer#g" -e "s#__WRITER_EXE__#$WRITER_EXE#g" "$1" > "$2"
+}
+
+WRITER_BIN=$OBJ/$WRITER_EXE
+compile "$WRITER_BIN" -module-name "$WRITER_EXE" Writer/main.swift Writer/EditTextView.swift Writer/FileWrite.swift Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift
+PREVIEW_BIN=$OBJ/$APPEX_EXE
+compile "$PREVIEW_BIN" -application-extension -module-name "$APPEX_EXE" \
+  Preview/PreviewViewController.swift Preview/SettingsStore.swift Preview/Probe.swift \
+  Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/WebShell.swift \
+  $( [ "${PROBE:-0}" = 1 ] && echo -D PROBE ) \
+  -framework QuickLookUI -framework WebKit -Xlinker -e -Xlinker _NSExtensionMain
+compile "$APP/Contents/MacOS/$APP_EXE" -parse-as-library -module-name "$APP_EXE" App/*.swift Shared/Settings.swift Shared/WebShell.swift \
+  -framework WebKit -framework SwiftUI
+plist App/Info.plist "$APP/Contents/Info.plist"
+if [ -f App/AppIcon.icns ]; then cp App/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"; fi
+
+ENT=$OUT/Preview.entitlements
+{
+  echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>'
+  echo '<key>com.apple.security.app-sandbox</key><true/>'
+  echo '<key>com.apple.security.files.user-selected.read-only</key><true/>'
+  # WebKit's WebContent/Networking helpers crash-loop inside a sandboxed appex without this; only remote images are fetched.
+  [ "${NET:-1}" = 1 ] && echo '<key>com.apple.security.network.client</key><true/>'
+  if [ "$READ_ACCESS" = abs-ro ]; then
+    echo '<key>com.apple.security.temporary-exception.files.absolute-path.read-only</key><array><string>/</string></array>'
+  fi
+  if [ "$READ_ACCESS" = abs-rw ]; then
+    echo '<key>com.apple.security.temporary-exception.files.absolute-path.read-write</key><array><string>/</string></array>'
+  fi
+  echo '</dict></plist>'
+} > "$ENT"
+
+# appex <bundle ID> <executable> <display name> <content types>: the one preview binary under the given name and ID, with its
+# own writer. The controller tells the two apart by bundle ID.
+appex() {
+  local dir=$APP/Contents/PlugIns/$2.appex
+  local xpc=$dir/Contents/XPCServices/$1.writer.xpc
+  mkdir -p "$dir/Contents/MacOS" "$dir/Contents/Resources" "$xpc/Contents/MacOS"
+  cp "$PREVIEW_BIN" "$dir/Contents/MacOS/$2"
+  cp "$WRITER_BIN" "$xpc/Contents/MacOS/$WRITER_EXE"
+  cp -R Preview/web "$dir/Contents/Resources/web"
+  plist Preview/Info.plist "$dir/Contents/Info.plist" "$1" "$2" "$3" "$4"
+  plist Writer/Info.plist "$xpc/Contents/Info.plist" "$1" "$2" "$3" "$4"
+  codesign --force --sign "$SIGN_ID" --timestamp=none "$xpc"
+  codesign --force --sign "$SIGN_ID" --timestamp=none --entitlements "$ENT" "$dir"
+}
+types() { printf '<string>%s</string>' "$@"; }
+appex "$APPEX_ID" "$APPEX_EXE" "$APP_NAME" "$(types net.daringfireball.markdown public.markdown "$ROUTE_TYPE")"
+appex "$FOLDERS_ID" "$FOLDERS_EXE" "$APP_NAME Folders" "$(types public.folder public.directory)"
+codesign --force --sign "$SIGN_ID" --timestamp=none "$APP"
+rm -rf "$OBJ"
+echo "built $APP ($(lipo -archs "$APP/Contents/MacOS/$APP_EXE"), macOS $MIN_OS+)"
+[ "${NO_INSTALL:-0}" = 1 ] && exit 0
+
+mkdir -p "$INSTALL_DIR"
+for legacy in "${LEGACY_INSTALLS[@]}"; do
+  LEGACY="$INSTALL_DIR/${legacy%%:*}"
+  [ -d "$LEGACY" ] || continue
+  for ex in ${legacy#*:}; do pluginkit -r "$LEGACY/Contents/PlugIns/$ex.appex" 2>/dev/null || true; done
+  "$LSREGISTER" -u "$LEGACY" 2>/dev/null || true
+  rm -rf "$LEGACY"
+  echo "removed $LEGACY"
+done
+DEST="$INSTALL_DIR/$APP_NAME.app"
+for ex in "$APPEX_EXE" "$FOLDERS_EXE"; do pluginkit -r "$DEST/Contents/PlugIns/$ex.appex" 2>/dev/null || true; done
+rm -rf "$DEST"
+cp -R "$APP" "$DEST"
+"$LSREGISTER" -f -R "$DEST"
+pluginkit -a "$DEST/Contents/PlugIns/$APPEX_EXE.appex"
+pluginkit -a "$DEST/Contents/PlugIns/$FOLDERS_EXE.appex"
+# Folder previews are opt-in: the folders extension is enabled only while settings.json turns folderMode on. The app keeps
+# the two in step when the setting changes.
+# The support folder keeps its legacy name (spacebar.md) until the app or a writer first runs and moves it.
+SETTINGS="$HOME/Library/Application Support/$APP_NAME/settings.json"
+[ -e "$(dirname "$SETTINGS")" ] || SETTINGS="$HOME/Library/Application Support/spacebar.md/settings.json"
+if grep -qE '"folderMode"[[:space:]]*:[[:space:]]*true' "$SETTINGS" 2>/dev/null; then
+  pluginkit -e use -i "$FOLDERS_ID"
+else
+  pluginkit -e ignore -i "$FOLDERS_ID"
+fi
+# A running extension keeps serving its old code until it exits. It is not killed: it may be mid-write for an open preview.
+running=$(pgrep -x "$APPEX_EXE" || true)
+[ -n "$running" ] && echo "note: $APPEX_EXE still running (pid $running); close its Quick Look preview to load this build"
+qlmanage -r >/dev/null 2>&1
+qlmanage -r cache >/dev/null 2>&1
+echo "installed $DEST (READ_ACCESS=$READ_ACCESS PROBE=${PROBE:-0} SIGN_ID=$SIGN_ID)"
+pluginkit -mAvvv -i "$APPEX_ID" | sed -n '1,4p'
+pluginkit -m -i "$FOLDERS_ID"

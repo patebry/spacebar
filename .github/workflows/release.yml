@@ -1,0 +1,38 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unit tests
+        run: for t in settings scheme linkpolicy cas editkeys; do test/$t/run.sh; done
+
+      - name: Build (universal, ad-hoc signed, not installed)
+        run: SIGN_ID=- VERSION="${GITHUB_REF_NAME#v}" BUILD_NUMBER="$GITHUB_RUN_NUMBER" ./build.sh --no-install
+
+      - name: Package
+        working-directory: build
+        run: |
+          archs=$(lipo -archs spacebar.app/Contents/MacOS/Spacebar)
+          echo "$archs"
+          case $archs in *arm64*x86_64*|*x86_64*arm64*) ;; *) echo "not universal"; exit 1 ;; esac
+          codesign --verify --deep --strict spacebar.app
+          ditto -c -k --keepParent spacebar.app spacebar.zip
+          shasum -a 256 spacebar.zip > spacebar.zip.sha256
+          cat spacebar.zip.sha256
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" build/spacebar.zip build/spacebar.zip.sha256
+          --verify-tag --title "spacebar $GITHUB_REF_NAME" --generate-notes

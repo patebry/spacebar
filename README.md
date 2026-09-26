@@ -1,0 +1,114 @@
+# spacebar
+
+Press Space on a Markdown file in Finder and read it properly: headings, tables, task lists, code highlighting, math and
+Mermaid diagrams, in six themes. Click a block to edit it in place, or tick a task box, and the file is saved. Free and
+open source, for macOS 13 and later (Apple silicon and Intel).
+
+[spacebar.patebryant.com](https://spacebar.patebryant.com)
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/evidence/themes/theme-github-dark.png">
+  <img alt="A Markdown file in spacebar's Quick Look preview: math, highlighted code, a Mermaid diagram and a task list" src="docs/evidence/themes/theme-github-light.png" width="720">
+</picture>
+
+## Install
+
+```sh
+curl -fsSL https://spacebar.patebryant.com/install.sh | sh
+```
+
+Then select a `.md` file in Finder and press Space.
+
+spacebar is **not notarized**: there is no Apple Developer ID behind it yet. Files that curl downloads are not quarantined,
+so Gatekeeper does not stop the app, but it also means you are trusting this repository's build rather than Apple's check.
+Read [`scripts/install.sh`](scripts/install.sh) before you run it. It:
+
+1. checks for macOS 13 or later;
+2. asks the GitHub API for the latest release (or uses `SPACEBAR_VERSION=vX.Y.Z`), downloads `spacebar.zip` and
+   `spacebar.zip.sha256`, and stops unless the SHA-256 matches;
+3. copies the new app into `~/Applications` beside the old one (no `sudo`);
+4. if `~/Applications/spacebar.app` exists, quits it, unregisters its extensions and deletes it (that path only), then
+   moves the new copy into its place;
+5. registers it with `lsregister` and `pluginkit`, turns the Markdown preview on, and resets Quick Look (`qlmanage -r`);
+6. lists other Quick Look extensions that are turned on and also claim Markdown, such as QLMarkdown, and says how to turn
+   them off. It never turns anything off itself.
+
+The release zip is built by [GitHub Actions](.github/workflows/release.yml) from the tagged commit, ad-hoc signed.
+`install.sh --help` lists its options, including `--dry-run`.
+
+## Uninstall
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh
+```
+
+This unregisters and deletes `~/Applications/spacebar.app`. To also delete your settings and themes in
+`~/Library/Application Support/spacebar`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh -s -- --purge
+```
+
+## Build from source
+
+Requirements: macOS 13+ and the Xcode command-line tools (`xcode-select --install`); the full Xcode app is not needed.
+
+```sh
+git clone https://github.com/patebry/spacebar.git
+cd spacebar
+./build.sh              # build, sign, install to ~/Applications and register
+./build.sh --no-install # build into build/spacebar.app only
+```
+
+`build.sh` signs with the identity named in an untracked `.sign-id` file, else the first code-signing identity in your
+keychain, else ad-hoc (`SIGN_ID=-` forces ad-hoc). A stable identity keeps macOS from asking again about the extension's
+sandbox container after each rebuild. Other options are documented at the top of the script.
+
+Tests that run off screen, without Quick Look (the test builds target Apple silicon):
+
+```sh
+for t in settings scheme linkpolicy cas editkeys; do test/$t/run.sh; done
+python3 test/webcheck.py && python3 test/webthemes.py && python3 test/remoteimages.py
+```
+
+The other scripts in `test/` drive real Quick Look windows and synthetic input; run them on a machine you are not using.
+
+## How it works
+
+```
+spacebar.app                         settings window (SwiftUI)
+└─ PlugIns/SpacebarPreview.appex     sandboxed Quick Look preview: WKWebView + markdown-it, KaTeX, highlight.js,
+   │                                 Mermaid, DOMPurify, all bundled; no network code of its own
+   └─ XPCServices/…writer.xpc        small unsandboxed helper: saves edits, opens links, owns the inline-edit panel
+└─ PlugIns/SpacebarFolders.appex     the same preview for folders (off unless you enable folder previews)
+```
+
+Quick Look extensions never receive key events, so inline editing uses a click-through, non-activating panel owned by the
+writer service; Finder stays in front. Saves are compare-and-swap: if the file changed on disk, the external change wins.
+[FINDINGS.md](FINDINGS.md) has the details and measurements.
+
+## Privacy and security
+
+- No analytics, telemetry, accounts or update checks. Settings are a JSON file in `~/Library/Application Support/spacebar`.
+- Remote images are off by default (fetching one tells its server when you opened the document). A blocked image offers a
+  one-time load for that document.
+- A Markdown file is treated as hostile. The page runs under a strict Content Security Policy (bundled scripts only, no
+  inline scripts, frames, forms or connections), and DOMPurify sanitizes everything before it reaches the page.
+- The writer only writes to the Markdown file on screen, only opens http(s) links or non-executable documents, and only
+  accepts messages from the extension's own page.
+- The preview extension has a read-only sandbox exception for the whole disk, so relative images beside a document load.
+
+Found a security problem? Please open a GitHub security advisory on this repository rather than a public issue.
+
+## Contributing
+
+Issues and pull requests are welcome. Please run the off-screen tests above before sending a change, and keep new
+dependencies out of the extension unless they are vendored with their licence (see `Preview/web/vendor/VERSIONS.txt` and
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
+
+## Licence
+
+MIT, © 2026 Pate Bryant. See [LICENSE](LICENSE). Bundled third-party code and fonts keep their own licences, listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Not affiliated with Apple. Mac, macOS, Finder and Quick Look are trademarks of Apple Inc.

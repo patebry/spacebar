@@ -1,0 +1,92 @@
+#!/bin/sh
+# spacebar uninstaller: https://github.com/patebry/spacebar
+#
+#   curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh
+#
+# Quits ~/Applications/spacebar.app, unregisters its Quick Look extensions, and deletes it. Settings in
+# ~/Library/Application Support/spacebar are kept unless you pass --purge. Safe to run more than once.
+set -eu
+
+APP_NAME=spacebar.app
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+
+usage() {
+  cat <<'EOF'
+Remove spacebar from ~/Applications.
+
+usage: uninstall.sh [--purge] [--dry-run] [--no-register] [--help]
+
+  --purge        also delete your settings and themes in ~/Library/Application Support/spacebar
+  --dry-run      print what would change without changing anything
+  --no-register  delete files only: skip quitting, pluginkit, lsregister and qlmanage
+                 (or set SPACEBAR_SKIP_REGISTER=1)
+  --help         show this help
+EOF
+}
+
+say() { printf '%s\n' "$*"; }
+run() {
+  if [ "$DRY_RUN" = 1 ]; then say "would run: $*"; else "$@"; fi
+}
+run_quiet() {
+  if [ "$DRY_RUN" = 1 ]; then say "would run: $*"; else "$@" >/dev/null 2>&1; fi
+}
+path_regex() { printf '^%s/' "$1" | sed 's/[][\.*$+?(){}|]/\\&/g'; }
+
+# Everything runs from main, called on the last line, so a download cut short by the network runs nothing.
+main() {
+PURGE=0
+DRY_RUN=0
+SKIP_REGISTER=${SPACEBAR_SKIP_REGISTER:-0}
+while [ $# -gt 0 ]; do
+  case $1 in
+    --purge) PURGE=1 ;;
+    --dry-run) DRY_RUN=1 ;;
+    --no-register) SKIP_REGISTER=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
+  esac
+  shift
+done
+
+DEST="$HOME/Applications/$APP_NAME"
+SUPPORT="$HOME/Library/Application Support/spacebar"
+LEGACY_SUPPORT="$HOME/Library/Application Support/spacebar.md"
+
+if [ -e "$DEST" ]; then
+  if [ "$SKIP_REGISTER" != 1 ]; then
+    run pkill -f "$(path_regex "$DEST")Contents/MacOS/" || true
+    for appex in "$DEST"/Contents/PlugIns/*.appex; do
+      [ -d "$appex" ] && { run pluginkit -r "$appex" || true; }
+    done
+    run "$LSREGISTER" -u "$DEST" || true
+  fi
+  run rm -rf "$DEST"
+  if [ "$SKIP_REGISTER" != 1 ]; then
+    run_quiet qlmanage -r || true
+    run_quiet qlmanage -r cache || true
+  fi
+  [ "$DRY_RUN" = 1 ] || say "Removed $DEST"
+else
+  say "spacebar is not installed at $DEST"
+fi
+
+if [ "$PURGE" = 1 ]; then
+  for dir in "$SUPPORT" "$LEGACY_SUPPORT"; do
+    if [ -e "$dir" ]; then
+      run rm -rf "$dir"
+      [ "$DRY_RUN" = 1 ] || say "Removed $dir"
+    fi
+  done
+  # Deleting another app's sandbox container makes macOS ask for permission, so it is left to you.
+  for id in md.spacebar.preview md.spacebar.preview.folders; do
+    if [ -e "$HOME/Library/Containers/$id" ]; then
+      say "Left the sandbox container ~/Library/Containers/$id; delete it in Finder if you like."
+    fi
+  done
+elif [ -e "$SUPPORT" ]; then
+  say "Kept your settings in $SUPPORT (pass --purge to delete them)."
+fi
+}
+
+main "$@"

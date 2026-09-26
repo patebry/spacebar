@@ -1,0 +1,19 @@
+/* highlight.js token classes, coloured by the active code theme's --hl-* variables (see themes.css). */
+@layer sb-code {
+  pre > code { color: var(--hl-fg); }
+  .hljs-comment, .hljs-quote, .hljs-code, .hljs-formula { color: var(--hl-comment); font-style: italic; }
+  .hljs-keyword, .hljs-selector-tag, .hljs-doctag, .hljs-template-tag, .hljs-variable.language_, .hljs-meta .hljs-keyword { color: var(--hl-keyword); }
+  .hljs-string, .hljs-regexp, .hljs-char, .hljs-meta .hljs-string, .hljs-selector-attr, .hljs-template-variable { color: var(--hl-string); }
+  .hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet, .hljs-link { color: var(--hl-number); }
+  .hljs-title, .hljs-title.function_, .hljs-section, .hljs-selector-id { color: var(--hl-title); }
+  .hljs-type, .hljs-title.class_, .hljs-title.class_.inherited__, .hljs-selector-class { color: var(--hl-type); }
+  .hljs-attr, .hljs-attribute, .hljs-property, .hljs-selector-pseudo { color: var(--hl-attr); }
+  .hljs-built_in, .hljs-name { color: var(--hl-builtin); }
+  .hljs-meta { color: var(--hl-meta); }
+  .hljs-variable { color: var(--hl-variable); }
+  .hljs-addition { color: var(--hl-addition); background: color-mix(in srgb, var(--hl-addition) 10%, transparent); }
+  .hljs-deletion { color: var(--hl-deletion); background: color-mix(in srgb, var(--hl-deletion) 10%, transparent); }
+  .hljs-section, .hljs-strong { font-weight: 600; }
+  .hljs-emphasis { font-style: italic; }
+  .hljs-link { text-decoration: underline; }
+}

@@ -1,0 +1,53 @@
+/* Every bundled rule lives in a layer, so unlayered CSS (the user's theme, custom.css, and the <style> mermaid puts in each
+   diagram) wins over it without specificity games. Later layers win: themes and code tokens come last. The click-safety and
+   containment rules (here and in style.css) are !important because a layered !important beats every unlayered declaration,
+   !important or not. */
+@layer sb-vendor, sb-base, sb-app, sb-themes, sb-code;
+@import url("vendor/katex.min.css") layer(sb-vendor);
+
+@layer sb-base {
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff; --fg: #1d1d1f; --muted: #6e6e73; --border: #d2d2d7; --code-bg: #f5f5f7;
+    --link: #0066cc; --accent: #007aff; --sel: #b3d7ff; --quote: #6e6e73;
+    --hl-bg: #f5f5f7; --hl-fg: #1d1d1f; --hl-keyword: #9b2393; --hl-string: #c41a16; --hl-comment: #5d6c79; --hl-number: #1c00cf;
+    --hl-title: #0f68a0; --hl-type: #3900a0; --hl-attr: #815f03; --hl-builtin: #6c36a9; --hl-meta: #643820; --hl-variable: #326d74;
+    --hl-addition: #1a7f37; --hl-deletion: #cf222e;
+    --font-body: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+    --font-heading: var(--font-body);
+    --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+    --font-size: 15px;
+    --line-height: 1.6;
+    --measure: 760px;
+    --diagram-edge: color-mix(in srgb, var(--accent) 70%, var(--bg)); --diagram-line: var(--muted);
+  }
+  :root[data-font=serif] { --font-body: ui-serif, "New York", Charter, Georgia, serif; }
+  :root[data-font=rounded] { --font-body: ui-rounded, "SF Pro Rounded", -apple-system, sans-serif; }
+  :root[data-font=mono] { --font-body: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace; }
+  :root[data-mono=menlo] { --font-mono: Menlo, monospace; }
+  :root[data-mono=monaco] { --font-mono: Monaco, monospace; }
+  :root[data-mono=courier] { --font-mono: "Courier New", Courier, monospace; }
+  :root[data-width=narrow] { --measure: 640px; }
+  :root[data-width=wide] { --measure: 960px; }
+  :root[data-width=full] { --measure: none; }
+
+  html { background: var(--bg); color: var(--fg); -webkit-text-size-adjust: none; }
+  body {
+    margin: 0; display: flex; align-items: flex-start; min-height: 100vh;
+    font-family: var(--font-body); font-size: var(--font-size); line-height: var(--line-height);
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; font-kerning: normal;
+  }
+  [hidden] { display: none !important; }
+
+  #sidebar { width: 200px; flex: none; align-self: stretch; border-right: 1px solid var(--border); padding: 12px 0; height: 100vh; overflow: auto; position: sticky; top: 0; box-sizing: border-box; }
+  #doc { flex: 1 1 auto; min-width: 0; max-width: var(--measure); margin: 0 auto; padding: 44px 40px 80px; overflow-x: auto;
+    contain: paint !important; position: relative !important; isolation: isolate !important; }
+  #toc { flex: none; width: 210px; position: sticky; top: 0; max-height: 100vh; overflow: auto; box-sizing: border-box; padding: 56px 20px 24px 4px; }
+  #toolbar { position: fixed !important; top: 8px; right: 12px; display: flex; gap: 6px; align-items: center; z-index: 10 !important; }
+  :root.sb-embedded #toolbar { display: none !important; }
+  :root.sb-embedded #doc { padding-top: 24px; }
+  :root.sb-embedded body::after { content: ""; position: fixed; left: 0; right: 0; bottom: 0; height: 28px; pointer-events: none;
+    background: linear-gradient(transparent, var(--bg)); }
+  @media (max-width: 899px) { #toc { display: none !important; } }
+  @media (max-width: 560px) { #doc { padding-left: 20px; padding-right: 20px; } }
+}

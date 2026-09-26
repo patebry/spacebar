@@ -63,8 +63,13 @@
   @keyframes blink { 50% { border-color: transparent; } }
 
   /* ---------- sidebar and table of contents ---------- */
-  #sidebar a { display: block; padding: 3px 14px; color: var(--fg); text-decoration: none; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #sidebar a.active { background: var(--code-bg); font-weight: 600; }
+  #sidebar { font: 13px/1.35 -apple-system, BlinkMacSystemFont, sans-serif; -webkit-user-select: none; user-select: none; }
+  #side-head { padding: 44px 16px 6px; font-size: 11px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #side-list { padding: 0 8px 12px; }
+  #sidebar a { display: block; padding: 4px 8px; border-radius: 6px; color: var(--fg); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #sidebar a:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+  #sidebar a.active { background: color-mix(in srgb, var(--accent) 12%, transparent); font-weight: 600; }
+  #side-more { padding: 4px 16px 14px; font-size: 11.5px; color: var(--muted); }
   #toc { font: 12.5px/1.35 -apple-system, BlinkMacSystemFont, sans-serif; }
   #toc .toc-title { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 0 0 8px 12px; }
   #toc a { display: block; padding: 4px 8px 4px 10px; border-left: 2px solid var(--border); color: var(--muted); text-decoration: none;
@@ -75,26 +80,28 @@
   #toc a.active { color: var(--fg); border-left-color: var(--accent); font-weight: 500; }
 
   /* ---------- toolbar and the Aa popover: native chrome, independent of the document theme ---------- */
-  #toolbar {
+  #toolbar, #side-toggle {
     --ui-fg: rgba(0, 0, 0, .85); --ui-muted: rgba(0, 0, 0, .6); --ui-bg: rgba(250, 250, 250, .72); --ui-pop: rgba(246, 246, 246, .95); --ui-edge: rgba(0, 0, 0, .1);
     --ui-hover: rgba(0, 0, 0, .06); --ui-seg: rgba(0, 0, 0, .06); --ui-seg-on: #fff; --ui-accent: #007aff;
     font: 12px/1.3 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--ui-muted);
     -webkit-user-select: none; user-select: none;
   }
   @media (prefers-color-scheme: dark) {
-    #toolbar { --ui-fg: rgba(255, 255, 255, .88); --ui-muted: rgba(255, 255, 255, .62); --ui-bg: rgba(44, 44, 46, .72); --ui-pop: rgba(40, 40, 42, .95); --ui-edge: rgba(255, 255, 255, .12);
+    #toolbar, #side-toggle { --ui-fg: rgba(255, 255, 255, .88); --ui-muted: rgba(255, 255, 255, .62); --ui-bg: rgba(44, 44, 46, .72); --ui-pop: rgba(40, 40, 42, .95); --ui-edge: rgba(255, 255, 255, .12);
       --ui-hover: rgba(255, 255, 255, .08); --ui-seg: rgba(255, 255, 255, .08); --ui-seg-on: rgba(255, 255, 255, .2); --ui-accent: #0a84ff; }
   }
-  @supports (color: -apple-system-control-accent) { #toolbar { --ui-accent: -apple-system-control-accent; } }
+  @supports (color: -apple-system-control-accent) { #toolbar, #side-toggle { --ui-accent: -apple-system-control-accent; } }
   #status:empty, #stats:empty { display: none; }
   #stats { font-variant-numeric: tabular-nums; margin-right: 2px; }
-  #toolbar > button {
+  #toolbar > button, #side-toggle {
     font: inherit; font-weight: 500; color: var(--ui-fg); height: 24px; padding: 0 10px; border-radius: 6px; cursor: default;
     background: var(--ui-bg); border: 0; box-shadow: 0 0 0 .5px var(--ui-edge), 0 1px 2px rgba(0, 0, 0, .06);
     -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px);
   }
-  #toolbar > button:hover { background: color-mix(in srgb, var(--ui-bg) 80%, var(--ui-fg) 8%); }
-  #toolbar > button:active, #toolbar > #aa[aria-expanded=true] { background: color-mix(in srgb, var(--ui-bg) 70%, var(--ui-fg) 16%); }
+  #toolbar > button:hover, #side-toggle:hover { background: color-mix(in srgb, var(--ui-bg) 80%, var(--ui-fg) 8%); }
+  #toolbar > button:active, #toolbar > #aa[aria-expanded=true], #side-toggle:active { background: color-mix(in srgb, var(--ui-bg) 70%, var(--ui-fg) 16%); }
+  #side-toggle { width: 32px; padding: 0; display: grid; place-items: center; color: var(--ui-muted); }
+  #side-toggle:hover, #side-toggle[aria-expanded=true] { color: var(--ui-fg); }
   #toolbar > #aa { font: 600 13px/1 ui-serif, "New York", Georgia, serif; width: 32px; padding: 0; letter-spacing: -.02em; }
 
   #aa-pop {

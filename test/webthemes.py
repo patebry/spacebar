@@ -22,7 +22,8 @@ class Page:
         exe = os.path.join(self.out, 'webcheck')
         subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-O', '-target', 'arm64-apple-macos13.0',
                         os.path.join(ROOT, 'test', 'web', 'main.swift'), os.path.join(ROOT, 'Shared', 'Settings.swift'),
-                        os.path.join(ROOT, 'Shared', 'WebShell.swift'), '-o', exe], check=True)
+                        os.path.join(ROOT, 'Shared', 'WebShell.swift'),
+                        os.path.join(ROOT, 'Shared', 'FolderListing.swift'), '-o', exe], check=True)
         self.proc = subprocess.Popen([exe, WEB], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
                                      env=dict(os.environ, SPACEBAR_SUPPORT_DIR=self.support))
         self.logs = []
@@ -355,8 +356,10 @@ def main():
         page.cmd('@size:800x760')
         check(page.js("return getComputedStyle(document.getElementById('toc')).display") == 'none', 'TOC hidden in a narrow window')
         page.cmd('@size:1100x760')
-        long = os.path.join(page.out, 'toc.md')
-        shutil.copy(os.path.join(ROOT, 'test', 'fixtures', 'img.png'), page.out)
+        # A stable folder name: the sidebar shows it in the screenshot.
+        os.makedirs(os.path.join(page.out, 'notes'), exist_ok=True)
+        long = os.path.join(page.out, 'notes', 'toc.md')
+        shutil.copy(os.path.join(ROOT, 'test', 'fixtures', 'img.png'), os.path.join(page.out, 'notes'))
         open(long, 'w').write(open(fm).read() + '\n' + open(os.path.join(ROOT, 'test', 'fixtures', 'demo.md')).read().replace('# spacebar demo', '## Overview')
                               + '\n## Notes\n\nA closing paragraph with *emphasis*, `code`, and a [link](https://example.com).\n\n### Details\n\n> A quote to end on.\n')
         page.render(long)

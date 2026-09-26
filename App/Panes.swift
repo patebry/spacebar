@@ -3,13 +3,14 @@ import SwiftUI
 enum SettingsTab: String, CaseIterable {
     case general, appearance, folders, editing, advanced
 
-    var title: String { rawValue.capitalized }
+    /// The Folders tab keeps its raw value, which spacebar-md://settings/folders and the preview's openSettings name.
+    var title: String { self == .folders ? "Sidebar" : rawValue.capitalized }
 
     var symbol: String {
         switch self {
         case .general: return "gearshape"
         case .appearance: return "paintpalette"
-        case .folders: return "folder"
+        case .folders: return "sidebar.left"
         case .editing: return "pencil.line"
         case .advanced: return "gearshape.2"
         }
@@ -412,6 +413,23 @@ struct FoldersPane: View {
         let on = store.settings.folderMode
         Pane {
             Section {
+                Toggle(isOn: showSidebar) {
+                    Text("Show sidebar")
+                    Text("List the Markdown files in the same folder beside every preview. The sidebar button in the preview changes this too.")
+                }
+                Toggle("Show README first", isOn: store.binding(\.folderReadmeFirst, "folderReadmeFirst"))
+                Picker("Sort files by", selection: store.binding(\.folderSort, "folderSort")) {
+                    Text("Name").tag("name")
+                    Text("Date Modified").tag("modified")
+                }
+            } header: {
+                Text("Sidebar")
+            } footer: {
+                Text("A README is listed first, and opens first when you preview a folder. Hidden files aren't listed, and at most "
+                     + "\(FolderListing.cap) files are shown. A narrow preview hides the sidebar until you click its button.")
+                    .settingsFooter()
+            }
+            Section {
                 Toggle(isOn: folderMode) {
                     Text("Preview folders")
                     Text("Press Space on a folder to browse the Markdown files in it.")
@@ -429,20 +447,11 @@ struct FoldersPane: View {
             } footer: {
                 Text(folderNote).settingsFooter()
             }
-            Section {
-                Toggle("Show README first", isOn: store.binding(\.folderReadmeFirst, "folderReadmeFirst"))
-                Picker("Sort files by", selection: store.binding(\.folderSort, "folderSort")) {
-                    Text("Name").tag("name")
-                    Text("Date Modified").tag("modified")
-                }
-            } header: {
-                Text("Sidebar")
-            } footer: {
-                Text("When a folder has a README, it opens first; the other files are listed in the sidebar in this order.")
-                    .settingsFooter()
-            }
-            .disabled(!on)
         }
+    }
+
+    private var showSidebar: Binding<Bool> {
+        Binding(get: { !store.settings.sidebarCollapsed }, set: { store.set("sidebarCollapsed", !$0) })
     }
 
     /// The toggle is the one place (with the Turn On / Turn Off button) that changes the extension's state in System Settings.

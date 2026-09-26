@@ -1,8 +1,9 @@
 # spacebar
 
 Press Space on a Markdown file in Finder and read it properly: headings, tables, task lists, code highlighting, math and
-Mermaid diagrams, in six themes. Click a block to edit it in place, or tick a task box, and the file is saved. Free and
-open source, for macOS 13 and later (Apple silicon and Intel).
+Mermaid diagrams, in six themes. A sidebar lists the other Markdown files in the same folder, so you can move between them
+without leaving Quick Look; its button collapses it, and every preview remembers that. Click a block to edit it in place, or
+tick a task box, and the file is saved. Free and open source, for macOS 13 and later (Apple silicon and Intel).
 
 [spacebar.patebryant.com](https://spacebar.patebryant.com)
 
@@ -78,7 +79,7 @@ Tests that run off screen, without Quick Look (the test builds target Apple sili
 
 ```sh
 for t in settings scheme linkpolicy cas editkeys; do test/$t/run.sh; done
-python3 test/webcheck.py && python3 test/webthemes.py && python3 test/remoteimages.py
+python3 test/webcheck.py && python3 test/webthemes.py && python3 test/remoteimages.py && python3 test/sidebar.py
 ```
 
 The other scripts in `test/` drive real Quick Look windows and synthetic input; run them on a machine you are not using.

@@ -88,10 +88,10 @@ PROBE_FLAGS=()
 [ "${PROBE:-0}" = 1 ] && PROBE_FLAGS=(-D PROBE)
 compile "$PREVIEW_BIN" -application-extension -module-name "$APPEX_EXE" \
   Preview/PreviewViewController.swift Preview/SettingsStore.swift Preview/Probe.swift \
-  Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/WebShell.swift \
+  Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/WebShell.swift Shared/FolderListing.swift \
   ${PROBE_FLAGS[@]+"${PROBE_FLAGS[@]}"} \
   -framework QuickLookUI -framework WebKit -Xlinker -e -Xlinker _NSExtensionMain
-compile "$APP/Contents/MacOS/$APP_EXE" -parse-as-library -module-name "$APP_EXE" App/*.swift Shared/Settings.swift Shared/WebShell.swift \
+compile "$APP/Contents/MacOS/$APP_EXE" -parse-as-library -module-name "$APP_EXE" App/*.swift Shared/Settings.swift Shared/WebShell.swift Shared/FolderListing.swift \
   -framework WebKit -framework SwiftUI
 plist App/Info.plist "$APP/Contents/Info.plist"
 cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"

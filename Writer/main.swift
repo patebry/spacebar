@@ -62,15 +62,16 @@ final class Writer: NSObject, SpacebarWriterProtocol {
     }
 
     func updateSettings(_ patch: Data, reply: @escaping (Bool) -> Void) {
-        guard patch.count <= 4096, let obj = (try? JSONSerialization.jsonObject(with: patch)) as? [String: Any] else {
-            log.error("refused settings patch: not a small JSON object")
-            return reply(false)
+        if patch.count <= 4096, let keys = (try? JSONSerialization.jsonObject(with: patch)) as? [String: Any] {
+            let dropped = Set(keys.keys).subtracting(Settings.panelKeys)
+            if !dropped.isEmpty { log.error("settings patch: dropped keys \(dropped.sorted().joined(separator: ","), privacy: .public)") }
         }
-        let dropped = Set(obj.keys).subtracting(Settings.panelKeys)
-        if !dropped.isEmpty { log.error("settings patch: dropped keys \(dropped.sorted().joined(separator: ","), privacy: .public)") }
-        switch SettingsFile.update(obj, allowed: Settings.panelKeys) {
+        switch SettingsFile.updateFromPanel(patch) {
+        case nil:
+            log.error("refused settings patch: not a small JSON object")
+            reply(false)
         case .success(let s):
-            log.info("settings updated theme=\(s.theme, privacy: .public) fontSize=\(s.fontSize) width=\(s.width, privacy: .public)")
+            log.info("settings updated theme=\(s.theme, privacy: .public) fontSize=\(s.fontSize) width=\(s.width, privacy: .public) sidebarCollapsed=\(s.sidebarCollapsed)")
             reply(true)
         case .failure(let f):
             log.error("settings update failed: \(String(describing: f), privacy: .public)")

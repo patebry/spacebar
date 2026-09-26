@@ -17,6 +17,8 @@ spacebar.app (md.spacebar)                        SwiftUI settings app; spacebar
         open       links and "Open in editor" (NSWorkspace is a no-op inside the sandboxed extension)
         beginEdit  owns the hidden, non-activating key panel used for inline editing
         updateSettings / ensureSupportDir / openSettings   panel setting patches (Settings.panelKeys only)
+   sidebar              FolderListing (Shared/FolderListing.swift) lists the previewed folder off the main thread; FolderWatch
+                        re-lists it when files are added, removed or renamed; the page gets it through sb.setFiles
 └─ PlugIns/SpacebarFolders.appex (md.spacebar.preview.folders)   same binary; claims folders; own writer copy
 ```
 
@@ -36,6 +38,7 @@ Swift calls into the page through `window.sb`, and the page calls back through t
 | Live reload | DispatchSource watch that re-arms across atomic saves, 15 ms debounce; covers append, temp+rename and rename-away saves | `test/livereload.py` |
 | Images and links | Relative images load via `<base href="spacebar://file/<dir>/">`. Markdown links inside the previewed folder open in the panel; others go through the link policy to the default app | `test/webcheck.py`, `test/linkpolicy/run.sh` |
 | Folder mode (opt-in) | The folders extension claims `public.folder`/`public.directory`; it is enabled only while `folderMode` is on and declines otherwise. Ships; verified by hand in Finder | `docs/evidence/themes/settings-folders.png`; `test/folders.py` (Quick Look) |
+| Sidebar | Every preview, a single file or a folder, shows the same sidebar: the Markdown files of the previewed folder, README first, sorted by `folderSort`, current file highlighted; a click opens a file in the panel. Hidden files and links out of the folder are skipped; at most 500 files, with an "N more" note; listed off the main thread and re-listed by a folder watch. A toolbar button collapses it (animated, off under reduced motion); `sidebarCollapsed` is saved through the writer and applied at document start, so every preview opens in the same state. Below 640 px it collapses on screen only and the button shows it over the page; below 1100 px an open sidebar hides the TOC rail | `test/sidebar.py` (35), `test/settings/run.sh` (listing, watch, setting) |
 | Task toggles | The checkbox sends its line and text; Swift re-locates the line and the writer saves it with compare-and-swap | 2338549; `test/corpus.py` |
 | Inline editing | See the next section | 068d11d, e1396e9, a742ad8, 4bfa7d6, f2c81fb, bbc51b2 |
 | Double-click fix | See below | a742ad8; `test/dblclick.py` |
@@ -91,7 +94,7 @@ The threat is a downloaded Markdown file, and whatever sits beside it, driving t
 3. **Swift message gate**
    - Only messages from the main frame of `spacebar://bundle` are accepted, and every field is type- and size-checked.
    - Toggles and edits apply only to the previewed file.
-   - `open` is limited to files in the folder sidebar.
+   - `open` is limited to files the sidebar listed (none reached through a link out of the folder).
 4. **Link policy** (`Shared/LinkPolicy.swift`, enforced in both the extension and the writer)
    - Allows only http(s) links, or existing non-executable documents of an allowed type.
    - A per-file "Open With" setting is ignored.
@@ -104,14 +107,15 @@ The threat is a downloaded Markdown file, and whatever sits beside it, driving t
      pointer must have gone down on the button itself). Swift grants it only for the file on screen and only while the
      setting is off, lifts the list for that path, and re-renders with a payload flag the document cannot set.
    - Not saved, CSP unchanged; the block returns when the preview opens another document or disappears.
-6. **Settings:** the page may post only `setting` for `Settings.panelKeys` (theme, appearance, fontSize, width, bodyFont),
-   sanitized in the extension and again in the writer, and `openSettings` for an allow-listed tab. CSS paths, the editor app and
+6. **Settings:** the page may post only `setting` for `Settings.panelKeys` (theme, appearance, fontSize, width, bodyFont,
+   sidebarCollapsed, which takes a JSON boolean only), sanitized in the extension (`Settings.panelPatch`) and again in the
+   writer (`SettingsFile.updateFromPanel`), and `openSettings` for an allow-listed tab. CSS paths, the editor app and
    what is rendered can be set only in the app or settings.json. The `user` host serves only `custom.css` and
    `themes/<plain name>.css`, regular files, no symlinks. Click-safety CSS rules are `!important` inside cascade layers, so no
    unlayered CSS overrides them.
 7. **Writer:** writes only to existing Markdown regular files (checked on both the path and the symlink target), at most 64 MB.
 
-Tests: `test/webcheck.py` (10/10), `test/linkpolicy/run.sh` (44/44), `test/remoteimages.py` (19/19), `test/hostile.py` (runs the hostile fixtures through Quick Look). The two-round adversarial review's findings are fixed in 1c207e0.
+Tests: `test/webcheck.py` (10/10), `test/linkpolicy/run.sh` (44/44), `test/remoteimages.py` (19/19), `test/sidebar.py` (35/35), `test/hostile.py` (runs the hostile fixtures through Quick Look). The two-round adversarial review's findings are fixed in 1c207e0.
 
 ## Platform findings
 
@@ -143,5 +147,6 @@ Releases are signed with a self-signed certificate, "spacebar Release", rather t
 
 Folder previews and live settings ship. Folder previews were verified by hand in Finder; live settings are covered by
 `test/webthemes.py` off screen and by `test/settings_live.py` in Quick Look. Platform questions still open from the plan: V2 system
-colours and ui-serif in the appex, V3 the folder watch under the read-only exception, V6 what Quick Look shows after a folder
+colours and ui-serif in the appex, V3 the folder watch under the read-only exception (the sidebar's live list depends on it;
+off screen it is covered by `test/settings/run.sh`, in Quick Look not yet), V6 what Quick Look shows after a folder
 decline, V7 the settings window coming forward over the panel.

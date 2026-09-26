@@ -73,7 +73,30 @@ check("panel allow-list takes theme", afterPanel.theme == "solarized")
 check("panel allow-list drops userTheme/editor/customCSS/editing/rawHTML/remoteImages",
       afterPanel.userTheme == nil && afterPanel.editorBundleID == nil && afterPanel.customCSS && afterPanel.inlineEditing
       && afterPanel.rawHTML == "sanitized" && !afterPanel.remoteImages)
-check("panel keys are cosmetic only", Settings.panelKeys.isSubset(of: ["theme", "appearance", "fontSize", "width", "bodyFont", "lineHeight"]))
+check("panel keys are cosmetic only", Settings.panelKeys.isSubset(of: ["theme", "appearance", "fontSize", "width", "bodyFont", "lineHeight", "sidebarCollapsed"]))
+
+// sidebarCollapsed: the sidebar button's state, a panel key that takes a JSON boolean only.
+check("sidebar open by default", !Settings().sidebarCollapsed && decode("{}")?.sidebarCollapsed == false)
+check("sidebarCollapsed true taken", Settings(dictionary: ["sidebarCollapsed": true]).sidebarCollapsed && decode(#"{"sidebarCollapsed":true}"#)?.sidebarCollapsed == true)
+check("sidebarCollapsed non-bool falls back", [1, 0, "true", "yes", NSNull(), [true]].allSatisfy { !Settings(dictionary: ["sidebarCollapsed": $0]).sidebarCollapsed }
+      && decode(#"{"sidebarCollapsed":1}"#)?.sidebarCollapsed == false && decode(#"{"sidebarCollapsed":"true"}"#)?.sidebarCollapsed == false)
+check("sidebarCollapsed is a panel key", Settings.panelKeys.contains("sidebarCollapsed"))
+check("panel patch takes a bool", Settings.panelPatch("sidebarCollapsed", NSNumber(value: true)).map { obj(String(data: $0, encoding: .utf8)!)["sidebarCollapsed"] as? Bool } == true)
+check("panel patch refuses a number, string, null or array for it", [NSNumber(value: 1), NSNumber(value: 0), "true", NSNull(), [true]].allSatisfy { Settings.panelPatch("sidebarCollapsed", $0) == nil })
+check("panel patch refuses keys outside the panel", ["folderMode", "inlineEditing", "remoteImages", "editorBundleID", "bogus"].allSatisfy { Settings.panelPatch($0, true) == nil })
+try? fm.removeItem(at: SettingsFile.url)
+_ = SettingsFile.update(["folderMode": true, "theme": "nord"])
+let writerPatch = try! JSONSerialization.data(withJSONObject: ["sidebarCollapsed": true, "folderMode": false, "remoteImages": true])
+if case .success(let s)? = SettingsFile.updateFromPanel(writerPatch) {
+    check("writer patch persists sidebarCollapsed and drops the rest", s.sidebarCollapsed && s.folderMode && !s.remoteImages && s.theme == "nord"
+          && SettingsFile.load().sidebarCollapsed)
+} else { check("writer patch persists sidebarCollapsed and drops the rest", false) }
+_ = SettingsFile.updateFromPanel(Data(#"{"sidebarCollapsed":1}"#.utf8))
+check("writer ignores a non-bool sidebarCollapsed", SettingsFile.load().sidebarCollapsed)
+check("writer refuses a non-object or oversized patch", SettingsFile.updateFromPanel(Data("[true]".utf8)) == nil
+      && SettingsFile.updateFromPanel(Data(#"{"theme":"nord","x":"\#(String(repeating: "a", count: 5000))"}"#.utf8)) == nil)
+_ = SettingsFile.updateFromPanel(Data(#"{"sidebarCollapsed":false}"#.utf8))
+check("writer patch turns it back off", !SettingsFile.load().sidebarCollapsed)
 
 // Data safety: a file that is not a JSON object is never overwritten.
 try! Data("{ this is not json".utf8).write(to: SettingsFile.url)
@@ -138,6 +161,72 @@ try! fm.createDirectory(at: newDir, withIntermediateDirectories: true)
 check("migrate: an empty new folder is never replaced", !SettingsFile.migrateLegacySupportDir(in: base) && fm.fileExists(atPath: oldDir.appendingPathComponent("settings.json").path))
 check("migrate: skipped under SPACEBAR_SUPPORT_DIR", !SettingsFile.migrateLegacySupportDir())
 try! fm.removeItem(at: base)
+
+// Sidebar listing (Shared/FolderListing.swift)
+let ld = dir.appendingPathComponent("listing", isDirectory: true)
+let outside = dir.appendingPathComponent("outside", isDirectory: true)
+try? fm.removeItem(at: ld); try? fm.removeItem(at: outside)
+try! fm.createDirectory(at: ld.appendingPathComponent("sub.md", isDirectory: true), withIntermediateDirectories: true)
+try! fm.createDirectory(at: outside, withIntermediateDirectories: true)
+func touch(_ name: String, _ age: Double, in d: URL = ld) {
+    let u = d.appendingPathComponent(name)
+    try! Data("# \(name)\n".utf8).write(to: u)
+    try! fm.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -age)], ofItemAtPath: u.path)
+}
+touch("b.md", 30); touch("a.markdown", 10); touch("README.md", 50); touch("c10.md", 20); touch("c9.MD", 40)
+touch("notes.txt", 0); touch(".hidden.md", 0); touch("flagged.md", 0); touch("secret.md", 0, in: outside)
+chflags(ld.appendingPathComponent("flagged.md").path, UInt32(UF_HIDDEN))
+try! fm.createSymbolicLink(atPath: ld.appendingPathComponent("inside-link.md").path, withDestinationPath: "b.md")
+try! fm.createSymbolicLink(atPath: ld.appendingPathComponent("outside-link.md").path, withDestinationPath: outside.appendingPathComponent("secret.md").path)
+try! fm.createSymbolicLink(atPath: ld.appendingPathComponent("dangling.md").path, withDestinationPath: "nowhere.md")
+try! fm.createSymbolicLink(atPath: ld.appendingPathComponent("etc.md").path, withDestinationPath: "/etc/hosts")
+mkfifo(ld.appendingPathComponent("pipe.md").path, 0o600)
+let names = { (l: FolderListing.Listing) in l.files.map(\.name) }
+let byName = FolderListing.list(ld.path, sort: "name", readmeFirst: true)
+check("listing: README first, then names in Finder order", names(byName) == ["README.md", "a.markdown", "b.md", "c9.MD", "c10.md", "inside-link.md"])
+check("listing: hidden, flagged hidden, non-Markdown, folders, FIFOs skipped", !names(byName).contains { [".hidden.md", "flagged.md", "notes.txt", "sub.md", "pipe.md"].contains($0) })
+check("listing: links out of the folder or dangling skipped", !names(byName).contains { ["outside-link.md", "dangling.md", "etc.md"].contains($0) })
+check("listing: a link inside the folder resolves to its target", byName.files.last?.resolved == (FolderListing.realPath(ld.path)! + "/b.md")
+      && byName.files.last?.path == ld.path + "/inside-link.md")
+check("listing: README not first when that is off", names(FolderListing.list(ld.path, sort: "name", readmeFirst: false)).first == "a.markdown")
+check("listing: by date modified, newest first, README still first",
+      names(FolderListing.list(ld.path, sort: "modified", readmeFirst: true)) == ["README.md", "a.markdown", "c10.md", "b.md", "inside-link.md", "c9.MD"])
+let capped = FolderListing.list(ld.path, sort: "name", readmeFirst: true, cap: 2)
+check("listing: capped, with a count of the rest", names(capped) == ["README.md", "a.markdown"] && capped.more == 4)
+let pinned = FolderListing.list(ld.path, sort: "name", readmeFirst: true, cap: 2, pinned: ld.path + "/c10.md")
+check("listing: the document on screen is listed past the cap", names(pinned) == ["README.md", "a.markdown", "c10.md"] && pinned.more == 3)
+check("listing: the entry of the document on screen", byName.entry(resolving: ld.path + "/c9.MD")?.name == "c9.MD" && byName.entry(resolving: ld.path + "/notes.txt") == nil)
+let payload = byName.payload(active: ld.path + "/b.md")
+check("listing: payload names the folder and the active file", payload["dirName"] as? String == "listing" && payload["more"] as? Int == 0
+      && (payload["files"] as? [[String: String]])?.first == ["name": "README.md", "path": ld.path + "/README.md"] && payload["active"] as? String == ld.path + "/b.md")
+check("listing: a missing folder lists nothing", FolderListing.list(ld.path + "/nope", sort: "name", readmeFirst: true).files.isEmpty)
+let big = dir.appendingPathComponent("big", isDirectory: true)
+try! fm.createDirectory(at: big, withIntermediateDirectories: true)
+for i in 0..<620 { fm.createFile(atPath: big.appendingPathComponent(String(format: "note-%04d.md", i)).path, contents: Data()) }
+let t0 = Date()
+let bigList = FolderListing.list(big.path, sort: "modified", readmeFirst: true)
+check("listing: 620 files cap at 500 with 120 more (\(Int(Date().timeIntervalSince(t0) * 1000)) ms)", bigList.files.count == FolderListing.cap && bigList.more == 120)
+try! fm.removeItem(at: big); try! fm.removeItem(at: ld); try! fm.removeItem(at: outside)
+
+// The folder watch behind the sidebar's live list
+let wd = dir.appendingPathComponent("watched", isDirectory: true)
+try! fm.createDirectory(at: wd, withIntermediateDirectories: true)
+var fired = 0
+let spin = { (s: Double) in RunLoop.main.run(until: Date(timeIntervalSinceNow: s)) }
+let watch = FolderWatch(path: wd.path) { fired += 1 }
+for i in 0..<3 { fm.createFile(atPath: wd.appendingPathComponent("n\(i).md").path, contents: Data("x".utf8)) }
+spin(0.4)
+let afterAdd = fired
+try! fm.removeItem(at: wd.appendingPathComponent("n0.md"))
+spin(0.4)
+let afterRemove = fired
+try! fm.moveItem(at: wd.appendingPathComponent("n1.md"), to: wd.appendingPathComponent("renamed.md"))
+spin(0.4)
+check("folder watch: a burst of adds is one change, then a removal and a rename each one more", watch != nil && afterAdd == 1 && afterRemove == 2 && fired == 3)
+try! fm.removeItem(at: wd)
+spin(0.3)
+check("folder watch: a deleted folder is no longer watched", fired <= 4 && FolderWatch(path: wd.path) {} == nil)
+withExtendedLifetime(watch) {}
 
 print("\n\(failures == 0 ? "all" : "\(failures) FAILED of") settings checks")
 exit(failures == 0 ? 0 : 1)

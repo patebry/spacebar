@@ -39,15 +39,32 @@
   }
   [hidden] { display: none !important; }
 
-  #sidebar { width: 200px; flex: none; align-self: stretch; border-right: 1px solid var(--border); padding: 12px 0; height: 100vh; overflow: auto; position: sticky; top: 0; box-sizing: border-box; }
+  /* The sidebar keeps its full width inside and is clipped as it collapses, so its text never reflows mid-animation.
+     Transitions start only after the first paint (sb-anim), so a collapsed sidebar never shows open first. */
+  #sidebar { --side-w: 220px; width: var(--side-w); flex: none; position: sticky; top: 0; height: 100vh; box-sizing: border-box;
+    display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border); }
+  #sidebar > * { width: var(--side-w); box-sizing: border-box; flex: none; }
+  #side-list { flex: 1 1 auto; min-height: 0; overflow: auto; position: relative; }
+  :root[data-sidebar=collapsed] #sidebar { width: 0; border-right-width: 0; visibility: hidden; }
+  :root.sb-anim #sidebar { transition: width .2s ease-out, visibility 0s; }
+  :root.sb-anim[data-sidebar=collapsed] #sidebar { transition: width .2s ease-out, visibility 0s .2s; }
+  #side-toggle { position: fixed !important; top: 8px; left: 12px; z-index: 10 !important; }
   #doc { flex: 1 1 auto; min-width: 0; max-width: var(--measure); margin: 0 auto; padding: 44px 40px 80px; overflow-x: auto;
     contain: paint !important; position: relative !important; isolation: isolate !important; }
   #toc { flex: none; width: 210px; position: sticky; top: 0; max-height: 100vh; overflow: auto; box-sizing: border-box; padding: 56px 20px 24px 4px; }
   #toolbar { position: fixed !important; top: 8px; right: 12px; display: flex; gap: 6px; align-items: center; z-index: 10 !important; }
-  :root.sb-embedded #toolbar { display: none !important; }
+  :root.sb-embedded #toolbar, :root.sb-embedded #sidebar, :root.sb-embedded #side-toggle { display: none !important; }
   :root.sb-embedded #doc { padding-top: 24px; }
   :root.sb-embedded body::after { content: ""; position: fixed; left: 0; right: 0; bottom: 0; height: 28px; pointer-events: none;
     background: linear-gradient(transparent, var(--bg)); }
   @media (max-width: 899px) { #toc { display: none !important; } }
+  @media (max-width: 1099px) { :root:not([data-sidebar=collapsed]) #sidebar:not([hidden]) ~ #toc { display: none !important; } }
+  /* Narrow: the sidebar collapses whatever the setting says (it is not changed), and the button shows it over the page. */
+  @media (max-width: 639px) {
+    #sidebar { width: 0; border-right-width: 0; visibility: hidden; }
+    :root.sb-peek #sidebar { position: fixed; left: 0; top: 0; z-index: 9; width: var(--side-w); visibility: visible;
+      background: var(--bg); border-right-width: 1px; box-shadow: 0 0 24px rgba(0, 0, 0, .18); }
+  }
   @media (max-width: 560px) { #doc { padding-left: 20px; padding-right: 20px; } }
+  @media (prefers-reduced-motion: reduce) { :root.sb-anim #sidebar { transition: none; } }
 }

@@ -23,6 +23,7 @@ struct Settings: Codable, Equatable {
     var folderMode = false
     var folderReadmeFirst = true
     var folderSort = "name"
+    var sidebarCollapsed = false
     var frontMatter = "table"
     var toc = "auto"
     var stats = true
@@ -52,13 +53,21 @@ struct Settings: Codable, Equatable {
     static let intRanges: [String: ClosedRange<Int>] = ["fontSize": 12...24]
     static let doubleRanges: [String: ClosedRange<Double>] = ["lineHeight": 1.2...2.0]
     static let boolKeys: Set<String> = ["customCSS", "inlineEditing", "taskToggles", "folderMode", "folderReadmeFirst", "stats", "math",
-                                        "mermaid", "remoteImages"]
+                                        "mermaid", "remoteImages", "sidebarCollapsed"]
     /// Keys whose value is a string or null, each checked by its own pattern.
     static let optionalKeys: Set<String> = ["userTheme", "editorBundleID"]
     static var allKeys: Set<String> { Set(choices.keys).union(intRanges.keys).union(doubleRanges.keys).union(boolKeys).union(optionalKeys) }
-    /// The only keys the preview panel may change (its Aa popover). The page renders an untrusted document, so even a page that
-    /// was somehow scripted can restyle the preview but never pick a CSS file, an editor app, or what is rendered or opened.
-    static let panelKeys: Set<String> = ["theme", "appearance", "fontSize", "width", "bodyFont"]
+    /// The only keys the preview panel may change (its Aa popover and sidebar button). The page renders an untrusted document,
+    /// so even a page that was somehow scripted can restyle the preview but never pick a CSS file, an editor app, or what is
+    /// rendered or opened.
+    static let panelKeys: Set<String> = ["theme", "appearance", "fontSize", "width", "bodyFont", "sidebarCollapsed"]
+
+    /// A panel change as the JSON patch the writer takes, or nil when the key is not a panel key or the value does not
+    /// sanitize (sidebarCollapsed takes a JSON boolean only, never a number or a string).
+    static func panelPatch(_ key: String, _ value: Any) -> Data? {
+        guard panelKeys.contains(key), let clean = sanitize(key, value) else { return nil }
+        return try? JSONSerialization.data(withJSONObject: [key: clean])
+    }
 
     static let maxFileBytes = 64 << 10
 
@@ -128,6 +137,7 @@ struct Settings: Codable, Equatable {
         take(.width, \.width); takeOptional(.editorBundleID, \.editorBundleID)
         take(.inlineEditing, \.inlineEditing); take(.taskToggles, \.taskToggles); take(.folderMode, \.folderMode)
         take(.folderReadmeFirst, \.folderReadmeFirst); take(.folderSort, \.folderSort); take(.frontMatter, \.frontMatter)
+        take(.sidebarCollapsed, \.sidebarCollapsed)
         take(.toc, \.toc); take(.stats, \.stats); take(.mdLinks, \.mdLinks); take(.webLinks, \.webLinks)
         take(.math, \.math); take(.mermaid, \.mermaid); take(.rawHTML, \.rawHTML); take(.remoteImages, \.remoteImages)
         self = s
@@ -244,6 +254,13 @@ enum SettingsFile {
         if obj["version"] == nil { obj["version"] = 1; changed = true }
         if changed { if let f = write(obj, to: url) { return .failure(f) } }
         return .success(Settings(dictionary: obj))
+    }
+
+    /// The writer's `updateSettings`: a small JSON object from the preview panel, merged with only Settings.panelKeys allowed.
+    /// Nil when the patch is not such an object.
+    static func updateFromPanel(_ patch: Data, at url: URL = url) -> Result<Settings, Failure>? {
+        guard patch.count <= 4096, let obj = (try? JSONSerialization.jsonObject(with: patch)) as? [String: Any] else { return nil }
+        return update(obj, allowed: Settings.panelKeys, at: url)
     }
 
     /// Creates the support folder, themes/, and a settings.json of defaults when none exists. An existing file is never touched.

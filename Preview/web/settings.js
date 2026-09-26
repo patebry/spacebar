@@ -37,6 +37,7 @@
     d.width = pick(p.width, Object.keys(MEASURE), 'medium');
     d.editing = p.inlineEditing === false ? 'off' : 'on';
     d.remoteImages = p.remoteImages === true ? 'on' : 'off';
+    d.sidebar = p.sidebarCollapsed === true ? 'collapsed' : 'open';
     r.style.setProperty('--font-size', Math.round(num(p.fontSize, 12, 24, 15)) + 'px');
     r.style.setProperty('--line-height', String(num(p.lineHeight, 1.2, 2, 1.6)));
     r.style.setProperty('--measure', MEASURE[d.width]);

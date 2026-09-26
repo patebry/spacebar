@@ -14,7 +14,7 @@ private func processAgeMs() -> String {
     let t = info.kp_proc.p_un.__p_starttime
     return String(format: "%.1f", (Date().timeIntervalSince1970 - (Double(t.tv_sec) + Double(t.tv_usec) / 1e6)) * 1000)
 }
-private let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "mkdn"]
+private let markdownExtensions = FolderListing.markdownExtensions
 
 private func ms(_ since: Date) -> String { String(format: "%.1f", Date().timeIntervalSince(since) * 1000) }
 /// NSEvent timestamps and systemUptime share the boot-time clock, so the writer's key time can be compared here.
@@ -201,11 +201,18 @@ final class FileWatcher {
 final class PreviewViewController: NSViewController, QLPreviewingController {
     private let host = WebHost.shared
     private var fileURL: URL?
-    private var folder: [[String: String]]?
     /// The folder of the item Quick Look asked for (the folder itself in folder mode), symlinks resolved. Markdown links open in
-    /// the panel, where they can be edited, only inside it; others open in the default app like any other document.
+    /// the panel, where they can be edited, only inside it; others open in the default app like any other document. The
+    /// sidebar lists it, for a single file and a folder alike.
     private var rootDir = ""
     private var watcher: FileWatcher?
+    /// The sidebar's files; `open` from the page is limited to them.
+    private var listing: FolderListing.Listing?
+    private var listGen = 0
+    /// Folder mode's first open: run by whichever listing lands first, since a newer one (a .DS_Store write) supersedes older ones.
+    private var onListed: ((FolderListing.Listing) -> Void)?
+    private var listedWith: (sort: String, readmeFirst: Bool)?
+    private var folderWatch: FolderWatch?
     /// Latest document the preview intends to be on disk (includes queued edits).
     private var docText: String?
     /// Last content confirmed on disk, in its on-disk line endings; every write must name it as its base.
@@ -332,21 +339,23 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         let resolved = url.resolvingSymlinksInPath()
         rootDir = isDir.boolValue ? resolved.path : resolved.deletingLastPathComponent().path
         if isDir.boolValue {
-            let s = SettingsStore.shared.settings
             // Folder previews are opt-in; declining hands the folder back to Quick Look's own preview.
-            guard s.folderMode else { return decline(handler, "folder previews are off") }
-            let entries = (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-            let modified = { (u: URL) in (try? u.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast }
-            let mds = entries.filter { markdownExtensions.contains($0.pathExtension.lowercased()) && Self.unreadable($0) == nil }
-                .sorted { s.folderSort == "modified" ? modified($0) > modified($1) : $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
-            log.info("folder preview: \(entries.count) entries, \(mds.count) markdown")
-            guard !mds.isEmpty else { return decline(handler, "no markdown in the folder") }
-            folder = mds.map { ["name": $0.lastPathComponent, "path": $0.path] }
-            let readme = s.folderReadmeFirst ? mds.first { $0.deletingPathExtension().lastPathComponent.lowercased() == "readme" } : nil
-            open(readme ?? mds[0])
+            guard SettingsStore.shared.settings.folderMode else { return decline(handler, "folder previews are off") }
+            // The folder opens on the sidebar's first file: its README when that setting is on.
+            refreshListing(then: { [weak self] l in
+                guard let self else { return }
+                log.info("folder preview: \(l.files.count + l.more) markdown")
+                guard let first = l.files.first else {
+                    if let c = self.completion { self.decline(c, "no markdown in the folder") }
+                    return
+                }
+                self.open(URL(fileURLWithPath: first.path))
+            })
         } else {
             open(url)
+            refreshListing()
         }
+        folderWatch = FolderWatch(path: rootDir) { [weak self] in self?.refreshListing() }
         // Launch the writer and build its hidden edit panel now, so the first click into a block does not wait for either.
         // Inline editing off: no writer launch until something needs it, but the support folder still gets made.
         if SettingsStore.shared.settings.inlineEditing {
@@ -358,7 +367,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         } else if !FileManager.default.fileExists(atPath: SettingsFile.url.path) {
             helper { $0.ensureSupportDir { _ in DispatchQueue.main.async { SettingsStore.shared.checkNow(reason: "created") } } }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.finishPrepare(nil) }
+        // Not while a folder waits for its first listing: the panel would show the previous preview's document.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in if self?.onListed == nil { self?.finishPrepare(nil) } }
     }
 
     private func decline(_ handler: (Error?) -> Void, _ why: String) {
@@ -369,6 +379,33 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
 
     fileprivate func settingsChanged(_ s: Settings) {
         if !s.inlineEditing, edit != nil { stopEdit(notifyWriter: true) }
+        if let w = listedWith, w != (s.folderSort, s.folderReadmeFirst) { refreshListing() }
+    }
+
+    /// Lists rootDir off the main thread, then sends the page the list when it changed. `then` sees the new listing first.
+    private func refreshListing(then: ((FolderListing.Listing) -> Void)? = nil) {
+        listGen += 1
+        if let then { onListed = then }
+        let gen = listGen, dir = rootDir, s = SettingsStore.shared.settings, pinned = fileURL?.path
+        listedWith = (s.folderSort, s.folderReadmeFirst)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let l = FolderListing.list(dir, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, pinned: pinned)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, gen == self.listGen, dir == self.rootDir else { return }
+                let changed = l != self.listing
+                self.listing = l
+                if let f = self.onListed { self.onListed = nil; f(l) }
+                if changed { self.sendListing() }
+            }
+        }
+    }
+
+    private func sendListing() {
+        guard let l = listing else { return }
+        host.whenReady { [weak self] in
+            guard let self, self.host.controller === self, self.listing == l else { return }
+            self.js("sb.setFiles", l.payload(active: l.entry(resolving: self.fileURL?.path)?.path))
+        }
     }
 
     private func finishPrepare(_ error: Error?) {
@@ -378,15 +415,13 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         c(error)
     }
 
-    private static let maxDocumentBytes = 64 << 20
-
     /// Why `url` cannot be previewed: a document must be a regular file (after symlinks) of bounded size, so a `.md` that is a
     /// FIFO or a link to /dev/zero cannot hang or exhaust the extension.
     private static func unreadable(_ url: URL) -> String? {
         var st = stat()
         guard stat(url.path, &st) == 0 else { return "cannot read \(url.lastPathComponent)" }
         guard st.st_mode & S_IFMT == S_IFREG else { return "\(url.lastPathComponent) is not a regular file" }
-        return st.st_size <= maxDocumentBytes ? nil : "\(url.lastPathComponent) is too large to preview"
+        return st.st_size <= FolderListing.maxDocumentBytes ? nil : "\(url.lastPathComponent) is too large to preview"
     }
 
     private func open(_ url: URL) {
@@ -445,7 +480,9 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         comps.path = (path as NSString).deletingLastPathComponent + "/"
         var payload: [String: Any] = ["text": text, "path": path, "base": comps.url!.absoluteString,
                                       "name": (path as NSString).lastPathComponent, "reason": reason]
-        if let folder { payload["files"] = folder }
+        payload["dir"] = rootDir
+        payload["dirName"] = (rootDir as NSString).lastPathComponent
+        payload["active"] = listing?.entry(resolving: path)?.path ?? NSNull()
         if let keyTime { payload["keyTime"] = keyTime }
         if host.remoteImages.allowedPath == path { payload[RemoteImageGate.payloadKey] = true }
         payload["ver"] = docVersion
@@ -481,13 +518,14 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             guard let href = m.string("href", max: LinkPolicy.maxURLBytes), let url = URL(string: href) else { return refuse("link", "bad href") }
             followLink(url)
         case "open":
-            // Only a file the folder sidebar listed.
-            guard let p = m.string("path", max: 4096), folder?.contains(where: { $0["path"] == p }) == true else { return refuse("open", "not in the folder list") }
+            // Only a file the sidebar listed.
+            // Checked again now: a listed file may since have been replaced by a link out of the folder.
+            guard let p = m.string("path", max: 4096), listing?.files.contains(where: { $0.path == p }) == true,
+                  FolderListing.realPath(p)?.hasPrefix((FolderListing.realPath(rootDir) ?? rootDir) + "/") == true else { return refuse("open", "not in the folder list") }
             open(URL(fileURLWithPath: p))
         case "setting":
-            // The Aa popover: cosmetic keys only (Settings.panelKeys), checked here and again by the writer.
-            guard let key = m.string("key", max: 32), Settings.panelKeys.contains(key), let raw = body["value"],
-                  let value = Settings.sanitize(key, raw), let patch = try? JSONSerialization.data(withJSONObject: [key: value]) else {
+            // The Aa popover and the sidebar button: cosmetic keys only (Settings.panelKeys), checked here and again by the writer.
+            guard let key = m.string("key", max: 32), let raw = body["value"], let patch = Settings.panelPatch(key, raw) else {
                 return refuse("setting", "key not allowed or bad value")
             }
             log.info("setting \(key, privacy: .public) from the panel")

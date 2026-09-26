@@ -16,13 +16,14 @@ const el = (tag, cls, text) => {
 // document-start script) is absent in a plain browser, so the page falls back to a minimal apply of its own.
 const DEFAULTS = { theme: 'apple', appearance: 'auto', codeTheme: 'auto', bodyFont: 'system', monoFont: 'system', fontSize: 15,
   lineHeight: 1.6, width: 'medium', frontMatter: 'table', toc: 'auto', stats: true, math: true, mermaid: true, rawHTML: 'sanitized',
-  remoteImages: false, inlineEditing: true, taskToggles: true, customCSSURL: null, userThemeURL: null };
+  remoteImages: false, inlineEditing: true, taskToggles: true, sidebarCollapsed: false, customCSSURL: null, userThemeURL: null };
 let settings = { ...DEFAULTS, ...(window.__sbInitial || {}) };
 const THEMES = { apple: 'Apple', github: 'GitHub', paper: 'Paper', solarized: 'Solarized', nord: 'Nord', contrast: 'High Contrast' };
 const theme = window.sbTheme && typeof window.sbTheme.apply === 'function' ? window.sbTheme : {
   apply(p) {
     const r = document.documentElement;
-    Object.assign(r.dataset, { theme: p.theme, font: p.bodyFont, mono: p.monoFont, width: p.width, editing: p.inlineEditing ? 'on' : 'off' });
+    Object.assign(r.dataset, { theme: p.theme, font: p.bodyFont, mono: p.monoFont, width: p.width, editing: p.inlineEditing ? 'on' : 'off',
+      sidebar: p.sidebarCollapsed === true ? 'collapsed' : 'open' });
     r.style.setProperty('--font-size', p.fontSize + 'px');
   },
 };
@@ -535,12 +536,14 @@ window.sb = {
     current = p;
     $('base').href = p.base;
     document.title = p.name;
+    showFolder(p);
     draw();
-    if (p.files) renderSidebar(p.files, p.path);
     window.scrollTo(0, y);
     const t1 = performance.now();
     const nodes = document.querySelectorAll('#doc pre.mermaid');
     post({ type: 'painted', parseMs: t1 - t0, reason: p.reason || '' });
+    // The sidebar's state is in place from document start; only changes after the first paint animate.
+    if (!document.documentElement.classList.contains('sb-anim')) afterPaint(() => document.documentElement.classList.add('sb-anim'));
     if (nodes.length) await drawnMermaid;
     requestAnimationFrame(() => post({ type: 'rendered', parseMs: t1 - t0, totalMs: performance.now() - t0, mermaid: nodes.length, reason: p.reason || '', keyTime: p.keyTime }));
   },
@@ -551,6 +554,7 @@ window.sb = {
     settings = { ...DEFAULTS, ...p };
     theme.apply(settings);
     syncPopover();
+    syncToggle();
     if (RENDER_KEYS.some((k) => prev[k] !== settings[k]) && current.path) {
       const y = window.scrollY;
       draw();
@@ -617,6 +621,12 @@ window.sb = {
     retired = null;
     draw();
   },
+  /** The sidebar's files for folder `dir`; kept for the next render when it is not the folder on screen yet. */
+  setFiles(f) {
+    const s = sideState(f);
+    if (!s) return;
+    if (current.path && s.dir === current.dir) { side = s; renderSidebar(); } else pendingSide = s;
+  },
   status(s, sticky) {
     if (sticky) stickyStatus = s;
     $('status').textContent = s;
@@ -624,11 +634,86 @@ window.sb = {
   },
 };
 
-function renderSidebar(files, active) {
-  const nav = $('sidebar');
-  nav.hidden = false;
-  nav.innerHTML = files.map((f) => `<a href="#" data-path="${esc(f.path)}" class="${f.path === active ? 'active' : ''}">${esc(f.name)}</a>`).join('');
+// ---------- the sidebar: the Markdown files in the document's folder, for a file and a folder alike (outside #doc, text only) ----------
+
+const root = document.documentElement;
+const narrow = matchMedia('(max-width: 639px)');
+let side = { dir: '', name: '', files: [], more: 0, active: null };
+let pendingSide = null;
+let sideDrawn = '';
+let sideVersion = 0;
+
+function sideState(f) {
+  if (!f || typeof f.dir !== 'string' || !f.dir) return null;
+  const files = Array.isArray(f.files) ? f.files.filter((x) => x && typeof x.name === 'string' && typeof x.path === 'string') : [];
+  return { dir: f.dir, name: typeof f.dirName === 'string' ? f.dirName : '', files, more: Math.max(0, +f.more || 0),
+    active: typeof f.active === 'string' ? f.active : null, version: ++sideVersion };
 }
+
+/** A render names its folder; the list stays when the folder is the same, and comes with setFiles when it is new. */
+function showFolder(p) {
+  if (typeof p.dir !== 'string' || !p.dir) side = { dir: '', name: '', files: [], more: 0, active: null };
+  else if (p.dir !== side.dir) side = (pendingSide && pendingSide.dir === p.dir ? pendingSide : sideState({ dir: p.dir, dirName: p.dirName }));
+  if (side.dir) side.active = typeof p.active === 'string' ? p.active : null;
+  pendingSide = null;
+  renderSidebar();
+}
+
+function renderSidebar() {
+  const on = !!side.dir;
+  $('sidebar').hidden = !on;
+  $('side-toggle').hidden = !on;
+  syncToggle();
+  const key = `${side.version}\n${current.path}\n${side.active}`;
+  if (!on || key === sideDrawn) return;
+  const moved = !sideDrawn.startsWith(`${side.version}\n`);
+  sideDrawn = key;
+  $('side-head').textContent = side.name;
+  $('side-head').title = side.dir;
+  const list = $('side-list');
+  let at = null;
+  list.replaceChildren(...side.files.map((f) => {
+    const a = el('a', '', f.name);
+    a.href = '#';
+    a.title = f.name;
+    a.dataset.path = f.path;
+    if (f.path === (side.active ?? current.path)) { a.className = 'active'; a.setAttribute('aria-current', 'page'); at = at || a; }
+    return a;
+  }));
+  $('side-more').hidden = !side.more;
+  $('side-more').textContent = side.more ? `${side.more.toLocaleString()} more not listed` : '';
+  // Keep the document on screen in view; the list scrolls on its own, never the page.
+  if (at && (moved || at.offsetTop < list.scrollTop || at.offsetTop + at.offsetHeight > list.scrollTop + list.clientHeight)) {
+    list.scrollTop = Math.max(0, at.offsetTop - list.clientHeight / 3);
+  }
+}
+
+/** Open or collapsed as the setting says; below the narrow width it is always collapsed and the button shows it over the page. */
+function sidebarShown() { return narrow.matches ? root.classList.contains('sb-peek') : settings.sidebarCollapsed !== true; }
+
+function syncToggle() {
+  const open = sidebarShown(), t = $('side-toggle');
+  t.setAttribute('aria-expanded', String(open));
+  t.title = open ? 'Hide sidebar' : 'Show sidebar';
+}
+
+function peek(open) {
+  root.classList.toggle('sb-peek', open);
+  syncToggle();
+}
+
+$('side-toggle').addEventListener('click', () => {
+  if (narrow.matches) return peek(!root.classList.contains('sb-peek'));
+  choose('sidebarCollapsed', settings.sidebarCollapsed !== true);
+});
+narrow.addEventListener('change', () => peek(false));
+// While the sidebar shows over a narrow page, a click anywhere else only closes it.
+document.addEventListener('click', (e) => {
+  if (!root.classList.contains('sb-peek') || e.target.closest('#sidebar, #side-toggle')) return;
+  peek(false);
+  e.preventDefault();
+  e.stopPropagation();
+}, true);
 
 // ---------- the Aa popover (in #toolbar, outside #doc: nothing the document renders can reach these messages) ----------
 
@@ -696,8 +781,9 @@ document.addEventListener('click', (e) => {
   const tClick = performance.timeOrigin + e.timeStamp;
   const toc = e.target.closest('#toc a');
   if (toc) { e.preventDefault(); const h = tocTargets[+toc.dataset.toc]; if (h && h.isConnected) h.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
-  const side = e.target.closest('#sidebar a');
-  if (side) { e.preventDefault(); post({ type: 'open', path: side.dataset.path }); return; }
+  const file = e.target.closest('#sidebar a');
+  if (file) { e.preventDefault(); peek(false); if (file.dataset.path !== current.path) post({ type: 'open', path: file.dataset.path }); return; }
+  if (e.target.closest('#sidebar')) return;
   const a = e.target.closest('a[href], a[*|href]');
   const href = a && (a.getAttribute('href') ?? a.getAttributeNS('http://www.w3.org/1999/xlink', 'href'));
   if (a && href && !href.startsWith('#')) { e.preventDefault(); post({ type: 'link', href: new URL(href, document.baseURI).href }); return; }

@@ -1,5 +1,6 @@
 import Cocoa
 import QuickLookUI
+import PDFKit
 import UniformTypeIdentifiers
 import WebKit
 import os
@@ -54,8 +55,6 @@ final class WebHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     let created = Date()
     let remoteImages: RemoteImageGate
     let scheme: SchemeHandler
-    /// The PDF on screen: the only URL a subframe may load (ShellPolicy), and the only PDF the scheme serves.
-    var pdfFrame: URL? { didSet { scheme.pdf = pdfFrame } }
 
     override init() {
         let config = WKWebViewConfiguration()
@@ -121,10 +120,9 @@ final class WebHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        // Only the shell page loads, and in a frame only the PDF on screen; links are clicks the page reports, and the document
-        // may not open frames.
+        // Only the shell page loads; links are clicks the page reports, and nothing may open a frame.
         let main = action.targetFrame?.isMainFrame ?? true
-        decisionHandler(ShellPolicy.allows(action.request.url, mainFrame: main, pdf: pdfFrame) ? .allow : .cancel)
+        decisionHandler(ShellPolicy.allows(action.request.url, mainFrame: main) ? .allow : .cancel)
     }
 
     private var crashes = 0
@@ -216,6 +214,10 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private var shownStamp: String?
     /// Whether the viewer offered "Open with" for the file on screen (FileView may take back what LinkPolicy allowed).
     private var shownCanOpen = false
+    /// The PDF on screen, drawn natively over the page's PDF area; nil for every other view.
+    private var pdfPane: PDFPane?
+    /// Bumped by every show and close, so a PDF still opening in the background for an older one is dropped.
+    private var pdfGen = 0
     /// The sidebar's folders as last sent, by path; `open` from the page is limited to their files.
     private var listings: [String: FolderListing.Listing] = [:]
     /// Folders the page may ask to list: the root and every folder a listing named. Nothing above the root is ever in it.
@@ -300,6 +302,11 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     override func viewWillAppear() {
         super.viewWillAppear()
         disableHostDoubleClick()
+        // Shown again without a new prepare: the PDF view closed when the preview disappeared, so bring it back.
+        if fileKind == .pdf, pdfPane == nil, let url = fileURL, host.controller === self {
+            shownStamp = nil
+            host.whenReady { [weak self] in self?.show(url, reason: "open") }
+        }
     }
 
     override func viewDidAppear() {
@@ -333,6 +340,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         super.viewWillDisappear()
         stopEdit(notifyWriter: true)
         host.remoteImages.reset()
+        closePDF()
     }
 
     deinit {
@@ -514,7 +522,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     }
 
     private func push(text: String, path: String, reason: String, keyTime: Double? = nil) {
-        host.pdfFrame = nil
+        closePDF()
         var payload = FileView.base(path: path, root: rootDir, reason: reason)
         payload["text"] = text
         payload["view"] = "markdown"
@@ -537,10 +545,40 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         let stamp = "\(st.st_size)-\(st.st_mtimespec.tv_sec).\(st.st_mtimespec.tv_nsec)-\(st.st_ino)"
         if reason == "change", stamp == shownStamp { return }
         shownStamp = stamp
-        let (p, pdf) = FileView.payload(path: url.path, kind: fileKind, root: rootDir, reason: reason, canOpen: LinkPolicy.fileRefusal(url) == nil)
+        let p = FileView.payload(path: url.path, kind: fileKind, root: rootDir, reason: reason, canOpen: LinkPolicy.fileRefusal(url) == nil)
         let canOpen = p["canOpen"] as? Bool == true
         shownCanOpen = canOpen
-        host.pdfFrame = pdf
+        pdfGen += 1
+        guard p["view"] as? String == "pdf" else { return finishShow(url, p, pdf: nil, reason: reason) }
+        // PDFKit may scan a large or damaged file to rebuild it, so it opens off the main thread; a newer show supersedes this one.
+        let gen = pdfGen
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = PDFPane.open(url)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, gen == self.pdfGen, self.fileURL == url else { return }
+                var p = p
+                var doc: PDFDocument?
+                switch result {
+                case .success(let d): doc = d
+                case .failure(let e):
+                    p["view"] = "info"
+                    p["note"] = e == .locked ? "This PDF is password-protected." : "This PDF can’t be shown here."
+                }
+                self.finishShow(url, p, pdf: doc, reason: reason)
+            }
+        }
+    }
+
+    private func finishShow(_ url: URL, _ p: [String: Any], pdf: PDFDocument?, reason: String) {
+        let canOpen = p["canOpen"] as? Bool == true
+        if let pdf {
+            let pane = pdfPane ?? PDFPane()
+            pane.onLink = { [weak self] in self?.pdfLink($0) }
+            pane.show(pdf, path: url.path, over: host.web)
+            pdfPane = pane
+        } else {
+            closePDF()
+        }
         let view = p["view"] as? String ?? ""
         log.info("show \(view, privacy: .public) (\(self.fileKind.rawValue, privacy: .public))")
         let json = String(data: try! JSONSerialization.data(withJSONObject: p), encoding: .utf8)!
@@ -557,6 +595,18 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
                 DispatchQueue.main.async { if self.fileURL?.path == path { self.js("sb.setOpener", ["path": path, "app": name]) } }
             } }
         }
+    }
+
+    private func closePDF() {
+        pdfGen += 1
+        pdfPane?.close()
+        pdfPane = nil
+    }
+
+    /// A link inside the PDF on screen: web links only, through the link policy and the writer, like the page's own links.
+    private func pdfLink(_ url: URL) {
+        if let why = PDFPane.linkRefusal(url) { return refuse("pdf link", why) }
+        openExternally(url)
     }
 
     /// A path the page names, accepted only when it is plain, inside the root (symlinks resolved), and one the sidebar listed.
@@ -674,6 +724,9 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             log.info("remote images loaded once for the previewed file")
             if let e = edit { stopEdit(notifyWriter: true, keepRetired: true); retired.append(e) }
             if let url = fileURL, let text = docText { push(text: text, path: url.path, reason: "remoteImages") }
+        case "pdfRect":
+            // Where the page reserved the PDF's place, in CSS pixels of the viewport; `hide` while the page has something above it.
+            if fileKind == .pdf { pdfPane?.place(message: body, in: host.web) }
         case "log":
             log.info("js: \(String((body["msg"] as? String ?? "").prefix(2000)), privacy: .private)")
         default: break

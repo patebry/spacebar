@@ -12,7 +12,7 @@ What the panel shows for each file in the sidebar:
 |---|---|
 | Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`, `.mkdn`) | rendered, with inline editing and task toggles |
 | Images (`.png`, `.jpg`, `.gif`, `.webp`, `.heic`, `.avif`, `.bmp`, `.tiff`, `.ico`, `.svg`) | fitted to the panel, with its dimensions and size; SVG as an image only |
-| PDF | rendered in the panel |
+| PDF | drawn natively by PDFKit in the panel, fitted to its width, pages in one scroll |
 | Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.html`, `.xml`, `.yaml`, `.toml`, `.sql`, `Dockerfile`, `Makefile` and more) | highlighted source with line numbers; HTML is shown as source, never rendered |
 | JSON | pretty-printed and highlighted, with a Raw toggle |
 | CSV and TSV | a table, first row as the header, up to 1,000 rows |
@@ -94,7 +94,7 @@ sandbox container after each rebuild. Other options are documented at the top of
 Tests that run off screen, without Quick Look (the test builds target Apple silicon):
 
 ```sh
-for t in settings scheme linkpolicy cas editkeys; do test/$t/run.sh; done
+for t in settings scheme linkpolicy cas editkeys pdfpane; do test/$t/run.sh; done
 python3 test/webcheck.py && python3 test/webthemes.py && python3 test/remoteimages.py && python3 test/sidebar.py
 ```
 
@@ -125,8 +125,8 @@ writer service; Finder stays in front. Saves are compare-and-swap: if the file c
   accepts messages from the extension's own page. Apps, scripts and executables in the sidebar can only be revealed in Finder.
 - The file browser never leaves the previewed folder: links that lead out of it are not listed, a file or folder the page asks
   for must be one the sidebar listed and must still resolve inside the folder, and hidden files are left out unless you turn
-  them on. Nothing in a file is ever run: HTML and scripts are shown as source, SVG only as an image, and the page loads files
-  only as images or the one PDF on screen.
+  them on. Nothing in a file is ever run: HTML and scripts are shown as source, SVG only as an image, a PDF by PDFKit (which runs
+  no PDF scripts; the PDF is parsed in the sandboxed preview extension itself), and the page loads files only as images.
 - The preview extension has a read-only sandbox exception for the whole disk, so relative images beside a document load and
   the sidebar can show the folder's files.
 - The preview extension has the `com.apple.security.network.client` entitlement. WKWebView's helper processes crash-loop

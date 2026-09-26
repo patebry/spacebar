@@ -208,8 +208,7 @@ function loadRemoteImages(e) {
 }
 
 /** Mermaid's strict mode disables click directives but keeps markup in labels; links and positioning there are the document's. */
-function tameMermaid(nodes) {
-  const blocked = settings.remoteImages !== true && current.remoteImagesOnce !== true;
+function tameMermaid(nodes, blocked = mermaidBlocked()) {
   for (const n of nodes) {
     if (blocked) n.querySelectorAll('img, image, feImage').forEach((i) => { if (/^\s*(https?:)?\/\//i.test(i.getAttribute('src') || i.getAttribute('href') || i.getAttribute('xlink:href') || '')) i.remove(); });
     n.querySelectorAll('a').forEach((a) => a.replaceWith(...a.childNodes));
@@ -267,40 +266,140 @@ function loadMermaid() {
       const s = document.createElement('script');
       s.src = 'spacebar://bundle/vendor/mermaid.min.js';
       s.onload = () => resolve();
-      s.onerror = reject;
+      s.onerror = (e) => { mermaidLoaded = null; reject(e); };
       document.head.appendChild(s);
     });
   }
   return mermaidLoaded;
 }
 
-// Each diagram's source, kept so a theme change can draw it again. Runs are queued: mermaid's configuration is global.
+// Mermaid lays a diagram out inside the element it draws into, so drawing in the document showed the source, then an empty
+// block, then a half-laid-out SVG. Every diagram is drawn off screen (#mm-stage) and put in whole; until then it is a blank
+// placeholder, as tall as the diagram last drawn in its place. Runs are queued: mermaid's configuration is global.
 const mermaidSrc = new WeakMap();
+// Finished SVGs ({ svg, id }) by configuration, width and source, so a redraw (an edit, a live reload) puts an unchanged
+// diagram back at once.
+const mermaidCache = new Map();
+const MERMAID_CACHE_MAX = 48;
+const MERMAID_MIN_H = 120;
 let mermaidQueue = Promise.resolve();
 let mermaidSeq = 0;
-/** Renders new diagrams, and with `redraw` draws already rendered ones again in the current theme's colours. */
+
+const mermaidBlocked = () => settings.remoteImages !== true && current.remoteImagesOnce !== true;
+// Some diagrams (gantt) size themselves to the width they are drawn at: the stage takes the document column's.
+function docWidth() {
+  const d = $('doc'), cs = getComputedStyle(d);
+  return Math.max(200, Math.round(d.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)));
+}
+const mermaidKey = (cfg, blocked, width) => `${JSON.stringify(cfg)}|${blocked ? 'b' : 'a'}|${width}`;
+function cacheSVG(key, entry) {
+  mermaidCache.delete(key);
+  mermaidCache.set(key, entry);
+  if (mermaidCache.size > MERMAID_CACHE_MAX) mermaidCache.delete(mermaidCache.keys().next().value);
+}
+
+/** Mermaid's SVG, parsed inert (a template loads nothing) and tamed before it can reach the page. */
+function tamedSVG(svg, blocked) {
+  const t = document.createElement('template');
+  t.innerHTML = svg;
+  tameMermaid([t.content], blocked);
+  return t.innerHTML;
+}
+
+/** A cached SVG under a fresh id (its markers and scoped styles use it), so two copies never share ids. */
+function reId(entry) {
+  const id = `sbm${++mermaidSeq}x`;
+  return entry.svg.split(entry.id).join(id);
+}
+
+function mermaidStage() {
+  let s = document.getElementById('mm-stage');
+  if (!s) {
+    s = el('div');
+    s.id = 'mm-stage';
+    s.setAttribute('aria-hidden', 'true');
+    document.body.append(s);
+  }
+  return s;
+}
+
+/** Takes each diagram's source out of a freshly rendered fragment, so it is never painted: a diagram drawn before in these
+ *  colours goes back at once, any other becomes a placeholder `heights[i]` tall (the diagram that was in its place). */
+function mountMermaid(frag, heights) {
+  const nodes = [...frag.querySelectorAll('pre.mermaid')];
+  if (!nodes.length) return;
+  const key = mermaidKey(mermaidConfig(), mermaidBlocked(), docWidth());
+  nodes.forEach((n, i) => {
+    const src = n.textContent;
+    mermaidSrc.set(n, src);
+    const hit = mermaidCache.get(key + '\n' + src);
+    if (hit) { n.innerHTML = reId(hit); return; }
+    n.textContent = '';
+    n.classList.add('mm-wait');
+    n.style.setProperty('--mm-h', Math.max(MERMAID_MIN_H, Math.round(heights[i] || 0)) + 'px');
+  });
+}
+
+/** Draws the diagrams still waiting, and with `redraw` every diagram again in the current colours. Nothing on screen changes
+ *  until every SVG of the run is finished; then all of them go in at once. */
 function runMermaid(redraw = true) {
   const job = mermaidQueue.then(async () => {
-    const nodes = [...document.querySelectorAll('#doc pre.mermaid')];
-    if (!nodes.length || !settings.mermaid) return;
-    const fresh = nodes.filter((n) => !mermaidSrc.has(n));
-    if (!fresh.length && !redraw) return;
-    fresh.forEach((n) => mermaidSrc.set(n, n.textContent));
+    const nodes = [...document.querySelectorAll('#doc pre.mermaid')].filter((n) => mermaidSrc.has(n));
+    const todo = redraw ? nodes : nodes.filter((n) => n.classList.contains('mm-wait'));
+    if (!todo.length || !settings.mermaid) return;
+    const done = new Map();
     try {
       await loadMermaid();
-      mermaid.initialize(mermaidConfig());
-      if (fresh.length) await mermaid.run({ nodes: fresh });
-      for (const n of redraw ? nodes : []) {
-        if (fresh.includes(n) || !n.isConnected) continue;
-        const { svg } = await mermaid.render(`sb-mermaid-${++mermaidSeq}`, mermaidSrc.get(n));
-        if (n.isConnected) n.innerHTML = svg;
+      if (document.fonts) await document.fonts.ready;
+      const cfg = mermaidConfig();
+      // Taken once: a remote-image grant during the run must not leave an untamed SVG under the blocked key.
+      const blocked = mermaidBlocked(), width = docWidth();
+      const key = mermaidKey(cfg, blocked, width);
+      mermaid.initialize(cfg);
+      const stage = mermaidStage();
+      stage.style.width = width + 'px';
+      for (const n of todo) {
+        const src = mermaidSrc.get(n);
+        const hit = mermaidCache.get(key + '\n' + src);
+        if (hit) { done.set(n, reId(hit)); continue; }
+        try {
+          const id = `sbm${++mermaidSeq}x`;
+          const svg = tamedSVG((await mermaid.render(id, src, stage)).svg, blocked);
+          if (blocked === mermaidBlocked()) cacheSVG(key + '\n' + src, { svg, id });
+          done.set(n, svg);
+        } catch (e) {
+          post({ type: 'log', msg: 'mermaid: ' + (e && (e.message || JSON.stringify(e))) });
+          done.set(n, null);
+        }
       }
-    } catch (e) { post({ type: 'log', msg: 'mermaid: ' + (e && (e.message || JSON.stringify(e))) }); } finally { tameMermaid(nodes); }
+    } catch (e) {
+      post({ type: 'log', msg: 'mermaid: ' + (e && (e.message || JSON.stringify(e))) });
+      // Mermaid did not load or start: a diagram still waiting shows its source rather than stay blank.
+      for (const n of todo) if (!done.has(n) && n.classList.contains('mm-wait')) done.set(n, null);
+    } finally {
+      mermaidStage().replaceChildren();
+    }
+    for (const [n, svg] of done) {
+      if (!n.isConnected) continue;
+      const fresh = n.classList.contains('mm-wait');
+      n.classList.remove('mm-wait');
+      n.style.removeProperty('--mm-h');
+      if (svg === null) {
+        // Not a diagram mermaid can draw: its source, marked as such, is the honest thing to show.
+        n.classList.add('mm-error');
+        n.textContent = mermaidSrc.get(n);
+        continue;
+      }
+      n.classList.remove('mm-error');
+      // Only a diagram's first appearance fades in; a redraw in new colours is a plain swap.
+      n.classList.toggle('mm-in', fresh);
+      n.innerHTML = svg;
+    }
   });
   mermaidQueue = job.catch(() => {});
   return job;
 }
-matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => runMermaid());
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { runMermaid(); syncPdf(); });
 theme.onchange = () => runMermaid(); // a user theme or custom.css finished loading
 
 // While editing, current.text is the page's own view of the document with the edit buffer applied (the native side saves the
@@ -350,11 +449,15 @@ function blockRange(b) {
 /** Every redraw makes new diagram nodes holding their source; each is drawn here, whatever redrew the document. */
 let drawnMermaid = Promise.resolve();
 function draw() {
-  if (!isMarkdown(current)) { $('doc').replaceChildren(viewNode(current)); decorate(); return; }
-  $('doc').replaceChildren(render(current.text));
+  if (!isMarkdown(current)) { $('doc').replaceChildren(viewNode(current)); decorate(); syncPdf(); return; }
+  const heights = [...document.querySelectorAll('#doc pre.mermaid')].map((n) => n.getBoundingClientRect().height);
+  const frag = render(current.text);
+  mountMermaid(frag, heights);
+  $('doc').replaceChildren(frag);
   if (editing) spliceEditor([editing.start, editing.start + editing.lines]);
   decorate();
-  if (settings.mermaid && document.querySelector('#doc pre.mermaid')) drawnMermaid = runMermaid(false);
+  syncPdf();
+  if (settings.mermaid && document.querySelector('#doc pre.mermaid.mm-wait')) drawnMermaid = runMermaid(false);
 }
 
 /** Rendered text of a range, without KaTeX's hidden MathML copy of each formula. */
@@ -542,10 +645,15 @@ window.sb = {
     docVer = p.ver ?? docVer;
     const y = samePath ? window.scrollY : 0;
     current = p;
+    // Each render may come with a new native PDF view (the extension closes it for anything else): place it afresh.
+    pdfPosted = '';
     $('base').href = p.base;
     document.title = p.name;
     root.dataset.view = isMarkdown(p) ? 'markdown' : p.view;
     $('edit').hidden = !isMarkdown(p);
+    // The popover's text settings do nothing for a PDF, and it would open under the native view.
+    $('aa').hidden = p.view === 'pdf';
+    if (p.view === 'pdf') showPopover(false);
     showFolder(p);
     showCrumbs(p);
     draw();
@@ -573,6 +681,7 @@ window.sb = {
     } else if (LOOK_KEYS.some((k) => prev[k] !== settings[k])) {
       runMermaid();
     }
+    syncPdf();
     post({ type: 'log', msg: `settings applied theme=${settings.theme}` });
   },
   /** The native side found the clicked block elsewhere in its copy of the document (the page trailed it). */
@@ -827,20 +936,62 @@ function imageView(p) {
   return box;
 }
 
+/** The PDF itself is drawn by a native PDFView the extension lays over `.pdf-area`; the page only reserves the space and
+ *  reports where it is (syncPdf), so WebKit's PDF plugin, and its unlabelled buttons, never load. */
 function pdfView(p) {
   const box = el('div', 'viewer viewer-pdf');
   box.append(viewHead(p));
-  const f = document.createElement('iframe');
-  f.title = p.name;
-  f.src = p.src;
-  box.append(f);
+  const area = el('div', 'pdf-area');
+  area.setAttribute('role', 'document');
+  area.setAttribute('aria-label', plainName(p.name));
+  box.append(area);
+  pdfObserver.disconnect();
+  pdfObserver.observe(area);
+  // Shown over a narrow page, the sidebar animates its width without moving the area.
+  pdfObserver.observe($('sidebar'));
   return box;
+}
+
+// Where the native PDF view goes, in CSS pixels of the viewport, posted whenever it moves or changes size (the sidebar's
+// animation, a drag of its edge, the panel resizing, the popover opening) and once with `hide` when no PDF is on screen.
+let pdfPosted = '';
+let pdfQueued = false;
+function pdfRect() {
+  const area = document.querySelector('#doc .pdf-area');
+  if (!area || current.view !== 'pdf') return { path: current.path, hide: true };
+  const r = area.getBoundingClientRect();
+  // The sidebar shown over the page in a narrow panel, and the Aa popover, sit above the page; the native view must not.
+  let left = r.left;
+  const side = $('sidebar');
+  if (root.classList.contains('sb-peek') && !side.hidden) left = Math.max(left, side.getBoundingClientRect().right);
+  const bottom = Math.min(r.bottom, window.innerHeight);
+  const c = themeColors();
+  const bg = mixc(c.bg, c.fg, 0.06).map(Math.round);
+  return { path: current.path, x: Math.round(left), y: Math.round(r.top), w: Math.max(0, Math.round(r.right - left)), h: Math.max(0, Math.round(bottom - r.top)),
+    hide: !pop.hidden, bg, dark: (0.2126 * c.bg[0] + 0.7152 * c.bg[1] + 0.0722 * c.bg[2]) / 255 < 0.45 };
+}
+const pdfObserver = new ResizeObserver(() => syncPdf());
+window.addEventListener('resize', () => syncPdf());
+window.addEventListener('scroll', () => syncPdf(), { passive: true });
+function syncPdf() {
+  if (pdfQueued) return;
+  pdfQueued = true;
+  requestAnimationFrame(() => {
+    pdfQueued = false;
+    const r = pdfRect();
+    const key = JSON.stringify(r);
+    if (key === pdfPosted) return;
+    // Nothing to take down when no PDF was ever up.
+    if (r.hide && !pdfPosted) return;
+    pdfPosted = r.hide && !('x' in r) ? '' : key;
+    post({ type: 'pdfRect', ...r });
+  });
 }
 
 function viewNode(p) {
   switch (p.view) {
     case 'image': if (typeof p.src === 'string') return imageView(p); break;
-    case 'pdf': if (typeof p.src === 'string') return pdfView(p); break;
+    case 'pdf': return pdfView(p);
     case 'json': if (typeof p.text === 'string') return jsonView(p); break;
     case 'csv': if (typeof p.text === 'string') return csvView(p); break;
     case 'code': case 'text':
@@ -856,7 +1007,7 @@ function viewNode(p) {
       break;
     default: break;
   }
-  return infoCard(p);
+  return infoCard(p, typeof p.note === 'string' ? p.note : undefined);
 }
 
 // ---------- the sidebar: the previewed folder as a tree, for a file and a folder alike (outside #doc, text only) ----------
@@ -1034,6 +1185,7 @@ function syncToggle() {
 function peek(open) {
   root.classList.toggle('sb-peek', open);
   syncToggle();
+  syncPdf();
 }
 
 $('side-toggle').addEventListener('click', () => {
@@ -1104,6 +1256,7 @@ function showPopover(open) {
   pop.hidden = !open;
   $('aa').setAttribute('aria-expanded', String(open));
   if (open) syncPopover();
+  syncPdf();
 }
 
 /** A popover choice: applied here at once, and sent to the native side, which saves it (panel keys only) and echoes it back. */

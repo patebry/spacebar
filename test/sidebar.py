@@ -8,8 +8,9 @@ Checks the tree (folders first, icons, lazy expand and collapse, remembered expa
 files, the cap, links out of the root), every file view (Markdown, image, SVG, PDF, code, JSON, CSV, text, the info card), the
 hostile fixtures in test/hostile/browser beside a link to /etc and names made of dots, the resize handle, the no-flash
 document-start state, the toggle and its persistence, the message gate, and that inline editing, task toggles, the TOC, the Aa
-popover, themes and narrow panels still work with the sidebar open or collapsed. A sandboxed copy of the harness, signed with
-the extension's entitlements, shows that a PDF and an image render under the extension's sandbox."""
+popover, themes and narrow panels still work with the sidebar open or collapsed, and the native PDF view: laid over the page's
+PDF area, following the sidebar and the panel, and torn down cleanly. A sandboxed copy of the harness, signed with the
+extension's entitlements, shows that a PDF and an image render under the extension's sandbox."""
 import json, os, random, shutil, subprocess, sys, tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webthemes import Page, ROOT, THEMES, HELPERS, click
@@ -77,6 +78,7 @@ def make_tree(out):
         open(os.path.join(tree, 'many', f'm-{i:03d}.txt'), 'w').write(f'{i}\n')
     shutil.copy(os.path.join(ROOT, 'test', 'fixtures', 'img.png'), os.path.join(tree, 'photo.png'))
     open(os.path.join(tree, 'doc.pdf'), 'wb').write(make_pdf('Hello PDF'))
+    open(os.path.join(tree, 'broken.pdf'), 'wb').write(b'%PDF-1.4\nnot really a pdf\n')
     hdir = os.path.join(tree, 'hostile')
     src = os.path.join(hostile.HERE, 'browser')
     for f in os.listdir(src):
@@ -101,7 +103,7 @@ SANDBOX_ID = 'md.spacebar.test.webcheck'
 
 def sandboxed(tree, check):
     """The harness signed with the preview extension's sandbox entitlements (build.sh's Preview.entitlements with the default
-    READ_ACCESS=abs-ro): a PDF and an image from the `file` host must still render. macOS keeps a container for it under
+    READ_ACCESS=abs-ro): PDFKit must read the PDF, and an image from the `file` host must still render. macOS keeps a container for it under
     ~/Library/Containers/md.spacebar.test.webcheck."""
     out = tempfile.mkdtemp(prefix='spacebar-sandbox-')
     exe, ent, plist = (os.path.join(out, n) for n in ('webcheck', 'ent.plist', 'Info.plist'))
@@ -109,7 +111,7 @@ def sandboxed(tree, check):
     open(plist, 'w').write(f'<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>{SANDBOX_ID}</string></dict></plist>')
     subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-O', '-target', 'arm64-apple-macos13.0'] +
                    [os.path.join(ROOT, *p) for p in (('test', 'web', 'main.swift'), ('Shared', 'Settings.swift'), ('Shared', 'WebShell.swift'),
-                                                      ('Shared', 'FolderListing.swift'), ('Shared', 'LinkPolicy.swift'))] +
+                                                      ('Shared', 'FolderListing.swift'), ('Shared', 'LinkPolicy.swift'), ('Preview', 'PDFPane.swift'))] +
                    ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist', '-Xlinker', plist, '-o', exe], check=True)
     subprocess.run(['codesign', '--force', '--sign', '-', '-i', SANDBOX_ID, '--entitlements', ent, exe], check=True, capture_output=True)
     ents = subprocess.run(['codesign', '-d', '--entitlements', '-', exe], capture_output=True, text=True).stdout
@@ -124,14 +126,11 @@ def sandboxed(tree, check):
     try:
         cmd('@size:1000x760')
         cmd('@root:' + tree)
-        r = cmd('@render:' + os.path.join(tree, 'doc.pdf'))
-        cmd('@wait:1.5')
-        rect = json.loads(cmd("@eval:JSON.stringify((() => { const r = document.querySelector('#doc .viewer-pdf iframe').getBoundingClientRect();"
-                              " return [r.left + r.width / 2, r.top + r.height / 2]; })())")['result'])
-        px = cmd('@pixel:%d,%d' % tuple(rect))['result']
-        frames = [m.get('url') for m in r['messages'] if m.get('type') == '_frame']
-        check('app-sandbox' in ents and frames and px and px[2] > 200 and px[0] < 60,
-              'sandboxed like the extension: a PDF renders in the panel', f'pixel {px}, frames {frames}')
+        cmd('@render:' + os.path.join(tree, 'doc.pdf'))
+        cmd('@wait:0.5')
+        pdf = cmd('@pdf')['result']
+        check('app-sandbox' in ents and pdf['open'] and pdf['placed'] and pdf['text'] == 'Hello PDF' and pdf.get('pixel') and pdf['pixel'][2] > 200,
+              'sandboxed like the extension: PDFKit reads and draws the PDF', json.dumps(pdf))
         cmd('@render:' + os.path.join(tree, 'photo.png'))
         cmd('@wait:0.5')
         w = cmd("@eval:(document.querySelector('#doc .viewer-image img') || {}).naturalWidth")['result']
@@ -566,13 +565,74 @@ def main():
         r = page.cmd("@eval:window.webkit.messageHandlers.sb.postMessage({type:'openFile', path: " + json.dumps(T('run.sh')) + "}); 0")
         page.cmd('@wait:0.1')
         check('_openRefused' in [m.get('type') for m in r['messages'] + page.cmd('@eval:0')['messages']], 'openFile for a script is refused')
+        # ---- PDF: a native PDFView over the page's PDF area; no WebKit plugin, no frame, no unlabelled buttons ----
+        PDF_AREA = "const r = document.querySelector('#doc .pdf-area').getBoundingClientRect(); return [r.left, r.top, r.width, r.height]"
+        near = lambda a, b: a and b and len(a) == len(b) and all(abs(x - y) <= 1 for x, y in zip(a, b))
         r = view(T('doc.pdf'))
-        page.cmd('@wait:1.5')
-        frames = [m.get('url') for m in r['messages'] if m.get('type') == '_frame']
-        rect = page.js("const r = document.querySelector('#doc .viewer-pdf iframe').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]")
-        px = page.cmd('@pixel:%d,%d' % (rect[0], rect[1]))['result']
-        check(len(frames) == 1 and frames[0].startswith('spacebar://file' + T('doc.pdf') + '?v=') and px and px[2] > 200 and px[0] < 60,
-              'PDF: rendered in the panel, in the one frame the shell allows', f'{frames} pixel {px}')
+        page.cmd('@wait:0.5')
+        pdf = page.cmd('@pdf')['result']
+        area = page.js(PDF_AREA)
+        check(pdf['open'] and pdf['placed'] and not pdf['hidden'] and pdf['above'] and pdf['inContainer'] and near(pdf['frame'], area)
+              and area[0] >= 240 and area[1] > 60 and area[1] + area[3] == 800,
+              'PDF: a native view laid exactly over the area the page reserves, right of the sidebar and under the breadcrumb',
+              f"frame {pdf.get('frame')} area {area}")
+        check(pdf['pages'] == 1 and pdf['text'] == 'Hello PDF' and pdf['autoScales'] and pdf['continuous'] and pdf.get('pixel')
+              and pdf['pixel'][2] > 200 and pdf['pixel'][0] < 60, 'PDF: PDFKit draws it, fitted, as continuous pages', json.dumps(pdf))
+        doc = page.js("""const d = document.getElementById('doc'); return { frames: document.querySelectorAll('iframe, embed, object').length,
+          buttons: [...d.querySelectorAll('button')].map((b) => [b.textContent, b.dataset.action]), aa: document.getElementById('aa').hidden,
+          crumbs: !document.getElementById('crumbs').hidden, side: getComputedStyle(document.getElementById('sidebar')).visibility,
+          scroll: document.scrollingElement.scrollHeight <= innerHeight }""")
+        check(doc == {'frames': 0, 'buttons': [['Open', 'openFile']], 'aa': True, 'crumbs': True, 'side': 'visible', 'scroll': True}
+              and not [m for m in r['messages'] if m.get('type') in ('_frame', '_navigation')],
+              'PDF: no frame or plugin; one labelled Open button through the writer; sidebar and breadcrumb stay', json.dumps(doc))
+        r = page.cmd('@nativeclick:#doc .viewer-pdf button.viewer-open')
+        check('_openFile' in [m.get('type') for m in r['messages']], 'PDF: its Open button posts openFile, checked like any viewer', json.dumps(r['messages'])[:200])
+        light = page.cmd('@appearance:light') and page.cmd('@wait:0.4') and page.cmd('@pdf')['result']
+        dark = page.cmd('@appearance:dark') and page.cmd('@wait:0.4') and page.cmd('@pdf')['result']
+        check(not light['dark'] and dark['dark'] and sum(light['bg']) > 600 and sum(dark['bg']) < 200,
+              "PDF: the backdrop follows the theme's light and dark background", f"{light['bg']} / {dark['bg']}")
+        page.cmd('@appearance:light')
+        click(page, '#side-toggle')
+        page.cmd('@wait:0.6')
+        collapsed, area = page.cmd('@pdf')['result'], page.js(PDF_AREA)
+        click(page, '#side-toggle')
+        page.cmd('@wait:0.6')
+        reopened, area2 = page.cmd('@pdf')['result'], page.js(PDF_AREA)
+        check(near(collapsed['frame'], area) and area[0] == 0 and area[2] == 1200 and near(reopened['frame'], area2) and area2[0] == 240,
+              'PDF: the view follows the sidebar collapsing and opening', f"{collapsed['frame']} / {reopened['frame']}")
+        page.cmd('@nativedrag:#side-resize,60')
+        dragged, area = page.cmd('@pdf')['result'], page.js(PDF_AREA)
+        page.cmd("@eval:document.getElementById('side-resize').dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); 0")
+        page.cmd('@wait:0.3')
+        check(near(dragged['frame'], area) and area[0] == 300, 'PDF: the view follows a drag of the sidebar edge', f"{dragged['frame']} area {area}")
+        page.cmd('@size:1000x700')
+        resized, area = page.cmd('@pdf')['result'], page.js(PDF_AREA)
+        check(near(resized['frame'], area) and area[1] + area[3] == 700, 'PDF: the view follows the panel resizing', f"{resized['frame']} area {area}")
+        page.cmd('@size:600x700')
+        click(page, '#side-toggle')
+        page.cmd('@wait:0.3')
+        peeked = page.cmd('@pdf')['result']
+        side_right = page.js("return document.getElementById('sidebar').getBoundingClientRect().right")
+        click(page, '#side-toggle')
+        page.cmd('@wait:0.3')
+        check(st()['view'] == 'pdf' and peeked['frame'][0] >= side_right - 1 and not peeked['hidden'],
+              'PDF: narrow, the sidebar shown over the page is never under the native view', f"{peeked['frame']} sidebar right {side_right}")
+        page.cmd('@size:1200x800')
+        view(T('README.md'))
+        page.cmd('@wait:0.3')
+        gone = page.cmd('@pdf')['result']
+        md = page.js("return [document.documentElement.dataset.view, !!document.querySelector('#doc h1'), getComputedStyle(document.body).overflow, document.getElementById('aa').hidden]")
+        check(gone == {'open': False, 'docAlive': False, 'fds': 0, 'inContainer': False} and md == ['markdown', True, 'visible', False],
+              'PDF -> Markdown: the native view is removed, its document freed and no descriptor left on the file; the page is back',
+              f'{json.dumps(gone)} {json.dumps(md)}')
+        view(T('doc.pdf'))
+        view(T('photo.png'))
+        gone = page.cmd('@pdf')['result']
+        check(not gone['open'] and not gone['docAlive'] and gone['fds'] == 0, 'PDF -> image: the same clean teardown', json.dumps(gone))
+        view(T('broken.pdf'))
+        card = page.js("const c = document.querySelector('#doc .info-card'); return c && [document.documentElement.dataset.view, c.querySelector('.viewer-note').textContent]")
+        check(card == ['info', 'This PDF can’t be shown here.'] and not page.cmd('@pdf')['result']['open'],
+              'PDF PDFKit cannot open: the info card with a note, no native view', json.dumps(card))
 
         # ---- hostile files: nothing runs, nothing renders as a document ----
         H = lambda f: T('hostile', f)
@@ -598,15 +658,19 @@ def main():
         check(page.js("return document.querySelectorAll('#doc img, #doc script, #doc a').length") == 0 and not pwned(r) and cells and cells[0].startswith('<img'),
               'hostile CSV: markup and formulas in cells stay text', json.dumps(cells)[:120])
         r = view(H('evil.pdf'))
-        page.cmd('@wait:1.5')
-        check(not pwned(r) and not [m for m in r['messages'] if m.get('type') == '_navigation'], 'hostile PDF: its JavaScript cannot reach the page')
+        page.cmd('@wait:1')
+        ev = page.cmd('@pdf')['result']
+        check(not pwned(r) and ev['open'] and ev['text'] == 'Evil' and not [m for m in r['messages'] if m.get('type') == '_navigation'],
+              'hostile PDF: PDFKit shows it and runs none of its JavaScript')
         r = page.cmd("@eval:(() => { const f = document.createElement('iframe'); f.src = " + json.dumps('spacebar://file' + H('page.html')) + "; document.body.appendChild(f);"
                      " const g = document.createElement('iframe'); g.src = " + json.dumps('spacebar://file' + T('doc.pdf')) + "; document.body.appendChild(g); return 0; })()")
         page.cmd('@wait:0.8')
         r2 = page.cmd('@eval:0')
-        navs = [m.get('url') for m in r['messages'] + r2['messages'] if m.get('type') == '_navigation']
-        check(len(navs) == 2 and not [m for m in r['messages'] + r2['messages'] if m.get('type') == '_frame'] and not pwned(r2),
-              'no frame loads but the PDF on screen: an HTML file or another PDF in an injected frame is cancelled', json.dumps(navs)[:200])
+        msgs = r['messages'] + r2['messages']
+        blocked = [m['msg'] for m in msgs if m.get('type') == 'log' and m.get('msg', '').startswith('csp blocked frame-src')]
+        check(len(blocked) == 2 and not [m for m in msgs if m.get('type') in ('_navigation', '_frame')] and not pwned(r2),
+              'no frame loads at all: the CSP stops an HTML file or a PDF in an injected frame before it is requested', json.dumps(blocked)[:200])
+        page.logs = [l for l in page.logs if not l.startswith('csp blocked frame-src')]
         page.cmd("@eval:document.querySelectorAll('body > iframe').forEach((f) => f.remove()); 0")
 
         # ---- Markdown in the browser: still edits, and the TOC and toggles work beside any view ----

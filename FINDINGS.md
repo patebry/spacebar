@@ -11,8 +11,8 @@ spacebar.app (md.spacebar)                        SwiftUI settings app; spacebar
 └─ PlugIns/SpacebarPreview.appex (md.spacebar.preview)
    │  sandboxed, view-based QLPreviewingController; one WKWebView per extension process, reused across previews
    │  spacebar://bundle/…  Preview/web (index.html, app.js, vendored markdown-it, KaTeX, highlight.js, mermaid, DOMPurify)
-   │  spacebar://file/…    read-only, by an explicit type map: images (the viewer, a document's relative images) and the
-   │                       one PDF on screen, inside the sidebar's root
+   │  spacebar://file/…    read-only, by an explicit type map: images only (the viewer, a document's relative images)
+   │  PDFPane              the PDF on screen: a PDFKit PDFView over the page's PDF area, placed by the page's pdfRect
    └─ XPCServices/md.spacebar.preview.writer.xpc   unsandboxed XPC service (SpacebarWriter)
         write      compare-and-swap writes to the previewed Markdown file
         open       links, "Open in editor" and the viewer's "Open with" (NSWorkspace is a no-op inside the sandboxed extension)
@@ -38,12 +38,13 @@ Swift calls into the page through `window.sb`, and the page calls back through t
 | Capability | How | Evidence |
 |---|---|---|
 | Render | markdown-it + KaTeX (texmath) + highlight.js; mermaid loads lazily, and the panel shows at first paint, before mermaid (4287dc1) | `docs/evidence/0-finder-spacebar.png`, `docs/evidence/themes/`; `test/webcheck.py` |
+| Mermaid without a flash | `mermaid.run` drew in the diagram's own element, so the source showed, then an empty block, then a half-laid-out SVG; a re-theme's `mermaid.render` drew into `<body>`, a flex row, beside the page. Every diagram is now drawn off screen (`#mm-stage`) and swapped in whole: its source is taken out before the first paint, a blank placeholder the height of the diagram last in its place holds the space, the first reveal fades in (not under reduced motion), a re-theme swaps finished SVGs, and finished SVGs are cached by colours and source so a redraw puts an unchanged diagram straight back | `test/webthemes.py` samples every diagram at each DOM mutation and animation frame |
 | Live reload | DispatchSource watch that re-arms across atomic saves, 15 ms debounce; covers append, temp+rename and rename-away saves | `test/livereload.py` |
 | Images and links | Relative images load via `<base href="spacebar://file/<dir>/">`. Markdown links inside the previewed folder open in the panel; others go through the link policy to the default app | `test/webcheck.py`, `test/linkpolicy/run.sh` |
 | Folder mode (opt-in) | The folders extension claims `public.folder`/`public.directory`; it is enabled only while `folderMode` is on and declines otherwise. Ships; verified by hand in Finder | `docs/evidence/themes/settings-folders.png`; `test/folders.py` (Quick Look) |
-| Sidebar file browser | Every preview, a single file or a folder, shows the previewed folder (the root) as a tree: folders first, then files, README first, sorted by `folderSort`, each with an inline-SVG type icon. Folders expand lazily and are re-listed by a watch while open; expansion is remembered per root for the life of the extension process, and the current file's folders open. Hidden files are skipped unless `showHiddenFiles`; links out of the root, FIFOs and devices always are; packages are single items; at most 500 entries per folder, with an "N more" note. A click shows the file in the panel by kind (FileView): Markdown as before; images fitted with dimensions; PDF in an iframe; code highlighted with line numbers (HTML as source); JSON pretty-printed with a Raw toggle; CSV/TSV as a table capped at 1,000 rows; text; anything else an info card with Open with its default app, or Reveal in Finder where LinkPolicy refuses it. A breadcrumb shows the path from the root; the panel title stays the file Quick Look opened | `test/sidebar.py` (88), `test/settings/run.sh` (tree, types), `test/scheme/run.sh` |
+| Sidebar file browser | Every preview, a single file or a folder, shows the previewed folder (the root) as a tree: folders first, then files, README first, sorted by `folderSort`, each with an inline-SVG type icon. Folders expand lazily and are re-listed by a watch while open; expansion is remembered per root for the life of the extension process, and the current file's folders open. Hidden files are skipped unless `showHiddenFiles`; links out of the root, FIFOs and devices always are; packages are single items; at most 500 entries per folder, with an "N more" note. A click shows the file in the panel by kind (FileView): Markdown as before; images fitted with dimensions; PDF natively (below); code highlighted with line numbers (HTML as source); JSON pretty-printed with a Raw toggle; CSV/TSV as a table capped at 1,000 rows; text; anything else an info card with Open with its default app, or Reveal in Finder where LinkPolicy refuses it. A breadcrumb shows the path from the root; the panel title stays the file Quick Look opened | `test/sidebar.py` (99), `test/settings/run.sh` (tree, types), `test/scheme/run.sh` |
 | Sidebar chrome | A toolbar button collapses it (animated, off under reduced motion); `sidebarCollapsed` is saved through the writer and applied at document start. Its right edge resizes it: 160 px to 45% of the panel or 480 px, saved as `sidebarWidth` once when the drag ends, applied at document start, reset by a double-click; dragging never collapses it. Below 640 px it collapses on screen only and the button shows it over the page; below 1100 px an open sidebar hides the TOC rail | `test/sidebar.py` |
-| PDF in the panel | Served as `application/pdf` from the `file` host into an iframe the page makes; the navigation delegate lets a subframe load only that exact URL (ShellPolicy). Verified off screen, and in a copy of the harness signed with the extension's sandbox entitlements (the rendered page is sampled for the PDF's pixels) | `test/sidebar.py` |
+| PDF in the panel | A PDFKit `PDFView` (Preview/PDFPane.swift) laid over the page's `.pdf-area`, under the breadcrumb and beside the sidebar: fitted, continuous pages, a backdrop from the theme. The page posts the area's rect whenever it moves (the sidebar's animation, a drag of its edge, the panel resizing); between posts the view keeps its margins. The iframe it replaced showed WebKit's PDF plugin and its unlabelled HUD buttons. Links in a PDF go through LinkPolicy and the writer. Anything else on screen closes the view and frees the document. Verified off screen, and in a copy of the harness signed with the extension's sandbox entitlements | `test/pdfpane/run.sh`, `test/sidebar.py` |
 | Task toggles | The checkbox sends its line and text; Swift re-locates the line and the writer saves it with compare-and-swap | 2338549; `test/corpus.py` |
 | Inline editing | See the next section | 068d11d, e1396e9, a742ad8, 4bfa7d6, f2c81fb, bbc51b2 |
 | Double-click fix | See below | a742ad8; `test/dblclick.py` |
@@ -89,7 +90,7 @@ The threat is a downloaded Markdown file, and whatever sits beside it, driving t
 
 1. **CSP**
    - Scripts load only from the bundle.
-   - No inline scripts or handlers, frames, objects, forms or connections.
+   - No inline scripts or handlers, frames, objects, forms or connections; the shell allows no subframe at all.
    - Images only from `spacebar:`, `https:` and `data:`.
 2. **DOMPurify** sanitizes the whole document before it reaches the DOM.
    - Inline styles are dropped, except table alignment.
@@ -125,12 +126,16 @@ The threat is a downloaded Markdown file, and whatever sits beside it, driving t
 7. **Writer:** writes only to existing Markdown regular files (checked on both the path and the symlink target), at most 64 MB.
    `reveal` only selects an existing file in Finder; `defaultApp` names an app only for a file LinkPolicy allows.
 8. **File views:** a file is never rendered as a document. The `file` host serves only images (by an explicit content-type
-   map, `nosniff`, a `default-src 'none'` CSP, at most 50 MB) and the one PDF on screen at its exact URL, inside the root; it
-   reads the path it checked, symlinks resolved, and serves no text, HTML or unknown type at all. Text, code, JSON and CSV reach the page as
+   map, `nosniff`, a `default-src 'none'` CSP, at most 50 MB); it reads the path it checked, symlinks resolved, and serves no
+   PDF, text, HTML or unknown type at all. A PDF is opened by PDFKit in the extension (off the main thread), which runs no PDF
+   JavaScript. This moves PDF parsing out of WebKit's WebContent process into the extension itself: a memory-safety bug in
+   CoreGraphics' PDF parser would now run in the sandboxed extension, which holds the connection to the writer, rather than
+   one process further away. Accepted for a native viewer without WebKit's unlabelled plugin controls; the writer's own checks
+   (Markdown files only, LinkPolicy) still bound what that connection can do. Text, code, JSON and CSV reach the page as
    strings and are put in with `textContent`; highlight.js output is sanitized to `<span class>` only. SVG is shown only as
-   `<img>`. The page's CSP allows frames only from `spacebar://file/`, and the shell only the PDF on screen.
+   `<img>`.
 
-Tests: `test/webcheck.py` (10/10), `test/linkpolicy/run.sh` (44/44), `test/remoteimages.py` (19/19), `test/sidebar.py` (88/88, with the
+Tests: `test/webcheck.py` (10/10), `test/linkpolicy/run.sh` (44/44), `test/remoteimages.py` (19/19), `test/sidebar.py` (99/99, with the
 hostile file-browser fixtures in `test/hostile/browser`, a link to `/etc` and names made of dots), `test/hostile.py` (runs the
 hostile fixtures through Quick Look). The two-round adversarial review's findings are fixed in 1c207e0.
 

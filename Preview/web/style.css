@@ -38,6 +38,15 @@
 
   .mermaid { text-align: center; }
   pre.mermaid { background: transparent; color: var(--muted); }
+  /* A diagram not drawn yet: a blank block the size it will likely have. Its source is never shown. */
+  pre.mermaid.mm-wait { box-sizing: border-box; min-height: var(--mm-h, 120px); background: color-mix(in srgb, var(--code-bg) 70%, transparent); }
+  pre.mermaid.mm-in > svg { animation: mm-in .16s ease-out both; }
+  @keyframes mm-in { from { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { pre.mermaid.mm-in > svg { animation: none; } }
+  pre.mermaid.mm-error { text-align: left; white-space: pre-wrap; border: 1px dashed var(--border); }
+  /* Where mermaid lays diagrams out, away from the page: never painted, never in the body's flex row. */
+  #mm-stage { position: fixed !important; left: -100000px !important; top: 0 !important; width: 1000px; height: 0; overflow: hidden !important;
+    visibility: hidden !important; pointer-events: none !important; }
   .img-blocked { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: .2em .8em; font-size: .8em; color: var(--muted); border: 1px dashed var(--border); border-radius: 6px; padding: .2em .6em; }
   .img-load { font: inherit; color: var(--link); background: none; border: 0; padding: 0; cursor: pointer; }
   .img-load:hover { text-decoration: underline; text-underline-offset: 2px; }
@@ -107,7 +116,15 @@
   #doc .code-view pre.code { flex: 1 1 auto; }
   #doc .viewer-image { margin: 0; }
   #doc .viewer-image img { display: block; margin: 0 auto; max-width: 100%; max-height: calc(100vh - 150px); object-fit: contain; }
-  #doc .viewer-pdf iframe { display: block; width: 100%; height: calc(100vh - 150px); border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+  /* A PDF fills the rest of the panel under its toolbar, edge to edge; the extension lays its native PDFView over .pdf-area. */
+  :root[data-view=pdf] body { height: 100vh; overflow: hidden; }
+  :root[data-view=pdf] #main { display: flex; flex-direction: column; height: 100vh; }
+  :root[data-view=pdf] #doc { flex: 1 1 auto; min-height: 0; width: 100%; box-sizing: border-box; display: flex; flex-direction: column;
+    padding-left: 0; padding-right: 0; padding-bottom: 0; }
+  #doc .viewer-pdf { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  #doc .viewer-pdf .viewer-head { padding: 0 40px; }
+  #doc .pdf-area { flex: 1 1 auto; min-height: 0; border-top: 1px solid var(--border); }
+  @media (max-width: 560px) { #doc .viewer-pdf .viewer-head { padding: 0 20px; } }
   #doc .viewer-csv table { font-size: 13px; }
   #doc .viewer-csv th, #doc .viewer-csv td { max-width: 32em; vertical-align: top; white-space: pre-wrap; }
   #doc .info-card { display: grid; justify-items: center; text-align: center; gap: 4px; padding: 48px 0 24px; }

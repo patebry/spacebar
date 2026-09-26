@@ -4,9 +4,9 @@ import WebKit
 
 /// Serves the page's `spacebar:` URLs:
 ///   spacebar://bundle/…            the web/ folder (the CSP allows scripts from here, so a path must stay inside web/)
-///   spacebar://file/<abs path>     read-only, typed by an explicit map (FileTypes.contentTypes): images (a document's
-///                                  relative images, the image viewer), and the one PDF on screen (`pdf`) inside `fileRoot`.
-///                                  Nothing else is served, so no file can be loaded as a page, a script or a style
+///   spacebar://file/<abs path>     read-only, typed by an explicit map (FileTypes.contentTypes): images only (a document's
+///                                  relative images, the image viewer). Nothing else is served, so no file can be loaded as a
+///                                  page, a script, a style or a frame
 ///   spacebar://user/custom.css     the user's CSS in the support folder
 ///   spacebar://user/themes/<f>.css a user theme; only a plain file name inside themes/
 /// The app's live preview uses it with `fileHost: false`.
@@ -15,10 +15,8 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
     let supportDir: () -> URL
     let fileHost: Bool
     var onRefused: (String) -> Void = { _ in }
-    /// The root of the sidebar's tree; nil serves images only.
+    /// The root of the sidebar's tree.
     var fileRoot: String?
-    /// The PDF on screen: the only PDF served, and only at this exact URL.
-    var pdf: URL?
     static let maxUserCSSBytes = 1 << 20
 
     init(webRoot: URL, supportDir: @escaping () -> URL = { SettingsFile.supportDir }, fileHost: Bool = true) {
@@ -45,17 +43,12 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
             let f = webRoot.appendingPathComponent(url.path).standardizedFileURL
             return f.path.hasPrefix(webRoot.path + "/") ? f : nil
         case "file" where fileHost:
-            // Only what a viewer loads: an image (inside the root, or beside a Markdown document anywhere), or the PDF on screen.
-            // The checked path, symlinks resolved, is what is read.
+            // Only what a viewer loads: an image (inside the root, or beside a Markdown document anywhere). A PDF is drawn
+            // natively, never loaded by the page. The checked path, symlinks resolved, is what is read.
             let f = URL(fileURLWithPath: url.path).standardizedFileURL
-            let mime = FileTypes.contentType(forPath: f.path)
-            let isPDF = mime == "application/pdf"
-            guard mime.hasPrefix("image/") || (isPDF && pdf?.absoluteString == url.absoluteString) else { return nil }
-            guard let real = FolderListing.realPath(f.path) else { return nil }
-            if isPDF { guard let root = fileRoot, FolderListing.isInside(real, root: root) else { return nil } }
+            guard FileTypes.contentType(forPath: f.path).hasPrefix("image/"), let real = FolderListing.realPath(f.path) else { return nil }
             var st = stat()
-            guard lstat(real, &st) == 0, st.st_mode & S_IFMT == S_IFREG,
-                  st.st_size <= (isPDF ? FileTypes.maxFileBytes : FileTypes.maxImageBytes) else { return nil }
+            guard lstat(real, &st) == 0, st.st_mode & S_IFMT == S_IFREG, st.st_size <= FileTypes.maxImageBytes else { return nil }
             return URL(fileURLWithPath: real)
         case "user":
             // percentEncodedPath: an encoded "%2F" or "%2E%2E" must not decode into a separator or a parent step.
@@ -88,8 +81,7 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
         do {
             let data = try Data(contentsOf: fileURL)
             let mime = Self.contentType(host: url.host, file: url.host == "file" ? URL(fileURLWithPath: url.path) : fileURL)
-            // An image (an SVG included) runs no script as <img>, and a PDF only renders in the one frame the shell allows; the
-            // headers keep a file inert however else it might be loaded.
+            // An image (an SVG included) runs no script as <img>; the headers keep a file inert however else it might be loaded.
             var headers = ["Content-Type": mime, "Content-Length": String(data.count), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"]
             if url.host == "file" {
                 headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
@@ -106,16 +98,14 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {}
 }
 
-/// Which navigations the preview's web view allows: the shell page in the main frame, and in a subframe only the PDF on screen,
-/// which the page shows in an iframe it made itself (the document's own frames are sanitized away and blocked by the CSP).
+/// Which navigations the preview's web view allows: the shell page in the main frame, and no subframe at all (the document's
+/// frames are sanitized away and blocked by the CSP; a PDF is a native view, not a frame).
 enum ShellPolicy {
     static let shell = "spacebar://bundle/index.html"
 
-    static func allows(_ url: URL?, mainFrame: Bool, pdf: URL?) -> Bool {
-        guard let url else { return false }
-        if mainFrame { return url.absoluteString == shell }
-        guard let pdf, url.absoluteString == pdf.absoluteString, url.scheme == "spacebar", url.host == "file" else { return false }
-        return FileTypes.contentType(forPath: url.path) == "application/pdf"
+    static func allows(_ url: URL?, mainFrame: Bool) -> Bool {
+        guard let url, mainFrame else { return false }
+        return url.absoluteString == shell
     }
 }
 

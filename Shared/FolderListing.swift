@@ -117,7 +117,7 @@ enum FileTypes {
 }
 
 /// What the page is sent to show a file: `view` says how (markdown, image, pdf, code, json, csv, text or info), and nothing in
-/// it is ever rendered as HTML. Also the PDF URL the shell may load in a frame, when the view is a PDF.
+/// it is ever rendered as HTML. A PDF is drawn natively (PDFPane); the page only reserves its place.
 enum FileView {
     /// What every render names: the file, its folder as the page's base URL, and the sidebar's root.
     static func base(path: String, root: String, reason: String) -> [String: Any] {
@@ -126,10 +126,10 @@ enum FileView {
     }
 
     /// A file that is not Markdown. `canOpen`: whether the link policy lets the writer open it (else Reveal in Finder only).
-    static func payload(path: String, kind: FileKind, root: String, reason: String, canOpen: Bool) -> ([String: Any], URL?) {
+    static func payload(path: String, kind: FileKind, root: String, reason: String, canOpen: Bool) -> [String: Any] {
         var p = base(path: path, root: root, reason: reason)
         var st = stat()
-        guard stat(path, &st) == 0 else { p["view"] = "info"; return (p, nil) }
+        guard stat(path, &st) == 0 else { p["view"] = "info"; return p }
         let regular = st.st_mode & S_IFMT == S_IFREG
         let size = Int64(st.st_size)
         let ext = (path as NSString).pathExtension
@@ -145,7 +145,7 @@ enum FileView {
             p["kindName"] = kind == .code ? "Source code" : "Plain text"
             p["canOpen"] = false
         }
-        var view = "info", pdf: URL?
+        var view = "info"
         let version = "\(st.st_mtimespec.tv_sec)\(st.st_mtimespec.tv_nsec)"
         switch kind {
         case .image where regular && size <= FileTypes.maxImageBytes:
@@ -153,8 +153,6 @@ enum FileView {
             p["src"] = FileTypes.fileURL(path, version: version)!.absoluteString
         case .pdf where regular && size <= FileTypes.maxFileBytes:
             view = "pdf"
-            pdf = FileTypes.fileURL(path, version: version)!
-            p["src"] = pdf!.absoluteString
         case .code, .json, .csv, .text, .other, .app:
             // O_NONBLOCK and fstat: a file swapped for a FIFO since the stat can neither hang the open nor be read.
             let fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
@@ -173,7 +171,7 @@ enum FileView {
             break
         }
         p["view"] = view
-        return (p, pdf)
+        return p
     }
 }
 

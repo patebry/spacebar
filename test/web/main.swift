@@ -1,6 +1,6 @@
 // Loads Preview/web in an offscreen WKWebView set up like the extension: the real SchemeHandler (spacebar://bundle, file and
 // user) and the real document-start settings script (PageSettings.userScript). Built with Shared/Settings.swift and
-// Shared/WebShell.swift, Shared/FolderListing.swift and Shared/LinkPolicy.swift; run with SPACEBAR_SUPPORT_DIR set to a scratch folder.
+// Shared/WebShell.swift, Shared/FolderListing.swift, Shared/LinkPolicy.swift and Preview/PDFPane.swift; run with SPACEBAR_SUPPORT_DIR set to a scratch folder.
 //   webcheck <web dir> <cmd>...   runs each command, prints one JSON line per command
 //   webcheck <web dir>            reads commands from stdin, one JSON-encoded string per line, and answers each with a line
 // Commands:
@@ -27,12 +27,18 @@
 // kind (FileView for anything but Markdown). The page's "list" lists a folder the tree named, "open" renders a listed file,
 // "openFile" and "reveal" are recorded as "_openFile" / "_reveal" (or "_openRefused"), each checked as the extension does;
 // "setting" goes through the extension's gate (Settings.panelPatch) and the writer's update (SettingsFile.updateFromPanel),
-// recorded as "_written" or "_settingRefused". A subframe may load only the PDF on screen (ShellPolicy).
+// recorded as "_written" or "_settingRefused". No subframe may load (ShellPolicy).
+// A PDF is shown as the extension shows it: a PDFPane (Preview/PDFPane.swift) over the web view, placed by the page's "pdfRect"
+// messages and closed by the next render of anything else.
+//   @pdf               the pane: {open, hidden, placed, frame [x, y, w, h] from the top left of the web view, pages, text,
+//                      autoScales, continuous, bg [r, g, b], dark, docAlive (a weak reference to the last document), fds (open
+//                      descriptors on that file), pixel [r, g, b] at the pane's centre as the window draws it}
 // The page's "loadRemoteImages" message goes to the real RemoteImageGate, as the extension routes it, and a granted request
 // re-renders the current file with the gate's payload flag.
 // The non-file commands print {cmd, result, messages}; messages are those posted while the command ran, plus "_refused" for
 // every URL the scheme handler refused.
 import AppKit
+import PDFKit
 import WebKit
 
 final class Recorder: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
@@ -42,7 +48,6 @@ final class Recorder: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     var onOpen: (String) -> Void = { _ in }
     var onSetting: ([String: Any]) -> Void = { _ in }
     var onMessage: (String, [String: Any]) -> Void = { _, _ in }
-    var pdfFrame: URL?
     func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
         var m = (message.body as? [String: Any]) ?? ["raw": String(describing: message.body)]
         m["_mainFrame"] = message.frameInfo.isMainFrame
@@ -56,9 +61,8 @@ final class Recorder: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     }
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         let main = action.targetFrame?.isMainFrame ?? true
-        let ok = ShellPolicy.allows(action.request.url, mainFrame: main, pdf: pdfFrame)
+        let ok = ShellPolicy.allows(action.request.url, mainFrame: main)
         if !ok { messages.append(["type": "_navigation", "url": action.request.url?.absoluteString ?? ""]) }
-        else if !main { messages.append(["type": "_frame", "url": action.request.url?.absoluteString ?? ""]) }
         decisionHandler(ok ? .allow : .cancel)
     }
 }
@@ -105,8 +109,15 @@ if web.responds(to: occlusion) {
 }
 // requestAnimationFrame (and so the page's "rendered" message and mermaid) only runs for a view in a window: an off-screen one.
 let window = NSWindow(contentRect: NSRect(x: -20000, y: -20000, width: 900, height: 2000), styleMask: [.borderless], backing: .buffered, defer: false)
-window.contentView = web
+// As the extension: the web view fills a plain container, and a PDF's native view sits above it in the same container.
+let container = NSView(frame: NSRect(x: 0, y: 0, width: 900, height: 2000))
+web.autoresizingMask = [.width, .height]
+container.addSubview(web)
+window.contentView = container
 window.orderBack(nil)
+var pdfPane: PDFPane?
+weak var lastPDF: PDFDocument?
+var lastPDFPath: String?
 
 // What the page saw at document start and at its first DOMContentLoaded, to show the theme is set before anything paints.
 let probe = WKUserScript(source: """
@@ -206,8 +217,8 @@ func renderFile(_ file: String, listFirst: Bool = true) {
     if listFirst { sendFolder(root) }
     var payload: [String: Any]
     if currentKind == .markdown {
-        rec.pdfFrame = nil
-        scheme.pdf = nil
+        pdfPane?.close()
+        pdfPane = nil
         currentCanOpen = false
         payload = FileView.base(path: url.path, root: root, reason: "open")
         payload["text"] = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
@@ -215,11 +226,29 @@ func renderFile(_ file: String, listFirst: Bool = true) {
         payload["ver"] = 0
         if gate.allowedPath == url.path { payload[RemoteImageGate.payloadKey] = true }
     } else {
-        let (p, pdf) = FileView.payload(path: url.path, kind: currentKind, root: root, reason: "open", canOpen: LinkPolicy.fileRefusal(url) == nil)
-        payload = p
-        rec.pdfFrame = pdf
-        scheme.pdf = pdf
-        currentCanOpen = p["canOpen"] as? Bool == true
+        payload = FileView.payload(path: url.path, kind: currentKind, root: root, reason: "open", canOpen: LinkPolicy.fileRefusal(url) == nil)
+        currentCanOpen = payload["canOpen"] as? Bool == true
+        // As the extension's show(): a PDF PDFKit cannot open gets the info card with a note; any other view closes the pane.
+        var doc: PDFDocument?
+        if payload["view"] as? String == "pdf" {
+            switch PDFPane.open(url) {
+            case .success(let d): doc = d
+            case .failure(let e):
+                payload["view"] = "info"
+                payload["note"] = e == .locked ? "This PDF is password-protected." : "This PDF can’t be shown here."
+            }
+        }
+        if let doc {
+            let pane = pdfPane ?? PDFPane()
+            pane.onLink = { rec.messages.append(["type": "_pdfLink", "url": $0.absoluteString]) }
+            pane.show(doc, path: url.path, over: web)
+            pdfPane = pane
+            lastPDF = doc
+            lastPDFPath = url.path
+        } else {
+            pdfPane?.close()
+            pdfPane = nil
+        }
     }
     _ = eval(web, "sb.render(\(jsonString(payload))); 0")
     if !listFirst { sendFolder(root) }
@@ -266,6 +295,8 @@ rec.onMessage = { type, body in
             rec.messages.append(["type": "_listRefused", "path": path ?? ""]); return
         }
         DispatchQueue.main.async { sendFolder(p) }
+    case "pdfRect":
+        if currentKind == .pdf { pdfPane?.place(message: body, in: web) }
     case "openFile", "reveal":
         let ok = path != nil && path == currentFile && currentKind != .markdown
             && (type == "reveal" || (currentCanOpen && LinkPolicy.fileRefusal(URL(fileURLWithPath: path!)) == nil))
@@ -337,7 +368,8 @@ func run(_ cmd: String) -> String {
         let p = arg.split(separator: "x").compactMap { Double($0) }
         if p.count == 2 {
             window.setFrame(NSRect(x: -20000, y: -20000, width: p[0], height: p[1]), display: true)
-            web.frame = NSRect(x: 0, y: 0, width: p[0], height: p[1])
+            container.frame = NSRect(x: 0, y: 0, width: p[0], height: p[1])
+            web.frame = container.bounds
             spin(0.3)
         }
         result = arg
@@ -391,6 +423,37 @@ func run(_ cmd: String) -> String {
             spin(0.4)
             result = true
         } else { result = false }
+    case "@pdf":
+        var fds = 0
+        if let path = lastPDFPath {
+            var buf = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+            for fd in 0..<getdtablesize() where fcntl(fd, F_GETPATH, &buf) != -1 {
+                if String(cString: buf) == path || String(cString: buf) == URL(fileURLWithPath: path).resolvingSymlinksInPath().path { fds += 1 }
+            }
+        }
+        var out: [String: Any] = ["open": pdfPane != nil, "docAlive": lastPDF != nil, "fds": fds, "inContainer": pdfPane?.view.superview === container]
+        if let v = pdfPane?.view {
+            let f = v.frame
+            out["hidden"] = v.isHidden
+            out["placed"] = pdfPane!.placed
+            out["frame"] = [f.minX, container.bounds.height - f.maxY, f.width, f.height].map { Double($0) }
+            out["pages"] = v.document?.pageCount ?? 0
+            out["text"] = v.document?.page(at: 0)?.string ?? ""
+            out["autoScales"] = v.autoScales
+            out["continuous"] = v.displayMode == .singlePageContinuous
+            out["above"] = container.subviews.last === v
+            if let c = v.backgroundColor.usingColorSpace(.sRGB) { out["bg"] = [c.redComponent, c.greenComponent, c.blueComponent].map { Int(($0 * 255).rounded()) } }
+            out["dark"] = v.appearance?.name == .darkAqua
+            spin(0.3)
+            if !v.isHidden, let rep = container.bitmapImageRepForCachingDisplay(in: container.bounds) {
+                container.cacheDisplay(in: container.bounds, to: rep)
+                let sx = Double(rep.pixelsWide) / container.bounds.width, sy = Double(rep.pixelsHigh) / container.bounds.height
+                if let c = rep.colorAt(x: Int(f.midX * sx), y: Int((container.bounds.height - f.midY) * sy))?.usingColorSpace(.sRGB) {
+                    out["pixel"] = [c.redComponent, c.greenComponent, c.blueComponent].map { Int(($0 * 255).rounded()) }
+                }
+            }
+        }
+        result = out
     case "@loaddisk":
         result = load(SettingsFile.load().dictionary)
     case "@relist":

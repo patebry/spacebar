@@ -23,7 +23,7 @@ class Page:
         subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-O', '-target', 'arm64-apple-macos13.0',
                         os.path.join(ROOT, 'test', 'web', 'main.swift'), os.path.join(ROOT, 'Shared', 'Settings.swift'),
                         os.path.join(ROOT, 'Shared', 'WebShell.swift'),
-                        os.path.join(ROOT, 'Shared', 'FolderListing.swift'), os.path.join(ROOT, 'Shared', 'LinkPolicy.swift'), '-o', exe], check=True)
+                        os.path.join(ROOT, 'Shared', 'FolderListing.swift'), os.path.join(ROOT, 'Shared', 'LinkPolicy.swift'), os.path.join(ROOT, 'Preview', 'PDFPane.swift'), '-o', exe], check=True)
         self.proc = subprocess.Popen([exe, WEB], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
                                      env=dict(os.environ, SPACEBAR_SUPPORT_DIR=self.support))
         self.logs = []
@@ -125,6 +125,29 @@ MERMAID_FILL = """
            stroke: n && getComputedStyle(n).stroke, edge: e && getComputedStyle(e).stroke };
 """
 
+# Samples every diagram at each DOM mutation (before the page can paint it) and at each animation frame, until __mm.stop.
+MM_SAMPLER = """
+  const hash = (t) => { let h = 0; for (let i = 0; i < t.length; i++) h = (h * 31 + t.charCodeAt(i)) | 0; return h; };
+  const mm = window.__mm = { samples: [], stop: false };
+  const sample = (when) => {
+    const stage = document.getElementById('mm-stage');
+    const strays = [...document.querySelectorAll('[id^="dsb-mermaid"], [id^="dmermaid"], [id^="isb-mermaid"]')].filter((e) => !e.closest('#mm-stage')).length;
+    for (const n of document.querySelectorAll('#doc pre.mermaid')) {
+      const cs = getComputedStyle(n), svg = n.querySelector(':scope > svg'), r = n.getBoundingClientRect();
+      const text = [...n.childNodes].filter((c) => c.nodeType === 3).map((c) => c.textContent).join('').trim();
+      mm.samples.push({ when, text: !!text && cs.visibility === 'visible' && cs.opacity !== '0' && !/, 0\\)$/.test(cs.color),
+        wait: n.classList.contains('mm-wait'), svg: svg ? hash(svg.outerHTML) : null, laid: svg ? !!svg.getAttribute('viewBox') && svg.getBoundingClientRect().height > 0 : null,
+        anim: svg ? getComputedStyle(svg).animationName : null, h: Math.round(r.height), strays,
+        stageOff: !stage || (stage.getBoundingClientRect().right <= 0 && getComputedStyle(stage).visibility === 'hidden') });
+    }
+  };
+  new MutationObserver(() => { if (!mm.stop) sample('mutation'); }).observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class', 'style'] });
+  const frame = () => { if (mm.stop) return; sample('frame'); requestAnimationFrame(frame); };
+  requestAnimationFrame(frame);
+  return true;
+"""
+MM_STOP = "window.__mm.stop = true; return window.__mm.samples"
+
 CLICK = """(sel) => { const t = document.querySelector(sel); if (!t) return false; const r = t.getBoundingClientRect();
   for (const type of ['mouseover', 'mousedown', 'mouseup', 'click'])
     t.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: r.left + 3, clientY: r.top + 3, detail: 1 }));
@@ -194,6 +217,90 @@ def main():
         check(c['keyword'] == seen[('nord', 'light')]['keyword'] and c['bg'] == seen[('github', 'light')]['bg'],
               'codeTheme takes code colours from another theme', f"kw {c['keyword']} bg {c['bg']}")
         page.apply(codeTheme='auto', theme='apple')
+
+        # ---- mermaid never flashes: no source, no half-drawn SVG, a placeholder until the finished SVG goes in ----
+        page.cmd('@load:{}')
+        page.cmd('@appearance:light')
+        lazy = page.js("return typeof window.mermaid")
+        page.js(MM_SAMPLER)
+        r = page.render(demo)
+        page.cmd('@wait:1.5')
+        first = page.js(MM_STOP)
+        final = first[-1]['svg'] if first else None
+        waits = [i for i, x in enumerate(first) if x['wait']]
+        svgs = [i for i, x in enumerate(first) if x['svg'] is not None]
+        types = [m.get('type') for m in r['messages']]
+        check(lazy == 'undefined' and first and not any(x['text'] for x in first), 'mermaid: its source is never visible, even while mermaid itself loads',
+              f"lazy {lazy}, {len(first)} samples, {sum(x['text'] for x in first)} with source")
+        check(waits and all(first[i]['h'] >= 120 and first[i]['svg'] is None for i in waits) and 'painted' in types and types.index('painted') < types.index('rendered'),
+              'mermaid: a blank placeholder holds the space from the first paint, and the panel shows before mermaid finishes',
+              f"{len(waits)} placeholder samples, heights {sorted({first[i]['h'] for i in waits})}")
+        check(svgs and waits and svgs[0] > waits[-1] and all(first[i]['svg'] == final and first[i]['laid'] for i in svgs)
+              and first[svgs[0]]['anim'] == 'mm-in', 'mermaid: revealed only when finished (every SVG seen is the final, laid-out one), with a fade',
+              f"first svg at {svgs[:1]}, last placeholder at {waits[-1:]}, anim {first[svgs[0]]['anim'] if svgs else None}")
+        check(all(x['strays'] == 0 and x['stageOff'] for x in first), "mermaid: its drawing area never reaches the page (off screen, hidden, outside the body's row)")
+        motion = page.js("""const out = []; const walk = (rules) => { for (const r of rules) { if (r.cssRules) walk(r.cssRules);
+            if (r.media && /prefers-reduced-motion/.test(r.media.mediaText))
+              for (const x of r.cssRules) if (x.selectorText && x.selectorText.includes('mm-in')) out.push(x.style.animationName); } };
+          for (const sh of document.styleSheets) { try { walk(sh.cssRules); } catch (e) {} } return out.join(' ')""")
+        check(motion == 'none', 'mermaid: the fade is off under reduced motion', motion)
+        before_h = first[-1]['h']
+        for label, act in (('a theme switch', lambda: page.apply(theme='nord')), ('the colour scheme flipping', lambda: page.cmd('@appearance:dark')),
+                           ('an inline-edit redraw', lambda: click(page, '#doc > p')), ('a live reload of the same text', lambda: page.render(demo))):
+            old = page.js("const s = document.querySelector('#doc pre.mermaid > svg'); return s && s.outerHTML.length")
+            page.js(MM_SAMPLER)
+            act()
+            page.cmd('@wait:1.5')
+            got = page.js(MM_STOP)
+            states = {x['svg'] for x in got}
+            # The diagram on screen keeps the class of its first fade; the one swapped in must not fade again.
+            swapped = [x for x in got if got and x['svg'] != got[0]['svg']]
+            check(got and all(x['svg'] is not None and x['laid'] and not x['wait'] and not x['text'] and x['h'] > 0 and not x['strays'] and x['stageOff'] for x in got)
+                  and len(states) <= 2 and all(x['anim'] == 'none' for x in swapped),
+                  f'mermaid: {label} swaps the finished diagram in place, with no placeholder, source or fade in between',
+                  f"{len(got)} samples, {len(states)} states, waits {sum(x['wait'] for x in got)}, anims {sorted({str(x['anim']) for x in got})}")
+            if label == 'an inline-edit redraw':
+                page.cmd('@eval:sb.editEnd({}); 0')
+        page.apply(theme='apple')
+        page.cmd('@appearance:light')
+        page.cmd('@wait:1')
+        # A changed diagram waits in a placeholder as tall as the diagram it replaces.
+        text = open(demo).read().replace('C --> D[WKWebView]', 'C --> D[WKWebView]\n  D --> E[Page]')
+        tall = page.js("return Math.round(document.querySelector('#doc pre.mermaid').getBoundingClientRect().height)")
+        held = page.js("const p = { path: " + json.dumps(demo) + ", name: 'demo.md', base: 'spacebar://file" + os.path.dirname(demo) + "/', reason: 'change', ver: 0, root: " + json.dumps(os.path.dirname(demo)) + ", rootName: 'fixtures', text: "
+                       + json.dumps(text) + " }; sb.render(p); const n = document.querySelector('#doc pre.mermaid');"
+                       " return [n.classList.contains('mm-wait'), Math.round(n.getBoundingClientRect().height), n.textContent]")
+        page.cmd('@wait:1.5')
+        check(held[0] and abs(held[1] - tall) <= 1 and held[2] == '' and page.js("return !!document.querySelector('#doc pre.mermaid > svg')"),
+              'mermaid: a changed diagram keeps the previous size while it is drawn', f'{held[:2]} vs {tall}')
+        page.render(demo)
+        page.cmd('@wait:1')
+        # What cannot be drawn shows its source, marked: a diagram mermaid rejects, and every diagram when mermaid fails to load.
+        bad = os.path.join(page.out, 'bad-mermaid.md')
+        open(bad, 'w').write('# Bad\n\n```mermaid\ngraph LR\n  A -->\n```\n')
+        page.render(bad)
+        page.cmd('@wait:1')
+        err = page.js("const n = document.querySelector('#doc pre.mermaid'); return [n.className, n.textContent.trim(), !!n.querySelector('svg')]")
+        check(err == ['mermaid mm-error', 'graph LR\n  A -->', False], 'mermaid: a diagram it cannot draw shows its source, marked', json.dumps(err))
+        open(bad, 'w').write('# Bad\n\n```mermaid\ngraph TD\n  Q --> R\n```\n')
+        page.cmd("@eval:window.__ml = mermaidLoaded; const p = Promise.reject(new Error('load failed (test)')); p.catch(() => {}); mermaidLoaded = p; 0")
+        page.render(bad)
+        page.cmd('@wait:1')
+        err = page.js("const n = document.querySelector('#doc pre.mermaid'); return [n.className, n.textContent.trim()]")
+        page.cmd('@eval:mermaidLoaded = window.__ml; 0')
+        check(err == ['mermaid mm-error', 'graph TD\n  Q --> R'], 'mermaid: if mermaid fails to load, diagrams show their source instead of staying blank', json.dumps(err))
+        page.logs = [l for l in page.logs if not (l.startswith('mermaid:') and ('load failed (test)' in l or 'Parse error' in l or 'Syntax error' in l or 'Expecting' in l))]
+        # Two copies of one diagram never share element ids (arrow markers resolve by id).
+        twin = os.path.join(page.out, 'twin.md')
+        open(twin, 'w').write('# Twins\n\n```mermaid\ngraph LR\n  A --> B\n```\n\n```mermaid\ngraph LR\n  A --> B\n```\n')
+        page.render(twin)
+        page.cmd('@wait:1')
+        page.render(twin)
+        ids = page.js("return [...document.querySelectorAll('#doc pre.mermaid [id]')].map((e) => e.id)")
+        check(ids and len(ids) == len(set(ids)) and page.js("return document.querySelectorAll('#doc pre.mermaid > svg').length") == 2,
+              'mermaid: identical diagrams, drawn or put back from the cache, have distinct ids', f'{len(ids)} ids, {len(set(ids))} distinct')
+        page.render(demo)
+        page.cmd('@wait:1')
 
         # ---- mermaid re-theming ----
         page.cmd('@wait:1')

@@ -15,7 +15,7 @@ exe = os.path.join(hostile.OUT, 'webcheck')
 subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-O', '-target', 'arm64-apple-macos13.0',
                 os.path.join(ROOT, 'test', 'web', 'main.swift'), os.path.join(ROOT, 'Shared', 'Settings.swift'),
                 os.path.join(ROOT, 'Shared', 'WebShell.swift'),
-                os.path.join(ROOT, 'Shared', 'FolderListing.swift'), os.path.join(ROOT, 'Shared', 'LinkPolicy.swift'), '-o', exe], check=True)
+                os.path.join(ROOT, 'Shared', 'FolderListing.swift'), os.path.join(ROOT, 'Shared', 'LinkPolicy.swift'), os.path.join(ROOT, 'Preview', 'PDFPane.swift'), '-o', exe], check=True)
 # A scratch settings folder: the harness must never read the real one.
 env = dict(os.environ, SPACEBAR_SUPPORT_DIR=tempfile.mkdtemp(prefix='spacebar-support-'))
 fixtures = [os.path.join(hostile.OUT, f) for f in hostile.materialize()]

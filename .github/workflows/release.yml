@@ -4,35 +4,119 @@ on:
   push:
     tags: ['v*']
 
-permissions:
-  contents: write
+permissions: {}
 
 jobs:
   release:
     runs-on: macos-15
+    permissions:
+      contents: write      # create the release
+      id-token: write      # sign the build provenance attestation
+      attestations: write  # store it
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Unit tests
         run: for t in settings scheme linkpolicy cas editkeys; do test/$t/run.sh; done
 
-      - name: Build (universal, ad-hoc signed, not installed)
-        run: SIGN_ID=- VERSION="${GITHUB_REF_NAME#v}" BUILD_NUMBER="$GITHUB_RUN_NUMBER" ./build.sh --no-install
+      # One stable identity for every release keeps the designated requirement the same, so an update does not make macOS
+      # ask again about the extension's sandbox container (FINDINGS.md). Forks without the secrets build ad-hoc.
+      - name: Signing identity
+        env:
+          P12: ${{ secrets.SPACEBAR_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.SPACEBAR_SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$P12" ] || [ -z "$P12_PASSWORD" ]; then
+            echo "::warning title=Ad-hoc signed::SPACEBAR_SIGNING_P12 or SPACEBAR_SIGNING_PASSWORD is not set, so this build is ad-hoc signed. Its signer changes with every build, and users updating to it may see a macOS data-sharing prompt."
+            echo "SIGN_ID=-" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          kc="$RUNNER_TEMP/spacebar-signing.keychain-db"
+          kcpw=$(openssl rand -hex 24)
+          echo "::add-mask::$kcpw"
+          security create-keychain -p "$kcpw" "$kc"
+          security set-keychain-settings -lut 3600 "$kc"
+          security unlock-keychain -p "$kcpw" "$kc"
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security import "$RUNNER_TEMP/signing.p12" -k "$kc" -P "$P12_PASSWORD" -T /usr/bin/codesign -f pkcs12
+          rm -f "$RUNNER_TEMP/signing.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kcpw" "$kc" > /dev/null
+          # codesign finds the certificate only through the keychain search list.
+          existing=$(security list-keychains -d user | tr -d '"' | xargs)
+          # shellcheck disable=SC2086
+          security list-keychains -d user -s "$kc" $existing
+          security find-identity -p codesigning "$kc" | grep -q '"spacebar Release"' ||
+            { echo "::error::SPACEBAR_SIGNING_P12 holds no \"spacebar Release\" identity"; exit 1; }
+          { echo "SIGN_ID=spacebar Release"; echo "SIGN_KEYCHAIN=$kc"; } >> "$GITHUB_ENV"
 
-      - name: Package
+      - name: Build (universal, not installed)
+        run: VERSION="${GITHUB_REF_NAME#v}" BUILD_NUMBER="$GITHUB_RUN_NUMBER" ./build.sh --no-install
+
+      - name: Check and package
         working-directory: build
         run: |
-          archs=$(lipo -archs spacebar.app/Contents/MacOS/Spacebar)
-          echo "$archs"
-          case $archs in *arm64*x86_64*|*x86_64*arm64*) ;; *) echo "not universal"; exit 1 ;; esac
+          count=0
+          while IFS= read -r -d '' f; do
+            file -b "$f" | grep -q 'Mach-O' || continue
+            archs=$(lipo -archs "$f")
+            echo "$archs  $f"
+            case " $archs " in *" arm64 "*) ;; *) echo "::error::$f has no arm64 slice"; exit 1 ;; esac
+            case " $archs " in *" x86_64 "*) ;; *) echo "::error::$f has no x86_64 slice"; exit 1 ;; esac
+            count=$((count + 1))
+          done < <(find spacebar.app -path '*/MacOS/*' -type f -print0)
+          [ "$count" -ge 5 ] || { echo "::error::expected at least 5 executables under */MacOS/*, found $count"; exit 1; }
           codesign --verify --deep --strict spacebar.app
+          codesign -d -r- spacebar.app
           ditto -c -k --keepParent spacebar.app spacebar.zip
           shasum -a 256 spacebar.zip > spacebar.zip.sha256
           cat spacebar.zip.sha256
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: build/spacebar.zip
+
+      - name: Release notes
+        run: |
+          sum=$(awk '{ print $1; exit }' build/spacebar.zip.sha256)
+          if [ "$SIGN_ID" = - ]; then
+            signing="This build is ad-hoc signed, so its signer differs from every other release's: macOS may show a data-sharing prompt when you update to it."
+          else
+            signing="Releases are signed with one stable, self-signed identity (\"spacebar Release\"). If you are upgrading from v0.1.0, which was ad-hoc signed, you may see one macOS prompt about spacebar's data; allow it. Later updates keep the same signer and should not ask again."
+          fi
+          cat > "$RUNNER_TEMP/notes.md" <<EOF
+          ## Install
+
+          \`\`\`sh
+          curl -fsSL https://spacebar.patebryant.com/install.sh | sh
+          \`\`\`
+
+          spacebar is not notarized: use the install command; a browser download will be blocked by Gatekeeper.
+
+          $signing
+
+          ## Uninstall
+
+          \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh
+          \`\`\`
+
+          ## Verify
+
+          SHA-256 of \`spacebar.zip\`: \`$sum\`
+
+          \`\`\`sh
+          gh attestation verify spacebar.zip -R patebry/spacebar
+          \`\`\`
+          EOF
+          cat "$RUNNER_TEMP/notes.md"
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: >
           gh release create "$GITHUB_REF_NAME" build/spacebar.zip build/spacebar.zip.sha256
-          --verify-tag --title "spacebar $GITHUB_REF_NAME" --generate-notes
+          --repo "$GITHUB_REPOSITORY" --verify-tag --title "spacebar $GITHUB_REF_NAME"
+          --notes-file "$RUNNER_TEMP/notes.md" --generate-notes

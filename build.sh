@@ -9,6 +9,7 @@
 #   VERSION=... BUILD_NUMBER=...  CFBundleShortVersionString (default 0.1.0) and CFBundleVersion (default 1)
 #   SIGN_ID=...               codesigning identity; default the name in .sign-id (untracked), else the first valid local
 #                             identity, else ad-hoc. SIGN_ID=- forces ad-hoc. A stable identity keeps TCC grants across rebuilds.
+#   SIGN_KEYCHAIN=...         keychain file holding SIGN_ID, when it is not in the search list (CI's temporary keychain)
 set -euo pipefail
 cd "$(dirname "$0")"
 for arg in "$@"; do
@@ -30,8 +31,6 @@ WRITER_EXE=SpacebarWriter           # each appex embeds its own writer as <appex
 # Claimed only by this extension: `qlmanage -c $ROUTE_TYPE -p file` reaches it even where another extension claims markdown.
 ROUTE_TYPE=md.spacebar.qlmanage
 PREFERRED_SIGN_ID=$(head -n1 .sign-id 2>/dev/null || true)
-# Pre-rename installs, each "<app>:<appex> ...": unregistered and removed so two copies do not both claim markdown.
-LEGACY_INSTALLS=("MDPeek.app:MDPeekPreview" "spacebar.md.app:SpacebarPreview SpacebarFolders")
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
 READ_ACCESS=${READ_ACCESS:-abs-ro}
@@ -55,6 +54,9 @@ if [ -z "${SIGN_ID:-}" ]; then
   fi
 fi
 
+SIGN_ARGS=(--force --sign "$SIGN_ID" --timestamp=none)
+[ -n "${SIGN_KEYCHAIN:-}" ] && SIGN_ARGS+=(--keychain "$SIGN_KEYCHAIN")
+
 rm -rf "$OUT"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$OBJ"
 
@@ -63,7 +65,8 @@ compile() {
   local out=$1; shift
   local slices=()
   for arch in $ARCHS; do
-    local slice="$OBJ/$(basename "$out").$arch"
+    local slice
+    slice="$OBJ/$(basename "$out").$arch"
     xcrun swiftc -swift-version 5 -O -target "$arch-apple-macos$MIN_OS" "$@" -o "$slice"
     slices+=("$slice")
   done
@@ -81,14 +84,17 @@ plist() {
 WRITER_BIN=$OBJ/$WRITER_EXE
 compile "$WRITER_BIN" -module-name "$WRITER_EXE" Writer/main.swift Writer/EditTextView.swift Writer/FileWrite.swift Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift
 PREVIEW_BIN=$OBJ/$APPEX_EXE
+PROBE_FLAGS=()
+[ "${PROBE:-0}" = 1 ] && PROBE_FLAGS=(-D PROBE)
 compile "$PREVIEW_BIN" -application-extension -module-name "$APPEX_EXE" \
   Preview/PreviewViewController.swift Preview/SettingsStore.swift Preview/Probe.swift \
   Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/WebShell.swift \
-  $( [ "${PROBE:-0}" = 1 ] && echo -D PROBE ) \
+  ${PROBE_FLAGS[@]+"${PROBE_FLAGS[@]}"} \
   -framework QuickLookUI -framework WebKit -Xlinker -e -Xlinker _NSExtensionMain
 compile "$APP/Contents/MacOS/$APP_EXE" -parse-as-library -module-name "$APP_EXE" App/*.swift Shared/Settings.swift Shared/WebShell.swift \
   -framework WebKit -framework SwiftUI
 plist App/Info.plist "$APP/Contents/Info.plist"
+cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
 if [ -f App/AppIcon.icns ]; then cp App/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"; fi
 
 ENT=$OUT/Preview.entitlements
@@ -116,28 +122,21 @@ appex() {
   cp "$PREVIEW_BIN" "$dir/Contents/MacOS/$2"
   cp "$WRITER_BIN" "$xpc/Contents/MacOS/$WRITER_EXE"
   cp -R Preview/web "$dir/Contents/Resources/web"
+  cp LICENSE THIRD_PARTY_NOTICES.md "$dir/Contents/Resources/"
   plist Preview/Info.plist "$dir/Contents/Info.plist" "$1" "$2" "$3" "$4"
   plist Writer/Info.plist "$xpc/Contents/Info.plist" "$1" "$2" "$3" "$4"
-  codesign --force --sign "$SIGN_ID" --timestamp=none "$xpc"
-  codesign --force --sign "$SIGN_ID" --timestamp=none --entitlements "$ENT" "$dir"
+  codesign "${SIGN_ARGS[@]}" "$xpc"
+  codesign "${SIGN_ARGS[@]}" --entitlements "$ENT" "$dir"
 }
 types() { printf '<string>%s</string>' "$@"; }
 appex "$APPEX_ID" "$APPEX_EXE" "$APP_NAME" "$(types net.daringfireball.markdown public.markdown "$ROUTE_TYPE")"
 appex "$FOLDERS_ID" "$FOLDERS_EXE" "$APP_NAME Folders" "$(types public.folder public.directory)"
-codesign --force --sign "$SIGN_ID" --timestamp=none "$APP"
+codesign "${SIGN_ARGS[@]}" "$APP"
 rm -rf "$OBJ"
 echo "built $APP ($(lipo -archs "$APP/Contents/MacOS/$APP_EXE"), macOS $MIN_OS+)"
 [ "${NO_INSTALL:-0}" = 1 ] && exit 0
 
 mkdir -p "$INSTALL_DIR"
-for legacy in "${LEGACY_INSTALLS[@]}"; do
-  LEGACY="$INSTALL_DIR/${legacy%%:*}"
-  [ -d "$LEGACY" ] || continue
-  for ex in ${legacy#*:}; do pluginkit -r "$LEGACY/Contents/PlugIns/$ex.appex" 2>/dev/null || true; done
-  "$LSREGISTER" -u "$LEGACY" 2>/dev/null || true
-  rm -rf "$LEGACY"
-  echo "removed $LEGACY"
-done
 DEST="$INSTALL_DIR/$APP_NAME.app"
 for ex in "$APPEX_EXE" "$FOLDERS_EXE"; do pluginkit -r "$DEST/Contents/PlugIns/$ex.appex" 2>/dev/null || true; done
 rm -rf "$DEST"

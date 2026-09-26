@@ -19,11 +19,11 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         var st = stat()
         guard path.hasPrefix("/"), [URL(fileURLWithPath: path), resolved].allSatisfy({ markdownExtensions.contains($0.pathExtension.lowercased()) }),
               stat(resolved.path, &st) == 0, st.st_mode & S_IFMT == S_IFREG, data.count <= maxWriteBytes, base.count <= maxWriteBytes else {
-            log.error("refused write to \(path, privacy: .public)")
+            log.error("refused write to \(path, privacy: .private)")
             return reply("refused: not an existing markdown file")
         }
         let err = compareAndWrite(data, path: path, expecting: base)
-        if let err { log.error("write \(path, privacy: .public): \(err, privacy: .public)") } else { log.info("wrote \(data.count) bytes to \(path, privacy: .public)") }
+        if let err { log.error("write \(path, privacy: .private): \(err, privacy: .private)") } else { log.info("wrote \(data.count) bytes to \(path, privacy: .private)") }
         reply(err)
     }
 
@@ -31,16 +31,16 @@ final class Writer: NSObject, SpacebarWriterProtocol {
 
     func open(_ url: URL, appBundleID: String?, reply: @escaping (Bool) -> Void) {
         if let why = LinkPolicy.refusal(url) {
-            log.error("refused open \(url.absoluteString, privacy: .public): \(why, privacy: .public)")
+            log.error("refused open \(url.absoluteString, privacy: .private): \(why, privacy: .public)")
             return reply(false)
         }
         guard url.isFileURL else {
             let ok = NSWorkspace.shared.open(url)
-            log.info("open \(url.absoluteString, privacy: .public) -> \(ok)")
+            log.info("open \(url.absoluteString, privacy: .private) -> \(ok)")
             return reply(ok)
         }
         guard let opener = LinkPolicy.opener(for: url) else {
-            log.error("refused open \(url.path, privacy: .public): no default app")
+            log.error("refused open \(url.path, privacy: .private): no default app")
             return reply(false)
         }
         let target = opener.file
@@ -50,7 +50,7 @@ final class Writer: NSObject, SpacebarWriterProtocol {
             app = editor
         }
         NSWorkspace.shared.open([target], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration()) { _, err in
-            log.info("open \(target.absoluteString, privacy: .public) with \(app.lastPathComponent, privacy: .public) -> \(err == nil)")
+            log.info("open \(target.absoluteString, privacy: .private) with \(app.lastPathComponent, privacy: .public) -> \(err == nil)")
             reply(err == nil)
         }
     }

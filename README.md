@@ -19,22 +19,32 @@ curl -fsSL https://spacebar.patebryant.com/install.sh | sh
 
 Then select a `.md` file in Finder and press Space.
 
-spacebar is **not notarized**: there is no Apple Developer ID behind it yet. Files that curl downloads are not quarantined,
-so Gatekeeper does not stop the app, but it also means you are trusting this repository's build rather than Apple's check.
+spacebar is **not notarized**: there is no Apple Developer ID behind it yet. Use the install command; a browser download
+of the zip will be blocked by Gatekeeper. Files that curl downloads are not quarantined, so Gatekeeper does not stop the app,
+but it also means you are trusting this repository's build rather than Apple's check.
 Read [`scripts/install.sh`](scripts/install.sh) before you run it. It:
 
 1. checks for macOS 13 or later;
-2. asks the GitHub API for the latest release (or uses `SPACEBAR_VERSION=vX.Y.Z`), downloads `spacebar.zip` and
-   `spacebar.zip.sha256`, and stops unless the SHA-256 matches;
+2. downloads `spacebar.zip` and `spacebar.zip.sha256` from the latest release (or `SPACEBAR_VERSION=vX.Y.Z`) through
+   `github.com/patebry/spacebar/releases/latest/download/`, with no GitHub API calls, and stops unless the SHA-256 matches;
 3. copies the new app into `~/Applications` beside the old one (no `sudo`);
-4. if `~/Applications/spacebar.app` exists, quits it, unregisters its extensions and deletes it (that path only), then
-   moves the new copy into its place;
+4. if `~/Applications/spacebar.app` exists, quits it and unregisters its extensions, moves it aside, moves the new copy
+   into its place and only then deletes the old one (it is put back if the move fails). Nothing else is deleted;
 5. registers it with `lsregister` and `pluginkit`, turns the Markdown preview on, and resets Quick Look (`qlmanage -r`);
-6. lists other Quick Look extensions that are turned on and also claim Markdown, such as QLMarkdown, and says how to turn
-   them off. It never turns anything off itself.
+6. lists other Quick Look extensions that are turned on and also claim Markdown, such as QLMarkdown, says how to turn them
+   off, and warns if another copy of spacebar is in `/Applications`. It never turns off or deletes anything itself.
 
-The release zip is built by [GitHub Actions](.github/workflows/release.yml) from the tagged commit, ad-hoc signed.
-`install.sh --help` lists its options, including `--dry-run`.
+`install.sh --help` lists its options, including `--dry-run`, which downloads and verifies but changes nothing.
+
+The release zip is built by [GitHub Actions](.github/workflows/release.yml) from the tagged commit. Releases after v0.1.0
+are signed with a self-signed "spacebar Release" certificate, so every release has the same signer and an update does not
+make macOS ask again about the extension's data ([why](FINDINGS.md#release-signing)). v0.1.0 was ad-hoc signed, so the first
+update from it may show one prompt. Those releases also carry a build provenance attestation, which the
+[GitHub CLI](https://cli.github.com) checks:
+
+```sh
+gh attestation verify spacebar.zip -R patebry/spacebar
+```
 
 ## Uninstall
 
@@ -97,8 +107,11 @@ writer service; Finder stays in front. Saves are compare-and-swap: if the file c
 - The writer only writes to the Markdown file on screen, only opens http(s) links or non-executable documents, and only
   accepts messages from the extension's own page.
 - The preview extension has a read-only sandbox exception for the whole disk, so relative images beside a document load.
+- The preview extension has the `com.apple.security.network.client` entitlement. WKWebView's helper processes crash-loop
+  in a sandboxed extension without it. spacebar has no network code of its own; the only requests the page can make are
+  remote images, which are blocked unless you allow them.
 
-Found a security problem? Please open a GitHub security advisory on this repository rather than a public issue.
+Found a security problem? Please report it privately as described in [SECURITY.md](SECURITY.md), not in a public issue.
 
 ## Contributing
 

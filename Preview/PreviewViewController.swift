@@ -57,7 +57,7 @@ final class WebHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     override init() {
         let config = WKWebViewConfiguration()
         let scheme = SchemeHandler(webRoot: Bundle.main.resourceURL!.appendingPathComponent("web"))
-        scheme.onRefused = { log.error("\($0, privacy: .public)") }
+        scheme.onRefused = { log.error("\($0, privacy: .private)") }
         config.setURLSchemeHandler(scheme, forURLScheme: "spacebar")
         web = PreviewWebView(frame: .zero, configuration: config)
         remoteImages = RemoteImageGate(config.userContentController)
@@ -176,7 +176,7 @@ final class FileWatcher {
         let fd = open(path, O_EVTONLY | O_NONBLOCK)
         guard fd >= 0 else {
             if attempt < 40 { DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) { [weak self] in self?.arm(attempt: attempt + 1) } }
-            else { log.error("watch: cannot open \(self.path, privacy: .public) errno=\(errno)") }
+            else { log.error("watch: cannot open \(self.path, privacy: .private) errno=\(errno)") }
             return
         }
         let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .extend, .delete, .rename, .attrib], queue: .main)
@@ -322,7 +322,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         prepareStart = Date()
         SettingsStore.shared.checkNow(reason: "prepare")
         let warm = host.ready
-        log.info("prepare \(url.path, privacy: .public) warm=\(warm) processAge=\(processAgeMs(), privacy: .public)ms wall=\(Date().timeIntervalSince1970, privacy: .public)")
+        log.info("prepare \(url.path, privacy: .private) warm=\(warm) processAge=\(processAgeMs(), privacy: .public)ms wall=\(Date().timeIntervalSince1970, privacy: .public)")
         _ = url.startAccessingSecurityScopedResource()
         host.controller = self
         completion = handler
@@ -391,7 +391,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
 
     private func open(_ url: URL) {
         if torn { return status("NOT SAVED: file partly written; retrying before switching") }
-        if let why = Self.unreadable(url) { log.error("open: \(why, privacy: .public)"); return status(why) }
+        if let why = Self.unreadable(url) { log.error("open: \(why, privacy: .private)"); return status(why) }
         stopEdit(notifyWriter: true)
         queuedSave = nil
         host.remoteImages.reset()
@@ -414,10 +414,10 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
 
     private func reload(reason: String) {
         guard let url = fileURL, !writing, !torn else { return }
-        if let why = Self.unreadable(url) { log.error("read refused: \(why, privacy: .public)"); return status(why) }
+        if let why = Self.unreadable(url) { log.error("read refused: \(why, privacy: .private)"); return status(why) }
         let raw: String
         do { raw = try String(contentsOf: url, encoding: .utf8) } catch {
-            log.error("read failed \(url.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            log.error("read failed \(url.path, privacy: .private): \(error.localizedDescription, privacy: .private)")
             return
         }
         if raw == diskText { return }
@@ -434,7 +434,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         }
         docText = text
         diskText = raw
-        log.info("read \(text.utf8.count) bytes, last line: \(text.split(separator: "\n").last.map(String.init) ?? "", privacy: .public)")
+        log.info("read \(text.utf8.count) bytes, last line: \(text.split(separator: "\n").last.map(String.init) ?? "", privacy: .private)")
         push(text: text, path: url.path, reason: reason)
     }
 
@@ -545,7 +545,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             if let e = edit { stopEdit(notifyWriter: true, keepRetired: true); retired.append(e) }
             if let url = fileURL, let text = docText { push(text: text, path: url.path, reason: "remoteImages") }
         case "log":
-            log.info("js: \(String((body["msg"] as? String ?? "").prefix(2000)), privacy: .public)")
+            log.info("js: \(String((body["msg"] as? String ?? "").prefix(2000)), privacy: .private)")
         default: break
         }
     }
@@ -557,7 +557,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     }
 
     private func refuse(_ what: String, _ why: String) {
-        log.error("refused \(what, privacy: .public): \(why, privacy: .public)")
+        log.error("refused \(what, privacy: .public): \(why, privacy: .private)")
     }
 
     private func followLink(_ url: URL) {
@@ -568,7 +568,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             let inside = (target.resolvingSymlinksInPath().path + "/").hasPrefix(rootDir + "/")
             if markdownExtensions.contains(target.pathExtension.lowercased()), inside, Self.unreadable(target) == nil,
                SettingsStore.shared.settings.mdLinks == "preview" {
-                log.info("link -> in-panel \(target.path, privacy: .public)")
+                log.info("link -> in-panel \(target.path, privacy: .private)")
                 open(target)
                 return
             }
@@ -583,7 +583,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
 
     /// NSWorkspace.open is a silent no-op inside the sandboxed QL extension, so opening goes through the helper.
     private func openExternally(_ url: URL) {
-        log.info("link -> helper open \(url.absoluteString, privacy: .public)")
+        log.info("link -> helper open \(url.absoluteString, privacy: .private)")
         // A file (the document, or a Markdown link when links open in the editor) goes to the chosen editor; the writer
         // honours the ID only when it matches settings.json itself.
         let editor = url.isFileURL && markdownExtensions.contains(url.pathExtension.lowercased()) ? SettingsStore.shared.settings.editorBundleID : nil
@@ -712,7 +712,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         if let error {
             // Not a conflict (disk full, I/O error, helper lost): keep the unsaved text on screen and in docText so the next edit
             // retries it. When the writer could not put the old content back, the partial file becomes the base to overwrite.
-            log.error("save failed: \(error, privacy: .public)")
+            log.error("save failed: \(error, privacy: .private)")
             queuedSave = nil
             stopEdit(notifyWriter: true)
             if error.contains("partly written") {

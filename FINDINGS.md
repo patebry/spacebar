@@ -1,4 +1,4 @@
-# spacebar spike: findings
+# spacebar: engineering notes
 
 > Short hashes in parentheses, such as a742ad8, refer to the private development history that this public repository was squashed from.
 
@@ -32,14 +32,14 @@ Swift calls into the page through `window.sb`, and the page calls back through t
 
 | Capability | How | Evidence |
 |---|---|---|
-| Render | markdown-it + KaTeX (texmath) + highlight.js; mermaid loads lazily, and the panel shows at first paint, before mermaid (4287dc1) | `docs/evidence/1-render.png`; `test/webcheck.py` |
-| Live reload | DispatchSource watch that re-arms across atomic saves, 15 ms debounce; covers append, temp+rename and rename-away saves | `docs/evidence/2-live-reload.png`; `test/livereload.py` |
-| Images and links | Relative images load via `<base href="spacebar://file/<dir>/">`. Markdown links inside the previewed folder open in the panel; others go through the link policy to the default app | `docs/evidence/4-link.png`, `docs/evidence/3-no-exception.png` |
-| Folder mode (opt-in) | The folders extension claims `public.folder`/`public.directory`; it is enabled only while `folderMode` is on and declines otherwise. Earlier evidence came from the old `FOLDERS=1` build | `docs/evidence/5-folder-finder.png`, `docs/evidence/5-folder-qlmanage.png` |
+| Render | markdown-it + KaTeX (texmath) + highlight.js; mermaid loads lazily, and the panel shows at first paint, before mermaid (4287dc1) | `docs/evidence/0-finder-spacebar.png`, `docs/evidence/themes/`; `test/webcheck.py` |
+| Live reload | DispatchSource watch that re-arms across atomic saves, 15 ms debounce; covers append, temp+rename and rename-away saves | `test/livereload.py` |
+| Images and links | Relative images load via `<base href="spacebar://file/<dir>/">`. Markdown links inside the previewed folder open in the panel; others go through the link policy to the default app | `test/webcheck.py`, `test/linkpolicy/run.sh` |
+| Folder mode (opt-in) | The folders extension claims `public.folder`/`public.directory`; it is enabled only while `folderMode` is on and declines otherwise. Ships; verified by hand in Finder | `docs/evidence/themes/settings-folders.png`; `test/folders.py` (Quick Look) |
 | Task toggles | The checkbox sends its line and text; Swift re-locates the line and the writer saves it with compare-and-swap | 2338549; `test/corpus.py` |
 | Inline editing | See the next section | 068d11d, e1396e9, a742ad8, 4bfa7d6, f2c81fb, bbc51b2 |
 | Double-click fix | See below | a742ad8; `test/dblclick.py` |
-| Themes and settings | Six built-in themes (light/dark), user themes and custom.css, live switching, Aa popover, front matter, TOC, stats | `docs/evidence/themes/`; `test/webthemes.py` (offscreen page); `test/settings_live.py` (Quick Look; not yet run, see below) |
+| Themes and settings | Six built-in themes (light/dark), user themes and custom.css, live switching, Aa popover, front matter, TOC, stats | `docs/evidence/themes/`; `test/webthemes.py` (offscreen page); `test/settings_live.py` (Quick Look) |
 | Contrast | Every built-in theme, light and dark, is WCAG AA: text, `--muted`, quotes and links on the page, every code token on `--hl-bg` and `--code-bg` (diff lines on their tint), toolbar and popover grey text. Apple's link clamps the system accent's lightness (relative colour), so every accent colour passes | `test/webthemes.py` measures each pair from the page's resolved colours, composited on a canvas (bf9dc93) |
 | Mermaid through edits | Every redraw renders its new diagram nodes, so diagrams outside the edited block are never left as source | `test/webthemes.py` (bf9dc93) |
 | Remote images | Off by default. A blocked image's placeholder has "Load images from the web": that document, this preview, not saved | `test/remoteimages.py` (da63068) |
@@ -123,9 +123,25 @@ Tests: `test/webcheck.py` (10/10), `test/linkpolicy/run.sh` (44/44), `test/remot
   not verified. `public.markdown` is not declared by macOS 15.4 either; the extension claims it anyway, harmlessly.
 - **Changing the signer of an existing sandbox container prompts.** The first launch with a real signing identity, over a container created by an ad-hoc build, blocks in `secinitd` on a data-sharing consent dialog. Later launches queue behind it until the user answers. Signing with one stable identity from the first launch avoids this.
 
-## Not yet verified in Quick Look
+## Release signing
 
-Built and unit/page-tested, but the Quick Look runs were blocked by a pending sandbox consent dialog (see above) while the
-screen was locked: `test/settings_live.py`, `test/folders.py`, and the existing Quick Look suites against this build. Open
-platform questions from the plan: V2 system colours and ui-serif in the appex, V3 the folder watch under the read-only
-exception, V6 what Quick Look shows after a folder decline, V7 the settings window coming forward over the panel.
+Releases are signed with a self-signed certificate, "spacebar Release", rather than ad-hoc.
+
+- An ad-hoc signature's designated requirement is its cdhash, so every build has a different signer as far as macOS is
+  concerned. The sandbox container finding above means each update would then stop at the `secinitd` data-sharing prompt.
+- A certificate gives a designated requirement that names the certificate instead:
+  `identifier "md.spacebar" and certificate leaf = H"<certificate SHA-1>"`. Two builds of different code signed with it have
+  different cdhashes and the same requirement (checked with `codesign -d -r-` on two local builds).
+- It is self-signed because there is no Apple Developer ID behind the project. Gatekeeper does not trust it, and it is not
+  meant to: the installer downloads with curl, which sets no quarantine flag. It only keeps the signer the same across releases.
+  The move from the ad-hoc v0.1.0 to it changes the signer once, so that one update may prompt.
+- The release workflow imports it from the `SPACEBAR_SIGNING_P12` and `SPACEBAR_SIGNING_PASSWORD` secrets into a temporary
+  keychain. Without them, as in a fork, it builds ad-hoc and warns. Each `spacebar.zip` also has a GitHub build provenance
+  attestation (`gh attestation verify spacebar.zip -R patebry/spacebar`).
+
+## Open questions
+
+Folder previews and live settings ship. Folder previews were verified by hand in Finder; live settings are covered by
+`test/webthemes.py` off screen and by `test/settings_live.py` in Quick Look. Platform questions still open from the plan: V2 system
+colours and ui-serif in the appex, V3 the folder watch under the read-only exception, V6 what Quick Look shows after a folder
+decline, V7 the settings window coming forward over the panel.

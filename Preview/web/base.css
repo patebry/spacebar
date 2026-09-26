@@ -41,19 +41,28 @@
 
   /* The sidebar keeps its full width inside and is clipped as it collapses, so its text never reflows mid-animation.
      Transitions start only after the first paint (sb-anim), so a collapsed sidebar never shows open first. */
-  #sidebar { --side-w: 220px; width: var(--side-w); flex: none; position: sticky; top: 0; height: 100vh; box-sizing: border-box;
+  #sidebar { --side-w: clamp(160px, var(--side-saved, 240px), max(160px, min(480px, 45vw))); width: var(--side-w); flex: none; position: sticky; top: 0; height: 100vh; box-sizing: border-box;
     display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border); }
   #sidebar > * { width: var(--side-w); box-sizing: border-box; flex: none; }
   #side-list { flex: 1 1 auto; min-height: 0; overflow: auto; position: relative; }
+  /* The resize handle sits on the sidebar's right edge, over its border. */
+  #sidebar > #side-resize { position: absolute; top: 0; right: 0; width: 6px; height: 100%; z-index: 2; cursor: col-resize; touch-action: none; }
+  :root.sb-resizing, :root.sb-resizing * { cursor: col-resize !important; -webkit-user-select: none !important; user-select: none !important; }
+  :root.sb-resizing #sidebar { transition: none !important; }
   :root[data-sidebar=collapsed] #sidebar { width: 0; border-right-width: 0; visibility: hidden; }
   :root.sb-anim #sidebar { transition: width .2s ease-out, visibility 0s; }
   :root.sb-anim[data-sidebar=collapsed] #sidebar { transition: width .2s ease-out, visibility 0s .2s; }
   #side-toggle { position: fixed !important; top: 8px; left: 12px; z-index: 10 !important; }
-  #doc { flex: 1 1 auto; min-width: 0; max-width: var(--measure); margin: 0 auto; padding: 44px 40px 80px; overflow-x: auto;
+  #main { flex: 1 1 auto; min-width: 0; }
+  #doc { max-width: var(--measure); margin: 0 auto; padding: 44px 40px 80px; overflow-x: auto;
     contain: paint !important; position: relative !important; isolation: isolate !important; }
+  /* The file on screen, as a path from the root, in the band under the toolbar; the document starts just below it. */
+  #crumbs { max-width: var(--measure); margin: 0 auto; padding: 44px 40px 0; }
+  #crumbs:not([hidden]) + #doc { padding-top: 12px; }
+  :root[data-view]:not([data-view=markdown]):not([data-view=info]) :is(#doc, #crumbs) { max-width: none; }
   #toc { flex: none; width: 210px; position: sticky; top: 0; max-height: 100vh; overflow: auto; box-sizing: border-box; padding: 56px 20px 24px 4px; }
   #toolbar { position: fixed !important; top: 8px; right: 12px; display: flex; gap: 6px; align-items: center; z-index: 10 !important; }
-  :root.sb-embedded #toolbar, :root.sb-embedded #sidebar, :root.sb-embedded #side-toggle { display: none !important; }
+  :root.sb-embedded #toolbar, :root.sb-embedded #sidebar, :root.sb-embedded #side-toggle, :root.sb-embedded #crumbs { display: none !important; }
   :root.sb-embedded #doc { padding-top: 24px; }
   :root.sb-embedded body::after { content: ""; position: fixed; left: 0; right: 0; bottom: 0; height: 28px; pointer-events: none;
     background: linear-gradient(transparent, var(--bg)); }
@@ -65,6 +74,6 @@
     :root.sb-peek #sidebar { position: fixed; left: 0; top: 0; z-index: 9; width: var(--side-w); visibility: visible;
       background: var(--bg); border-right-width: 1px; box-shadow: 0 0 24px rgba(0, 0, 0, .18); }
   }
-  @media (max-width: 560px) { #doc { padding-left: 20px; padding-right: 20px; } }
+  @media (max-width: 560px) { #doc, #crumbs { padding-left: 20px; padding-right: 20px; } }
   @media (prefers-reduced-motion: reduce) { :root.sb-anim #sidebar { transition: none; } }
 }

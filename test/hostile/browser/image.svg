@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="40" height="40" onload="@@PAYLOAD@@">
+<script>@@PAYLOAD@@</script>
+<rect width="40" height="40" fill="red"/>
+<a xlink:href="javascript:@@PAYLOAD@@"><rect width="20" height="20" fill="blue"/></a>
+<foreignObject width="40" height="40"><iframe xmlns="http://www.w3.org/1999/xhtml" src="javascript:@@PAYLOAD@@"></iframe></foreignObject>
+</svg>

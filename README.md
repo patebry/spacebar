@@ -1,9 +1,25 @@
 # spacebar
 
 Press Space on a Markdown file in Finder and read it properly: headings, tables, task lists, code highlighting, math and
-Mermaid diagrams, in six themes. A sidebar lists the other Markdown files in the same folder, so you can move between them
-without leaving Quick Look; its button collapses it, and every preview remembers that. Click a block to edit it in place, or
-tick a task box, and the file is saved. Free and open source, for macOS 13 and later (Apple silicon and Intel).
+Mermaid diagrams, in six themes. The sidebar is a file browser for the folder: its subfolders open in place, and a click shows
+any file in the panel, so you can read the Markdown, images, PDFs, code, JSON and CSV beside a document without leaving Quick
+Look. Drag its edge to resize it; its button collapses it, and every preview remembers both. Click a block of Markdown to edit
+it in place, or tick a task box, and the file is saved. Free and open source, for macOS 13 and later (Apple silicon and Intel).
+
+What the panel shows for each file in the sidebar:
+
+| File | Shown as |
+|---|---|
+| Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`, `.mkdn`) | rendered, with inline editing and task toggles |
+| Images (`.png`, `.jpg`, `.gif`, `.webp`, `.heic`, `.avif`, `.bmp`, `.tiff`, `.ico`, `.svg`) | fitted to the panel, with its dimensions and size; SVG as an image only |
+| PDF | rendered in the panel |
+| Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.html`, `.xml`, `.yaml`, `.toml`, `.sql`, `Dockerfile`, `Makefile` and more) | highlighted source with line numbers; HTML is shown as source, never rendered |
+| JSON | pretty-printed and highlighted, with a Raw toggle |
+| CSV and TSV | a table, first row as the header, up to 1,000 rows |
+| Text (`.txt`, `.log`, `LICENSE`, `.env.example` and other text) | as is, with line numbers |
+| Anything else | an info card: kind, size, date modified, and Open with its default app (Reveal in Finder for apps, scripts and executables) |
+
+Text over 2 MB shows its first 2 MB. Images over 50 MB get the info card.
 
 [spacebar.patebryant.com](https://spacebar.patebryant.com)
 
@@ -106,8 +122,13 @@ writer service; Finder stays in front. Saves are compare-and-swap: if the file c
 - A Markdown file is treated as hostile. The page runs under a strict Content Security Policy (bundled scripts only, no
   inline scripts, frames, forms or connections), and DOMPurify sanitizes everything before it reaches the page.
 - The writer only writes to the Markdown file on screen, only opens http(s) links or non-executable documents, and only
-  accepts messages from the extension's own page.
-- The preview extension has a read-only sandbox exception for the whole disk, so relative images beside a document load.
+  accepts messages from the extension's own page. Apps, scripts and executables in the sidebar can only be revealed in Finder.
+- The file browser never leaves the previewed folder: links that lead out of it are not listed, a file or folder the page asks
+  for must be one the sidebar listed and must still resolve inside the folder, and hidden files are left out unless you turn
+  them on. Nothing in a file is ever run: HTML and scripts are shown as source, SVG only as an image, and the page loads files
+  only as images or the one PDF on screen.
+- The preview extension has a read-only sandbox exception for the whole disk, so relative images beside a document load and
+  the sidebar can show the folder's files.
 - The preview extension has the `com.apple.security.network.client` entitlement. WKWebView's helper processes crash-loop
   in a sandboxed extension without it. spacebar has no network code of its own; the only requests the page can make are
   remote images, which are blocked unless you allow them.

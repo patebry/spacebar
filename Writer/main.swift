@@ -55,6 +55,23 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         }
     }
 
+    /// Selects the file in Finder and nothing else: it must never open or launch what it is given.
+    func reveal(_ url: URL, reply: @escaping (Bool) -> Void) {
+        var st = stat()
+        guard url.isFileURL, url.path.hasPrefix("/"), lstat(url.path, &st) == 0 else {
+            log.error("refused reveal \(url.absoluteString, privacy: .private)")
+            return reply(false)
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([url.standardizedFileURL])
+        log.info("reveal \(url.path, privacy: .private)")
+        reply(true)
+    }
+
+    func defaultApp(_ url: URL, reply: @escaping (String?) -> Void) {
+        guard url.isFileURL, LinkPolicy.refusal(url) == nil, let app = LinkPolicy.opener(for: url)?.app else { return reply(nil) }
+        reply(FileManager.default.displayName(atPath: app.path).replacingOccurrences(of: ".app", with: ""))
+    }
+
     func ensureSupportDir(reply: @escaping (Bool) -> Void) {
         let err = SettingsFile.ensure()
         if let err { log.error("support folder: \(String(describing: err), privacy: .public)") }

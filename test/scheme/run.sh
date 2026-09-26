@@ -3,5 +3,5 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 out=$(mktemp -d)
-xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/scheme/main.swift Shared/Settings.swift Shared/WebShell.swift -framework WebKit -o "$out/scheme"
+xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/scheme/main.swift Shared/Settings.swift Shared/WebShell.swift Shared/FolderListing.swift -framework WebKit -o "$out/scheme"
 SPACEBAR_SUPPORT_DIR="$out/support" "$out/scheme" "$PWD/Preview/web"

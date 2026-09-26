@@ -16,7 +16,7 @@ const el = (tag, cls, text) => {
 // document-start script) is absent in a plain browser, so the page falls back to a minimal apply of its own.
 const DEFAULTS = { theme: 'apple', appearance: 'auto', codeTheme: 'auto', bodyFont: 'system', monoFont: 'system', fontSize: 15,
   lineHeight: 1.6, width: 'medium', frontMatter: 'table', toc: 'auto', stats: true, math: true, mermaid: true, rawHTML: 'sanitized',
-  remoteImages: false, inlineEditing: true, taskToggles: true, sidebarCollapsed: false, customCSSURL: null, userThemeURL: null };
+  remoteImages: false, inlineEditing: true, taskToggles: true, sidebarCollapsed: false, sidebarWidth: 240, customCSSURL: null, userThemeURL: null };
 let settings = { ...DEFAULTS, ...(window.__sbInitial || {}) };
 const THEMES = { apple: 'Apple', github: 'GitHub', paper: 'Paper', solarized: 'Solarized', nord: 'Nord', contrast: 'High Contrast' };
 const theme = window.sbTheme && typeof window.sbTheme.apply === 'function' ? window.sbTheme : {
@@ -25,6 +25,7 @@ const theme = window.sbTheme && typeof window.sbTheme.apply === 'function' ? win
     Object.assign(r.dataset, { theme: p.theme, font: p.bodyFont, mono: p.monoFont, width: p.width, editing: p.inlineEditing ? 'on' : 'off',
       sidebar: p.sidebarCollapsed === true ? 'collapsed' : 'open' });
     r.style.setProperty('--font-size', p.fontSize + 'px');
+    r.style.setProperty('--side-saved', p.sidebarWidth + 'px');
   },
 };
 theme.apply(settings);
@@ -349,6 +350,7 @@ function blockRange(b) {
 /** Every redraw makes new diagram nodes holding their source; each is drawn here, whatever redrew the document. */
 let drawnMermaid = Promise.resolve();
 function draw() {
+  if (!isMarkdown(current)) { $('doc').replaceChildren(viewNode(current)); decorate(); return; }
   $('doc').replaceChildren(render(current.text));
   if (editing) spliceEditor([editing.start, editing.start + editing.lines]);
   decorate();
@@ -497,6 +499,12 @@ let statsTimer = 0;
 function updateStats() {
   clearTimeout(statsTimer);
   if (!settings.stats) { $('stats').textContent = ''; return; }
+  if (!isMarkdown(current)) {
+    const code = TEXT_VIEWS.has(current.view) && $('doc').querySelector('.code-view pre.code');
+    const n = code ? lineCount(code.textContent) : 0;
+    $('stats').textContent = n ? `${n.toLocaleString()} ${n === 1 ? 'line' : 'lines'}` : '';
+    return;
+  }
   statsTimer = setTimeout(() => {
     const skip = '.katex-mathml, pre.mermaid, .frontmatter, .frontmatter-raw, svg';
     const walk = document.createTreeWalker($('doc'), NodeFilter.SHOW_TEXT,
@@ -536,7 +544,10 @@ window.sb = {
     current = p;
     $('base').href = p.base;
     document.title = p.name;
+    root.dataset.view = isMarkdown(p) ? 'markdown' : p.view;
+    $('edit').hidden = !isMarkdown(p);
     showFolder(p);
+    showCrumbs(p);
     draw();
     window.scrollTo(0, y);
     const t1 = performance.now();
@@ -621,11 +632,13 @@ window.sb = {
     retired = null;
     draw();
   },
-  /** The sidebar's files for folder `dir`; kept for the next render when it is not the folder on screen yet. */
-  setFiles(f) {
-    const s = sideState(f);
-    if (!s) return;
-    if (current.path && s.dir === current.dir) { side = s; renderSidebar(); } else pendingSide = s;
+  /** One folder of the sidebar's tree: the root, or a folder expanded in it. */
+  setFiles(f) { setFolder(f); },
+  /** The app the viewer's Open button would use, named once the writer has looked it up. */
+  setOpener(o) {
+    if (!o || o.path !== current.path || typeof o.app !== 'string') return;
+    current.app = o.app;
+    document.querySelectorAll('#doc .viewer-open[data-action=openFile]').forEach((b) => { b.textContent = `Open with ${o.app}`; });
   },
   status(s, sticky) {
     if (sticky) stickyStatus = s;
@@ -634,58 +647,379 @@ window.sb = {
   },
 };
 
-// ---------- the sidebar: the Markdown files in the document's folder, for a file and a folder alike (outside #doc, text only) ----------
+// ---------- file views: everything that is not Markdown, built from text nodes (never the file's own markup) ----------
+
+const TEXT_VIEWS = new Set(['code', 'text', 'json']);
+const HIGHLIGHT_MAX = 512 * 1024;
+const CSV_ROWS = 1000;
+const CSV_COLS = 200;
+// Bidirectional controls in a file name could make it read as another type; they are dropped wherever a name is shown.
+const plainName = (s) => String(s).replace(/[\u202A-\u202E\u2066-\u2069]/g, '');
+const isMarkdown = (p) => !p.view || p.view === 'markdown';
+const lineCount = (t) => (t ? t.split('\n').length - (t.endsWith('\n') ? 1 : 0) : 0);
+
+function fmtSize(n) {
+  if (typeof n !== 'number' || !isFinite(n)) return '';
+  if (n < 1000) return `${n} ${n === 1 ? 'byte' : 'bytes'}`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let v = n, i = -1;
+  do { v /= 1000; i++; } while (v >= 1000 && i < units.length - 1);
+  return `${v.toFixed(v < 10 ? 1 : 0)} ${units[i]}`;
+}
+const fmtDate = (ms) => (typeof ms === 'number' && isFinite(ms) ? new Date(ms).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '');
+
+// The sidebar's and the info card's icons: drawn here, one set for every theme (colours come from style.css).
+const SVG = 'http://www.w3.org/2000/svg';
+const DOC = 'M4 1.5h5.5L13 5v9.5H4z';
+const FOLD = 'M9.5 1.5V5H13';
+const ICONS = {
+  folder: ['M1.5 13.5V3.5h4.3l1.5 1.8h7.2v8.2z', 'M1.5 6.5h13'],
+  markdown: [DOC, FOLD, 'M5.8 12V8.6l1.3 1.6 1.3-1.6V12', 'M10.6 8.6V12M9.6 11l1 1 1-1'],
+  image: ['M2 3.5h12v9H2z', 'M2.5 12l3.5-4 2.5 3 1.8-1.8L13.5 12', 'M10.5 5.6a1 1 0 1 0 0 2 1 1 0 1 0 0-2z'],
+  pdf: [DOC, FOLD, 'M6 8h5M6 10h5M6 12h3'],
+  code: [DOC, FOLD, 'M7.2 8.3 5.7 10l1.5 1.7M9.8 8.3l1.5 1.7-1.5 1.7'],
+  data: [DOC, FOLD, 'M5.8 7.6h5.4v4.6H5.8zM5.8 9.9h5.4M8.5 7.6v4.6'],
+  text: [DOC, FOLD, 'M6 7.5h5M6 9.5h5M6 11.5h3'],
+  other: [DOC, FOLD],
+};
+function icon(kind, size = 16) {
+  const k = ICONS[kind] ? kind : 'other';
+  const svg = document.createElementNS(SVG, 'svg');
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('width', size);
+  svg.setAttribute('height', size);
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('class', `ic ic-${k}`);
+  ICONS[k].forEach((d, i) => {
+    const path = document.createElementNS(SVG, 'path');
+    path.setAttribute('d', d);
+    if (i === 0) path.setAttribute('class', 'ic-body');
+    svg.appendChild(path);
+  });
+  return svg;
+}
+
+/** The viewer's button: "Open with <app>" when the link policy allows the file, else Reveal in Finder (apps, scripts,
+ *  executables, and anything the writer would refuse to open). */
+function openButton(p) {
+  const b = el('button', 'viewer-open');
+  b.type = 'button';
+  b.dataset.action = p.canOpen === true ? 'openFile' : 'reveal';
+  b.textContent = p.canOpen === true ? (p.app ? `Open with ${p.app}` : 'Open') : 'Reveal in Finder';
+  return b;
+}
+
+/** Open and Reveal only for a real click: the page's own buttons, never a script-made event. */
+function viewerAction(b, e) {
+  // A Markdown document can hold a look-alike button; the viewers exist only for other files.
+  if (!current.path || isMarkdown(current)) return;
+  const a = b.dataset.action;
+  if ((a === 'openFile' || a === 'reveal') && e.isTrusted) post({ type: a, path: current.path });
+  else if (a === 'raw') { jsonRaw = !jsonRaw; draw(); }
+}
+
+function viewHead(p, ...extra) {
+  const head = el('div', 'viewer-head');
+  head.append(el('span', 'viewer-kind', [p.kindName, fmtSize(p.size)].filter(Boolean).join(' · ')), ...extra, openButton(p));
+  return head;
+}
+
+function note(text) { return el('div', 'viewer-note', text); }
+
+function truncNote(p) { return p.truncated ? note(`Showing the first 2 MB of ${fmtSize(p.size)}.`) : null; }
+
+/** Source with line numbers; highlighted by the bundled highlight.js when the language is known and the text is not huge. */
+function codeBlock(text, lang) {
+  const wrap = el('div', 'code-view');
+  const n = Math.max(1, lineCount(text));
+  wrap.append(el('pre', 'gutter', Array.from({ length: n }, (_, i) => i + 1).join('\n')));
+  const pre = el('pre', 'code');
+  const code = el('code', 'hljs');
+  if (lang && window.hljs && hljs.getLanguage(lang) && text.length <= HIGHLIGHT_MAX) {
+    const html = hljs.highlight(text, { language: lang, ignoreIllegals: true }).value;
+    code.append(DOMPurify.sanitize(html, { ALLOWED_TAGS: ['span'], ALLOWED_ATTR: ['class'], RETURN_DOM_FRAGMENT: true }));
+  } else code.textContent = text;
+  pre.append(code);
+  wrap.append(pre);
+  return wrap;
+}
+
+let jsonRaw = false;
+function jsonView(p) {
+  let pretty = null;
+  if (!p.truncated) { try { pretty = JSON.stringify(JSON.parse(p.text), null, 2); } catch (e) { pretty = null; } }
+  const box = el('div', 'viewer viewer-code');
+  const toggle = pretty !== null ? el('button', 'viewer-toggle', jsonRaw ? 'Formatted' : 'Raw') : null;
+  if (toggle) { toggle.type = 'button'; toggle.dataset.action = 'raw'; toggle.setAttribute('aria-pressed', String(jsonRaw)); }
+  box.append(viewHead(p, ...(toggle ? [toggle] : [])));
+  const t = truncNote(p);
+  if (t) box.append(t);
+  if (pretty === null && !p.truncated) box.append(note('Not valid JSON: shown as is.'));
+  box.append(codeBlock(pretty !== null && !jsonRaw ? pretty : p.text, 'json'));
+  return box;
+}
+
+/** CSV (RFC 4180 quoting) or TSV; the first row is the header. Rows past the cap are counted, not kept. */
+function parseDelimited(text, sep, max) {
+  const rows = [];
+  let row = [], field = '', q = false, total = 0;
+  const endRow = () => { row.push(field); field = ''; if (total < max + 1) rows.push(row); total++; row = []; };
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) {
+      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else q = false; } else field += c;
+    } else if (c === '"' && field === '') q = true;
+    else if (c === sep) { row.push(field); field = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; endRow(); }
+    else field += c;
+  }
+  if (field !== '' || row.length) endRow();
+  return { rows, total };
+}
+
+function csvView(p) {
+  const box = el('div', 'viewer viewer-csv');
+  box.append(viewHead(p));
+  const t = truncNote(p);
+  if (t) box.append(t);
+  const { rows, total } = parseDelimited(p.text, p.tsv === true ? '\t' : ',', CSV_ROWS);
+  const body = rows.slice(1, CSV_ROWS + 1);
+  if (total - 1 > CSV_ROWS) box.append(note(`Showing the first ${CSV_ROWS.toLocaleString()} of ${(total - 1).toLocaleString()} rows.`));
+  const table = el('table', 'csv');
+  if (rows.length) {
+    const tr = table.appendChild(el('thead')).appendChild(el('tr'));
+    rows[0].slice(0, CSV_COLS).forEach((h) => tr.appendChild(el('th', '', h)));
+  }
+  const tb = table.appendChild(el('tbody'));
+  const wide = rows.some((r) => r.length > CSV_COLS);
+  if (wide) box.append(note(`Showing the first ${CSV_COLS} columns.`));
+  for (const r of body) { const tr = tb.appendChild(el('tr')); r.slice(0, CSV_COLS).forEach((c) => tr.appendChild(el('td', '', c))); }
+  box.append(table);
+  return box;
+}
+
+function infoCard(p, why) {
+  const card = el('div', 'viewer info-card');
+  card.append(icon(p.icon, 64), el('div', 'info-name', plainName(p.name)), el('div', 'info-kind', p.kindName || 'Document'));
+  const dl = el('dl');
+  const rel = typeof p.root === 'string' && p.path.startsWith(p.root + '/') ? p.path.slice(p.root.length + 1) : p.path;
+  for (const [k, v] of [['Size', typeof p.size === 'number' ? `${fmtSize(p.size)}${p.size >= 1000 ? ` (${p.size.toLocaleString()} bytes)` : ''}` : ''],
+    ['Modified', fmtDate(p.modified)], ['Where', rel]]) {
+    if (v) dl.append(el('dt', '', k), el('dd', '', v));
+  }
+  card.append(dl);
+  if (why) card.append(note(why));
+  card.append(openButton(p));
+  return card;
+}
+
+function imageView(p) {
+  const box = el('figure', 'viewer viewer-image');
+  const img = document.createElement('img');
+  const cap = el('figcaption', 'viewer-kind', [p.kindName, fmtSize(p.size)].filter(Boolean).join(' · '));
+  img.alt = p.name;
+  img.addEventListener('load', () => { cap.textContent = [p.kindName, `${img.naturalWidth} × ${img.naturalHeight}`, fmtSize(p.size)].filter(Boolean).join(' · '); });
+  img.addEventListener('error', () => { if (box.isConnected) box.replaceWith(infoCard(p, 'This image can’t be shown here.')); });
+  img.src = p.src;
+  const head = el('div', 'viewer-head');
+  head.append(cap, openButton(p));
+  box.append(head, img);
+  return box;
+}
+
+function pdfView(p) {
+  const box = el('div', 'viewer viewer-pdf');
+  box.append(viewHead(p));
+  const f = document.createElement('iframe');
+  f.title = p.name;
+  f.src = p.src;
+  box.append(f);
+  return box;
+}
+
+function viewNode(p) {
+  switch (p.view) {
+    case 'image': if (typeof p.src === 'string') return imageView(p); break;
+    case 'pdf': if (typeof p.src === 'string') return pdfView(p); break;
+    case 'json': if (typeof p.text === 'string') return jsonView(p); break;
+    case 'csv': if (typeof p.text === 'string') return csvView(p); break;
+    case 'code': case 'text':
+      if (typeof p.text === 'string') {
+        const box = el('div', 'viewer viewer-code');
+        box.append(viewHead(p));
+        const t = truncNote(p);
+        if (t) box.append(t);
+        if (p.view === 'code' && p.lang && p.text.length > HIGHLIGHT_MAX) box.append(note('Highlighting is off for files over 512 KB.'));
+        box.append(codeBlock(p.text, p.view === 'code' ? p.lang : null));
+        return box;
+      }
+      break;
+    default: break;
+  }
+  return infoCard(p);
+}
+
+// ---------- the sidebar: the previewed folder as a tree, for a file and a folder alike (outside #doc, text only) ----------
 
 const root = document.documentElement;
 const narrow = matchMedia('(max-width: 639px)');
-let side = { dir: '', name: '', files: [], more: 0, active: null };
-let pendingSide = null;
+// The tree of the root on screen: each listed folder by path. Expanded folders are remembered per root for this session
+// (the page lives as long as the extension process), never saved.
+let tree = { root: '', name: '', session: 0, dirs: new Map() };
+const expandedByRoot = new Map();
+const requested = new Set();
 let sideDrawn = '';
-let sideVersion = 0;
+let treeVersion = 0;
 
-function sideState(f) {
-  if (!f || typeof f.dir !== 'string' || !f.dir) return null;
-  const files = Array.isArray(f.files) ? f.files.filter((x) => x && typeof x.name === 'string' && typeof x.path === 'string') : [];
-  return { dir: f.dir, name: typeof f.dirName === 'string' ? f.dirName : '', files, more: Math.max(0, +f.more || 0),
-    active: typeof f.active === 'string' ? f.active : null, version: ++sideVersion };
+function expanded() {
+  if (!tree.root) return new Set();
+  let s = expandedByRoot.get(tree.root);
+  if (!s) {
+    s = new Set();
+    expandedByRoot.set(tree.root, s);
+    if (expandedByRoot.size > 64) expandedByRoot.delete(expandedByRoot.keys().next().value);
+  }
+  return s;
 }
 
-/** A render names its folder; the list stays when the folder is the same, and comes with setFiles when it is new. */
-function showFolder(p) {
-  if (typeof p.dir !== 'string' || !p.dir) side = { dir: '', name: '', files: [], more: 0, active: null };
-  else if (p.dir !== side.dir) side = (pendingSide && pendingSide.dir === p.dir ? pendingSide : sideState({ dir: p.dir, dirName: p.dirName }));
-  if (side.dir) side.active = typeof p.active === 'string' ? p.active : null;
-  pendingSide = null;
+function resetTree(rootPath, name) {
+  tree = { root: rootPath, name: name || rootPath.split('/').pop() || rootPath, session: 0, dirs: new Map() };
+  requested.clear();
+  treeVersion++;
+}
+
+const inTree = (p) => typeof p === 'string' && p.startsWith(tree.root === '/' ? '/' : tree.root + '/');
+const parentOf = (p) => p.slice(0, p.lastIndexOf('/')) || '/';
+
+function setFolder(f) {
+  if (!f || typeof f.root !== 'string' || !f.root || typeof f.dir !== 'string') return;
+  if (f.root !== tree.root) resetTree(f.root, f.rootName);
+  if (f.dir !== tree.root && !inTree(f.dir)) return;
+  // A new preview of the same root: what the page holds is kept on screen but asked for again, so the new preview watches it.
+  if (f.session !== tree.session) {
+    tree.session = f.session;
+    requested.clear();
+    for (const d of tree.dirs.values()) d.stale = true;
+  }
+  const entries = Array.isArray(f.entries) ? f.entries.filter((e) => e && typeof e.name === 'string' && typeof e.path === 'string' && parentOf(e.path) === f.dir) : [];
+  tree.dirs.set(f.dir, { entries: entries.map((e) => ({ name: e.name, path: e.path, dir: e.dir === true, icon: typeof e.icon === 'string' ? e.icon : 'other' })),
+    more: Math.max(0, +f.more || 0), stale: false });
+  requested.delete(f.dir);
+  treeVersion++;
+  requestFolders();
   renderSidebar();
 }
 
+/** Asks for every expanded folder whose parent is listed and names it, so each request is for a folder Swift has seen. */
+function requestFolders() {
+  for (const p of expanded()) {
+    const d = tree.dirs.get(p);
+    if ((d && !d.stale) || requested.has(p) || !inTree(p)) continue;
+    const parent = tree.dirs.get(parentOf(p));
+    if (!parent || parent.stale || !parent.entries.some((e) => e.dir && e.path === p)) continue;
+    requested.add(p);
+    post({ type: 'list', path: p });
+  }
+}
+
+function toggleFolder(p) {
+  const s = expanded();
+  if (s.has(p)) { s.delete(p); post({ type: 'unlist', path: p }); } else s.add(p);
+  treeVersion++;
+  requestFolders();
+  renderSidebar();
+}
+
+/** A render names its root; the tree stays when the root is the same, and the current file's folders open. */
+function showFolder(p) {
+  const r = typeof p.root === 'string' && p.root ? p.root : typeof p.dir === 'string' ? p.dir : '';
+  if (!r) { if (tree.root) resetTree('', ''); tree.root = ''; }
+  else if (r !== tree.root) resetTree(r, p.rootName || p.dirName);
+  if (tree.root && inTree(p.path)) {
+    const s = expanded();
+    for (let d = parentOf(p.path); d !== tree.root && inTree(d); d = parentOf(d)) s.add(d);
+    requestFolders();
+  }
+  renderSidebar();
+}
+
+function treeRow(e, depth) {
+  const a = el('a', `row ${e.dir ? 'folder' : 'file'}`);
+  a.href = '#';
+  a.title = e.name;
+  a.dataset.path = e.path;
+  a.style.setProperty('--depth', depth);
+  a.setAttribute('role', 'treeitem');
+  a.setAttribute('aria-level', depth + 1);
+  const tw = el('span', 'twisty');
+  if (e.dir) {
+    a.dataset.dir = '1';
+    const open = expanded().has(e.path);
+    a.setAttribute('aria-expanded', String(open));
+    if (open) a.classList.add('open');
+    const svg = document.createElementNS(SVG, 'svg');
+    svg.setAttribute('viewBox', '0 0 10 10');
+    svg.setAttribute('aria-hidden', 'true');
+    const path = document.createElementNS(SVG, 'path');
+    path.setAttribute('d', 'M3.5 2 7 5 3.5 8z');
+    svg.appendChild(path);
+    tw.appendChild(svg);
+  }
+  a.append(tw, icon(e.dir ? 'folder' : e.icon), el('span', 'nm', plainName(e.name)));
+  if (!e.dir && e.path === current.path) { a.classList.add('active'); a.setAttribute('aria-current', 'page'); }
+  return a;
+}
+
 function renderSidebar() {
-  const on = !!side.dir;
+  const on = !!tree.root;
   $('sidebar').hidden = !on;
   $('side-toggle').hidden = !on;
   syncToggle();
-  const key = `${side.version}\n${current.path}\n${side.active}`;
+  const key = `${treeVersion}\n${current.path}`;
   if (!on || key === sideDrawn) return;
-  const moved = !sideDrawn.startsWith(`${side.version}\n`);
+  const moved = sideDrawn.split('\n')[1] !== current.path;
   sideDrawn = key;
-  $('side-head').textContent = side.name;
-  $('side-head').title = side.dir;
+  $('side-head').textContent = tree.name;
+  $('side-head').title = tree.root;
   const list = $('side-list');
-  let at = null;
-  list.replaceChildren(...side.files.map((f) => {
-    const a = el('a', '', f.name);
-    a.href = '#';
-    a.title = f.name;
-    a.dataset.path = f.path;
-    if (f.path === (side.active ?? current.path)) { a.className = 'active'; a.setAttribute('aria-current', 'page'); at = at || a; }
-    return a;
-  }));
-  $('side-more').hidden = !side.more;
-  $('side-more').textContent = side.more ? `${side.more.toLocaleString()} more not listed` : '';
+  const rows = [];
+  const exp = expanded();
+  const walk = (dir, depth) => {
+    const d = tree.dirs.get(dir);
+    if (!d) {
+      if (depth) { const n = el('div', 'row-note', 'Loading…'); n.style.setProperty('--depth', depth); rows.push(n); }
+      return;
+    }
+    for (const e of d.entries) {
+      rows.push(treeRow(e, depth));
+      if (e.dir && exp.has(e.path) && depth < 64) walk(e.path, depth + 1);
+    }
+    if (d.more && depth) { const n = el('div', 'row-note', `${d.more.toLocaleString()} more not listed`); n.style.setProperty('--depth', depth); rows.push(n); }
+  };
+  walk(tree.root, 0);
+  list.replaceChildren(...rows);
+  const top = tree.dirs.get(tree.root);
+  $('side-more').hidden = !(top && top.more);
+  $('side-more').textContent = top && top.more ? `${top.more.toLocaleString()} more not listed` : '';
   // Keep the document on screen in view; the list scrolls on its own, never the page.
+  const at = list.querySelector('a.active');
   if (at && (moved || at.offsetTop < list.scrollTop || at.offsetTop + at.offsetHeight > list.scrollTop + list.clientHeight)) {
     list.scrollTop = Math.max(0, at.offsetTop - list.clientHeight / 3);
   }
+}
+
+/** The file on screen, as a path from the root: the panel's title stays the file Quick Look opened. */
+function showCrumbs(p) {
+  const c = $('crumbs');
+  const r = typeof p.root === 'string' ? p.root : '';
+  if (!r || typeof p.path !== 'string' || !p.path.startsWith(r === '/' ? '/' : r + '/')) { c.hidden = true; c.replaceChildren(); return; }
+  const parts = [p.rootName || r.split('/').pop() || r, ...p.path.slice(r.length + (r === '/' ? 0 : 1)).split('/')];
+  c.replaceChildren(...parts.flatMap((name, i) => {
+    const s = el('span', i === parts.length - 1 ? 'crumb here' : 'crumb', plainName(name));
+    return i ? [el('span', 'crumb-sep', '›'), s] : [s];
+  }));
+  c.title = p.path;
+  c.hidden = false;
 }
 
 /** Open or collapsed as the setting says; below the narrow width it is always collapsed and the button shows it over the page. */
@@ -714,6 +1048,37 @@ document.addEventListener('click', (e) => {
   e.preventDefault();
   e.stopPropagation();
 }, true);
+
+// The resize handle: the width follows the pointer and is saved once, when the drag ends. It never collapses the sidebar.
+const SIDE_MIN = 160, SIDE_MAX = 480, SIDE_DEFAULT = 240;
+const sideLimit = () => Math.max(SIDE_MIN, Math.min(SIDE_MAX, Math.floor(window.innerWidth * 0.45)));
+const clampSide = (w) => Math.round(Math.max(SIDE_MIN, Math.min(sideLimit(), w)));
+let resizing = null;
+const handle = $('side-resize');
+handle.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0 || narrow.matches) return;
+  e.preventDefault();
+  try { handle.setPointerCapture(e.pointerId); } catch (err) { /* a pointer the page cannot capture still resizes while over the handle */ }
+  resizing = { x: e.clientX, w: $('sidebar').getBoundingClientRect().width, now: null };
+  root.classList.add('sb-resizing');
+});
+handle.addEventListener('pointermove', (e) => {
+  if (!resizing) return;
+  resizing.now = clampSide(resizing.w + e.clientX - resizing.x);
+  root.style.setProperty('--side-saved', resizing.now + 'px');
+});
+function endResize() {
+  if (!resizing) return;
+  const w = resizing.now;
+  resizing = null;
+  root.classList.remove('sb-resizing');
+  if (w !== null && w !== settings.sidebarWidth) choose('sidebarWidth', w);
+  else root.style.setProperty('--side-saved', settings.sidebarWidth + 'px');
+}
+handle.addEventListener('pointerup', endResize);
+handle.addEventListener('pointercancel', endResize);
+handle.addEventListener('lostpointercapture', endResize);
+handle.addEventListener('dblclick', (e) => { e.preventDefault(); choose('sidebarWidth', SIDE_DEFAULT); });
 
 // ---------- the Aa popover (in #toolbar, outside #doc: nothing the document renders can reach these messages) ----------
 
@@ -781,9 +1146,17 @@ document.addEventListener('click', (e) => {
   const tClick = performance.timeOrigin + e.timeStamp;
   const toc = e.target.closest('#toc a');
   if (toc) { e.preventDefault(); const h = tocTargets[+toc.dataset.toc]; if (h && h.isConnected) h.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
-  const file = e.target.closest('#sidebar a');
-  if (file) { e.preventDefault(); peek(false); if (file.dataset.path !== current.path) post({ type: 'open', path: file.dataset.path }); return; }
-  if (e.target.closest('#sidebar')) return;
+  const row = e.target.closest('#side-list a.row');
+  if (row) {
+    e.preventDefault();
+    if (row.dataset.dir) { toggleFolder(row.dataset.path); return; }
+    peek(false);
+    if (row.dataset.path !== current.path) post({ type: 'open', path: row.dataset.path });
+    return;
+  }
+  if (e.target.closest('#sidebar, #crumbs')) return;
+  const act = e.target.closest('#doc .viewer [data-action]');
+  if (act) { e.preventDefault(); viewerAction(act, e); return; }
   const a = e.target.closest('a[href], a[*|href]');
   const href = a && (a.getAttribute('href') ?? a.getAttributeNS('http://www.w3.org/1999/xlink', 'href'));
   if (a && href && !href.startsWith('#')) { e.preventDefault(); post({ type: 'link', href: new URL(href, document.baseURI).href }); return; }

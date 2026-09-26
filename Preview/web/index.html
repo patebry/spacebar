@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src spacebar://bundle/app.js spacebar://bundle/vendor/; style-src spacebar: 'unsafe-inline'; img-src spacebar: https: data:; font-src spacebar:; base-uri spacebar:; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src spacebar://bundle/app.js spacebar://bundle/vendor/; style-src spacebar: 'unsafe-inline'; img-src spacebar: https: data:; font-src spacebar:; frame-src spacebar://file/; base-uri spacebar:; form-action 'none'">
 <base id="base" href="spacebar://bundle/">
 <link rel="stylesheet" href="spacebar://bundle/base.css">
 <link rel="stylesheet" href="spacebar://bundle/style.css">
@@ -15,10 +15,11 @@
 <script src="spacebar://bundle/vendor/purify.min.js"></script>
 </head>
 <body>
-<nav id="sidebar" aria-label="Markdown files in this folder" hidden>
+<nav id="sidebar" aria-label="Files in this folder" hidden>
   <div id="side-head"></div>
-  <div id="side-list"></div>
+  <div id="side-list" role="tree"></div>
   <div id="side-more" hidden></div>
+  <div id="side-resize" role="separator" aria-orientation="vertical" aria-label="Resize the sidebar" title="Drag to resize. Double-click to reset."></div>
 </nav>
 <button id="side-toggle" type="button" aria-controls="sidebar" aria-expanded="true" title="Hide sidebar" hidden>
   <svg viewBox="0 0 20 16" width="18" height="15" aria-hidden="true" fill="none" stroke="currentColor">
@@ -51,7 +52,10 @@
     <button id="aa-settings" type="button">Settings…</button>
   </div>
 </div>
-<main id="doc"></main>
+<div id="main">
+  <nav id="crumbs" aria-label="File path" hidden></nav>
+  <main id="doc"></main>
+</div>
 <nav id="toc" aria-label="Contents" hidden></nav>
 <script src="spacebar://bundle/app.js"></script>
 </body>

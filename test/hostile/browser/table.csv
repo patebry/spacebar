@@ -1,0 +1,2 @@
+name,html,formula
+"<img src=x onerror=""window.__pwned=1"">","</td></tr></table><script>window.__pwned=1</script>","=HYPERLINK(""javascript:window.__pwned=1"",""x"")"

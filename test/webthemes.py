@@ -23,7 +23,7 @@ class Page:
         subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-O', '-target', 'arm64-apple-macos13.0',
                         os.path.join(ROOT, 'test', 'web', 'main.swift'), os.path.join(ROOT, 'Shared', 'Settings.swift'),
                         os.path.join(ROOT, 'Shared', 'WebShell.swift'),
-                        os.path.join(ROOT, 'Shared', 'FolderListing.swift'), '-o', exe], check=True)
+                        os.path.join(ROOT, 'Shared', 'FolderListing.swift'), os.path.join(ROOT, 'Shared', 'LinkPolicy.swift'), '-o', exe], check=True)
         self.proc = subprocess.Popen([exe, WEB], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
                                      env=dict(os.environ, SPACEBAR_SUPPORT_DIR=self.support))
         self.logs = []

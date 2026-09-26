@@ -1,6 +1,6 @@
 // Loads Preview/web in an offscreen WKWebView set up like the extension: the real SchemeHandler (spacebar://bundle, file and
 // user) and the real document-start settings script (PageSettings.userScript). Built with Shared/Settings.swift and
-// Shared/WebShell.swift and Shared/FolderListing.swift; run with SPACEBAR_SUPPORT_DIR set to a scratch folder.
+// Shared/WebShell.swift, Shared/FolderListing.swift and Shared/LinkPolicy.swift; run with SPACEBAR_SUPPORT_DIR set to a scratch folder.
 //   webcheck <web dir> <cmd>...   runs each command, prints one JSON line per command
 //   webcheck <web dir>            reads commands from stdin, one JSON-encoded string per line, and answers each with a line
 // Commands:
@@ -15,13 +15,19 @@
 //   @size:<w>x<h>      resize the window and the web view
 //   @shot:<path.png>   WKWebView.takeSnapshot of the visible view
 //   @wait:<seconds>
+//   @pixel:<x>,<y>     the snapshot's colour at that point of the view, as [r, g, b]
 //   @nativeclick:<selector>   a real mouse click (NSEvent down/up sent to the harness's own window) at the element's corner
+//   @nativedrag:<selector>,<dx>   a real mouse drag in the harness's own window: down in the element, moves in steps, up
 //   @remotereset       RemoteImageGate.reset(), as a new preview or another document does
 //   @loaddisk          reload the page with settings.json from the scratch folder, as the next preview would
-//   @relist            list the current file's folder again and send it with sb.setFiles, as the folder watch does
-// Every render sends the sidebar listing of the file's folder first (FolderListing, as the extension does). The page's "open"
-// renders a listed file; "setting" goes through the extension's gate (Settings.panelPatch) and the writer's update
-// (SettingsFile.updateFromPanel), recorded as "_written" or "_settingRefused".
+//   @relist            list the root and every folder the page expanded again and send them, as the folder watches do
+//   @root:<dir>        the sidebar's root for the renders that follow (a folder preview); empty: each file's own folder
+//   @session           a new preview of the same root: the next listings carry a new session number
+// Every render sends the sidebar listing of the root first (FolderListing, as the extension does) and renders the file by its
+// kind (FileView for anything but Markdown). The page's "list" lists a folder the tree named, "open" renders a listed file,
+// "openFile" and "reveal" are recorded as "_openFile" / "_reveal" (or "_openRefused"), each checked as the extension does;
+// "setting" goes through the extension's gate (Settings.panelPatch) and the writer's update (SettingsFile.updateFromPanel),
+// recorded as "_written" or "_settingRefused". A subframe may load only the PDF on screen (ShellPolicy).
 // The page's "loadRemoteImages" message goes to the real RemoteImageGate, as the extension routes it, and a granted request
 // re-renders the current file with the gate's payload flag.
 // The non-file commands print {cmd, result, messages}; messages are those posted while the command ran, plus "_refused" for
@@ -35,6 +41,8 @@ final class Recorder: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     var onLoadRemoteImages: (String) -> Void = { _ in }
     var onOpen: (String) -> Void = { _ in }
     var onSetting: ([String: Any]) -> Void = { _ in }
+    var onMessage: (String, [String: Any]) -> Void = { _, _ in }
+    var pdfFrame: URL?
     func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
         var m = (message.body as? [String: Any]) ?? ["raw": String(describing: message.body)]
         m["_mainFrame"] = message.frameInfo.isMainFrame
@@ -44,11 +52,14 @@ final class Recorder: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         if m["type"] as? String == "loadRemoteImages", let p = m["path"] as? String { onLoadRemoteImages(p) }
         if m["type"] as? String == "open", let p = m["path"] as? String { onOpen(p) }
         if m["type"] as? String == "setting", let body = message.body as? [String: Any] { onSetting(body) }
+        if message.frameInfo.isMainFrame, let t = m["type"] as? String, let body = message.body as? [String: Any] { onMessage(t, body) }
     }
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        let shell = action.request.url?.absoluteString == "spacebar://bundle/index.html" && action.targetFrame?.isMainFrame == true
-        if !shell { messages.append(["type": "_navigation", "url": action.request.url?.absoluteString ?? ""]) }
-        decisionHandler(shell ? .allow : .cancel)
+        let main = action.targetFrame?.isMainFrame ?? true
+        let ok = ShellPolicy.allows(action.request.url, mainFrame: main, pdf: pdfFrame)
+        if !ok { messages.append(["type": "_navigation", "url": action.request.url?.absoluteString ?? ""]) }
+        else if !main { messages.append(["type": "_frame", "url": action.request.url?.absoluteString ?? ""]) }
+        decisionHandler(ok ? .allow : .cancel)
     }
 }
 
@@ -158,32 +169,69 @@ func messagesJSON() -> String {
     jsonString(rec.messages.map { m in m.mapValues { "\($0)" } })
 }
 
-var listing: FolderListing.Listing?
+var listings: [String: FolderListing.Listing] = [:]
+var knownDirs: Set<String> = []
+var rootOverride: String?
+var root = ""
+var session = 1
+var currentKind: FileKind = .markdown
+var currentCanOpen = false
 
-/// As the extension: the folder of the file, symlinks resolved, listed off the page and sent with sb.setFiles.
-func sendListing(for url: URL) {
+func rootFor(_ url: URL) -> String { rootOverride ?? url.deletingLastPathComponent().resolvingSymlinksInPath().path }
+
+/// As the extension: one folder of the tree, listed with the settings and sent with sb.setFiles.
+func sendFolder(_ dir: String) {
     let s = Settings(dictionary: settingsDict)
-    let dir = url.deletingLastPathComponent().resolvingSymlinksInPath().path
-    let l = FolderListing.list(dir, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, pinned: url.path)
-    listing = l
-    _ = eval(web, "sb.setFiles(\(jsonString(l.payload(active: l.entry(resolving: url.path)?.path)))); 0")
+    let l = FolderListing.list(dir, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles, pinned: currentFile)
+    listings[dir] = l
+    for f in l.folders { knownDirs.insert(f.path) }
+    var p = l.payload(root: root)
+    p["session"] = session
+    _ = eval(web, "sb.setFiles(\(jsonString(p))); 0")
 }
 
 /// `listFirst`: the list reaches the page before the render, as in a folder preview; otherwise after it, as a single file's can.
 func renderFile(_ file: String, listFirst: Bool = true) {
-    let url = URL(fileURLWithPath: file)
-    let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    var url = URL(fileURLWithPath: file)
+    let newRoot = rootFor(url)
+    // As the extension: a single file is named inside its resolved folder, as the sidebar lists it.
+    if rootOverride == nil { url = URL(fileURLWithPath: newRoot).appendingPathComponent(url.lastPathComponent) }
+    if newRoot != root { root = newRoot; listings = [:]; knownDirs = [root] }
+    scheme.fileRoot = root
     currentFile = url.path
-    if listFirst { sendListing(for: url) }
-    let dir = url.deletingLastPathComponent().resolvingSymlinksInPath().path
-    var payload: [String: Any] = ["text": text, "path": url.path, "name": url.lastPathComponent, "reason": "open", "ver": 0,
-                                  "base": "spacebar://file" + url.deletingLastPathComponent().path + "/",
-                                  "dir": dir, "dirName": (dir as NSString).lastPathComponent,
-                                  "active": listing?.entry(resolving: url.path)?.path ?? NSNull()]
-    if gate.allowedPath == url.path { payload[RemoteImageGate.payloadKey] = true }
+    var st = stat()
+    _ = stat(url.path, &st)
+    currentKind = FileTypes.kind(name: url.lastPathComponent, isDirectory: st.st_mode & S_IFMT == S_IFDIR, isPackage: st.st_mode & S_IFMT == S_IFDIR,
+                                 executable: st.st_mode & 0o111 != 0)
+    if listFirst { sendFolder(root) }
+    var payload: [String: Any]
+    if currentKind == .markdown {
+        rec.pdfFrame = nil
+        scheme.pdf = nil
+        currentCanOpen = false
+        payload = FileView.base(path: url.path, root: root, reason: "open")
+        payload["text"] = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        payload["view"] = "markdown"
+        payload["ver"] = 0
+        if gate.allowedPath == url.path { payload[RemoteImageGate.payloadKey] = true }
+    } else {
+        let (p, pdf) = FileView.payload(path: url.path, kind: currentKind, root: root, reason: "open", canOpen: LinkPolicy.fileRefusal(url) == nil)
+        payload = p
+        rec.pdfFrame = pdf
+        scheme.pdf = pdf
+        currentCanOpen = p["canOpen"] as? Bool == true
+    }
     _ = eval(web, "sb.render(\(jsonString(payload))); 0")
-    if !listFirst { sendListing(for: url) }
+    if !listFirst { sendFolder(root) }
     spin(8) { rec.messages.contains { $0["type"] as? String == "rendered" } }
+}
+
+/// As the extension: a path the page names is taken only when plain, inside the root, and a file a listing named.
+func listedFile(_ p: String?) -> String? {
+    guard let p, FolderListing.isPlainPath(p, under: root),
+          listings.values.contains(where: { l in l.entries.contains { $0.path == p && !$0.isDirectory } }),
+          FolderListing.isInside(p, root: root) else { return nil }
+    return p
 }
 
 func snapshot(_ path: String) -> String {
@@ -207,8 +255,23 @@ rec.onLoadRemoteImages = { path in
 
 // As the extension: only a listed file opens; a setting passes the extension's gate, then the writer's update.
 rec.onOpen = { path in
-    guard listing?.files.contains(where: { $0.path == path }) == true else { rec.messages.append(["type": "_openRefused", "path": path]); return }
-    DispatchQueue.main.async { renderFile(path) }
+    guard let p = listedFile(path) else { rec.messages.append(["type": "_openRefused", "path": path]); return }
+    DispatchQueue.main.async { renderFile(p) }
+}
+rec.onMessage = { type, body in
+    let path = body["path"] as? String
+    switch type {
+    case "list":
+        guard let p = path, knownDirs.contains(p), FolderListing.isPlainPath(p, under: root), FolderListing.isInside(p, root: root, allowRoot: true) else {
+            rec.messages.append(["type": "_listRefused", "path": path ?? ""]); return
+        }
+        DispatchQueue.main.async { sendFolder(p) }
+    case "openFile", "reveal":
+        let ok = path != nil && path == currentFile && currentKind != .markdown
+            && (type == "reveal" || (currentCanOpen && LinkPolicy.fileRefusal(URL(fileURLWithPath: path!)) == nil))
+        rec.messages.append(["type": ok ? "_\(type)" : "_openRefused", "path": path ?? ""])
+    default: break
+    }
 }
 rec.onSetting = { body in
     guard let key = body["key"] as? String, let value = body["value"], let patch = Settings.panelPatch(key, value) else {
@@ -280,6 +343,20 @@ func run(_ cmd: String) -> String {
         result = arg
     case "@shot":
         result = snapshot(arg)
+    case "@pixel":
+        let p = arg.split(separator: ",").compactMap { Double($0) }
+        var rgb: [Int] = [], done = false
+        web.takeSnapshot(with: nil) { image, _ in
+            if p.count == 2, let image, let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) {
+                let sx = Double(rep.pixelsWide) / web.bounds.width, sy = Double(rep.pixelsHigh) / web.bounds.height
+                if let c = rep.colorAt(x: Int(p[0] * sx), y: Int(p[1] * sy))?.usingColorSpace(.sRGB) {
+                    rgb = [c.redComponent, c.greenComponent, c.blueComponent].map { Int(($0 * 255).rounded()) }
+                }
+            }
+            done = true
+        }
+        spin(10) { done }
+        result = rgb
     case "@wait":
         spin(Double(arg) ?? 1)
         result = arg
@@ -296,11 +373,35 @@ func run(_ cmd: String) -> String {
             spin(0.5)
             result = true
         } else { result = false }
+    case "@nativedrag":
+        let parts = arg.split(separator: ",", omittingEmptySubsequences: false)
+        let sel = parts.dropLast().joined(separator: ","), dx = Double(parts.last ?? "") ?? 0
+        let js = "(() => { const t = document.querySelector(\(jsonString(sel))); if (!t) return null; const r = t.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()"
+        if let p = eval(web, js) as? [Double], p.count == 2 {
+            func send(_ type: NSEvent.EventType, _ x: Double) {
+                if let e = NSEvent.mouseEvent(with: type, location: NSPoint(x: x, y: web.frame.height - p[1]), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                              windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1) {
+                    window.sendEvent(e)
+                }
+                spin(0.03)
+            }
+            send(.leftMouseDown, p[0])
+            for i in 1...10 { send(.leftMouseDragged, p[0] + dx * Double(i) / 10) }
+            send(.leftMouseUp, p[0] + dx)
+            spin(0.4)
+            result = true
+        } else { result = false }
     case "@loaddisk":
         result = load(SettingsFile.load().dictionary)
     case "@relist":
-        if let f = currentFile { sendListing(for: URL(fileURLWithPath: f)) }
-        result = listing.map { $0.files.map(\.name) } ?? []
+        for d in Array(listings.keys) { sendFolder(d) }
+        result = listings[root].map { $0.entries.map(\.name) } ?? []
+    case "@root":
+        rootOverride = arg.isEmpty ? nil : arg
+        result = arg
+    case "@session":
+        session += 1
+        result = session
     case "@remotereset":
         gate.reset()
         result = gate.blocking

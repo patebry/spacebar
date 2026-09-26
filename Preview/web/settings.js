@@ -41,6 +41,7 @@
     r.style.setProperty('--font-size', Math.round(num(p.fontSize, 12, 24, 15)) + 'px');
     r.style.setProperty('--line-height', String(num(p.lineHeight, 1.2, 2, 1.6)));
     r.style.setProperty('--measure', MEASURE[d.width]);
+    r.style.setProperty('--side-saved', Math.round(num(p.sidebarWidth, 160, 480, 240)) + 'px');
     setLink('sb-user-theme', p.userThemeURL);
     setLink('sb-custom-css', p.customCSSURL);
   };

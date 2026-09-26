@@ -24,6 +24,8 @@ struct Settings: Codable, Equatable {
     var folderReadmeFirst = true
     var folderSort = "name"
     var sidebarCollapsed = false
+    var sidebarWidth = 240
+    var showHiddenFiles = false
     var frontMatter = "table"
     var toc = "auto"
     var stats = true
@@ -50,20 +52,20 @@ struct Settings: Codable, Equatable {
         "webLinks": ["browser"],
         "rawHTML": ["off", "sanitized"],
     ]
-    static let intRanges: [String: ClosedRange<Int>] = ["fontSize": 12...24]
+    static let intRanges: [String: ClosedRange<Int>] = ["fontSize": 12...24, "sidebarWidth": 160...480]
     static let doubleRanges: [String: ClosedRange<Double>] = ["lineHeight": 1.2...2.0]
     static let boolKeys: Set<String> = ["customCSS", "inlineEditing", "taskToggles", "folderMode", "folderReadmeFirst", "stats", "math",
-                                        "mermaid", "remoteImages", "sidebarCollapsed"]
+                                        "mermaid", "remoteImages", "sidebarCollapsed", "showHiddenFiles"]
     /// Keys whose value is a string or null, each checked by its own pattern.
     static let optionalKeys: Set<String> = ["userTheme", "editorBundleID"]
     static var allKeys: Set<String> { Set(choices.keys).union(intRanges.keys).union(doubleRanges.keys).union(boolKeys).union(optionalKeys) }
     /// The only keys the preview panel may change (its Aa popover and sidebar button). The page renders an untrusted document,
     /// so even a page that was somehow scripted can restyle the preview but never pick a CSS file, an editor app, or what is
     /// rendered or opened.
-    static let panelKeys: Set<String> = ["theme", "appearance", "fontSize", "width", "bodyFont", "sidebarCollapsed"]
+    static let panelKeys: Set<String> = ["theme", "appearance", "fontSize", "width", "bodyFont", "sidebarCollapsed", "sidebarWidth"]
 
     /// A panel change as the JSON patch the writer takes, or nil when the key is not a panel key or the value does not
-    /// sanitize (sidebarCollapsed takes a JSON boolean only, never a number or a string).
+    /// sanitize (sidebarCollapsed takes a JSON boolean only, never a number or a string; sidebarWidth a number, clamped).
     static func panelPatch(_ key: String, _ value: Any) -> Data? {
         guard panelKeys.contains(key), let clean = sanitize(key, value) else { return nil }
         return try? JSONSerialization.data(withJSONObject: [key: clean])
@@ -137,7 +139,8 @@ struct Settings: Codable, Equatable {
         take(.width, \.width); takeOptional(.editorBundleID, \.editorBundleID)
         take(.inlineEditing, \.inlineEditing); take(.taskToggles, \.taskToggles); take(.folderMode, \.folderMode)
         take(.folderReadmeFirst, \.folderReadmeFirst); take(.folderSort, \.folderSort); take(.frontMatter, \.frontMatter)
-        take(.sidebarCollapsed, \.sidebarCollapsed)
+        take(.sidebarCollapsed, \.sidebarCollapsed); take(.showHiddenFiles, \.showHiddenFiles)
+        if let n = try? c.decodeIfPresent(Double.self, forKey: .sidebarWidth), let v = Self.sanitize("sidebarWidth", n) as? Int { s.sidebarWidth = v }
         take(.toc, \.toc); take(.stats, \.stats); take(.mdLinks, \.mdLinks); take(.webLinks, \.webLinks)
         take(.math, \.math); take(.mermaid, \.mermaid); take(.rawHTML, \.rawHTML); take(.remoteImages, \.remoteImages)
         self = s

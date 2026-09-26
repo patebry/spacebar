@@ -415,8 +415,9 @@ struct FoldersPane: View {
             Section {
                 Toggle(isOn: showSidebar) {
                     Text("Show sidebar")
-                    Text("List the Markdown files in the same folder beside every preview. The sidebar button in the preview changes this too.")
+                    Text("Browse the folder beside every preview: its files and subfolders, each previewed in the panel. The sidebar button in the preview changes this too.")
                 }
+                Toggle("Show hidden files", isOn: store.binding(\.showHiddenFiles, "showHiddenFiles"))
                 Toggle("Show README first", isOn: store.binding(\.folderReadmeFirst, "folderReadmeFirst"))
                 Picker("Sort files by", selection: store.binding(\.folderSort, "folderSort")) {
                     Text("Name").tag("name")
@@ -425,14 +426,15 @@ struct FoldersPane: View {
             } header: {
                 Text("Sidebar")
             } footer: {
-                Text("A README is listed first, and opens first when you preview a folder. Hidden files aren't listed, and at most "
-                     + "\(FolderListing.cap) files are shown. A narrow preview hides the sidebar until you click its button.")
+                Text("Folders are listed first, then files, with a README first. At most \(FolderListing.cap) items of a folder are shown, "
+                     + "and links that lead out of the folder never are. Drag the sidebar's edge to resize it. A narrow preview hides the "
+                     + "sidebar until you click its button.")
                     .settingsFooter()
             }
             Section {
                 Toggle(isOn: folderMode) {
                     Text("Preview folders")
-                    Text("Press Space on a folder to browse the Markdown files in it.")
+                    Text("Press Space on a folder to browse the files in it. It opens on its README or first Markdown file.")
                 }
                 if let mismatch {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {

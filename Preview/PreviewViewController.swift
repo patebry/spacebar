@@ -53,10 +53,13 @@ final class WebHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     weak var controller: PreviewViewController?
     let created = Date()
     let remoteImages: RemoteImageGate
+    let scheme: SchemeHandler
+    /// The PDF on screen: the only URL a subframe may load (ShellPolicy), and the only PDF the scheme serves.
+    var pdfFrame: URL? { didSet { scheme.pdf = pdfFrame } }
 
     override init() {
         let config = WKWebViewConfiguration()
-        let scheme = SchemeHandler(webRoot: Bundle.main.resourceURL!.appendingPathComponent("web"))
+        scheme = SchemeHandler(webRoot: Bundle.main.resourceURL!.appendingPathComponent("web"))
         scheme.onRefused = { log.error("\($0, privacy: .private)") }
         config.setURLSchemeHandler(scheme, forURLScheme: "spacebar")
         web = PreviewWebView(frame: .zero, configuration: config)
@@ -118,9 +121,10 @@ final class WebHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        // Only the shell page loads; links are clicks the page reports, and the document may not open frames.
-        let isShell = action.request.url?.absoluteString == "spacebar://bundle/index.html" && action.targetFrame?.isMainFrame == true
-        decisionHandler(isShell ? .allow : .cancel)
+        // Only the shell page loads, and in a frame only the PDF on screen; links are clicks the page reports, and the document
+        // may not open frames.
+        let main = action.targetFrame?.isMainFrame ?? true
+        decisionHandler(ShellPolicy.allows(action.request.url, mainFrame: main, pdf: pdfFrame) ? .allow : .cancel)
     }
 
     private var crashes = 0
@@ -206,13 +210,25 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     /// sidebar lists it, for a single file and a folder alike.
     private var rootDir = ""
     private var watcher: FileWatcher?
-    /// The sidebar's files; `open` from the page is limited to them.
-    private var listing: FolderListing.Listing?
-    private var listGen = 0
+    /// What the file on screen is; only Markdown is edited, toggled or opened in the editor.
+    private var fileKind: FileKind = .markdown
+    /// The size and modification time of the non-Markdown file last shown, so a change on disk that changed nothing is skipped.
+    private var shownStamp: String?
+    /// Whether the viewer offered "Open with" for the file on screen (FileView may take back what LinkPolicy allowed).
+    private var shownCanOpen = false
+    /// The sidebar's folders as last sent, by path; `open` from the page is limited to their files.
+    private var listings: [String: FolderListing.Listing] = [:]
+    /// Folders the page may ask to list: the root and every folder a listing named. Nothing above the root is ever in it.
+    private var knownDirs: Set<String> = []
+    private var listGens: [String: Int] = [:]
     /// Folder mode's first open: run by whichever listing lands first, since a newer one (a .DS_Store write) supersedes older ones.
     private var onListed: ((FolderListing.Listing) -> Void)?
-    private var listedWith: (sort: String, readmeFirst: Bool)?
-    private var folderWatch: FolderWatch?
+    private var listedWith: (sort: String, readmeFirst: Bool, hidden: Bool)?
+    /// The root and every folder expanded in the sidebar, each re-listed when it changes.
+    private var dirWatches: [String: FolderWatch] = [:]
+    private static let maxWatches = 64
+    private static var sessions = 0
+    private let session: Int = { PreviewViewController.sessions += 1; return PreviewViewController.sessions }()
     /// Latest document the preview intends to be on disk (includes queued edits).
     private var docText: String?
     /// Last content confirmed on disk, in its on-disk line endings; every write must name it as its base.
@@ -338,24 +354,28 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
         let resolved = url.resolvingSymlinksInPath()
         rootDir = isDir.boolValue ? resolved.path : resolved.deletingLastPathComponent().path
+        host.scheme.fileRoot = rootDir
+        knownDirs = [rootDir]
+        listings = [:]
         if isDir.boolValue {
             // Folder previews are opt-in; declining hands the folder back to Quick Look's own preview.
             guard SettingsStore.shared.settings.folderMode else { return decline(handler, "folder previews are off") }
-            // The folder opens on the sidebar's first file: its README when that setting is on.
-            refreshListing(then: { [weak self] l in
+            // The folder opens on its first Markdown file (its README when that setting is on), else on its first file.
+            refreshListing(rootDir, then: { [weak self] l in
                 guard let self else { return }
-                log.info("folder preview: \(l.files.count + l.more) markdown")
-                guard let first = l.files.first else {
-                    if let c = self.completion { self.decline(c, "no markdown in the folder") }
+                log.info("folder preview: \(l.entries.count + l.more) items")
+                guard let first = FolderListing.firstDocument(l) else {
+                    if let c = self.completion { self.decline(c, "no files in the folder") }
                     return
                 }
                 self.open(URL(fileURLWithPath: first.path))
             })
         } else {
-            open(url)
-            refreshListing()
+            // The path inside the resolved folder, as the sidebar lists it.
+            open(URL(fileURLWithPath: rootDir).appendingPathComponent(resolved.lastPathComponent))
+            refreshListing(rootDir)
         }
-        folderWatch = FolderWatch(path: rootDir) { [weak self] in self?.refreshListing() }
+        watch(rootDir)
         // Launch the writer and build its hidden edit panel now, so the first click into a block does not wait for either.
         // Inline editing off: no writer launch until something needs it, but the support folder still gets made.
         if SettingsStore.shared.settings.inlineEditing {
@@ -379,32 +399,43 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
 
     fileprivate func settingsChanged(_ s: Settings) {
         if !s.inlineEditing, edit != nil { stopEdit(notifyWriter: true) }
-        if let w = listedWith, w != (s.folderSort, s.folderReadmeFirst) { refreshListing() }
+        if let w = listedWith, w != (s.folderSort, s.folderReadmeFirst, s.showHiddenFiles) {
+            for dir in Set(listings.keys).union(dirWatches.keys) { refreshListing(dir) }
+        }
     }
 
-    /// Lists rootDir off the main thread, then sends the page the list when it changed. `then` sees the new listing first.
-    private func refreshListing(then: ((FolderListing.Listing) -> Void)? = nil) {
-        listGen += 1
+    /// Watches `dir` (the root, or a folder expanded in the sidebar) and re-lists it when it changes.
+    private func watch(_ dir: String) {
+        guard dirWatches[dir] == nil, dirWatches.count < Self.maxWatches else { return }
+        dirWatches[dir] = FolderWatch(path: dir) { [weak self] in self?.refreshListing(dir) }
+    }
+
+    /// Lists `dir` off the main thread, then sends the page the list when it changed. `then` sees the new listing first.
+    private func refreshListing(_ dir: String, then: ((FolderListing.Listing) -> Void)? = nil) {
+        let gen = (listGens[dir] ?? 0) + 1
+        listGens[dir] = gen
         if let then { onListed = then }
-        let gen = listGen, dir = rootDir, s = SettingsStore.shared.settings, pinned = fileURL?.path
-        listedWith = (s.folderSort, s.folderReadmeFirst)
+        let root = rootDir, s = SettingsStore.shared.settings, pinned = fileURL?.path
+        listedWith = (s.folderSort, s.folderReadmeFirst, s.showHiddenFiles)
         DispatchQueue.global(qos: .userInitiated).async {
-            let l = FolderListing.list(dir, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, pinned: pinned)
+            let l = FolderListing.list(dir, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles, pinned: pinned)
             DispatchQueue.main.async { [weak self] in
-                guard let self, gen == self.listGen, dir == self.rootDir else { return }
-                let changed = l != self.listing
-                self.listing = l
-                if let f = self.onListed { self.onListed = nil; f(l) }
-                if changed { self.sendListing() }
+                guard let self, gen == self.listGens[dir], root == self.rootDir else { return }
+                let changed = l != self.listings[dir]
+                self.listings[dir] = l
+                for f in l.folders { self.knownDirs.insert(f.path) }
+                if dir == root, let f = self.onListed { self.onListed = nil; f(l) }
+                if changed { self.sendListing(l) }
             }
         }
     }
 
-    private func sendListing() {
-        guard let l = listing else { return }
+    private func sendListing(_ l: FolderListing.Listing) {
         host.whenReady { [weak self] in
-            guard let self, self.host.controller === self, self.listing == l else { return }
-            self.js("sb.setFiles", l.payload(active: l.entry(resolving: self.fileURL?.path)?.path))
+            guard let self, self.host.controller === self, self.listings[l.dir] == l else { return }
+            var p = l.payload(root: self.rootDir)
+            p["session"] = self.session
+            self.js("sb.setFiles", p)
         }
     }
 
@@ -426,11 +457,19 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
 
     private func open(_ url: URL) {
         if torn { return status("NOT SAVED: file partly written; retrying before switching") }
-        if let why = Self.unreadable(url) { log.error("open: \(why, privacy: .private)"); return status(why) }
+        var st = stat()
+        guard stat(url.path, &st) == 0 else { return status("cannot read \(url.lastPathComponent)") }
+        let kind = FileTypes.kind(name: url.lastPathComponent, isDirectory: st.st_mode & S_IFMT == S_IFDIR, isPackage: st.st_mode & S_IFMT == S_IFDIR,
+                                  executable: st.st_mode & 0o111 != 0)
+        if kind == .markdown, let why = Self.unreadable(url) { log.error("open: \(why, privacy: .private)"); return status(why) }
+        if kind != .markdown, st.st_mode & S_IFMT != S_IFREG, st.st_mode & S_IFMT != S_IFDIR { return status("\(url.lastPathComponent) is not a regular file") }
         stopEdit(notifyWriter: true)
         queuedSave = nil
         host.remoteImages.reset()
         fileURL = url
+        fileKind = kind
+        shownStamp = nil
+        shownCanOpen = false
         docText = nil
         diskText = nil
         watcher = FileWatcher(path: url.path) { [weak self] in self?.fileChanged() }
@@ -449,6 +488,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
 
     private func reload(reason: String) {
         guard let url = fileURL, !writing, !torn else { return }
+        guard fileKind == .markdown else { return show(url, reason: reason) }
         if let why = Self.unreadable(url) { log.error("read refused: \(why, privacy: .private)"); return status(why) }
         let raw: String
         do { raw = try String(contentsOf: url, encoding: .utf8) } catch {
@@ -474,15 +514,10 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     }
 
     private func push(text: String, path: String, reason: String, keyTime: Double? = nil) {
-        var comps = URLComponents()
-        comps.scheme = "spacebar"
-        comps.host = "file"
-        comps.path = (path as NSString).deletingLastPathComponent + "/"
-        var payload: [String: Any] = ["text": text, "path": path, "base": comps.url!.absoluteString,
-                                      "name": (path as NSString).lastPathComponent, "reason": reason]
-        payload["dir"] = rootDir
-        payload["dirName"] = (rootDir as NSString).lastPathComponent
-        payload["active"] = listing?.entry(resolving: path)?.path ?? NSNull()
+        host.pdfFrame = nil
+        var payload = FileView.base(path: path, root: rootDir, reason: reason)
+        payload["text"] = text
+        payload["view"] = "markdown"
         if let keyTime { payload["keyTime"] = keyTime }
         if host.remoteImages.allowedPath == path { payload[RemoteImageGate.payloadKey] = true }
         payload["ver"] = docVersion
@@ -492,6 +527,44 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
                 if let err { log.error("render eval failed: \(String(describing: err), privacy: .public)") }
             }
         }
+    }
+
+    /// Shows a file that is not Markdown, by what it is (FileView): an image or a PDF from the `file` host, text and code read
+    /// here (the first 2 MB), anything else as an info card. Nothing here is ever rendered as HTML.
+    private func show(_ url: URL, reason: String) {
+        var st = stat()
+        guard stat(url.path, &st) == 0 else { return status("cannot read \(url.lastPathComponent)") }
+        let stamp = "\(st.st_size)-\(st.st_mtimespec.tv_sec).\(st.st_mtimespec.tv_nsec)-\(st.st_ino)"
+        if reason == "change", stamp == shownStamp { return }
+        shownStamp = stamp
+        let (p, pdf) = FileView.payload(path: url.path, kind: fileKind, root: rootDir, reason: reason, canOpen: LinkPolicy.fileRefusal(url) == nil)
+        let canOpen = p["canOpen"] as? Bool == true
+        shownCanOpen = canOpen
+        host.pdfFrame = pdf
+        let view = p["view"] as? String ?? ""
+        log.info("show \(view, privacy: .public) (\(self.fileKind.rawValue, privacy: .public))")
+        let json = String(data: try! JSONSerialization.data(withJSONObject: p), encoding: .utf8)!
+        host.remoteImages.whenInPlace { [host] in
+            host.web.evaluateJavaScript("sb.render(\(json)); 0") { _, err in
+                if let err { log.error("render eval failed: \(String(describing: err), privacy: .public)") }
+            }
+        }
+        // The button names the app the writer would open it with; an app, a script or an executable gets Reveal in Finder only.
+        if canOpen, reason == "open" {
+            let path = url.path
+            helper { $0.defaultApp(url) { name in
+                guard let name else { return }
+                DispatchQueue.main.async { if self.fileURL?.path == path { self.js("sb.setOpener", ["path": path, "app": name]) } }
+            } }
+        }
+    }
+
+    /// A path the page names, accepted only when it is plain, inside the root (symlinks resolved), and one the sidebar listed.
+    private func listedFile(_ m: PageMessage) -> String? {
+        guard let p = m.string("path", max: 4096), FolderListing.isPlainPath(p, under: rootDir),
+              listings.values.contains(where: { l in l.entries.contains { $0.path == p && !$0.isDirectory } }),
+              FolderListing.isInside(p, root: rootDir) else { return nil }
+        return p
     }
 
     func handle(_ type: String, _ body: [String: Any]) {
@@ -518,11 +591,30 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             guard let href = m.string("href", max: LinkPolicy.maxURLBytes), let url = URL(string: href) else { return refuse("link", "bad href") }
             followLink(url)
         case "open":
-            // Only a file the sidebar listed.
-            // Checked again now: a listed file may since have been replaced by a link out of the folder.
-            guard let p = m.string("path", max: 4096), listing?.files.contains(where: { $0.path == p }) == true,
-                  FolderListing.realPath(p)?.hasPrefix((FolderListing.realPath(rootDir) ?? rootDir) + "/") == true else { return refuse("open", "not in the folder list") }
+            // Only a file the sidebar listed, checked again now: a listed file may since have been replaced by a link out of the root.
+            guard let p = listedFile(m) else { return refuse("open", "not in the folder list") }
             open(URL(fileURLWithPath: p))
+        case "list":
+            // A folder expanded in the sidebar: the root or one a listing named, still inside the root once symlinks are resolved.
+            guard let p = m.string("path", max: 4096), listings[p] == nil || dirWatches[p] == nil, knownDirs.contains(p), FolderListing.isPlainPath(p, under: rootDir),
+                  FolderListing.isInside(p, root: rootDir, allowRoot: true) else { return refuse("list", "not a folder of the tree") }
+            watch(p)
+            refreshListing(p)
+        case "unlist":
+            // A folder collapsed in the sidebar: no longer watched. The root always is.
+            guard let p = m.string("path", max: 4096), p != rootDir else { return }
+            dirWatches.removeValue(forKey: p)
+        case "openFile":
+            // The viewer's "Open with" button, for the file on screen only; the writer applies LinkPolicy again.
+            guard let url = fileURL, m.string("path", max: 4096) == url.path, fileKind != .markdown, shownCanOpen, LinkPolicy.fileRefusal(url) == nil else {
+                return refuse("openFile", "not the file on screen or not allowed")
+            }
+            openExternally(url)
+        case "reveal":
+            guard let url = fileURL, fileKind != .markdown, m.string("path", max: 4096) == url.path, FolderListing.isInside(url.path, root: rootDir) else {
+                return refuse("reveal", "not the file on screen")
+            }
+            helper { $0.reveal(url) { ok in if !ok { DispatchQueue.main.async { self.status("could not show \(url.lastPathComponent) in Finder") } } } }
         case "setting":
             // The Aa popover and the sidebar button: cosmetic keys only (Settings.panelKeys), checked here and again by the writer.
             guard let key = m.string("key", max: 32), let raw = body["value"], let patch = Settings.panelPatch(key, raw) else {
@@ -573,7 +665,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         case "editPainted":
             if let kt = m.double("keyTime") { log.info("keystroke->painted \(uptimeMs(since: kt), privacy: .public)ms") }
         case "edit":
-            if let fileURL { openExternally(fileURL) }
+            if let fileURL, fileKind == .markdown { openExternally(fileURL) }
         case "loadRemoteImages":
             // A blocked image's placeholder: this document's remote images, for this preview only. The setting is not touched.
             guard let p = m.string("path", max: 4096), host.remoteImages.allowOnce(p, current: fileURL?.path) else {
@@ -590,7 +682,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
 
     /// Edits name the file the page rendered; one for any other file (a stale page, a folder switch) is refused.
     private func isCurrent(_ m: PageMessage) -> Bool {
-        guard let fileURL, let p = m.string("path", max: 4096) else { return false }
+        guard let fileURL, fileKind == .markdown, let p = m.string("path", max: 4096) else { return false }
         return p == fileURL.path
     }
 

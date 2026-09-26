@@ -30,7 +30,7 @@ def payload(name, file):
 
 def materialize():
     for f in os.listdir(HERE):
-        if f == 'README.md':
+        if f == 'README.md' or os.path.isdir(os.path.join(HERE, f)):
             continue
         src = open(os.path.join(HERE, f)).read()
         name = os.path.splitext(f)[0]

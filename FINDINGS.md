@@ -11,14 +11,17 @@ spacebar.app (md.spacebar)                        SwiftUI settings app; spacebar
 └─ PlugIns/SpacebarPreview.appex (md.spacebar.preview)
    │  sandboxed, view-based QLPreviewingController; one WKWebView per extension process, reused across previews
    │  spacebar://bundle/…  Preview/web (index.html, app.js, vendored markdown-it, KaTeX, highlight.js, mermaid, DOMPurify)
-   │  spacebar://file/…    images beside the document (absolute-path read-only exception)
+   │  spacebar://file/…    read-only, by an explicit type map: images (the viewer, a document's relative images) and the
+   │                       one PDF on screen, inside the sidebar's root
    └─ XPCServices/md.spacebar.preview.writer.xpc   unsandboxed XPC service (SpacebarWriter)
         write      compare-and-swap writes to the previewed Markdown file
-        open       links and "Open in editor" (NSWorkspace is a no-op inside the sandboxed extension)
+        open       links, "Open in editor" and the viewer's "Open with" (NSWorkspace is a no-op inside the sandboxed extension)
+        reveal / defaultApp   Reveal in Finder, and the name of the app `open` would use
         beginEdit  owns the hidden, non-activating key panel used for inline editing
         updateSettings / ensureSupportDir / openSettings   panel setting patches (Settings.panelKeys only)
-   sidebar              FolderListing (Shared/FolderListing.swift) lists the previewed folder off the main thread; FolderWatch
-                        re-lists it when files are added, removed or renamed; the page gets it through sb.setFiles
+   sidebar              FolderListing (Shared/FolderListing.swift) lists each folder of the tree off the main thread; a
+                        FolderWatch per expanded folder re-lists it on change; the page gets each through sb.setFiles and asks
+                        for a folder with "list"; FileView builds what the panel shows for a file that is not Markdown
 └─ PlugIns/SpacebarFolders.appex (md.spacebar.preview.folders)   same binary; claims folders; own writer copy
 ```
 
@@ -38,7 +41,9 @@ Swift calls into the page through `window.sb`, and the page calls back through t
 | Live reload | DispatchSource watch that re-arms across atomic saves, 15 ms debounce; covers append, temp+rename and rename-away saves | `test/livereload.py` |
 | Images and links | Relative images load via `<base href="spacebar://file/<dir>/">`. Markdown links inside the previewed folder open in the panel; others go through the link policy to the default app | `test/webcheck.py`, `test/linkpolicy/run.sh` |
 | Folder mode (opt-in) | The folders extension claims `public.folder`/`public.directory`; it is enabled only while `folderMode` is on and declines otherwise. Ships; verified by hand in Finder | `docs/evidence/themes/settings-folders.png`; `test/folders.py` (Quick Look) |
-| Sidebar | Every preview, a single file or a folder, shows the same sidebar: the Markdown files of the previewed folder, README first, sorted by `folderSort`, current file highlighted; a click opens a file in the panel. Hidden files and links out of the folder are skipped; at most 500 files, with an "N more" note; listed off the main thread and re-listed by a folder watch. A toolbar button collapses it (animated, off under reduced motion); `sidebarCollapsed` is saved through the writer and applied at document start, so every preview opens in the same state. Below 640 px it collapses on screen only and the button shows it over the page; below 1100 px an open sidebar hides the TOC rail | `test/sidebar.py` (35), `test/settings/run.sh` (listing, watch, setting) |
+| Sidebar file browser | Every preview, a single file or a folder, shows the previewed folder (the root) as a tree: folders first, then files, README first, sorted by `folderSort`, each with an inline-SVG type icon. Folders expand lazily and are re-listed by a watch while open; expansion is remembered per root for the life of the extension process, and the current file's folders open. Hidden files are skipped unless `showHiddenFiles`; links out of the root, FIFOs and devices always are; packages are single items; at most 500 entries per folder, with an "N more" note. A click shows the file in the panel by kind (FileView): Markdown as before; images fitted with dimensions; PDF in an iframe; code highlighted with line numbers (HTML as source); JSON pretty-printed with a Raw toggle; CSV/TSV as a table capped at 1,000 rows; text; anything else an info card with Open with its default app, or Reveal in Finder where LinkPolicy refuses it. A breadcrumb shows the path from the root; the panel title stays the file Quick Look opened | `test/sidebar.py` (88), `test/settings/run.sh` (tree, types), `test/scheme/run.sh` |
+| Sidebar chrome | A toolbar button collapses it (animated, off under reduced motion); `sidebarCollapsed` is saved through the writer and applied at document start. Its right edge resizes it: 160 px to 45% of the panel or 480 px, saved as `sidebarWidth` once when the drag ends, applied at document start, reset by a double-click; dragging never collapses it. Below 640 px it collapses on screen only and the button shows it over the page; below 1100 px an open sidebar hides the TOC rail | `test/sidebar.py` |
+| PDF in the panel | Served as `application/pdf` from the `file` host into an iframe the page makes; the navigation delegate lets a subframe load only that exact URL (ShellPolicy). Verified off screen, and in a copy of the harness signed with the extension's sandbox entitlements (the rendered page is sampled for the PDF's pixels) | `test/sidebar.py` |
 | Task toggles | The checkbox sends its line and text; Swift re-locates the line and the writer saves it with compare-and-swap | 2338549; `test/corpus.py` |
 | Inline editing | See the next section | 068d11d, e1396e9, a742ad8, 4bfa7d6, f2c81fb, bbc51b2 |
 | Double-click fix | See below | a742ad8; `test/dblclick.py` |
@@ -94,7 +99,11 @@ The threat is a downloaded Markdown file, and whatever sits beside it, driving t
 3. **Swift message gate**
    - Only messages from the main frame of `spacebar://bundle` are accepted, and every field is type- and size-checked.
    - Toggles and edits apply only to the previewed file.
-   - `open` is limited to files the sidebar listed (none reached through a link out of the folder).
+   - `open` is limited to files the sidebar listed, `list` to the root and folders a listing named; both must be plain paths
+     (no `.`, `..` or empty step) that still resolve inside the root when asked, so nothing above the root is reachable.
+   - Editing, task toggles and "Open in editor" apply only to Markdown. `openFile` and `reveal` apply only to the file on screen;
+     `openFile` only when the viewer offered it and LinkPolicy allows it (a `.ts` is not handed to QuickTime), and the page posts
+     either only for a trusted click.
 4. **Link policy** (`Shared/LinkPolicy.swift`, enforced in both the extension and the writer)
    - Allows only http(s) links, or existing non-executable documents of an allowed type.
    - A per-file "Open With" setting is ignored.
@@ -114,8 +123,16 @@ The threat is a downloaded Markdown file, and whatever sits beside it, driving t
    `themes/<plain name>.css`, regular files, no symlinks. Click-safety CSS rules are `!important` inside cascade layers, so no
    unlayered CSS overrides them.
 7. **Writer:** writes only to existing Markdown regular files (checked on both the path and the symlink target), at most 64 MB.
+   `reveal` only selects an existing file in Finder; `defaultApp` names an app only for a file LinkPolicy allows.
+8. **File views:** a file is never rendered as a document. The `file` host serves only images (by an explicit content-type
+   map, `nosniff`, a `default-src 'none'` CSP, at most 50 MB) and the one PDF on screen at its exact URL, inside the root; it
+   reads the path it checked, symlinks resolved, and serves no text, HTML or unknown type at all. Text, code, JSON and CSV reach the page as
+   strings and are put in with `textContent`; highlight.js output is sanitized to `<span class>` only. SVG is shown only as
+   `<img>`. The page's CSP allows frames only from `spacebar://file/`, and the shell only the PDF on screen.
 
-Tests: `test/webcheck.py` (10/10), `test/linkpolicy/run.sh` (44/44), `test/remoteimages.py` (19/19), `test/sidebar.py` (35/35), `test/hostile.py` (runs the hostile fixtures through Quick Look). The two-round adversarial review's findings are fixed in 1c207e0.
+Tests: `test/webcheck.py` (10/10), `test/linkpolicy/run.sh` (44/44), `test/remoteimages.py` (19/19), `test/sidebar.py` (88/88, with the
+hostile file-browser fixtures in `test/hostile/browser`, a link to `/etc` and names made of dots), `test/hostile.py` (runs the
+hostile fixtures through Quick Look). The two-round adversarial review's findings are fixed in 1c207e0.
 
 ## Platform findings
 

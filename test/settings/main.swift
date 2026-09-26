@@ -73,7 +73,18 @@ check("panel allow-list takes theme", afterPanel.theme == "solarized")
 check("panel allow-list drops userTheme/editor/customCSS/editing/rawHTML/remoteImages",
       afterPanel.userTheme == nil && afterPanel.editorBundleID == nil && afterPanel.customCSS && afterPanel.inlineEditing
       && afterPanel.rawHTML == "sanitized" && !afterPanel.remoteImages)
-check("panel keys are cosmetic only", Settings.panelKeys.isSubset(of: ["theme", "appearance", "fontSize", "width", "bodyFont", "lineHeight", "sidebarCollapsed"]))
+check("panel keys are cosmetic only", Settings.panelKeys.isSubset(of: ["theme", "appearance", "fontSize", "width", "bodyFont", "lineHeight", "sidebarCollapsed", "sidebarWidth"]))
+check("hidden files off by default, a bool only, not a panel key", !Settings().showHiddenFiles && Settings(dictionary: ["showHiddenFiles": true]).showHiddenFiles
+      && [1, "true", NSNull()].allSatisfy { !Settings(dictionary: ["showHiddenFiles": $0]).showHiddenFiles } && decode(#"{"showHiddenFiles":true}"#)?.showHiddenFiles == true
+      && Settings.allKeys.contains("showHiddenFiles") && Settings.panelPatch("showHiddenFiles", true) == nil)
+check("sidebar width: default 240, clamped to 160...480, rounded", Settings().sidebarWidth == 240 && Settings(dictionary: ["sidebarWidth": 90]).sidebarWidth == 160
+      && Settings(dictionary: ["sidebarWidth": 9999]).sidebarWidth == 480 && Settings(dictionary: ["sidebarWidth": 301.6]).sidebarWidth == 302
+      && decode(#"{"sidebarWidth":1000}"#)?.sidebarWidth == 480 && decode(#"{"sidebarWidth":"wide"}"#)?.sidebarWidth == 240
+      && Settings(dictionary: ["sidebarWidth": true]).sidebarWidth == 240)
+check("sidebar width: a panel key, clamped in the patch, a number only",
+      Settings.panelPatch("sidebarWidth", 5000).map { obj(String(data: $0, encoding: .utf8)!)["sidebarWidth"] as? Int } == 480
+      && Settings.panelPatch("sidebarWidth", 12).map { obj(String(data: $0, encoding: .utf8)!)["sidebarWidth"] as? Int } == 160
+      && Settings.panelPatch("sidebarWidth", "300") == nil && Settings.panelPatch("sidebarWidth", NSNumber(value: true)) == nil && Settings.panelPatch("sidebarWidth", NSNull()) == nil)
 
 // sidebarCollapsed: the sidebar button's state, a panel key that takes a JSON boolean only.
 check("sidebar open by default", !Settings().sidebarCollapsed && decode("{}")?.sidebarCollapsed == false)
@@ -162,11 +173,13 @@ check("migrate: an empty new folder is never replaced", !SettingsFile.migrateLeg
 check("migrate: skipped under SPACEBAR_SUPPORT_DIR", !SettingsFile.migrateLegacySupportDir())
 try! fm.removeItem(at: base)
 
-// Sidebar listing (Shared/FolderListing.swift)
+// Sidebar tree listing (Shared/FolderListing.swift)
 let ld = dir.appendingPathComponent("listing", isDirectory: true)
 let outside = dir.appendingPathComponent("outside", isDirectory: true)
 try? fm.removeItem(at: ld); try? fm.removeItem(at: outside)
-try! fm.createDirectory(at: ld.appendingPathComponent("sub.md", isDirectory: true), withIntermediateDirectories: true)
+for d in ["sub.md", "Zeta", "alpha", "alpha/deep", ".hiddendir", "Tool.app/Contents"] {
+    try! fm.createDirectory(at: ld.appendingPathComponent(d, isDirectory: true), withIntermediateDirectories: true)
+}
 try! fm.createDirectory(at: outside, withIntermediateDirectories: true)
 func touch(_ name: String, _ age: Double, in d: URL = ld) {
     let u = d.appendingPathComponent(name)
@@ -174,39 +187,96 @@ func touch(_ name: String, _ age: Double, in d: URL = ld) {
     try! fm.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -age)], ofItemAtPath: u.path)
 }
 touch("b.md", 30); touch("a.markdown", 10); touch("README.md", 50); touch("c10.md", 20); touch("c9.MD", 40)
-touch("notes.txt", 0); touch(".hidden.md", 0); touch("flagged.md", 0); touch("secret.md", 0, in: outside)
+touch("notes.txt", 5); touch("photo.png", 6); touch("paper.pdf", 7); touch("data.csv", 8); touch("main.ts", 9); touch("run.sh", 11)
+touch(".hidden.md", 0); touch("flagged.md", 0); touch("secret.md", 0, in: outside); touch("inner.md", 0, in: ld.appendingPathComponent("alpha"))
 chflags(ld.appendingPathComponent("flagged.md").path, UInt32(UF_HIDDEN))
 try! fm.createSymbolicLink(atPath: ld.appendingPathComponent("inside-link.md").path, withDestinationPath: "b.md")
+try! fm.createSymbolicLink(atPath: ld.appendingPathComponent("inside-dir").path, withDestinationPath: "alpha")
 try! fm.createSymbolicLink(atPath: ld.appendingPathComponent("outside-link.md").path, withDestinationPath: outside.appendingPathComponent("secret.md").path)
+try! fm.createSymbolicLink(atPath: ld.appendingPathComponent("outside-dir").path, withDestinationPath: outside.path)
+try! fm.createSymbolicLink(atPath: ld.appendingPathComponent("etc").path, withDestinationPath: "/etc")
+try! fm.createSymbolicLink(atPath: ld.appendingPathComponent("up").path, withDestinationPath: "..")
 try! fm.createSymbolicLink(atPath: ld.appendingPathComponent("dangling.md").path, withDestinationPath: "nowhere.md")
-try! fm.createSymbolicLink(atPath: ld.appendingPathComponent("etc.md").path, withDestinationPath: "/etc/hosts")
 mkfifo(ld.appendingPathComponent("pipe.md").path, 0o600)
-let names = { (l: FolderListing.Listing) in l.files.map(\.name) }
+let names = { (l: FolderListing.Listing) in l.entries.map(\.name) }
 let byName = FolderListing.list(ld.path, sort: "name", readmeFirst: true)
-check("listing: README first, then names in Finder order", names(byName) == ["README.md", "a.markdown", "b.md", "c9.MD", "c10.md", "inside-link.md"])
-check("listing: hidden, flagged hidden, non-Markdown, folders, FIFOs skipped", !names(byName).contains { [".hidden.md", "flagged.md", "notes.txt", "sub.md", "pipe.md"].contains($0) })
-check("listing: links out of the folder or dangling skipped", !names(byName).contains { ["outside-link.md", "dangling.md", "etc.md"].contains($0) })
-check("listing: a link inside the folder resolves to its target", byName.files.last?.resolved == (FolderListing.realPath(ld.path)! + "/b.md")
-      && byName.files.last?.path == ld.path + "/inside-link.md")
-check("listing: README not first when that is off", names(FolderListing.list(ld.path, sort: "name", readmeFirst: false)).first == "a.markdown")
-check("listing: by date modified, newest first, README still first",
-      names(FolderListing.list(ld.path, sort: "modified", readmeFirst: true)) == ["README.md", "a.markdown", "c10.md", "b.md", "inside-link.md", "c9.MD"])
+check("tree: folders first, then README, then files in Finder order",
+      names(byName) == ["alpha", "inside-dir", "sub.md", "Zeta", "README.md", "a.markdown", "b.md", "c9.MD", "c10.md", "data.csv", "inside-link.md",
+                        "main.ts", "notes.txt", "paper.pdf", "photo.png", "run.sh", "Tool.app"])
+check("tree: folders are marked, a package is one item", byName.folders.map(\.name) == ["alpha", "inside-dir", "sub.md", "Zeta"]
+      && byName.entries.first { $0.name == "Tool.app" }.map { !$0.isDirectory && $0.kind == .app } == true)
+check("tree: hidden, flagged hidden, FIFOs skipped", !names(byName).contains { [".hidden.md", ".hiddendir", "flagged.md", "pipe.md"].contains($0) })
+check("tree: links out of the root, to /etc, to the parent, or dangling are skipped",
+      !names(byName).contains { ["outside-link.md", "outside-dir", "etc", "up", "dangling.md"].contains($0) })
+let hidden = FolderListing.list(ld.path, sort: "name", readmeFirst: true, showHidden: true)
+check("tree: showHidden lists dot files, flagged files and hidden folders", [".hidden.md", ".hiddendir", "flagged.md"].allSatisfy(names(hidden).contains)
+      && !names(hidden).contains("pipe.md") && !names(hidden).contains("outside-link.md"))
+check("tree: README not first when that is off", names(FolderListing.list(ld.path, sort: "name", readmeFirst: false))[4] == "a.markdown")
+let byDate = FolderListing.list(ld.path, sort: "modified", readmeFirst: true).files.map(\.name)
+check("tree: files by date modified, newest first, README still first", Array(byDate.prefix(5)) == ["README.md", "Tool.app", "notes.txt", "photo.png", "paper.pdf"])
+let sub = FolderListing.list(ld.path + "/alpha", root: ld.path, sort: "name", readmeFirst: true)
+check("tree: a subfolder of the root lists its own entries", names(sub) == ["deep", "inner.md"] && sub.entries.last?.path == ld.path + "/alpha/inner.md")
+check("tree: a folder outside the root lists nothing", FolderListing.list(outside.path, root: ld.path, sort: "name", readmeFirst: true).entries.isEmpty
+      && FolderListing.list(ld.path + "/outside-dir", root: ld.path, sort: "name", readmeFirst: true).entries.isEmpty
+      && FolderListing.list(ld.path + "/..", root: ld.path, sort: "name", readmeFirst: true).entries.isEmpty
+      && FolderListing.list("/etc", root: ld.path, sort: "name", readmeFirst: true).entries.isEmpty)
+check("tree: a link to a folder inside the root lists it", names(FolderListing.list(ld.path + "/inside-dir", root: ld.path, sort: "name", readmeFirst: true)) == ["deep", "inner.md"])
 let capped = FolderListing.list(ld.path, sort: "name", readmeFirst: true, cap: 2)
-check("listing: capped, with a count of the rest", names(capped) == ["README.md", "a.markdown"] && capped.more == 4)
+check("tree: capped, with a count of the rest", names(capped) == ["alpha", "inside-dir"] && capped.more == 15)
 let pinned = FolderListing.list(ld.path, sort: "name", readmeFirst: true, cap: 2, pinned: ld.path + "/c10.md")
-check("listing: the document on screen is listed past the cap", names(pinned) == ["README.md", "a.markdown", "c10.md"] && pinned.more == 3)
-check("listing: the entry of the document on screen", byName.entry(resolving: ld.path + "/c9.MD")?.name == "c9.MD" && byName.entry(resolving: ld.path + "/notes.txt") == nil)
-let payload = byName.payload(active: ld.path + "/b.md")
-check("listing: payload names the folder and the active file", payload["dirName"] as? String == "listing" && payload["more"] as? Int == 0
-      && (payload["files"] as? [[String: String]])?.first == ["name": "README.md", "path": ld.path + "/README.md"] && payload["active"] as? String == ld.path + "/b.md")
-check("listing: a missing folder lists nothing", FolderListing.list(ld.path + "/nope", sort: "name", readmeFirst: true).files.isEmpty)
+check("tree: the document on screen is listed past the cap", names(pinned) == ["alpha", "inside-dir", "c10.md"] && pinned.more == 14)
+let payload = byName.payload(root: ld.path)
+let pe = payload["entries"] as? [[String: Any]] ?? []
+check("tree: payload names the root, the folder and each entry's icon", payload["rootName"] as? String == "listing" && payload["dir"] as? String == ld.path
+      && payload["more"] as? Int == 0 && pe.first?["dir"] as? Bool == true && pe.first?["icon"] as? String == "folder"
+      && pe.first { $0["name"] as? String == "data.csv" }?["icon"] as? String == "data" && pe.first { $0["name"] as? String == "Tool.app" }?["icon"] as? String == "other")
+check("tree: a missing folder lists nothing", FolderListing.list(ld.path + "/nope", sort: "name", readmeFirst: true).entries.isEmpty)
+check("tree: a folder preview opens its first Markdown file, else its first file",
+      FolderListing.firstDocument(byName)?.name == "README.md"
+      && FolderListing.firstDocument(FolderListing.list(ld.path + "/alpha/deep", root: ld.path, sort: "name", readmeFirst: true)) == nil)
+check("paths: inside the root, symlinks resolved", FolderListing.isInside(ld.path + "/b.md", root: ld.path) && FolderListing.isInside(ld.path + "/inside-link.md", root: ld.path)
+      && !FolderListing.isInside(ld.path + "/outside-link.md", root: ld.path) && !FolderListing.isInside(ld.path + "/etc/hosts", root: ld.path)
+      && !FolderListing.isInside(ld.path + "/../outside/secret.md", root: ld.path) && !FolderListing.isInside(ld.path, root: ld.path)
+      && FolderListing.isInside(ld.path, root: ld.path, allowRoot: true) && !FolderListing.isInside(ld.path + "/up", root: ld.path, allowRoot: true))
+check("paths: only plain spellings under the root", FolderListing.isPlainPath(ld.path + "/alpha/inner.md", under: ld.path)
+      && !FolderListing.isPlainPath(ld.path + "/../outside/secret.md", under: ld.path) && !FolderListing.isPlainPath(ld.path + "/./b.md", under: ld.path)
+      && !FolderListing.isPlainPath(ld.path + "//b.md", under: ld.path) && !FolderListing.isPlainPath(ld.path + "x/b.md", under: ld.path)
+      && !FolderListing.isPlainPath("/etc/hosts", under: ld.path) && !FolderListing.isPlainPath(ld.path + "/alpha/..", under: ld.path))
 let big = dir.appendingPathComponent("big", isDirectory: true)
 try! fm.createDirectory(at: big, withIntermediateDirectories: true)
-for i in 0..<620 { fm.createFile(atPath: big.appendingPathComponent(String(format: "note-%04d.md", i)).path, contents: Data()) }
+for i in 0..<600 { fm.createFile(atPath: big.appendingPathComponent(String(format: "note-%04d.txt", i)).path, contents: Data()) }
+for i in 0..<20 { try! fm.createDirectory(at: big.appendingPathComponent("dir-\(i)"), withIntermediateDirectories: true) }
 let t0 = Date()
 let bigList = FolderListing.list(big.path, sort: "modified", readmeFirst: true)
-check("listing: 620 files cap at 500 with 120 more (\(Int(Date().timeIntervalSince(t0) * 1000)) ms)", bigList.files.count == FolderListing.cap && bigList.more == 120)
+check("tree: 620 entries cap at 500 with 120 more, folders kept first (\(Int(Date().timeIntervalSince(t0) * 1000)) ms)",
+      bigList.entries.count == FolderListing.cap && bigList.more == 120 && bigList.folders.count == 20 && bigList.entries[20].name.hasPrefix("note-"))
 try! fm.removeItem(at: big); try! fm.removeItem(at: ld); try! fm.removeItem(at: outside)
+
+// Type detection and the content-type map (Shared/FolderListing.swift, FileTypes)
+let kinds: [(String, FileKind)] = [("a.md", .markdown), ("A.MARKDOWN", .markdown), ("p.png", .image), ("p.JPG", .image), ("p.jpeg", .image),
+    ("p.gif", .image), ("p.webp", .image), ("p.heic", .image), ("x.svg", .image), ("d.pdf", .pdf), ("d.json", .json), ("d.csv", .csv),
+    ("d.tsv", .csv), ("t.txt", .text), ("t.log", .text), ("s.js", .code), ("s.ts", .code), ("s.tsx", .code), ("s.jsx", .code), ("s.py", .code),
+    ("s.rb", .code), ("s.go", .code), ("s.rs", .code), ("s.swift", .code), ("s.sh", .code), ("s.zsh", .code), ("s.c", .code), ("s.h", .code),
+    ("s.cpp", .code), ("s.java", .code), ("s.kt", .code), ("s.css", .code), ("s.scss", .code), ("page.html", .code), ("s.xml", .code),
+    ("s.yaml", .code), ("s.yml", .code), ("s.toml", .code), ("s.ini", .code), ("s.sql", .code), ("Dockerfile", .code), ("Makefile", .code),
+    ("Gemfile", .code), (".env.example", .text), ("env.example", .text), ("LICENSE", .text), ("x.zip", .other), ("x.bin", .app), ("noext", .other)]
+let wrong = kinds.filter { FileTypes.kind(name: $0.0) != $0.1 }.map { "\($0.0)=\(FileTypes.kind(name: $0.0))" }
+check("types: every listed kind detected by name (\(wrong.joined(separator: " ")))", wrong.isEmpty)
+check("types: an executable with no extension is an app; a folder a folder; a package an item",
+      FileTypes.kind(name: "tool", executable: true) == .app && FileTypes.kind(name: "src", isDirectory: true) == .folder
+      && FileTypes.kind(name: "X.app", isDirectory: true, isPackage: true) == .app && FileTypes.kind(name: "d.rtfd", isDirectory: true, isPackage: true) == .other)
+check("types: highlight.js languages", FileTypes.language(name: "a.ts") == "typescript" && FileTypes.language(name: "a.tsx") == "typescript"
+      && FileTypes.language(name: "page.html") == "xml" && FileTypes.language(name: "Makefile") == "makefile" && FileTypes.language(name: "Dockerfile") == nil
+      && FileTypes.language(name: "a.sh") == "bash" && FileTypes.language(name: "a.toml") == "ini")
+check("types: icons", [FileKind.json, .csv].allSatisfy { $0.icon == "data" } && FileKind.app.icon == "other" && FileKind.code.icon == "code")
+check("content types: images and PDF by the map, SVG as an image",
+      FileTypes.contentType(forPath: "/a/b.PNG") == "image/png" && FileTypes.contentType(forPath: "/a/b.jpg") == "image/jpeg"
+      && FileTypes.contentType(forPath: "/a/b.svg") == "image/svg+xml" && FileTypes.contentType(forPath: "/a/b.pdf") == "application/pdf")
+check("content types: anything else is octet-stream, never HTML or script", ["/a/b.html", "/a/b.htm", "/a/b.js", "/a/b.xhtml", "/a/b.xml", "/a/b.md",
+      "/a/b.txt", "/a/b", "/a/b.css", "/a/b.json", "/a/b.svgz", "/a/b.php"].allSatisfy { FileTypes.contentType(forPath: $0) == FileTypes.octetStream })
+check("text sniff: text yes, NUL or invalid UTF-8 no, a cut character yes", FileTypes.looksLikeText(Data("héllo\n".utf8))
+      && !FileTypes.looksLikeText(Data([0x41, 0x00, 0x42])) && !FileTypes.looksLikeText(Data([0xff, 0xfe, 0x41, 0x80]))
+      && FileTypes.looksLikeText(Data("ab".utf8) + Data([0xc3])))
 
 // The folder watch behind the sidebar's live list
 let wd = dir.appendingPathComponent("watched", isDirectory: true)

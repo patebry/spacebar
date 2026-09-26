@@ -1,0 +1,1 @@
+{"html": "</script><script>window.__pwned = 1</script>", "img": "<img src=x onerror=\"window.__pwned=1\">", "nested": {"a": [1, 2, 3]}}

@@ -4,7 +4,9 @@ import WebKit
 
 /// Serves the page's `spacebar:` URLs:
 ///   spacebar://bundle/…            the web/ folder (the CSP allows scripts from here, so a path must stay inside web/)
-///   spacebar://file/<abs path>     images beside the document, never anything a browser would run
+///   spacebar://file/<abs path>     read-only, typed by an explicit map (FileTypes.contentTypes): images (a document's
+///                                  relative images, the image viewer), and the one PDF on screen (`pdf`) inside `fileRoot`.
+///                                  Nothing else is served, so no file can be loaded as a page, a script or a style
 ///   spacebar://user/custom.css     the user's CSS in the support folder
 ///   spacebar://user/themes/<f>.css a user theme; only a plain file name inside themes/
 /// The app's live preview uses it with `fileHost: false`.
@@ -13,6 +15,10 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
     let supportDir: () -> URL
     let fileHost: Bool
     var onRefused: (String) -> Void = { _ in }
+    /// The root of the sidebar's tree; nil serves images only.
+    var fileRoot: String?
+    /// The PDF on screen: the only PDF served, and only at this exact URL.
+    var pdf: URL?
     static let maxUserCSSBytes = 1 << 20
 
     init(webRoot: URL, supportDir: @escaping () -> URL = { SettingsFile.supportDir }, fileHost: Bool = true) {
@@ -39,8 +45,18 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
             let f = webRoot.appendingPathComponent(url.path).standardizedFileURL
             return f.path.hasPrefix(webRoot.path + "/") ? f : nil
         case "file" where fileHost:
+            // Only what a viewer loads: an image (inside the root, or beside a Markdown document anywhere), or the PDF on screen.
+            // The checked path, symlinks resolved, is what is read.
             let f = URL(fileURLWithPath: url.path).standardizedFileURL
-            return UTType(filenameExtension: f.pathExtension)?.conforms(to: .image) == true ? f : nil
+            let mime = FileTypes.contentType(forPath: f.path)
+            let isPDF = mime == "application/pdf"
+            guard mime.hasPrefix("image/") || (isPDF && pdf?.absoluteString == url.absoluteString) else { return nil }
+            guard let real = FolderListing.realPath(f.path) else { return nil }
+            if isPDF { guard let root = fileRoot, FolderListing.isInside(real, root: root) else { return nil } }
+            var st = stat()
+            guard lstat(real, &st) == 0, st.st_mode & S_IFMT == S_IFREG,
+                  st.st_size <= (isPDF ? FileTypes.maxFileBytes : FileTypes.maxImageBytes) else { return nil }
+            return URL(fileURLWithPath: real)
         case "user":
             // percentEncodedPath: an encoded "%2F" or "%2E%2E" must not decode into a separator or a parent step.
             let raw = URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? ""
@@ -54,6 +70,15 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
         }
     }
 
+    /// The Content-Type a resolved file is served with: the user host serves CSS only, the file host goes by FileTypes' map.
+    static func contentType(host: String?, file: URL) -> String {
+        switch host {
+        case "user": return "text/css"
+        case "file": return FileTypes.contentType(forPath: file.path)
+        default: return UTType(filenameExtension: file.pathExtension)?.preferredMIMEType ?? FileTypes.octetStream
+        }
+    }
+
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
         guard let url = task.request.url else { return }
         guard let fileURL = resolve(url) else {
@@ -62,10 +87,13 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
         }
         do {
             let data = try Data(contentsOf: fileURL)
-            let mime = url.host == "user" ? "text/css" : UTType(filenameExtension: fileURL.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
-            // An image (an SVG included) runs no script as <img>; the header keeps it inert however else it might be loaded.
-            var headers = ["Content-Type": mime, "Content-Length": String(data.count), "Cache-Control": "no-store"]
-            if url.host == "file" { headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'" }
+            let mime = Self.contentType(host: url.host, file: url.host == "file" ? URL(fileURLWithPath: url.path) : fileURL)
+            // An image (an SVG included) runs no script as <img>, and a PDF only renders in the one frame the shell allows; the
+            // headers keep a file inert however else it might be loaded.
+            var headers = ["Content-Type": mime, "Content-Length": String(data.count), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"]
+            if url.host == "file" {
+                headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
+            }
             task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!)
             task.didReceive(data)
             task.didFinish()
@@ -76,6 +104,19 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {}
+}
+
+/// Which navigations the preview's web view allows: the shell page in the main frame, and in a subframe only the PDF on screen,
+/// which the page shows in an iframe it made itself (the document's own frames are sanitized away and blocked by the CSP).
+enum ShellPolicy {
+    static let shell = "spacebar://bundle/index.html"
+
+    static func allows(_ url: URL?, mainFrame: Bool, pdf: URL?) -> Bool {
+        guard let url else { return false }
+        if mainFrame { return url.absoluteString == shell }
+        guard let pdf, url.absoluteString == pdf.absoluteString, url.scheme == "spacebar", url.host == "file" else { return false }
+        return FileTypes.contentType(forPath: url.path) == "application/pdf"
+    }
 }
 
 /// What the page is told about the settings: the settings themselves plus the URLs of the user CSS to load, each versioned by

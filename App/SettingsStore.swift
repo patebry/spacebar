@@ -15,6 +15,7 @@ final class SettingsStore: ObservableObject {
 
     func start() {
         if let f = SettingsFile.ensure() { problem = Self.message(f) }
+        SettingsFile.migrate()
         reload()
         watcher = FolderWatcher(paths: { [weak self] in self?.watchedPaths() ?? [] }) { [weak self] in self?.reload() }
     }

@@ -240,13 +240,13 @@ else
   run pluginkit -a "$DEST/Contents/PlugIns/SpacebarPreview.appex"
   run pluginkit -a "$DEST/Contents/PlugIns/SpacebarFolders.appex"
   run pluginkit -e use -i "$APPEX_ID"
-  # Folder previews are opt-in (Settings > Folders); the folders extension stays off unless they were turned on before.
+  # Folder previews are on by default (Settings > Sidebar); the folders extension stays off only if they were turned off.
   settings="$HOME/Library/Application Support/spacebar/settings.json"
   [ -e "${settings%/*}" ] || settings="$HOME/Library/Application Support/spacebar.md/settings.json"
-  if grep -qE '"folderMode"[[:space:]]*:[[:space:]]*true' "$settings" 2>/dev/null; then
-    run pluginkit -e use -i "$FOLDERS_ID"
-  else
+  if grep -qE '"folderMode"[[:space:]]*:[[:space:]]*false' "$settings" 2>/dev/null && grep -qE '"version"[[:space:]]*:[[:space:]]*([2-9]|[1-9][0-9])' "$settings"; then
     run pluginkit -e ignore -i "$FOLDERS_ID"
+  else
+    run pluginkit -e use -i "$FOLDERS_ID"
   fi
   run_quiet qlmanage -r || true
   run_quiet qlmanage -r cache || true

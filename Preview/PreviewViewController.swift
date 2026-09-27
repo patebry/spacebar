@@ -444,7 +444,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         pendingAnchor = nil
         linkMemo = nil
         if isDir.boolValue {
-            // Folder previews are opt-in; declining hands the folder back to Quick Look's own preview. Everything else a
+            // Folder previews can be turned off; declining hands the folder back to Quick Look's own preview. Everything else a
             // folder preview declines (packages, volumes, system folders) is known here, before anything starts.
             guard SettingsStore.shared.settings.folderMode else { return decline(handler, "folder previews are off") }
             if let why = FolderRules.declineReason(resolved.path) { return decline(handler, why) }

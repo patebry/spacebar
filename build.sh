@@ -146,15 +146,15 @@ cp -R "$APP" "$DEST"
 "$LSREGISTER" -f -R "$DEST"
 pluginkit -a "$DEST/Contents/PlugIns/$APPEX_EXE.appex"
 pluginkit -a "$DEST/Contents/PlugIns/$FOLDERS_EXE.appex"
-# Folder previews are opt-in: the folders extension is enabled only while settings.json turns folderMode on. The app keeps
-# the two in step when the setting changes.
+# Folder previews are on unless settings.json turns folderMode off. A file from before version 2 stores the old default
+# (false) and reads as on until the app or a writer migrates it. The app keeps the extension in step when the setting changes.
 # The support folder keeps its legacy name (spacebar.md) until the app or a writer first runs and moves it.
 SETTINGS="$HOME/Library/Application Support/$APP_NAME/settings.json"
 [ -e "$(dirname "$SETTINGS")" ] || SETTINGS="$HOME/Library/Application Support/spacebar.md/settings.json"
-if grep -qE '"folderMode"[[:space:]]*:[[:space:]]*true' "$SETTINGS" 2>/dev/null; then
-  pluginkit -e use -i "$FOLDERS_ID"
-else
+if grep -qE '"folderMode"[[:space:]]*:[[:space:]]*false' "$SETTINGS" 2>/dev/null && grep -qE '"version"[[:space:]]*:[[:space:]]*([2-9]|[1-9][0-9])' "$SETTINGS"; then
   pluginkit -e ignore -i "$FOLDERS_ID"
+else
+  pluginkit -e use -i "$FOLDERS_ID"
 fi
 # A running extension keeps serving its old code until it exits. It is not killed: it may be mid-write for an open preview.
 running=$(pgrep -x "$APPEX_EXE" || true)

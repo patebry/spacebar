@@ -1,7 +1,9 @@
 #!/bin/bash
 # Reads files iCloud has evicted (dataless) the way the extension does, sandboxed like it and with Quick Look's no-materialization
-# policy: the Markdown read, FileView's text read and PDFPane. Downloads the files it reads.
-#   test/dataless/run.sh [DIR [MD CSV PDF]]   default ~/Desktop/spacebar-film with docs/faq.md, budget.csv, invoice-0042.pdf
+# policy: the Markdown read, FileView's text read, PDFPane, and off the main thread FileLoader and the file host's image read
+# (with a main-thread heartbeat), plus FileLoader's cancellation and timeout with injected readers. Downloads the files it reads.
+#   test/dataless/run.sh [DIR [MD CSV PDF [LOADMD IMAGE]]]   default ~/Desktop/spacebar-film with docs/faq.md, budget.csv,
+#                        invoice-0042.pdf, vault-demo/Daily/2026-09-25.md, design/wireframe.png
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 out=$(mktemp -d)
@@ -15,6 +17,7 @@ cat > "$out/ent.plist" <<'PLIST'
 <array><string>/</string></array></dict></plist>
 PLIST
 xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/dataless/main.swift Shared/FolderListing.swift Preview/PDFPane.swift Shared/LinkPolicy.swift \
+  Shared/WebShell.swift Shared/Settings.swift Shared/FolderScan.swift -framework WebKit \
   ${DATALESS_EXTRA:-} -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$out/Info.plist" -o "$out/dataless"
 codesign --force --sign - -i "$id" --entitlements "$out/ent.plist" "$out/dataless" 2>/dev/null
 "$out/dataless" "$@"

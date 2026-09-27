@@ -18,6 +18,23 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
     /// The root of the sidebar's tree.
     var fileRoot: String?
     static let maxUserCSSBytes = 1 << 20
+    /// How the `file` host reads a resolved image, off the main thread (tests inject a slow one).
+    var readFile: (URL) throws -> Data = SchemeHandler.readImage
+    /// A `file` read still running after this fails its task; the read itself finishes on its own and is dropped.
+    var readTimeout: TimeInterval = FileLoader.downloadTimeout
+    /// The `file` tasks still owed an answer, each with the token of its start. Main thread only: `stop` removes a task, and
+    /// nothing is sent to a task that is no longer here.
+    private var live: [ObjectIdentifier: Int] = [:]
+    private var tokens = 0
+    /// Image reads, a few at a time: offline, each read of an evicted image blocks its thread until the download gives up, and
+    /// a note full of them must not take every worker thread. A task's timeout starts when its read does, so a local image
+    /// queued behind stuck downloads still loads, and a task stopped while queued is never read.
+    private static let reads: OperationQueue = {
+        let q = OperationQueue()
+        q.maxConcurrentOperationCount = 4
+        q.qualityOfService = .userInitiated
+        return q
+    }()
 
     init(webRoot: URL, supportDir: @escaping () -> URL = { SettingsFile.supportDir }, fileHost: Bool = true) {
         self.webRoot = webRoot.standardizedFileURL
@@ -72,30 +89,75 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
         }
     }
 
+    /// An image the `file` host serves, downloaded first when iCloud has evicted it; never more than the image bound.
+    static func readImage(_ url: URL) throws -> Data {
+        try FileTypes.materializing {
+            let h = try FileHandle(forReadingFrom: url)
+            defer { try? h.close() }
+            let data = try h.read(upToCount: Int(FileTypes.maxImageBytes) + 1) ?? Data()
+            guard data.count <= FileTypes.maxImageBytes else { throw URLError(.dataLengthExceedsMaximum) }
+            return data
+        }
+    }
+
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
         guard let url = task.request.url else { return }
         guard let fileURL = resolve(url) else {
             onRefused("refused load \(url.absoluteString)")
             return task.didFailWithError(URLError(.noPermissionsToReadFile))
         }
-        do {
-            let data = try FileTypes.materializing { try Data(contentsOf: fileURL) }
-            let mime = Self.contentType(host: url.host, file: url.host == "file" ? URL(fileURLWithPath: url.path) : fileURL)
-            // An image (an SVG included) runs no script as <img>; the headers keep a file inert however else it might be loaded.
-            var headers = ["Content-Type": mime, "Content-Length": String(data.count), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"]
-            if url.host == "file" {
-                headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
+        guard url.host == "file" else {
+            // The page's own files and the user's CSS: local, small, read here.
+            do { respond(task, url: url, file: fileURL, data: try Data(contentsOf: fileURL)) } catch { fail(task, fileURL, error) }
+            return
+        }
+        // An image may be in iCloud and not downloaded: read off the main thread, answered on it unless stopped or timed out.
+        tokens += 1
+        let id = ObjectIdentifier(task), token = tokens
+        live[id] = token
+        let finish = { [weak self] (r: Result<Data, Error>) in
+            // The closure holds the task, so its identifier cannot be reused by another task meanwhile.
+            guard let self, self.live[id] == token else { return }
+            self.live[id] = nil
+            switch r {
+            case .success(let data): self.respond(task, url: url, file: fileURL, data: data)
+            case .failure(let error): self.fail(task, fileURL, error)
             }
-            task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!)
-            task.didReceive(data)
-            task.didFinish()
-        } catch {
-            onRefused("read failed \(fileURL.path): \(error.localizedDescription)")
-            task.didFailWithError(error)
+        }
+        let read = readFile, timeout = readTimeout
+        Self.reads.addOperation { [weak self] in
+            // Main never waits on this queue, so the hop cannot deadlock.
+            let wanted = DispatchQueue.main.sync { () -> Bool in
+                guard let self, self.live[id] == token else { return false }
+                DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { finish(.failure(URLError(.timedOut))) }
+                return true
+            }
+            guard wanted else { return }
+            let r = Result { try read(fileURL) }
+            DispatchQueue.main.async { finish(r) }
         }
     }
 
-    func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {}
+    func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {
+        live[ObjectIdentifier(task)] = nil
+    }
+
+    private func respond(_ task: WKURLSchemeTask, url: URL, file: URL, data: Data) {
+        let mime = Self.contentType(host: url.host, file: url.host == "file" ? URL(fileURLWithPath: url.path) : file)
+        // An image (an SVG included) runs no script as <img>; the headers keep a file inert however else it might be loaded.
+        var headers = ["Content-Type": mime, "Content-Length": String(data.count), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"]
+        if url.host == "file" {
+            headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'"
+        }
+        task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!)
+        task.didReceive(data)
+        task.didFinish()
+    }
+
+    private func fail(_ task: WKURLSchemeTask, _ file: URL, _ error: Error) {
+        onRefused("read failed \(file.path): \(error.localizedDescription)")
+        task.didFailWithError(error)
+    }
 }
 
 /// Which navigations the preview's web view allows: the shell page in the main frame, and no subframe at all (the document's

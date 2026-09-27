@@ -65,7 +65,7 @@
   /* The file on screen, as a path from the root, in the band under the toolbar; the document starts just below it. */
   #crumbs { max-width: var(--measure); margin: 0 auto; padding: 44px 40px 0; }
   #crumbs:not([hidden]) + #doc { padding-top: 12px; }
-  :root[data-view]:not([data-view=markdown]):not([data-view=info]) :is(#doc, #crumbs) { max-width: none; }
+  :root[data-view]:not([data-view=markdown]):not([data-view=info]):not([data-view=loading]) :is(#doc, #crumbs) { max-width: none; }
   #toc { flex: none; width: 210px; position: sticky; top: 0; max-height: 100vh; overflow: auto; box-sizing: border-box; padding: 56px 20px 24px 4px; }
   #toolbar { position: fixed !important; top: 8px; right: 12px; display: flex; gap: 6px; align-items: center; z-index: 10 !important; }
   :root.sb-embedded #toolbar, :root.sb-embedded #sidebar, :root.sb-embedded #side-toggle, :root.sb-embedded #crumbs,

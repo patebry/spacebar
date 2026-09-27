@@ -1,6 +1,7 @@
 // Checks SchemeHandler.resolve: the user host serves only custom.css and themes/<name>.css from the support folder, and no
 // URL spelling reaches another file. Build and run with test/scheme/run.sh.
 import Foundation
+import WebKit
 
 var failures = 0
 func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)"); if !ok { failures += 1 } }
@@ -85,6 +86,67 @@ check("shell policy: the shell in the main frame only, and no frame at all",
 let noFile = SchemeHandler(webRoot: URL(fileURLWithPath: CommandLine.arguments[1]), fileHost: false)
 noFile.fileRoot = tree.path
 check("file host off for the app preview", URL(string: fu(tree.path + "/a.png")).flatMap { noFile.resolve($0) } == nil)
+
+// The file host reads off the main thread and answers on it: never after `stop`, and a read past the timeout fails the task
+// once while its late result is dropped. Readers are injected; `a.png` under the tree is the resolved file.
+final class FakeTask: NSObject, WKURLSchemeTask {
+    let request: URLRequest
+    var events: [String] = []
+    var offMain = false
+    init(_ url: URL) { request = URLRequest(url: url) }
+    private func note(_ e: String) { events.append(e); if !Thread.isMainThread { offMain = true } }
+    func didReceive(_ response: URLResponse) { note("response") }
+    func didReceive(_ data: Data) { note("data") }
+    func didFinish() { note("finish") }
+    func didFailWithError(_ error: Error) { note((error as? URLError)?.code == .timedOut ? "timeout" : "fail") }
+}
+func spin(_ seconds: TimeInterval, until done: () -> Bool = { false }) {
+    let end = Date().addingTimeInterval(seconds)
+    while !done() && Date() < end { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
+}
+let web = WKWebView(frame: .zero)
+let img = URL(string: fu(tree.path + "/a.png"))!
+let gate = DispatchSemaphore(value: 0)
+h.readFile = { _ in gate.wait(); return Data("png".utf8) }
+h.readTimeout = 5
+let stopped = FakeTask(img)
+h.webView(web, start: stopped)
+check("file host: start does not wait for the read", stopped.events.isEmpty)
+h.webView(web, stop: stopped)
+gate.signal()
+spin(0.3)
+check("file host: nothing is sent to a task after stop", stopped.events.isEmpty)
+var reads = 0
+h.readFile = { _ in reads += 1; return Data("png".utf8) }
+let queued = FakeTask(img)
+h.webView(web, start: queued)
+h.webView(web, stop: queued)
+spin(0.3)
+check("file host: a task stopped before its read starts is never read", reads == 0 && queued.events.isEmpty)
+let served = FakeTask(img)
+h.readFile = { _ in Data("png".utf8) }
+h.webView(web, start: served)
+spin(2) { served.events.last == "finish" }
+check("file host: an image read off the main thread is answered on it", served.events == ["response", "data", "finish"] && !served.offMain)
+let late = DispatchSemaphore(value: 0)
+h.readFile = { _ in late.wait(); return Data("png".utf8) }
+h.readTimeout = 0.2
+let slow = FakeTask(img)
+h.webView(web, start: slow)
+spin(1)
+late.signal()
+spin(0.3)
+check("file host: a read past the timeout fails the task once; its late result is dropped", slow.events == ["timeout"])
+let refusedTask = FakeTask(URL(string: "spacebar://file/etc/hosts")!)
+h.webView(web, start: refusedTask)
+check("file host: a refused URL still fails at once", refusedTask.events == ["fail"])
+h.readFile = SchemeHandler.readImage
+let big = tree.appendingPathComponent("big.png")
+try! Data().write(to: big)
+let fh = try! FileHandle(forWritingTo: big)
+try! fh.truncate(atOffset: UInt64(FileTypes.maxImageBytes) + 1)
+try! fh.close()
+check("file host: the image read is bounded", (try? SchemeHandler.readImage(big)) == nil && (try? SchemeHandler.readImage(tree.appendingPathComponent("a.png"))) == Data("x".utf8))
 
 print("\n\(failures == 0 ? "all" : "\(failures) FAILED of") scheme checks")
 exit(failures == 0 ? 0 : 1)

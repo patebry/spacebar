@@ -598,6 +598,24 @@ def main():
         check(not synthetic and [m.get('type') for m in r['messages'] if m.get('type', '').startswith('_')] == ['_reveal'] and
               [m for m in r['messages'] if m.get('type') == 'reveal'][0].get('path') == T('archive.zip'),
               'Reveal in Finder posts reveal for the file on screen, for a real click only', json.dumps(r['messages'])[:300])
+        # A file still being read (an iCloud download): a quiet "Loading…" with no Open button, then, when it could not be
+        # downloaded, the info card with Reveal in Finder, for a Markdown file too.
+        stub = {'path': T('notes.md'), 'base': 'spacebar://file' + tree + '/', 'name': 'notes.md', 'root': tree, 'rootName': os.path.basename(tree), 'reason': 'open'}
+        page.cmd('@eval:sb.render(' + json.dumps(dict(stub, view='loading', cloud=True)) + '); 0')
+        ld = page.js("""const l = document.querySelector('#doc .viewer-loading'); const s = l && l.querySelector('.spinner');
+          return l && { view: document.documentElement.dataset.view, role: l.getAttribute('role'), text: l.querySelector('.loading-text').textContent,
+            note: l.querySelector('.viewer-note').textContent, anim: getComputedStyle(s).animationName, buttons: document.querySelectorAll('#doc button').length,
+            edit: document.getElementById('edit').hidden }""")
+        check(ld and ld['view'] == 'loading' and ld['role'] == 'status' and ld['text'] == 'Loading…' and ld['note'] == 'Downloading from iCloud'
+              and 'sb-spin' in ld['anim'] and ld['buttons'] == 0 and ld['edit'], 'loading: "Loading…" with a spinner, no buttons, no Open', json.dumps(ld))
+        page.cmd('@eval:sb.render(' + json.dumps(dict(stub, view='info', icon='markdown', kindName='Markdown', canOpen=False, size=1010,
+                                                     note='This file is in iCloud and couldn’t be downloaded.')) + '); 0')
+        card = page.js("""const c = document.querySelector('#doc .info-card'); return c && [c.querySelector('.viewer-note').textContent,
+          c.querySelector('button').textContent, c.querySelector('button').dataset.action]""")
+        r = page.cmd('@nativeclick:#doc .info-card button')
+        check(card == ['This file is in iCloud and couldn’t be downloaded.', 'Reveal in Finder', 'reveal']
+              and [m.get('path') for m in r['messages'] if m.get('type') == 'reveal'] == [T('notes.md')],
+              'iCloud: the card for a file that could not be downloaded, with Reveal in Finder (a Markdown file too)', json.dumps([card, r['messages']])[:300])
         view(T('movie.mp4'))
         r = page.cmd("@eval:sb.setOpener({ path: " + json.dumps(T('movie.mp4')) + ", app: 'QuickTime Player' }); 0")
         b = page.js("return [document.querySelector('#doc .info-card button').textContent, document.querySelector('#doc .info-card button').dataset.action]")

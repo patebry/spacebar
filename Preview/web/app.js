@@ -1078,6 +1078,17 @@ function infoCard(p, why) {
   return card;
 }
 
+/** The file is still being read (an iCloud download, or a slow disk): a quiet placeholder until the extension sends it. */
+function loadingView(p) {
+  const box = el('div', 'viewer viewer-loading');
+  box.setAttribute('role', 'status');
+  const spin = el('span', 'spinner');
+  spin.setAttribute('aria-hidden', 'true');
+  box.append(spin, el('div', 'loading-text', 'Loading…'));
+  if (p.cloud === true) box.append(note('Downloading from iCloud'));
+  return box;
+}
+
 function imageView(p) {
   const box = el('figure', 'viewer viewer-image');
   const img = document.createElement('img');
@@ -1148,6 +1159,7 @@ function viewNode(p) {
   switch (p.view) {
     case 'image': if (typeof p.src === 'string') return imageView(p); break;
     case 'pdf': return pdfView(p);
+    case 'loading': return loadingView(p);
     case 'overview': return overviewView(p);
     case 'json': if (typeof p.text === 'string') return jsonView(p); break;
     case 'csv': if (typeof p.text === 'string') return csvView(p); break;
@@ -1229,7 +1241,7 @@ function overviewView(p) {
 function syncOpen(p) {
   const b = $('edit');
   const doc = isMarkdown(p);
-  b.hidden = !doc && (p.view === 'overview' || !p.path);
+  b.hidden = !doc && (p.view === 'overview' || p.view === 'loading' || !p.path);
   b.dataset.kind = doc ? 'doc' : 'file';
   if (doc) { b.dataset.action = 'edit'; b.textContent = 'Open in editor'; b.title = 'Open this file in your editor'; return; }
   b.dataset.action = p.canOpen === true ? 'openFile' : 'reveal';
@@ -1607,7 +1619,7 @@ function followWiki(a) {
 
 // The toolbar's Open button; a file's Open or Reveal is posted only for a real click, and the extension checks it again.
 $('edit').addEventListener('click', (e) => {
-  if (isMarkdown(current)) { post({ type: 'edit' }); return; }
+  if (isMarkdown(current)) { post({ type: 'edit', path: current.path }); return; }
   const a = $('edit').dataset.action;
   if ((a === 'openFile' || a === 'reveal') && e.isTrusted && current.path) post({ type: a, path: current.path });
 });

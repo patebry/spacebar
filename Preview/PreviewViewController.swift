@@ -218,6 +218,30 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private var pdfPane: PDFPane?
     /// Bumped by every show and close, so a PDF still opening in the background for an older one is dropped.
     private var pdfGen = 0
+    /// Every read of the file on screen, off the main thread: a file iCloud has evicted downloads first, which can take long or
+    /// never finish offline. Opening another file drops the read in flight.
+    private let loader = FileLoader()
+    /// The file on screen shows the info card because it could not be read (Reveal in Finder is allowed for it, Markdown too).
+    private var unavailablePath: String?
+    /// Bumped by every write sent: a read that started before a write may hold the bytes the write replaced.
+    private var writeEpoch = 0
+    /// The file the load in flight reads, while iCloud downloads it: a change event meanwhile waits for that read instead of
+    /// starting another one blocked on the same download.
+    private var downloading: (url: URL, load: Int, stamp: String)?
+
+    /// The file's identity and version, from stat (which never downloads).
+    private static func stamp(_ url: URL) -> String? {
+        var st = stat()
+        guard stat(url.path, &st) == 0 else { return nil }
+        return "\(st.st_size)-\(st.st_mtimespec.tv_sec).\(st.st_mtimespec.tv_nsec)-\(st.st_ino)"
+    }
+
+    /// Whether a read of `url` is already waiting on the download of the very version now at the path (a new version
+    /// swapped in while evicted is read again).
+    private func awaitingDownload(_ url: URL) -> Bool {
+        guard let d = downloading, d.url == url, loader.isActive(d.load), FileTypes.isDataless(url.path) else { return false }
+        return Self.stamp(url) == d.stamp
+    }
     /// The sidebar's folders as last sent, by path; `open` from the page is limited to their files.
     private var listings: [String: FolderListing.Listing] = [:]
     /// Folders the page may ask to list: the root and every folder a listing named. Nothing above the root is ever in it.
@@ -499,6 +523,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         shownStamp = nil
         shownCanOpen = false
         showingOverview = true
+        loader.cancel()
+        unavailablePath = nil
         offer(r.recent.map(\.path))
         let json = String(data: try! JSONSerialization.data(withJSONObject: r.payload(reason: reason)), encoding: .utf8)!
         host.whenReady { [host] in
@@ -601,6 +627,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         if kind != .markdown, st.st_mode & S_IFMT != S_IFREG, st.st_mode & S_IFMT != S_IFDIR { return status("\(url.lastPathComponent) is not a regular file") }
         stopEdit(notifyWriter: true)
         queuedSave = nil
+        loader.cancel()
+        unavailablePath = nil
         host.remoteImages.reset()
         showingOverview = false
         folderPending = false
@@ -631,11 +659,33 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         guard let url = fileURL, !writing, !torn else { return }
         guard fileKind == .markdown else { return show(url, reason: reason) }
         if let why = Self.unreadable(url) { log.error("read refused: \(why, privacy: .private)"); return status(why) }
-        let raw: String
-        do { raw = try FileView.readDocument(url) } catch {
-            log.error("read failed \(url.path, privacy: .private): \(error.localizedDescription, privacy: .private)")
-            return
+        if reason == "change", awaitingDownload(url) { return }
+        let epoch = writeEpoch, cloud = FileTypes.isDataless(url.path)
+        // A conflict keeps the rejected text on screen until the file's own text arrives: it may be the only copy left to copy.
+        let quiet = reason == "conflict"
+        let id = loader.load(timesOut: cloud, { Result { try FileView.readDocument(url) } }) { [weak self] outcome in
+            guard let self, self.host.controller === self, self.fileURL == url, self.fileKind == .markdown else { return }
+            switch outcome {
+            case .timedOut:
+                log.error("read timed out \(url.path, privacy: .private)")
+                // A document already on screen stays, as it does when a read fails.
+                if self.docText == nil, !quiet { self.showUnavailable(url, reason: reason, cloud: cloud) }
+            case .done(.failure(let error)):
+                log.error("read failed \(url.path, privacy: .private): \(error.localizedDescription, privacy: .private)")
+                // A document already on screen stays (a save swapping the file can fail one read); a new one gets the card.
+                if self.docText == nil, !quiet { self.showUnavailable(url, reason: reason, cloud: cloud || FileTypes.isDataless(url.path)) }
+            case .done(.success(let raw)):
+                // Bytes read before a write started may be what the write replaced: the write's own reload reads again.
+                guard !self.writing, !self.torn, epoch == self.writeEpoch else { return }
+                self.apply(raw, url: url, reason: reason)
+            }
         }
+        if cloud, let s = Self.stamp(url) { downloading = (url, id, s) }
+        if docText == nil, !quiet { showLoading(url, load: id, cloud: cloud) }
+    }
+
+    /// Takes a Markdown read that is still current: `raw` is the file's text as on disk.
+    private func apply(_ raw: String, url: URL, reason: String) {
         if raw == diskText { return }
         if edit == nil, let d = docText, onDisk(d) != diskText { status("unsaved text replaced by the version on disk") }
         let crlf = raw.contains("\r\n") && !raw.replacingOccurrences(of: "\r\n", with: "").utf8.contains(10)
@@ -654,8 +704,42 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         push(text: text, path: url.path, reason: reason)
     }
 
+    /// "Loading…" in place of the file while load `id` runs: at once for a file iCloud must download, else only once a read
+    /// is slow, so a local file never flashes it. The previous file's view goes, the native PDF with it.
+    private func showLoading(_ url: URL, load id: Int, cloud: Bool) {
+        let show = { [weak self] in
+            guard let self, self.host.controller === self, self.loader.isActive(id), self.fileURL == url else { return }
+            self.pdfPane?.close()
+            self.pdfPane = nil
+            var p = FileView.base(path: url.path, root: self.rootDir, reason: "open")
+            p["view"] = "loading"
+            p["cloud"] = cloud
+            self.render(p)
+        }
+        if cloud { show() } else { DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: show) }
+    }
+
+    /// The info card for a file that could not be read in time. A later change on disk (the download landing) reads it again.
+    private func showUnavailable(_ url: URL, reason: String, cloud: Bool) {
+        closePDF()
+        shownStamp = nil
+        shownCanOpen = false
+        unavailablePath = url.path
+        render(FileView.unavailable(path: url.path, kind: fileKind, root: rootDir, reason: reason, cloud: cloud))
+    }
+
+    private func render(_ payload: [String: Any]) {
+        let json = String(data: try! JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!
+        host.remoteImages.whenInPlace { [host] in
+            host.web.evaluateJavaScript("sb.render(\(json)); 0") { _, err in
+                if let err { log.error("render eval failed: \(String(describing: err), privacy: .public)") }
+            }
+        }
+    }
+
     private func push(text: String, path: String, reason: String, keyTime: Double? = nil) {
         closePDF()
+        unavailablePath = nil
         var payload = FileView.base(path: path, root: rootDir, reason: reason)
         payload["text"] = text
         payload["view"] = "markdown"
@@ -664,12 +748,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         payload["ver"] = docVersion
         if let a = pendingAnchor, a.path == path { payload["anchor"] = a.anchor; pendingAnchor = nil }
         if text.contains("[[") { addLinks(&payload, text: text, path: path) }
-        let json = String(data: try! JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!
-        host.remoteImages.whenInPlace { [host] in
-            host.web.evaluateJavaScript("sb.render(\(json)); 0") { _, err in
-                if let err { log.error("render eval failed: \(String(describing: err), privacy: .public)") }
-            }
-        }
+        render(payload)
     }
 
     /// The document's wikilinks and embeds, resolved against the root's index (LinkIndex) off the main thread: resolving stats
@@ -698,7 +777,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         DispatchQueue.global(qos: .userInitiated).async {
             let r = idx.payload(text: text, current: path)
             DispatchQueue.main.async { [weak self] in
-                guard let self, gen == self.linkGen, root == self.rootDir, self.fileURL?.path == path, self.fileKind == .markdown else { return }
+                guard let self, self.host.controller === self, gen == self.linkGen, root == self.rootDir, self.fileURL?.path == path,
+                      self.fileKind == .markdown else { return }
                 self.offer(Array(r.paths))
                 let old = self.linkMemo
                 let same = old.map { $0.path == path && NSDictionary(dictionary: $0.links).isEqual(to: r.links)
@@ -743,33 +823,53 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         var st = stat()
         guard stat(url.path, &st) == 0 else { return status("cannot read \(url.lastPathComponent)") }
         let stamp = "\(st.st_size)-\(st.st_mtimespec.tv_sec).\(st.st_mtimespec.tv_nsec)-\(st.st_ino)"
-        if reason == "change", stamp == shownStamp { return }
+        if reason == "change", stamp == shownStamp || awaitingDownload(url) { return }
         shownStamp = stamp
-        let p = FileView.payload(path: url.path, kind: fileKind, root: rootDir, reason: reason, canOpen: LinkPolicy.fileRefusal(url) == nil)
-        let canOpen = p["canOpen"] as? Bool == true
-        shownCanOpen = canOpen
         pdfGen += 1
-        guard p["view"] as? String == "pdf" else { return finishShow(url, p, pdf: nil, reason: reason) }
-        // PDFKit may scan a large or damaged file to rebuild it, so it opens off the main thread; a newer show supersedes this one.
-        let gen = pdfGen
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = PDFPane.open(url)
-            DispatchQueue.main.async { [weak self] in
-                guard let self, gen == self.pdfGen, self.fileURL == url else { return }
-                var p = p
-                var doc: PDFDocument?
-                switch result {
-                case .success(let d): doc = d
-                case .failure(let e):
-                    p["view"] = "info"
-                    p["note"] = e == .locked ? "This PDF is password-protected." : "This PDF can’t be shown here."
-                }
-                self.finishShow(url, p, pdf: doc, reason: reason)
+        // Read off the main thread: text is read, an image in iCloud is downloaded before the page loads it, and PDFKit may
+        // scan a large or damaged file to rebuild it. A newer show or open supersedes this one.
+        let gen = pdfGen, kind = fileKind, root = rootDir, canOpen = LinkPolicy.fileRefusal(url) == nil
+        let cloud = FileTypes.isDataless(url.path)
+        // Only a download times out: PDFKit rebuilding a large local PDF may take longer, and is still shown when done.
+        let id = loader.load(timesOut: cloud, { () -> (payload: [String: Any], pdf: Result<PDFDocument, PDFPane.LoadError>?, stuck: Bool) in
+            let p = FileView.payload(path: url.path, kind: kind, root: root, reason: reason, canOpen: canOpen)
+            var pdf: Result<PDFDocument, PDFPane.LoadError>?
+            switch p["view"] as? String {
+            case "pdf": pdf = PDFPane.open(url)
+            case "image" where cloud: _ = try? SchemeHandler.readImage(url)
+            default: break
             }
+            // Only what FileView downloads counts: an evicted archive or video is its info card without a download.
+            let fetched = ["pdf", "image"].contains(p["view"] as? String)
+                || ([.code, .json, .csv, .text].contains(kind) && (p["size"] as? Int64 ?? .max) <= FolderListing.maxDocumentBytes)
+            return (p, pdf, cloud && fetched && FileTypes.isDataless(url.path))
+        }) { [weak self] outcome in
+            guard let self, self.host.controller === self, self.fileURL == url, self.fileKind == kind else { return }
+            guard case .done(let r) = outcome else {
+                log.error("show timed out \(url.path, privacy: .private)")
+                return self.showUnavailable(url, reason: reason, cloud: cloud)
+            }
+            var p = r.payload
+            var doc: PDFDocument?
+            switch r.pdf {
+            case .success(let d)?: doc = d
+            case .failure(let e)?:
+                p["view"] = "info"
+                p["note"] = e == .locked ? "This PDF is password-protected." : "This PDF can’t be shown here."
+            case nil: break
+            }
+            if r.stuck { return self.showUnavailable(url, reason: reason, cloud: true) }
+            // The panel closed while a PDF opened: it is shown again when the panel reappears (viewWillAppear).
+            if doc != nil, gen != self.pdfGen { return }
+            self.shownCanOpen = p["canOpen"] as? Bool == true
+            self.finishShow(url, p, pdf: doc, reason: reason)
         }
+        if cloud, let s = Self.stamp(url) { downloading = (url, id, s) }
+        if reason != "change" { showLoading(url, load: id, cloud: cloud) }
     }
 
     private func finishShow(_ url: URL, _ p: [String: Any], pdf: PDFDocument?, reason: String) {
+        unavailablePath = nil
         let canOpen = p["canOpen"] as? Bool == true
         if let pdf {
             let pane = pdfPane ?? PDFPane()
@@ -781,12 +881,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         }
         let view = p["view"] as? String ?? ""
         log.info("show \(view, privacy: .public) (\(self.fileKind.rawValue, privacy: .public))")
-        let json = String(data: try! JSONSerialization.data(withJSONObject: p), encoding: .utf8)!
-        host.remoteImages.whenInPlace { [host] in
-            host.web.evaluateJavaScript("sb.render(\(json)); 0") { _, err in
-                if let err { log.error("render eval failed: \(String(describing: err), privacy: .public)") }
-            }
-        }
+        render(p)
         // The button names the app the writer would open it with; an app, a script or an executable gets Reveal in Finder only.
         if canOpen, reason == "open" {
             let path = url.path
@@ -877,7 +972,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             }
             openExternally(url)
         case "reveal":
-            guard let url = fileURL, fileKind != .markdown, m.string("path", max: 4096) == url.path, FolderListing.isInside(url.path, root: rootDir) else {
+            guard let url = fileURL, fileKind != .markdown || unavailablePath == url.path, m.string("path", max: 4096) == url.path,
+                  FolderListing.isInside(url.path, root: rootDir) else {
                 return refuse("reveal", "not the file on screen")
             }
             helper { $0.reveal(url) { ok in if !ok { DispatchQueue.main.async { self.status("could not show \(url.lastPathComponent) in Finder") } } } }
@@ -931,7 +1027,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         case "editPainted":
             if let kt = m.double("keyTime") { log.info("keystroke->painted \(uptimeMs(since: kt), privacy: .public)ms") }
         case "edit":
-            if let fileURL, fileKind == .markdown { openExternally(fileURL) }
+            // The page names the document it shows: while a new file loads it may still show the previous one.
+            if let fileURL, fileKind == .markdown, m.string("path", max: 4096) == fileURL.path { openExternally(fileURL) }
         case "loadRemoteImages":
             // A blocked image's placeholder: this document's remote images, for this preview only. The setting is not touched.
             guard let p = m.string("path", max: 4096), host.remoteImages.allowOnce(p, current: fileURL?.path) else {
@@ -1064,6 +1161,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             return
         }
         writing = true
+        writeEpoch += 1
         helper(onError: { [weak self] in self?.saved(url, text, keyTime: keyTime, error: "xpc") }) {
             $0.write(Data(self.onDisk(text).utf8), toPath: url.path, expecting: base) { err in
                 DispatchQueue.main.async { self.saved(url, text, keyTime: keyTime, error: err) }

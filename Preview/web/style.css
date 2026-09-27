@@ -196,6 +196,13 @@
   @media (max-width: 560px) { #doc .viewer-pdf .viewer-head { padding: 0 20px; } }
   #doc .viewer-csv table { font-size: 13px; }
   #doc .viewer-csv th, #doc .viewer-csv td { max-width: 32em; vertical-align: top; white-space: pre-wrap; }
+  #doc .viewer-loading { display: grid; justify-items: center; gap: 10px; padding: 96px 0 24px; font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--muted); }
+  #doc .viewer-loading .viewer-note { margin: 0; }
+  #doc .viewer-loading .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--muted) 25%, transparent);
+    border-top-color: var(--muted); animation: sb-spin .8s linear infinite, sb-fade .2s ease-out both; }
+  @keyframes sb-spin { to { transform: rotate(360deg); } }
+  @keyframes sb-fade { from { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { #doc .viewer-loading .spinner { animation: none; } }
   #doc .info-card { display: grid; justify-items: center; text-align: center; gap: 4px; padding: 48px 0 24px; }
   #doc .info-card .ic { width: 64px; height: 64px; stroke-width: .7; margin-bottom: 8px; }
   #doc .info-name { font-weight: 600; font-size: 1.15em; overflow-wrap: anywhere; }

@@ -193,6 +193,258 @@ def sandboxed(tree, check):
         shutil.rmtree(out, ignore_errors=True)
 
 
+CURSOR = """const t = (s) => (document.querySelector(s) || {}).textContent || null;
+  return { cursor: t('#side-list a.cursor'), active: t('#side-list a.active'), focus: document.activeElement.id || document.activeElement.tagName,
+    rows: [...document.querySelectorAll('#side-list a.row')].map((a) => [a.textContent, +a.getAttribute('aria-level'), a.getAttribute('aria-expanded')]),
+    notes: [...document.querySelectorAll('#side-list .row-note')].map((n) => n.textContent), q: document.getElementById('side-q').value };"""
+
+
+def keys_and_filter(page, check, T, st, types):
+    """The tree's keys and the filter, on the file browser's tree with sub/deep/deepest.txt open. Keys are dispatched as DOM
+    events inside the page: the offscreen harness has no key window, and nothing is posted to any app."""
+    def key(k, target='document.activeElement', **mods):
+        opts = dict(key=k, bubbles=True, cancelable=True, **mods)
+        r = page.cmd('@eval:(() => { const t = ' + target + ' || document.body; const e = new KeyboardEvent("keydown", '
+                     + json.dumps(opts) + '); t.dispatchEvent(e); return String(e.defaultPrevented); })()')
+        w = page.cmd('@wait:0.3')
+        return {'taken': r['result'] == 'true', 'types': types(r) + types(w), 'msgs': r['messages'] + w['messages']}
+
+    def opened(k):
+        return [m.get('path') for m in k['msgs'] if m.get('type') == 'open']
+
+    def typed(text):
+        page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.focus(); q.value = " + json.dumps(text)
+                 + "; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
+        return page.js(CURSOR)
+
+    c = page.js(CURSOR)
+    check(c['cursor'] == 'deepest.txt' and c['active'] == 'deepest.txt', 'keys: the cursor starts on the file on screen', json.dumps(c))
+    k = key('ArrowDown')
+    c = page.js(CURSOR)
+    check(k['taken'] and opened(k) == [T('sub', 'inner.md')] and c['cursor'] == 'inner.md' and c['active'] == 'inner.md',
+          'keys: ↓ moves to the next row and opens it', json.dumps([k['types'], c['cursor'], c['active']]))
+    r1 = page.cmd('@eval:(() => { const e = new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true }); document.body.dispatchEvent(e);'
+                  ' document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })); return 0; })()')
+    page.cmd('@wait:0.4')
+    c = page.js(CURSOR)
+    check([m.get('path') for m in r1['messages'] if m.get('type') == 'open'] == [T('sub', 'deep', 'deepest.txt')] and c['cursor'] == 'deep'
+          and c['active'] == 'deepest.txt', 'keys: ↑↑ opens the file passed and stops on the folder, which the late render does not undo', json.dumps(c))
+    k = key('ArrowLeft')
+    c = page.js(CURSOR)
+    check(k['taken'] and 'unlist' in k['types'] and ['deep', 2, 'false'] in c['rows'] and c['cursor'] == 'deep' and not opened(k),
+          'keys: ← collapses an open folder', json.dumps(k['types']))
+    k = key('ArrowRight')
+    c = page.js(CURSOR)
+    check(k['taken'] and ['deep', 2, 'true'] in c['rows'] and ['deepest.txt', 3, None] in c['rows'], 'keys: → expands a folder', json.dumps(c['rows'][:6]))
+    k = key('ArrowRight')
+    c = page.js(CURSOR)
+    check(k['taken'] and c['cursor'] == 'deepest.txt' and c['active'] == 'deepest.txt', 'keys: → on an open folder moves into it', json.dumps(c))
+    k = key('ArrowLeft')
+    c = page.js(CURSOR)
+    check(c['cursor'] == 'deep' and not opened(k), 'keys: ← on a file moves to its folder', json.dumps(c))
+    k = key('Enter')
+    c1 = page.js(CURSOR)
+    key('Enter')
+    c2 = page.js(CURSOR)
+    check(k['taken'] and ['deep', 2, 'false'] in c1['rows'] and ['deep', 2, 'true'] in c2['rows'], 'keys: Return on a folder toggles it')
+    k = key('End')
+    c = page.js(CURSOR)
+    last = c['rows'][-1][0]
+    check(k['taken'] and c['cursor'] == last and opened(k) == [T(last)], 'keys: End jumps to the last row and opens it', json.dumps([last, opened(k)]))
+    k = key('Home')
+    c = page.js(CURSOR)
+    check(k['taken'] and c['cursor'] == c['rows'][0][0] == 'hostile' and not opened(k), 'keys: Home jumps to the first row (a folder: nothing opens)', json.dumps(c['cursor']))
+    top = page.js("return document.getElementById('side-list').scrollTop")
+    key('End')
+    bottom = page.js("""const l = document.getElementById('side-list'), r = l.querySelector('a.cursor').getBoundingClientRect(), b = l.getBoundingClientRect();
+      return [l.scrollTop, r.top >= b.top - 1 && r.bottom <= b.bottom + 1]""")
+    check(top == 0 and bottom[1] and (bottom[0] > 0 or page.js("const l = document.getElementById('side-list'); return l.scrollHeight <= l.clientHeight")),
+          'keys: the cursor row scrolls into view in the list', json.dumps([top, bottom]))
+
+    # Not taken: Space (Quick Look closes on it), modified keys, other fields, the Aa popover, and an edit in progress.
+    before = page.js(CURSOR)
+    sp = key(' ')
+    check(not sp['taken'] and not {'open', 'list', 'unlist'} & set(sp['types']) and page.js(CURSOR)['cursor'] == before['cursor'], 'keys: Space is never taken')
+    mod = key('ArrowDown', altKey=True)
+    check(not mod['taken'] and not opened(mod), 'keys: ⌥↓ is left alone')
+    page.cmd("@eval:(() => { const i = document.createElement('input'); i.id = 'other-field'; document.body.append(i); i.focus(); return 0; })()")
+    other = key('ArrowDown', "document.getElementById('other-field')")
+    page.cmd("@eval:document.getElementById('other-field').remove(); 0")
+    check(not other['taken'] and not opened(other), 'keys: not taken in another field')
+    click(page, '#aa')
+    popk = key('ArrowUp')
+    click(page, '#aa')
+    check(not popk['taken'] and not opened(popk) and page.js("return document.getElementById('aa-pop').hidden"), 'keys: not taken while the Aa popover is open')
+    page.render(T('README.md'))
+    page.cmd('@wait:0.3')
+    click(page, '#doc > p')
+    during = [key('ArrowDown'), key('End'), key('ArrowUp', "document.getElementById('side-q')")]
+    ed = st()['editing']
+    check(ed and not any(k['taken'] or opened(k) for k in during) and 'editStop' not in sum((k['types'] for k in during), []),
+          'keys: nothing is taken while a block is being edited', json.dumps([k['types'] for k in during]))
+    fk = key('f', metaKey=True)
+    check(not fk['taken'] and page.js(CURSOR)['focus'] != 'side-q', 'keys: ⌘F is not bound (Quick Look never passes it to the page)')
+    page.cmd('@eval:sb.editEnd({}); 0')
+
+    # ---- the filter, typed into the page's own field ----
+    c = typed('rdme')
+    check([r[0] for r in c['rows']] == ['README.md'], 'filter: fuzzy, the letters in order ("rdme" finds README.md)', json.dumps(c['rows']))
+    c = typed('INNER')
+    check([r[0] for r in c['rows']] == ['sub', 'inner.md'] and c['rows'][0][2] == 'true', 'filter: case-insensitive, and the folder holding a match stays, shown open',
+          json.dumps(c['rows']))
+    click(page, '#side-q')
+    typed('')
+    click(page, '#side-list a.row[data-path$="/sub"]')
+    s = [x[0] for x in st()['rows'] if x[1] == 2]
+    r = page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.value = 'deepest'; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
+    w = page.cmd('@wait:0.3')
+    c = page.js(CURSOR)
+    check(not s and [x[0] for x in c['rows']] == ['sub', 'deep', 'deepest.txt'] and not {'list', 'unlist'} & set(types(r) + types(w)),
+          'filter: finds files in listed folders that are collapsed, and lists nothing new', json.dumps([s, c['rows'], types(r) + types(w)]))
+    c = typed('evil.pdf')
+    check(not c['rows'] and c['notes'] == ['No matches'], 'filter: a folder never listed (hostile/) is not scanned for it', json.dumps(c))
+    c = typed('.md')
+    k = key('ArrowDown')
+    c2 = page.js(CURSOR)
+    check(k['taken'] and c2['focus'] == 'side-q' and opened(k) and c2['cursor'] == c2['active'] and c2['cursor'].endswith('.md'),
+          'filter: ↓ from the field moves through the matches and opens them; the field keeps focus', json.dumps([c2['cursor'], opened(k)]))
+    k = key('ArrowLeft')
+    check(not k['taken'], 'filter: ←/→ stay in the field for editing the text')
+    k = key(' ')
+    check(not k['taken'], 'filter: Space is not taken in the field either')
+    k = key('Escape')
+    c = page.js(CURSOR)
+    check(k['taken'] and c['q'] == '' and c['focus'] == 'side-q' and any(r[0] == 'README.md' for r in c['rows']) and not c['notes'][:1] == ['No matches'],
+          'filter: Esc clears it and the whole tree comes back', json.dumps(c['q']))
+    k = key('Escape')
+    check(k['taken'] and page.js(CURSOR)['focus'] != 'side-q', 'filter: a second Esc leaves the field')
+    typed('inner')
+    page.cmd('@root:')
+    page.render(T('README.md'))
+    page.cmd('@wait:0.3')
+    check(page.js(CURSOR)['q'] == 'inner', 'filter: kept while the same folder shows another file')
+    typed('')
+    page.cmd("@eval:document.getElementById('side-q').blur(); 0")
+    filter_session(page, check, T, st, types, key, opened)
+
+
+def filter_session(page, check, T, st, types, key, opened):
+    """The filter in Quick Look, page side: a real click asks for the writer's key panel (filterBegin), and the native side's
+    sb.filterText, sb.filterKey and sb.filterEnd stand in for it here."""
+    held = lambda: page.js("return document.getElementById('side-q').classList.contains('held')")
+    msgs = lambda r, t: [m for m in r['messages'] if m.get('type') == t]
+    page.cmd('@root:' + T())
+    page.render(T('README.md'))
+    page.cmd('@wait:0.3')
+
+    r = click(page, '#side-q')
+    check(not msgs(r, 'filterBegin') and not held(), 'filter session: a synthetic click does not start one')
+    r = page.cmd('@nativeclick:#side-q')
+    fb = msgs(r, 'filterBegin')
+    seq = int(fb[0]['seq']) if fb else -1
+    check(len(fb) == 1 and fb[0].get('text') == '' and float(fb[0].get('width', 0)) > 100 and 0 < float(fb[0].get('height', 0)) < 40
+          and 0 <= float(fb[0].get('clickX', -1)) <= float(fb[0].get('width', 0)) and held(),
+          'filter session: a real click in the field asks for the key panel over it', json.dumps(fb))
+    r = page.cmd('@nativeclick:#side-q')
+    check(not msgs(r, 'filterBegin'), 'filter session: a second click in the field keeps the one session')
+
+    def native(fn, arg):
+        r = page.cmd('@eval:sb.' + fn + '(' + json.dumps(arg) + '); 0')
+        w = page.cmd('@wait:0.3')
+        return {'types': types(r) + types(w), 'msgs': r['messages'] + w['messages']}
+
+    native('filterText', {'seq': seq, 'text': 'inner'})
+    c = page.js(CURSOR)
+    check([x[0] for x in c['rows']] == ['sub', 'inner.md'] and c['q'] == 'inner', 'filter session: the text the writer sends filters the tree', json.dumps(c['rows']))
+    native('filterText', {'seq': seq + 1, 'text': 'zzz'})
+    native('filterText', {'seq': seq, 'text': 5})
+    check(page.js(CURSOR)['q'] == 'inner', 'filter session: text for another session, or not text, is ignored')
+    k = native('filterKey', {'seq': seq, 'key': 'down'})
+    c = page.js(CURSOR)
+    check(c['cursor'] == 'sub' and not opened(k), 'filter session: ↓ from the writer moves to the first match (a folder: nothing opens)', json.dumps(c['cursor']))
+    k = native('filterKey', {'seq': seq, 'key': 'down'})
+    c = page.js(CURSOR)
+    check(opened(k) == [T('sub', 'inner.md')] and c['cursor'] == 'inner.md' and c['active'] == 'inner.md' and held(),
+          'filter session: ↓ again opens the match, and the session stays', json.dumps([opened(k), c['cursor']]))
+    k = native('filterKey', {'seq': seq, 'key': 'home'})
+    check(page.js(CURSOR)['cursor'] == 'sub', 'filter session: Home from the writer jumps to the first match')
+    k = native('filterKey', {'seq': seq, 'key': 'return'})
+    check(page.js(CURSOR)['cursor'] == 'sub' and not opened(k) and held(), 'filter session: Return on a folder opens no file and keeps the session')
+    for bad in ('escape', 'ArrowDown', '__proto__', 'toString'):
+        before = page.js(CURSOR)
+        k = native('filterKey', {'seq': seq, 'key': bad})
+        if page.js(CURSOR) != before or opened(k):
+            check(False, f'filter session: unknown key {bad!r} ignored')
+            break
+    else:
+        check(True, 'filter session: keys other than up, down, home, end and return are ignored')
+    k = native('filterKey', {'seq': seq, 'key': ' '})
+    check(not opened(k) and held(), 'filter session: Space is not a list key')
+
+    r = click(page, '#side-list a.row[data-path$="/inner.md"]')
+    check(held() and not msgs(r, 'filterStop'), 'filter session: a click in the sidebar keeps it')
+    page.render(T('README.md'))
+    page.cmd('@wait:0.3')
+    check(held(), 'filter session: kept while the same folder shows another file')
+    r = click(page, '#doc > p')
+    t = types(r)
+    check(not held() and msgs(r, 'filterStop') and int(msgs(r, 'filterStop')[0]['seq']) == seq and 'editBlock' in t and t.index('filterStop') < t.index('editBlock'),
+          'filter session: a click outside the sidebar ends it before an edit starts', json.dumps(t))
+    native('filterText', {'seq': seq, 'text': 'late'})
+    check(page.js(CURSOR)['q'] == 'inner', 'filter session: text arriving after the end is ignored')
+
+    r = page.cmd('@nativeclick:#side-q')
+    t = types(r)
+    fb = msgs(r, 'filterBegin')
+    check('editStop' in t and fb and t.index('editStop') < t.index('filterBegin') and not st()['editing'] and int(fb[0]['seq']) > seq
+          and fb[0].get('text') == 'inner', 'filter session: clicking the field ends the edit first, then asks with the text so far', json.dumps(t))
+    seq = int(fb[0]['seq']) if fb else -1
+    native('filterEnd', {'seq': seq + 1})
+    check(held(), 'filter session: an end for another session is ignored')
+    native('filterEnd', {'seq': seq})
+    check(not held(), 'filter session: the native side can end it (Esc, blur, an edit, a closed preview)')
+
+    r = page.cmd('@nativeclick:#side-q')
+    seq = int(msgs(r, 'filterBegin')[0]['seq'])
+    native('filterText', {'seq': seq, 'text': 'md'})
+    r = page.cmd("@eval:[1, 2, 3].forEach(() => sb.filterKey({ seq: %d, key: 'down', repeat: true })); 0" % seq)
+    w = page.cmd('@wait:0.4')
+    held_opens = [m for m in r['messages'] if m.get('type') == 'open']
+    check(not held_opens and len([m for m in w['messages'] if m.get('type') == 'open']) == 1,
+          'filter session: a held ↓ (auto-repeat) opens only the file it stops on', json.dumps(types(r) + types(w)))
+    r = page.cmd('@size:600x700')
+    w = page.cmd('@wait:0.3')
+    check(not held() and [int(m['seq']) for m in r['messages'] + w['messages'] if m.get('type') == 'filterStop'] == [seq],
+          'filter session: narrowing the panel hides the sidebar and ends the session', json.dumps(types(r) + types(w)))
+    page.cmd('@size:1200x800')
+    r = page.cmd('@nativeclick:#side-q')
+    r2 = page.cmd('@eval:sb.filterEnd({ all: true }); 0')
+    check(msgs(r, 'filterBegin') and not held() and not msgs(r2, 'filterStop'), "filter session: a new preview clears the page's session without asking the writer")
+    page.cmd('@size:600x700')
+    click(page, '#side-toggle')
+    page.cmd('@wait:0.4')
+    r = page.cmd('@nativeclick:#side-q')
+    seq = int(msgs(r, 'filterBegin')[0]['seq'])
+    native('filterText', {'seq': seq, 'text': 'v2'})
+    k = native('filterKey', {'seq': seq, 'key': 'down'})
+    peeking = page.js("return document.documentElement.classList.contains('sb-peek')")
+    check(opened(k) and not peeking and not held() and [int(m['seq']) for m in k['msgs'] if m.get('type') == 'filterStop'] == [seq],
+          'filter session: in a narrow panel, opening a file hides the sidebar and ends the session with it', json.dumps(k['types']))
+    page.cmd('@size:1200x800')
+    native('filterText', {'seq': seq, 'text': ''})
+    page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.value = ''; q.dispatchEvent(new Event('input')); return 0; })()")
+
+    r = page.cmd('@nativeclick:#side-q')
+    seq = int(msgs(r, 'filterBegin')[0]['seq'])
+    other = os.path.join(page.out, 'lone')
+    page.cmd('@root:' + other)
+    r = page.render(os.path.join(other, 'only.md'))
+    page.cmd('@wait:0.3')
+    check(not held() and [int(m['seq']) for m in msgs(r, 'filterStop')] == [seq] and page.js(CURSOR)['q'] == '',
+          'filter session: another folder ends it and clears the field', json.dumps(types(r)))
+    page.cmd('@root:')
+
+
 def main():
     results = []
 
@@ -516,6 +768,8 @@ def main():
               "the current file's folders open and it is highlighted", json.dumps(s['rows'][:6]))
         check(s['crumbs'] == 'tree›sub›deep›deepest.txt', 'the breadcrumb shows the path from the root', repr(s['crumbs']))
         page.cmd('@wait:0.2')
+        keys_and_filter(page, check, T, st, types)
+        view(T('sub', 'deep', 'deepest.txt'))
         click(page, '#side-list a.row[data-path$="/many"]')
         page.cmd('@wait:0.4')
         s = st()

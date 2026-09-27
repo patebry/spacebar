@@ -534,6 +534,9 @@ struct AdvancedPane: View {
     @EnvironmentObject var store: SettingsStore
     @EnvironmentObject var system: SystemStatus
     @State private var confirmReset = false
+    @State private var confirmUninstall = false
+    @State private var purge = false
+    @State private var uninstallError: String?
 
     var body: some View {
         Pane {
@@ -604,12 +607,73 @@ struct AdvancedPane: View {
                 Text("The file can be edited by hand; changes appear here and in open previews right away.")
                     .settingsFooter()
             }
+
+            Section {
+                LabeledContent("Opens with Space in Finder") {
+                    Text(QuickLookClaims.summary).multilineTextAlignment(.trailing).fixedSize(horizontal: false, vertical: true)
+                }
+                LabeledContent("Inside spacebar", value: "Every file in the folder")
+            } header: {
+                Text("Files")
+            } footer: {
+                Text("Folders open in spacebar while “Preview folders” is on in Sidebar, as it is by default. In spacebar's sidebar, any file can be opened.")
+                    .settingsFooter()
+            }
+
+            Section {
+                HStack {
+                    Button("Report a Problem…") { NSWorkspace.shared.open(ProblemReport.url(ProblemReport.current(), log: ProblemReport.readLog())) }
+                    Spacer()
+                    Button("Uninstall spacebar…") { purge = false; uninstallError = nil; confirmUninstall = true }
+                }
+            } header: {
+                Text("Help")
+            } footer: {
+                Text("Report a Problem opens a new GitHub issue in your browser with your spacebar and macOS versions, your Mac's model and the end of the update log filled in. Nothing is sent until you submit it there.")
+                    .settingsFooter()
+            }
         }
         .confirmationDialog("Reset all settings to their defaults?", isPresented: $confirmReset) {
             Button("Reset", role: .destructive) { store.resetToDefaults() }
         } message: {
             Text("Theme, fonts, folder, editing and rendering settings go back to how spacebar comes. custom.css and your themes are not changed.")
         }
+        .sheet(isPresented: $confirmUninstall) { uninstallSheet }
+    }
+
+    private var uninstallSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Uninstall spacebar?").font(.headline)
+            Text("spacebar quits, and these are removed:")
+            VStack(alignment: .leading, spacing: 4) {
+                Text("• ~/Applications/spacebar.app")
+                Text("• its Quick Look extensions, unregistered from macOS")
+            }
+            .padding(.leading, 4)
+            Toggle(isOn: $purge) {
+                Text("Also delete my settings and themes")
+                Text("~/Library/Application Support/spacebar, and spacebar.md there from older versions").font(.caption).foregroundStyle(.secondary)
+            }
+            .toggleStyle(.checkbox)
+            Text("Nothing else is touched: your files stay where they are. What the uninstaller did is written to ~/Library/Logs/spacebar-uninstall.log.")
+                .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if !Uninstall.isInstalledCopy {
+                Text("This copy of spacebar isn't the one in ~/Applications, so it can't uninstall it.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            if let uninstallError {
+                Label(uninstallError, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { confirmUninstall = false }.keyboardShortcut(.cancelAction)
+                Button("Uninstall", role: .destructive) { uninstallError = Uninstall.run(purge: purge) }
+                    .disabled(!Uninstall.isInstalledCopy)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
     }
 
     private func abbreviated(_ path: String) -> String {

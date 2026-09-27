@@ -1430,6 +1430,15 @@ const expandedByRoot = new Map();
 const requested = new Set();
 let sideDrawn = '';
 let treeVersion = 0;
+// The filter's text, lower-cased, and the row the arrow keys move from (a file or a folder, by path).
+let sideQuery = '';
+let cursor = '';
+// The filter field holding the writer's key panel ({ seq }), and the last sequence number used.
+let filterSession = null;
+let filterSeq = 0;
+// Files the keys opened, by path, with when: their renders, and any render while one is pending, leave the cursor where the
+// keys put it since.
+const keyed = new Map();
 
 function expanded() {
   if (!tree.root) return new Set();
@@ -1446,6 +1455,9 @@ function resetTree(rootPath, name) {
   tree = { root: rootPath, name: name || rootPath.split('/').pop() || rootPath, session: 0, dirs: new Map() };
   requested.clear();
   treeVersion++;
+  if (filterSession) endFilter();
+  sideQuery = '';
+  $('side-q').value = '';
 }
 
 const inTree = (p) => typeof p === 'string' && p.startsWith(tree.root === '/' ? '/' : tree.root + '/');
@@ -1503,7 +1515,7 @@ function showFolder(p) {
   renderSidebar();
 }
 
-function treeRow(e, depth) {
+function treeRow(e, depth, open = e.dir && expanded().has(e.path)) {
   const a = el('a', `row ${e.dir ? 'folder' : 'file'}`);
   a.href = '#';
   a.title = e.name;
@@ -1514,7 +1526,6 @@ function treeRow(e, depth) {
   const tw = el('span', 'twisty');
   if (e.dir) {
     a.dataset.dir = '1';
-    const open = expanded().has(e.path);
     a.setAttribute('aria-expanded', String(open));
     if (open) a.classList.add('open');
     const svg = document.createElementNS(SVG, 'svg');
@@ -1535,7 +1546,7 @@ function renderSidebar() {
   $('sidebar').hidden = !on;
   $('side-toggle').hidden = !on;
   syncToggle();
-  const key = `${treeVersion}\n${current.path}`;
+  const key = `${treeVersion}\n${current.path}\n${sideQuery}`;
   if (!on || key === sideDrawn) return;
   const moved = sideDrawn.split('\n')[1] !== current.path;
   sideDrawn = key;
@@ -1556,13 +1567,28 @@ function renderSidebar() {
     }
     if (d.more && depth) { const n = el('div', 'row-note', `${d.more.toLocaleString()} more not listed`); n.style.setProperty('--depth', depth); rows.push(n); }
   };
-  walk(tree.root, 0);
+  // Filtered: every listed folder is searched, expanded or not, and a folder stays while anything in it matches. Nothing new
+  // is listed for it.
+  const find = (dir, depth) => {
+    const d = tree.dirs.get(dir), out = [];
+    for (const e of d ? d.entries : []) {
+      const kids = e.dir && depth < 64 ? find(e.path, depth + 1) : [];
+      if (kids.length || matches(e.name, sideQuery)) out.push(treeRow(e, depth, kids.length > 0), ...kids);
+    }
+    return out;
+  };
+  if (sideQuery) rows.push(...find(tree.root, 0));
+  else walk(tree.root, 0);
+  if (sideQuery && !rows.length) rows.push(el('div', 'row-note', 'No matches'));
   list.replaceChildren(...rows);
   const top = tree.dirs.get(tree.root);
-  $('side-more').hidden = !(top && top.more);
+  $('side-more').hidden = !(top && top.more) || !!sideQuery;
   $('side-more').textContent = top && top.more ? `${top.more.toLocaleString()} more not listed` : '';
   // Keep the document on screen in view; the list scrolls on its own, never the page.
   const at = list.querySelector('a.active');
+  for (const [p, t] of keyed) if (performance.now() - t > 2000) keyed.delete(p);
+  if (moved && !keyed.delete(current.path) && !keyed.size) cursor = current.path;
+  markCursor();
   if (at && moved) at.classList.add('arrive');
   if (at && (moved || at.offsetTop < list.scrollTop || at.offsetTop + at.offsetHeight > list.scrollTop + list.clientHeight)) {
     list.scrollTop = Math.max(0, at.offsetTop - list.clientHeight / 3);
@@ -1592,6 +1618,8 @@ function sidebarShown() { return narrow.matches ? root.classList.contains('sb-pe
 
 function syncToggle() {
   const open = sidebarShown(), t = $('side-toggle');
+  // The filter must not keep the keyboard for a sidebar that is gone: collapsed, peeked away, or narrowed out of view.
+  if (!open) endFilter();
   t.setAttribute('aria-expanded', String(open));
   t.title = open ? 'Hide sidebar' : 'Show sidebar';
 }
@@ -1646,6 +1674,142 @@ handle.addEventListener('pointercancel', endResize);
 handle.addEventListener('lostpointercapture', endResize);
 handle.addEventListener('dblclick', (e) => { e.preventDefault(); choose('sidebarWidth', SIDE_DEFAULT); });
 
+// ---------- the sidebar's filter and keys ----------
+
+/** Case-insensitive, and fuzzy: the query's characters in order anywhere in the name, so "rdme" finds README.md. */
+function matches(name, q) {
+  const want = [...q];
+  let i = 0;
+  for (const c of name.toLowerCase()) if (c === want[i] && ++i === want.length) return true;
+  return !want.length;
+}
+
+const filterField = $('side-q');
+filterField.addEventListener('input', () => {
+  sideQuery = filterField.value.trim().toLowerCase();
+  renderSidebar();
+});
+
+function markCursor() {
+  for (const r of $('side-list').querySelectorAll('a.row')) {
+    const on = r.dataset.path === cursor;
+    r.classList.toggle('cursor', on);
+    if (on) r.setAttribute('aria-selected', 'true'); else r.removeAttribute('aria-selected');
+  }
+}
+
+/** Scrolls the list, never the page, just enough to show the row. */
+function revealRow(r) {
+  const list = $('side-list');
+  if (r.offsetTop < list.scrollTop) list.scrollTop = r.offsetTop;
+  else if (r.offsetTop + r.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = r.offsetTop + r.offsetHeight - list.clientHeight;
+}
+
+// A held arrow key moves the cursor at the key-repeat rate and opens the file it stops on.
+let openTimer = 0;
+function moveCursor(r, open, repeat) {
+  cursor = r.dataset.path;
+  markCursor();
+  revealRow(r);
+  clearTimeout(openTimer);
+  if (!open || r.dataset.dir || cursor === current.path) return;
+  const path = cursor;
+  keyed.set(path, performance.now());
+  const go = () => { peek(false); post({ type: 'open', path }); };
+  if (repeat) openTimer = setTimeout(go, 90); else go();
+}
+
+/** One of Finder's keys for the tree, by KeyboardEvent key name; false when it does nothing here. */
+function sideKey(key, inFilter, repeat) {
+  if (editing || !pop.hidden || !tree.root || !sidebarShown()) return false;
+  const rows = [...$('side-list').querySelectorAll('a.row')];
+  if (!rows.length) return false;
+  const i = rows.findIndex((r) => r.dataset.path === cursor);
+  const r = rows[i];
+  const step = (d) => rows[i < 0 ? (d > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, i + d))];
+  switch (key) {
+    case 'ArrowDown': moveCursor(step(1), true, repeat); break;
+    case 'ArrowUp': moveCursor(step(-1), true, repeat); break;
+    case 'Home': moveCursor(rows[0], true, false); break;
+    case 'End': moveCursor(rows[rows.length - 1], true, false); break;
+    case 'ArrowRight':
+      if (!r || !r.dataset.dir) return false;
+      if (r.getAttribute('aria-expanded') !== 'true') toggleFolder(r.dataset.path);
+      else if (rows[i + 1] && +rows[i + 1].getAttribute('aria-level') > +r.getAttribute('aria-level')) moveCursor(rows[i + 1], true, false);
+      break;
+    case 'ArrowLeft': {
+      if (!r) return false;
+      if (r.dataset.dir && expanded().has(r.dataset.path) && r.getAttribute('aria-expanded') === 'true') { toggleFolder(r.dataset.path); break; }
+      const up = rows.find((x) => x.dataset.path === parentOf(r.dataset.path));
+      if (!up) return false;
+      moveCursor(up, false, false);
+      break;
+    }
+    case 'Enter':
+      if (!r) { if (inFilter) moveCursor(rows[0], true, false); else return false; }
+      else if (r.dataset.dir) toggleFolder(r.dataset.path);
+      else moveCursor(r, true, false);
+      break;
+    default: return false;
+  }
+  $('side-list').classList.add('keyed');
+  return true;
+}
+
+// The keys, when the page has the keyboard: never during an edit (the writer's panel has it then), with the Aa popover open, or
+// in a field other than the filter, which passes on only ↑, ↓ and Return. Space is never taken: Quick Look closes on it.
+document.addEventListener('keydown', (e) => {
+  if (e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
+  const inFilter = e.target === filterField;
+  if (inFilter && e.key === 'Escape' && !editing) {
+    e.preventDefault();
+    if (filterField.value) { filterField.value = ''; sideQuery = ''; renderSidebar(); } else filterField.blur();
+    return;
+  }
+  if (inFilter ? !['ArrowUp', 'ArrowDown', 'Enter'].includes(e.key) : e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable]')) return;
+  if (sideKey(e.key, inFilter, e.repeat)) e.preventDefault();
+});
+
+// In Quick Look the page never gets keys, so a click in the filter field asks the writer's key panel (the one inline editing
+// uses) to hold them over the field: it sends back the text and the list keys, and Esc on an empty field, a click outside the
+// sidebar, an edit, or another preview ends it. Return opens a file and keeps the field, like the arrows do.
+const FILTER_KEYS = { up: 'ArrowUp', down: 'ArrowDown', home: 'Home', end: 'End', return: 'Enter' };
+
+function beginFilter(e) {
+  if (filterSession || editing || !tree.root) return;
+  if (updateBusy) { window.sb.status('Updating…'); return; }
+  const r = filterField.getBoundingClientRect();
+  filterSession = { seq: ++filterSeq };
+  filterField.classList.add('held');
+  post({ type: 'filterBegin', seq: filterSession.seq, text: filterField.value, clickX: e.clientX - r.left, clickY: e.clientY - r.top,
+    width: r.width, height: r.height });
+}
+
+function endFilter() {
+  if (!filterSession) return;
+  post({ type: 'filterStop', seq: filterSession.seq });
+  filterDone();
+}
+
+function filterDone() {
+  filterSession = null;
+  filterField.classList.remove('held');
+}
+
+const ofFilter = (m) => !!m && !!filterSession && m.seq === filterSession.seq;
+Object.assign(window.sb, {
+  filterText(m) {
+    if (!ofFilter(m) || typeof m.text !== 'string') return;
+    filterField.value = m.text;
+    sideQuery = m.text.trim().toLowerCase();
+    renderSidebar();
+  },
+  filterKey(m) { if (ofFilter(m) && Object.hasOwn(FILTER_KEYS, m.key)) sideKey(FILTER_KEYS[m.key], true, m.repeat === true); },
+  /** One session's end, or with `all` any session: a new preview's controller never began the one the page may hold. */
+  filterEnd(m) { if (ofFilter(m) || (m && m.all === true && filterSession)) filterDone(); },
+});
+document.addEventListener('click', (e) => { if (filterSession && !e.target.closest('#sidebar')) endFilter(); }, true);
+
 // ---------- the Aa popover (in #toolbar, outside #doc: nothing the document renders can reach these messages) ----------
 
 const pop = $('aa-pop');
@@ -1667,13 +1831,14 @@ function syncPopover() {
 }
 
 let updateTimer = 0;
-/** An update has started: the installer quits this preview, so no edit or task toggle starts meanwhile. */
+/** An update has started: the installer quits this preview, so no edit, filter session or task toggle starts meanwhile. */
 let updateBusy = false;
 function showUpdate(u) {
   const v = u.version, failed = u.state === 'failed', running = u.state === 'started' || u.state === 'inProgress';
   clearTimeout(updateTimer);
   updateBusy = running;
   if (running && editing) stopEditing();
+  if (running) endFilter();
   const title = failed ? 'Update failed' : u.state === 'started' ? `Updating to spacebar ${v}…` : u.state === 'inProgress'
     ? `Still updating to spacebar ${v}…` : u.state === 'done' ? `spacebar ${v} is installed` : `spacebar ${v} is available`;
   $('aa-update-title').textContent = title;
@@ -1714,6 +1879,7 @@ pop.addEventListener('click', (e) => {
   if (b.id === 'aa-install') {
     // The update quits Quick Look: the edit ends first, so its last keys are saved before the writer starts it.
     if (editing) stopEditing();
+    endFilter();
     b.disabled = true;
     post({ type: 'installUpdate' });
     return;
@@ -1756,10 +1922,16 @@ document.addEventListener('click', (e) => {
     if (h && h.isConnected) h.scrollIntoView({ behavior: reducedMotion.matches ? 'auto' : 'smooth', block: 'start' });
     return;
   }
+  if (e.target === filterField) { if (e.isTrusted) beginFilter(e); return; }
   if (e.target.closest('#side-head') && tree.root) { e.preventDefault(); peek(false); post({ type: 'overview' }); return; }
   const row = e.target.closest('#side-list a.row');
   if (row) {
     e.preventDefault();
+    cursor = row.dataset.path;
+    keyed.clear();
+    markCursor();
+    // The cursor's ring is for the keys; a click shows only the highlight.
+    $('side-list').classList.remove('keyed');
     if (row.dataset.dir) { toggleFolder(row.dataset.path); return; }
     peek(false);
     if (row.dataset.path !== current.path) post({ type: 'open', path: row.dataset.path });

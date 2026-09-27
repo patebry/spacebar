@@ -39,6 +39,11 @@ protocol SpacebarWriterProtocol {
     /// the selection) and releases the keys held since the request.
     func resetEdit(_ session: Int, text: String?, caret: Int)
     func endEdit(_ session: Int)
+    /// Holds the keyboard for the sidebar's filter field in the same invisible panel an edit uses, placed over the field. Text
+    /// comes back through filterChanged and the list keys through filterKey; nothing is ever written. Beginning a filter ends
+    /// an edit, and beginning an edit ends a filter.
+    func beginFilter(_ session: Int, text: String, clickX: Double, clickY: Double, fieldWidth: Double, fieldHeight: Double, reply: @escaping (Bool) -> Void)
+    func endFilter(_ session: Int)
 }
 
 /// Exported by the preview extension so the writer can stream the edit buffer back.
@@ -52,6 +57,34 @@ protocol SpacebarEditHostProtocol {
     /// Enter that ends the block: it keeps `before`, `after` becomes a new block the edit moves into, and `tail` (may be
     /// empty) follows as a block of its own. The host answers with resetEdit.
     func editSplit(_ session: Int, before: String, after: String, tail: String)
+    /// The filter field's text (FilterKeys.clean) after each change.
+    func filterChanged(_ session: Int, text: String)
+    /// A key the sidebar moves with, one of FilterKeys.names; `isRepeat` for a held key's auto-repeat.
+    func filterKey(_ session: Int, key: String, isRepeat: Bool)
+    /// Sent for every filter session end; nothing more arrives for `session`.
+    func filterEnded(_ session: Int, reason: String)
+}
+
+/// The sidebar filter's keys and text, shared by the writer that captures them and the extension that checks them.
+enum FilterKeys {
+    static let names: Set<String> = ["up", "down", "home", "end", "return"]
+    static let maxLength = 256
+    private static let byCode: [UInt16: String] = [126: "up", 125: "down", 115: "home", 119: "end", 36: "return", 76: "return"]
+    /// NSEvent.ModifierFlags shift, control, option and command: with any of them the key edits the field's text instead.
+    private static let editing: UInt = 1 << 17 | 1 << 18 | 1 << 19 | 1 << 20
+
+    /// The sidebar key for a key pressed in the field, or nil when the field keeps it.
+    static func name(keyCode: UInt16, modifiers: UInt) -> String? {
+        modifiers & editing == 0 ? byCode[keyCode] : nil
+    }
+
+    /// One line of at most maxLength Unicode scalars, without control characters.
+    static func clean(_ s: String) -> String {
+        String(String.UnicodeScalarView(s.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }.prefix(maxLength)))
+    }
+
+    /// Esc clears a field with text in it and ends the session on an empty one, like the page's own field.
+    static func escapeEnds(text: String) -> Bool { text.isEmpty }
 }
 
 /// The writer is embedded in each preview extension under the extension's own bundle ID plus ".writer".

@@ -16,6 +16,8 @@ final class EditTextView: NSTextView {
     var onSplit: ((_ before: String, _ after: String, _ tail: String) -> Void)?
     /// Called when a merge or split gets no answer: the held keys cannot be applied safely, so the session ends.
     var onHoldTimeout: () -> Void = {}
+    /// Set while a filter session is active; takes the keys FilterKeys names instead of the text.
+    var onFilterKey: ((_ key: String, _ isRepeat: Bool) -> Void)?
     var session = 0
     var firstKeyLogged = false
     /// Keys (and shortcuts) that arrive between a merge or split request and its resetEdit, replayed onto the new text. They are
@@ -29,7 +31,12 @@ final class EditTextView: NSTextView {
             log.info("lat[\(self.session)] first-key \(upMs(), format: .fixed(precision: 1)) (event \(event.timestamp * 1000, format: .fixed(precision: 1)))")
         }
         if held != nil { held!.append(event); return }
-        if event.keyCode == 53 { onEscape(); return }
+        // While an input method composes, its keys (Esc to cancel, arrows to choose, Return to commit) belong to it.
+        if event.keyCode == 53, !hasMarkedText() { onEscape(); return }
+        if let key = onFilterKey, !hasMarkedText(), let name = FilterKeys.name(keyCode: event.keyCode, modifiers: event.modifierFlags.rawValue) {
+            key(name, event.isARepeat)
+            return
+        }
         super.keyDown(with: event)
     }
 

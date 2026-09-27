@@ -239,9 +239,11 @@ final class Writer: NSObject, SpacebarWriterProtocol {
             let old = EditSession.current
             guard let host else {
                 old?.end("replaced", notify: true)
+                FilterSession.current?.end("replaced", notify: true)
                 return reply(false)
             }
             old?.end("replaced", notify: true, hide: false)
+            FilterSession.current?.end("replaced", notify: true, hide: false)
             let mouse = NSEvent.mouseLocation
             let frame = NSRect(x: mouse.x - clickX, y: mouse.y + clickY - blockHeight, width: max(blockWidth, 40), height: max(blockHeight, 24))
             let s = EditSession(owner: self, id: session, text: text, caret: caret, frame: frame, host: host)
@@ -270,6 +272,36 @@ final class Writer: NSObject, SpacebarWriterProtocol {
 
     func endEdit(_ session: Int) {
         DispatchQueue.main.async { EditSession.end(owner: self, session: session, "host") }
+    }
+
+    func beginFilter(_ session: Int, text: String, clickX: Double, clickY: Double, fieldWidth: Double, fieldHeight: Double, reply: @escaping (Bool) -> Void) {
+        let host = connection?.remoteObjectProxyWithErrorHandler { err in
+            log.error("filter host gone: \(err.localizedDescription, privacy: .public)")
+            DispatchQueue.main.async { FilterSession.end(owner: self, "host-gone") }
+        } as? SpacebarEditHostProtocol
+        startAppKit()
+        DispatchQueue.main.async {
+            guard let host else {
+                EditSession.current?.end("replaced", notify: true)
+                FilterSession.current?.end("replaced", notify: true)
+                return reply(false)
+            }
+            EditSession.current?.end("replaced", notify: true, hide: false)
+            FilterSession.current?.end("replaced", notify: true, hide: false)
+            let mouse = NSEvent.mouseLocation
+            let frame = NSRect(x: mouse.x - clickX, y: mouse.y + clickY - fieldHeight, width: max(fieldWidth, 40), height: max(fieldHeight, 16))
+            let s = FilterSession(owner: self, id: session, text: FilterKeys.clean(text), frame: frame, host: host)
+            FilterSession.current = s
+            reply(true)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                guard FilterSession.current === s else { return }
+                if !EditSurface.shared.panel.isKeyWindow { s.end("not-key", notify: true) }
+            }
+        }
+    }
+
+    func endFilter(_ session: Int) {
+        DispatchQueue.main.async { FilterSession.end(owner: self, session: session, "host") }
     }
 }
 
@@ -363,6 +395,7 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         textView.delegate = self
         textView.onEscape = { [weak self] in self?.end("escape", notify: true) }
         textView.onHoldTimeout = { [weak self] in self?.end("hold-timeout", notify: true) }
+        textView.onFilterKey = nil
         textView.onMergeBackward = { [weak self] in
             guard let self, !self.ended else { return }
             self.flush(force: true)
@@ -460,6 +493,101 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
     }
 }
 
+/// The sidebar's filter field while it holds the keyboard: the edit panel and text view, with the text streamed to the host and
+/// the list keys forwarded. It has no path to any file.
+final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
+    static var current: FilterSession?
+    let id: Int
+    weak var owner: Writer?
+    private let surface = EditSurface.shared
+    private var textView: EditTextView { surface.textView }
+    private let host: SpacebarEditHostProtocol
+    private var sendQueued = false
+    private var ended = false
+
+    static func end(owner: Writer, session: Int? = nil, _ reason: String) {
+        guard let s = current, s.owner === owner, session == nil || session == s.id else { return }
+        s.end(reason, notify: true)
+    }
+
+    init(owner: Writer, id: Int, text: String, frame: NSRect, host: SpacebarEditHostProtocol) {
+        self.owner = owner
+        self.id = id
+        self.host = host
+        super.init()
+        let panel = surface.panel
+        panel.setFrame(frame, display: false)
+        textView.frame = NSRect(origin: .zero, size: frame.size)
+        textView.delegate = nil
+        textView.dropHeld()
+        textView.string = text
+        textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+        textView.undoManager?.removeAllActions()
+        textView.session = id
+        textView.firstKeyLogged = true
+        textView.onMergeBackward = nil
+        textView.onSplit = nil
+        textView.delegate = self
+        textView.onEscape = { [weak self] in self?.escape() }
+        textView.onHoldTimeout = {}
+        textView.onFilterKey = { [weak self] key, isRepeat in
+            guard let self, !self.ended else { return }
+            self.flush()
+            self.host.filterKey(self.id, key: key, isRepeat: isRepeat)
+        }
+        panel.delegate = self
+        panel.makeKeyAndOrderFront(nil)
+        panel.makeFirstResponder(textView)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(appActivated), name: NSWorkspace.didActivateApplicationNotification, object: nil)
+    }
+
+    @objc private func appActivated(_ n: Notification) { end("app-activated", notify: true) }
+
+    private func escape() {
+        if FilterKeys.escapeEnds(text: textView.string) { return end("escape", notify: true) }
+        textView.string = ""
+        textView.undoManager?.removeAllActions()
+        flush()
+    }
+
+    func textDidChange(_ notification: Notification) {
+        guard !ended, !sendQueued else { return }
+        sendQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.ended else { return }
+            self.sendQueued = false
+            self.flush()
+        }
+    }
+
+    /// Sends the text, first making the field one clean line if a paste brought in more.
+    private func flush() {
+        let clean = FilterKeys.clean(textView.string)
+        if clean != textView.string { textView.string = clean }
+        host.filterChanged(id, text: clean)
+    }
+
+    func windowDidResignKey(_ notification: Notification) { end("blur", notify: true) }
+
+    /// `hide: false` keeps the panel key for a session that replaces this one at once.
+    func end(_ reason: String, notify: Bool, hide: Bool = true) {
+        guard !ended else { return }
+        if sendQueued { flush() }
+        ended = true
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        log.info("filter end: \(reason, privacy: .public)")
+        if surface.panel.delegate === self { surface.panel.delegate = nil }
+        if textView.delegate === self {
+            textView.delegate = nil
+            textView.onEscape = {}
+            textView.onFilterKey = nil
+        }
+        if hide { surface.panel.orderOut(nil) }
+        if notify { host.filterEnded(id, reason: reason) }
+        if FilterSession.current === self { FilterSession.current = nil }
+    }
+}
+
 final class Delegate: NSObject, NSXPCListenerDelegate {
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection c: NSXPCConnection) -> Bool {
         c.exportedInterface = NSXPCInterface(with: SpacebarWriterProtocol.self)
@@ -469,7 +597,10 @@ final class Delegate: NSObject, NSXPCListenerDelegate {
         // An open preview keeps the service from idle exit, so the next edit does not pay for a relaunch.
         xpc_transaction_begin()
         c.invalidationHandler = {
-            DispatchQueue.main.async { EditSession.end(owner: writer, "disconnected") }
+            DispatchQueue.main.async {
+                EditSession.end(owner: writer, "disconnected")
+                FilterSession.end(owner: writer, "disconnected")
+            }
             xpc_transaction_end()
         }
         c.resume()

@@ -6,7 +6,7 @@ import Foundation
 /// set falls back to the default, and a number out of range is clamped. Writing merges into the raw JSON object, so keys this
 /// version does not know (written by a newer one) survive, and a file that is not a JSON object is never overwritten.
 struct Settings: Codable, Equatable {
-    var version = 1
+    var version = Settings.currentVersion
     var theme = "apple"
     var appearance = "auto"
     var codeTheme = "auto"
@@ -20,7 +20,7 @@ struct Settings: Codable, Equatable {
     var editorBundleID: String? = nil
     var inlineEditing = true
     var taskToggles = true
-    var folderMode = false
+    var folderMode = true
     var folderReadmeFirst = true
     var folderSort = "name"
     var sidebarCollapsed = false
@@ -38,6 +38,11 @@ struct Settings: Codable, Equatable {
     var remoteImages = false
     var htmlScripts = "local"
     var checkUpdates = true
+
+    /// 2: folder previews became on by default. A file written before that stores the old default, false, so it reads as on
+    /// until SettingsFile.update rewrites it; a user who turns them off afterwards stays off.
+    static let currentVersion = 2
+    static func fileVersion(_ raw: [String: Any]) -> Int { (raw["version"] as? NSNumber)?.intValue ?? 1 }
 
     static let themes = ["apple", "github", "paper", "solarized", "nord", "contrast"]
     /// Allowed values of every string-enum key. rawHTML has no "on": unsanitized HTML would hand a downloaded document the page.
@@ -120,6 +125,7 @@ struct Settings: Codable, Equatable {
         for (k, v) in raw where Self.allKeys.contains(k) {
             if let clean = Self.sanitize(k, v) { d[k] = clean }
         }
+        if !raw.isEmpty, Self.fileVersion(raw) < 2 { d["folderMode"] = true }
         let data = try! JSONSerialization.data(withJSONObject: d)
         self = (try? JSONDecoder().decode(Settings.self, from: data)) ?? Settings()
     }
@@ -253,14 +259,26 @@ enum SettingsFile {
         case .failure(let f): return .failure(f)
         }
         var changed = false
+        // Migrated before the patch, so a user's "off" in the same write is kept.
+        if Settings.fileVersion(obj) < Settings.currentVersion {
+            if Settings.fileVersion(obj) < 2 { obj["folderMode"] = true }
+            obj["version"] = Settings.currentVersion
+            changed = true
+        }
         for (k, v) in patch where allowed.contains(k) {
             guard let clean = Settings.sanitize(k, v) else { continue }
             obj[k] = clean
             changed = true
         }
-        if obj["version"] == nil { obj["version"] = 1; changed = true }
         if changed { if let f = write(obj, to: url) { return .failure(f) } }
         return .success(Settings(dictionary: obj))
+    }
+
+    /// Brings an existing settings.json up to Settings.currentVersion. Run by the app and the writer, never the sandboxed extension.
+    static func migrate(at url: URL = url) {
+        var st = stat()
+        guard lstat(url.path, &st) == 0 else { return }
+        _ = update([:], at: url)
     }
 
     /// The writer's `updateSettings`: a small JSON object from the preview panel, merged with only Settings.panelKeys allowed.

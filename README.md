@@ -139,7 +139,7 @@ spacebar.app                         settings window (SwiftUI)
 └─ PlugIns/SpacebarPreview.appex     sandboxed Quick Look preview: WKWebView + markdown-it, KaTeX, highlight.js,
    │                                 Mermaid, DOMPurify, all bundled; no network code of its own
    └─ XPCServices/…writer.xpc        small unsandboxed helper: saves edits, opens links, owns the inline-edit panel
-└─ PlugIns/SpacebarFolders.appex     the same preview for folders (off unless you enable folder previews)
+└─ PlugIns/SpacebarFolders.appex     the same preview for folders (on by default; turn off in Settings)
 ```
 
 Quick Look extensions never receive key events, so inline editing uses a click-through, non-activating panel owned by the

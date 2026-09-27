@@ -63,7 +63,7 @@ if case .success(let s) = SettingsFile.update(["fontSize": 30, "theme": "github"
 } else { check("update merges and clamps", false) }
 let rawAfter = obj(String(data: fm.contents(atPath: SettingsFile.url.path)!, encoding: .utf8)!)
 check("update keeps unknown keys", (rawAfter["futureKey"] as? [String: Any])?["a"] as? Int == 1)
-check("update wrote version", rawAfter["version"] as? Int == 1)
+check("update wrote version", rawAfter["version"] as? Int == Settings.currentVersion)
 
 // Allow-list
 _ = SettingsFile.update(["theme": "solarized", "userTheme": "evil.css", "editorBundleID": "com.evil.app", "customCSS": false,
@@ -443,6 +443,27 @@ try! fm.removeItem(at: wd)
 spin(0.3)
 check("folder watch: a deleted folder is no longer watched", fired <= 4 && FolderWatch(path: wd.path) {} == nil)
 withExtendedLifetime(watch) {}
+
+// Version 2: folder previews on by default, and on once for files written before it.
+let migDir = FileManager.default.temporaryDirectory.appendingPathComponent("spacebar-migrate-\(UUID().uuidString)")
+try! FileManager.default.createDirectory(at: migDir, withIntermediateDirectories: true)
+let migFile = migDir.appendingPathComponent("settings.json")
+check("defaults: folder previews on, version 2", Settings().folderMode && Settings().version == 2)
+try! Data(#"{"version": 1, "folderMode": false, "theme": "nord"}"#.utf8).write(to: migFile)
+check("a version-1 file reads as folder previews on", SettingsFile.load(at: migFile).folderMode)
+SettingsFile.migrate(at: migFile)
+let migrated = (try! JSONSerialization.jsonObject(with: Data(contentsOf: migFile))) as! [String: Any]
+check("migrate turns folder previews on once and writes version 2, keeping other keys",
+      migrated["folderMode"] as? Bool == true && (migrated["version"] as? NSNumber)?.intValue == 2 && migrated["theme"] as? String == "nord")
+_ = SettingsFile.update(["folderMode": false], at: migFile)
+SettingsFile.migrate(at: migFile)
+check("turned off after the migration stays off", SettingsFile.load(at: migFile).folderMode == false)
+try! Data(#"{"folderMode": false}"#.utf8).write(to: migFile)
+_ = SettingsFile.update(["folderMode": false], at: migFile)
+check("an unversioned file's off in the same write is kept", SettingsFile.load(at: migFile).folderMode == false)
+try? FileManager.default.removeItem(at: migDir)
+SettingsFile.migrate(at: migFile)
+check("migrate creates nothing when there is no file", !FileManager.default.fileExists(atPath: migFile.path))
 
 print("\n\(failures == 0 ? "all" : "\(failures) FAILED of") settings checks")
 exit(failures == 0 ? 0 : 1)

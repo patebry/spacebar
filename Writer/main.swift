@@ -32,8 +32,10 @@ final class Writer: NSObject, SpacebarWriterProtocol {
 
     func open(_ url: URL, reply: @escaping (Bool) -> Void) { open(url, appBundleID: nil, reply: reply) }
 
+    /// Archives are allowed here: the extension sends only the viewer's Open button on the file on screen with them, having
+    /// refused them for links itself.
     func open(_ url: URL, appBundleID: String?, reply: @escaping (Bool) -> Void) {
-        if let why = LinkPolicy.refusal(url) {
+        if let why = LinkPolicy.refusal(url, allowArchives: true) {
             log.error("refused open \(url.absoluteString, privacy: .private): \(why, privacy: .public)")
             return reply(false)
         }
@@ -42,7 +44,7 @@ final class Writer: NSObject, SpacebarWriterProtocol {
             log.info("open \(url.absoluteString, privacy: .private) -> \(ok)")
             return reply(ok)
         }
-        guard let opener = LinkPolicy.opener(for: url) else {
+        guard let opener = LinkPolicy.opener(for: url, allowArchives: true) else {
             log.error("refused open \(url.path, privacy: .private): no default app")
             return reply(false)
         }
@@ -71,9 +73,30 @@ final class Writer: NSObject, SpacebarWriterProtocol {
     }
 
     func defaultApp(_ url: URL, reply: @escaping (String?) -> Void) {
-        guard url.isFileURL, LinkPolicy.refusal(url) == nil, let app = LinkPolicy.opener(for: url)?.app else { return reply(nil) }
+        guard url.isFileURL, LinkPolicy.refusal(url, allowArchives: true) == nil, let app = LinkPolicy.opener(for: url, allowArchives: true)?.app else { return reply(nil) }
         reply(FileManager.default.displayName(atPath: app.path).replacingOccurrences(of: ".app", with: ""))
     }
+
+    /// Lists an archive with a sandboxed bsdtar (ArchiveListing): only an archive, by name and by the exact type LinkPolicy lets
+    /// the viewer open, so the extension cannot point libarchive at anything else. One listing at a time; the reply comes
+    /// within a fixed time even if bsdtar never ends.
+    func listArchive(_ path: String, reply: @escaping (Data?) -> Void) {
+        let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
+        guard path.hasPrefix("/"), ArchiveListing.extensions.contains(url.pathExtension.lowercased()),
+              LinkPolicy.fileRefusal(url, allowArchives: true) == nil, LinkPolicy.fileRefusal(url) != nil else {
+            log.error("refused listArchive \(path, privacy: .private)")
+            return reply(nil)
+        }
+        let lock = NSLock()
+        var replied = false
+        let once = { (d: Data?) in
+            lock.lock(); defer { lock.unlock() }
+            if !replied { replied = true; reply(d) }
+        }
+        Self.listQueue.async { once(ArchiveListing.list(url.path)) }
+        DispatchQueue.global().asyncAfter(deadline: .now() + ArchiveListing.timeout + 4) { once(nil) }
+    }
+    private static let listQueue = DispatchQueue(label: "md.spacebar.list-archive", qos: .userInitiated)
 
     func ensureSupportDir(reply: @escaping (Bool) -> Void) {
         let err = SettingsFile.ensure()

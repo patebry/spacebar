@@ -32,6 +32,7 @@
 				<key>public.mime-type</key><array><string>text/markdown</string></array>
 			</dict>
 		</dict>
+		__IMPORTED_TYPES__
 	</array>
 	<key>LSMinimumSystemVersion</key><string>13.0</string>
 	<key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>

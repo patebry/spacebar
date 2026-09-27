@@ -74,15 +74,41 @@ compile() {
   lipo -create "${slices[@]}" -output "$out"
 }
 
+# The types the preview extension claims and the app declares, from scripts/quicklook-types.txt (its header says how).
+CLAIMS=()
+IMPORTED_TYPES=
+seen_exts=" "
+while read -r verb exts conforms desc; do
+  case $verb in
+    ''|'#'*) continue ;;
+    claim)
+      [[ $exts =~ ^[A-Za-z0-9.-]+$ && -z $conforms ]] || { echo "quicklook-types.txt: bad claim: $exts $conforms" >&2; exit 1; }
+      CLAIMS+=("$exts") ;;
+    declare)
+      # Checked so each value goes into the plist, and through sed, as is.
+      [[ $exts =~ ^[a-z0-9]+(,[a-z0-9]+)*$ && $conforms =~ ^[a-z0-9.-]+(,[a-z0-9.-]+)*$ && $desc =~ ^[A-Za-z0-9][A-Za-z0-9\ .+-]*$ ]] \
+        || { echo "quicklook-types.txt: bad declaration: $exts $conforms $desc" >&2; exit 1; }
+      for ext in ${exts//,/ }; do
+        [[ $seen_exts == *" $ext "* ]] && { echo "quicklook-types.txt: .$ext declared twice" >&2; exit 1; }
+        seen_exts+="$ext "
+      done
+      CLAIMS+=("md.spacebar.type.${exts%%,*}")
+      IMPORTED_TYPES+="<dict><key>UTTypeIdentifier</key><string>md.spacebar.type.${exts%%,*}</string><key>UTTypeDescription</key><string>$desc</string>"
+      IMPORTED_TYPES+="<key>UTTypeConformsTo</key><array>$(printf '<string>%s</string>' ${conforms//,/ })</array>"
+      IMPORTED_TYPES+="<key>UTTypeTagSpecification</key><dict><key>public.filename-extension</key><array>$(printf '<string>%s</string>' ${exts//,/ })</array></dict></dict>" ;;
+    *) echo "quicklook-types.txt: unknown line: $verb" >&2; exit 1 ;;
+  esac
+done < scripts/quicklook-types.txt
+
 # plist <template> <output> [appex ID] [appex executable] [display name] [content types]
 plist() {
-  sed -e "s#__APP_NAME__#$APP_NAME#g" -e "s#__APP_ID__#$APP_ID#g" -e "s#__APP_EXE__#$APP_EXE#g" -e "s#__MIN_OS__#$MIN_OS#g" -e "s#__VERSION__#$VERSION#g" -e "s#__BUILD__#$BUILD_NUMBER#g" \
+  sed -e "s#__APP_NAME__#$APP_NAME#g" -e "s#__IMPORTED_TYPES__#$IMPORTED_TYPES#g" -e "s#__APP_ID__#$APP_ID#g" -e "s#__APP_EXE__#$APP_EXE#g" -e "s#__MIN_OS__#$MIN_OS#g" -e "s#__VERSION__#$VERSION#g" -e "s#__BUILD__#$BUILD_NUMBER#g" \
       -e "s#__APPEX_ID__#${3:-}#g" -e "s#__APPEX_EXE__#${4:-}#g" -e "s#__APPEX_DISPLAY__#${5:-}#g" -e "s#__CONTENT_TYPES__#${6:-}#g" \
       -e "s#__WRITER_ID__#${3:-}.writer#g" -e "s#__WRITER_EXE__#$WRITER_EXE#g" "$1" > "$2"
 }
 
 WRITER_BIN=$OBJ/$WRITER_EXE
-compile "$WRITER_BIN" -module-name "$WRITER_EXE" Writer/main.swift Writer/EditTextView.swift Writer/FileWrite.swift Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/Updates.swift
+compile "$WRITER_BIN" -module-name "$WRITER_EXE" Writer/main.swift Writer/EditTextView.swift Writer/FileWrite.swift Shared/ArchiveListing.swift Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/Updates.swift
 PREVIEW_BIN=$OBJ/$APPEX_EXE
 PROBE_FLAGS=()
 [ "${PROBE:-0}" = 1 ] && PROBE_FLAGS=(-D PROBE)
@@ -91,7 +117,7 @@ compile "$PREVIEW_BIN" -application-extension -module-name "$APPEX_EXE" \
   Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/Updates.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift \
   ${PROBE_FLAGS[@]+"${PROBE_FLAGS[@]}"} \
   -framework QuickLookUI -framework WebKit -framework PDFKit -framework AVKit -framework AVFoundation -framework QuickLookThumbnailing -Xlinker -e -Xlinker _NSExtensionMain
-compile "$APP/Contents/MacOS/$APP_EXE" -parse-as-library -module-name "$APP_EXE" App/*.swift Shared/Settings.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift \
+compile "$APP/Contents/MacOS/$APP_EXE" -parse-as-library -module-name "$APP_EXE" App/*.swift Shared/Settings.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift Shared/QuickLookClaims.swift \
   -framework WebKit -framework SwiftUI
 plist App/Info.plist "$APP/Contents/Info.plist"
 cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
@@ -131,7 +157,7 @@ appex() {
   codesign "${SIGN_ARGS[@]}" --entitlements "$ENT" "$dir"
 }
 types() { printf '<string>%s</string>' "$@"; }
-appex "$APPEX_ID" "$APPEX_EXE" "$APP_NAME" "$(types net.daringfireball.markdown public.markdown public.html "$ROUTE_TYPE")"
+appex "$APPEX_ID" "$APPEX_EXE" "$APP_NAME" "$(types "${CLAIMS[@]}" "$ROUTE_TYPE")"
 appex "$FOLDERS_ID" "$FOLDERS_EXE" "$APP_NAME Folders" "$(types public.folder public.directory)"
 codesign "${SIGN_ARGS[@]}" "$APP"
 rm -rf "$OBJ"

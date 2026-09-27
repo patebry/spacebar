@@ -1,0 +1,73 @@
+#!/bin/bash
+# Builds the app without installing it (./build.sh --no-install: nothing registered, nothing in ~/Applications) and checks
+# what the built Info.plists claim and declare: every type that routes to a third-party extension (measured on macOS 15.4),
+# none Apple previews itself, and one imported declaration per extension spacebar gives a type.
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+[ "${SKIP_BUILD:-0}" = 1 ] || ARCHS=${ARCHS:-arm64} ./build.sh --no-install >/dev/null
+plutil -lint -s build/spacebar.app/Contents/Info.plist build/spacebar.app/Contents/PlugIns/*.appex/Contents/Info.plist
+python3 - build/spacebar.app <<'PY'
+import plistlib, re, sys
+app = sys.argv[1]
+host = plistlib.load(open(f'{app}/Contents/Info.plist', 'rb'))
+appex = plistlib.load(open(f'{app}/Contents/PlugIns/SpacebarPreview.appex/Contents/Info.plist', 'rb'))
+folders = plistlib.load(open(f'{app}/Contents/PlugIns/SpacebarFolders.appex/Contents/Info.plist', 'rb'))
+claims = appex['NSExtension']['NSExtensionAttributes']['QLSupportedContentTypes']
+imports = host['UTImportedTypeDeclarations']
+failures = 0
+def check(ok, name, detail=''):
+    global failures
+    print(('PASS ' if ok else 'FAIL ') + name + ('' if ok else f' {detail}'))
+    failures += not ok
+
+ROUTES = '''net.daringfireball.markdown public.markdown md.spacebar.qlmanage
+  public.swift-source public.python-script public.ruby-script public.perl-script public.php-script public.shell-script public.bash-script
+  public.zsh-script public.ksh-script com.apple.terminal.shell-script public.c-source public.c-header public.c-plus-plus-source
+  public.c-plus-plus-header public.objective-c-source public.objective-c-plus-plus-source com.sun.java-source com.netscape.javascript-source
+  com.microsoft.typescript public.css public.make-source public.patch-file public.protobuf-source com.apple.applescript.text com.apple.rez-source
+  public.json public.geojson public.yaml public.xml com.apple.property-list public.tab-separated-values-text com.apple.log org.w3.webvtt
+  public.zip-archive public.tar-archive org.gnu.gnu-zip-archive org.gnu.gnu-zip-tar-archive public.bzip2-archive org.tukaani.xz-archive
+  org.7-zip.7-zip-archive public.data'''.split()
+# Apple previews these itself (or nothing routes them); a claim would be dead weight or, for a parent, meaningless.
+APPLE = '''public.plain-text public.text public.html public.xhtml public.comma-separated-values-text public.x509-certificate com.adobe.pdf
+  public.image public.png public.jpeg public.movie public.mpeg-4 com.apple.quicktime-movie public.mp3 public.mpeg-4-audio com.apple.m4a-audio
+  com.microsoft.waveform-audio public.avi org.xiph.flac org.xiph.ogg-vorbis public.rtf com.microsoft.word.doc org.openxmlformats.wordprocessingml.document
+  public.mpeg-2-transport-stream public.avchd-mpeg-2-transport-stream com.apple.disk-image-udif public.disk-image org.matroska.mkv com.adobe.flash.video
+  org.webmproject.webm public.source-code public.script public.archive public.content public.item com.apple.logic.exs'''.split()
+UNDECLARED = '''adoc asciidoc bat bib cfg cjs clj cmake conf cs csr cts dart diz dockerignore editorconfig env erl err ex example fish gitattributes
+  gitignore gitmodules go gql gradle graphql groovy har hcl hs ini ipynb json5 jsonc jsx kt kts less lock lua mod nfo nim npmrc nvmrc org out
+  properties ps1 pyi rar rs rst sample sass scala scss sql srt sum svelte tex toml tf vb vue wat webmanifest xsd xsl zig zst dockerfile'''.split()
+CONFORMS = {'public.source-code', 'public.script', 'public.plain-text', 'public.json', 'public.xml', 'public.archive'}
+
+missing = [t for t in ROUTES if t not in claims]
+check(not missing, f'appex claims every routing system type ({len(ROUTES)})', missing)
+bad = [t for t in claims if t in APPLE]
+check(not bad and 'public.html' not in claims, 'appex claims no Apple-owned or parent type, public.html included', bad)
+check(len(claims) == len(set(claims)), 'appex claims each type once', [t for t in claims if claims.count(t) > 1])
+check(all(re.fullmatch(r'[A-Za-z0-9.-]+', t) and not t.startswith('dyn.') for t in claims), 'every claim is a plain identifier, no dyn.* ID')
+
+ids = [d.get('UTTypeIdentifier') for d in imports]
+ours = [d for d in imports if d.get('UTTypeIdentifier', '').startswith('md.spacebar.type.')]
+check(ids.count('net.daringfireball.markdown') == 1, 'host still declares Markdown once')
+check(len(ids) == len(set(ids)), 'host declares each imported type exactly once', [i for i in ids if ids.count(i) > 1])
+exts = [e for d in ours for e in d['UTTypeTagSpecification']['public.filename-extension']]
+check(len(exts) == len(set(exts)), 'each extension belongs to one declaration', [e for e in exts if exts.count(e) > 1])
+check(not [e for e in UNDECLARED if e not in exts], f'every undeclared extension the spike found ({len(UNDECLARED)}) is declared', [e for e in UNDECLARED if e not in exts])
+badconf = [(d['UTTypeIdentifier'], d.get('UTTypeConformsTo')) for d in ours
+           if not d.get('UTTypeConformsTo') or any(c not in CONFORMS for c in d['UTTypeConformsTo'])]
+check(not badconf, 'each declaration conforms to source code, a script, plain text, JSON, XML or an archive', badconf)
+wellformed = all(d['UTTypeIdentifier'] == 'md.spacebar.type.' + d['UTTypeTagSpecification']['public.filename-extension'][0]
+                 and d.get('UTTypeDescription') and set(d) == {'UTTypeIdentifier', 'UTTypeDescription', 'UTTypeConformsTo', 'UTTypeTagSpecification'}
+                 for d in ours)
+check(wellformed, 'each declaration is named for its first extension, with a description and nothing else')
+confs = {d['UTTypeIdentifier']: d['UTTypeConformsTo'] for d in ours}
+check(confs.get('md.spacebar.type.ipynb') == ['public.json'] and confs.get('md.spacebar.type.toml') == ['public.plain-text']
+      and confs.get('md.spacebar.type.rar') == ['public.archive'] and confs.get('md.spacebar.type.go') == ['public.source-code'],
+      'ipynb is JSON, TOML plain text, RAR an archive, Go source code', confs)
+unclaimed = [d['UTTypeIdentifier'] for d in ours if d['UTTypeIdentifier'] not in claims]
+check(not unclaimed, f'appex claims every declared type ({len(ours)})', unclaimed)
+check(set(claims) == set(ROUTES) | {d['UTTypeIdentifier'] for d in ours}, 'appex claims nothing else', sorted(set(claims) - set(ROUTES) - set(confs)))
+check(folders['NSExtension']['NSExtensionAttributes']['QLSupportedContentTypes'] == ['public.folder', 'public.directory'], 'folders extension unchanged')
+print('claims: all passed' if not failures else f'claims: {failures} failed')
+sys.exit(1 if failures else 0)
+PY

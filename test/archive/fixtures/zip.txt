@@ -1,0 +1,11 @@
+drwxr-xr-x  0 501    20          0 Sep 20 10:15 src/
+-rw-r--r--  0 501    20          6 Sep 20 10:15 src/hard.txt
+drwxr-xr-x  0 501    20          0 Sep 20 10:15 src/sub/
+drwxr-xr-x  0 501    20          0 Sep 20 10:15 src/sub/deep/
+-rw-r--r--  0 501    20       5000 Jan  2  2020 src/sub/deep/blob.bin
+-rw-r--r--  0 501    20          1 Sep 20 10:15 src/sub/new\nline.txt
+-rw-r--r--  0 501    20          4 Sep 20 10:15 src/sub/file with space.md
+-rw-r--r--  0 501    20          1 Sep 20 10:15 src/sub/back\\slash.txt
+-rw-r--r--  0 501    20          2 Sep 20 10:15 src/sub/é ünï 日本.txt
+lrwxr-xr-x  0 501    20          0 Sep 20 10:15 src/link -> a.txt
+-rw-r--r--  0 501    20          6 Sep 20 10:15 src/a.txt

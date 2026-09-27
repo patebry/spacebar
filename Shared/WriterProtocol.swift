@@ -12,6 +12,8 @@ protocol SpacebarWriterProtocol {
     func reveal(_ url: URL, reply: @escaping (Bool) -> Void)
     /// The display name of the app `open` would use for a file, or nil when LinkPolicy refuses the file or no app claims it.
     func defaultApp(_ url: URL, reply: @escaping (String?) -> Void)
+    /// The contents of an archive LinkPolicy allows, as ArchiveListing's JSON, or nil when it cannot be listed.
+    func listArchive(_ path: String, reply: @escaping (Data?) -> Void)
     /// Creates the support folder, themes/ and a default settings.json if missing.
     func ensureSupportDir(reply: @escaping (Bool) -> Void)
     /// Merges a JSON object of settings into settings.json atomically. Only Settings.panelKeys are taken, each sanitized.

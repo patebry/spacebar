@@ -87,7 +87,7 @@ PREVIEW_BIN=$OBJ/$APPEX_EXE
 PROBE_FLAGS=()
 [ "${PROBE:-0}" = 1 ] && PROBE_FLAGS=(-D PROBE)
 compile "$PREVIEW_BIN" -application-extension -module-name "$APPEX_EXE" \
-  Preview/PreviewViewController.swift Preview/PDFPane.swift Preview/SettingsStore.swift Preview/Probe.swift \
+  Preview/PreviewViewController.swift Preview/PDFPane.swift Preview/HTMLPane.swift Preview/SettingsStore.swift Preview/Probe.swift \
   Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/Updates.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift \
   ${PROBE_FLAGS[@]+"${PROBE_FLAGS[@]}"} \
   -framework QuickLookUI -framework WebKit -framework PDFKit -Xlinker -e -Xlinker _NSExtensionMain
@@ -131,7 +131,7 @@ appex() {
   codesign "${SIGN_ARGS[@]}" --entitlements "$ENT" "$dir"
 }
 types() { printf '<string>%s</string>' "$@"; }
-appex "$APPEX_ID" "$APPEX_EXE" "$APP_NAME" "$(types net.daringfireball.markdown public.markdown "$ROUTE_TYPE")"
+appex "$APPEX_ID" "$APPEX_EXE" "$APP_NAME" "$(types net.daringfireball.markdown public.markdown public.html "$ROUTE_TYPE")"
 appex "$FOLDERS_ID" "$FOLDERS_EXE" "$APP_NAME Folders" "$(types public.folder public.directory)"
 codesign "${SIGN_ARGS[@]}" "$APP"
 rm -rf "$OBJ"

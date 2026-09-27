@@ -216,6 +216,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private var shownCanOpen = false
     /// The PDF on screen, drawn natively over the page's PDF area; nil for every other view.
     private var pdfPane: PDFPane?
+    /// The HTML file on screen, rendered natively over the same reserved area; nil for every other view.
+    private var htmlPane: HTMLPane?
     /// Bumped by every show and close, so a PDF still opening in the background for an older one is dropped.
     private var pdfGen = 0
     /// Every read of the file on screen, off the main thread: a file iCloud has evicted downloads first, which can take long or
@@ -359,7 +361,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         super.viewWillAppear()
         disableHostDoubleClick()
         // Shown again without a new prepare: the PDF view closed when the preview disappeared, so bring it back.
-        if fileKind == .pdf, pdfPane == nil, let url = fileURL, host.controller === self {
+        if (fileKind == .pdf && pdfPane == nil) || (fileKind == .html && htmlPane == nil), let url = fileURL, host.controller === self {
             shownStamp = nil
             host.whenReady { [weak self] in self?.show(url, reason: "open") }
         }
@@ -741,6 +743,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             guard let self, self.host.controller === self, self.loader.isActive(id), self.fileURL == url else { return }
             self.pdfPane?.close()
             self.pdfPane = nil
+            self.htmlPane?.close()
+            self.htmlPane = nil
             var p = FileView.base(path: url.path, root: self.rootDir, reason: "open")
             p["view"] = "loading"
             p["cloud"] = cloud
@@ -867,10 +871,11 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             switch p["view"] as? String {
             case "pdf": pdf = PDFPane.open(url)
             case "image" where cloud: _ = try? SchemeHandler.readImage(url)
+            case "html" where cloud: _ = FileTypes.materializing { try? Data(contentsOf: url) }
             default: break
             }
             // Only what FileView downloads counts: an evicted archive or video is its info card without a download.
-            let fetched = ["pdf", "image"].contains(p["view"] as? String)
+            let fetched = ["pdf", "image", "html"].contains(p["view"] as? String)
                 || ([.code, .json, .csv, .text].contains(kind) && (p["size"] as? Int64 ?? .max) <= FolderListing.maxDocumentBytes)
             return (p, pdf, cloud && fetched && FileTypes.isDataless(url.path))
         }) { [weak self] outcome in
@@ -909,6 +914,12 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         } else {
             closePDF()
         }
+        if p["view"] as? String == "html" {
+            let scripts = HTMLPane.runsScripts(url, setting: SettingsStore.shared.settings.htmlScripts)
+            if htmlPane?.scripts != scripts { htmlPane?.close(); htmlPane = HTMLPane(scripts: scripts) }
+            htmlPane?.onLink = { [weak self] in self?.htmlLink($0) }
+            htmlPane?.show(url, over: host.web)
+        }
         let view = p["view"] as? String ?? ""
         log.info("show \(view, privacy: .public) (\(self.fileKind.rawValue, privacy: .public))")
         render(p)
@@ -922,10 +933,26 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         }
     }
 
+    /// Takes down the native view of a PDF or an HTML file.
     private func closePDF() {
         pdfGen += 1
         pdfPane?.close()
         pdfPane = nil
+        htmlPane?.close()
+        htmlPane = nil
+    }
+
+    /// A link in the HTML file on screen: a file beside it opens in the panel like a sidebar click, a web link in the browser.
+    private func htmlLink(_ url: URL) {
+        if url.isFileURL {
+            let target = url.standardizedFileURL
+            guard FolderListing.isInside(target.resolvingSymlinksInPath().path, root: rootDir), FileManager.default.fileExists(atPath: target.path) else {
+                return refuse("html link", "file outside the folder")
+            }
+            return open(target, anchor: nil)
+        }
+        if let why = PDFPane.linkRefusal(url) { return refuse("html link", why) }
+        openExternally(url)
     }
 
     /// A link inside the PDF on screen: web links only, through the link policy and the writer, like the page's own links.
@@ -1071,6 +1098,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         case "pdfRect":
             // Where the page reserved the PDF's place, in CSS pixels of the viewport; `hide` while the page has something above it.
             if fileKind == .pdf { pdfPane?.place(message: body, in: host.web) }
+            if fileKind == .html { htmlPane?.place(message: body, in: host.web) }
         case "copyInstall":
             helper { $0.copyInstallCommand { ok in DispatchQueue.main.async { self.js("sb.installCopied", ["ok": ok]) } } }
         case "installUpdate":

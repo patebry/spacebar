@@ -36,6 +36,7 @@ struct Settings: Codable, Equatable {
     var mermaid = true
     var rawHTML = "sanitized"
     var remoteImages = false
+    var htmlScripts = "local"
     var checkUpdates = true
 
     static let themes = ["apple", "github", "paper", "solarized", "nord", "contrast"]
@@ -53,6 +54,7 @@ struct Settings: Codable, Equatable {
         "mdLinks": ["preview", "editor"],
         "webLinks": ["browser"],
         "rawHTML": ["off", "sanitized"],
+        "htmlScripts": ["local", "off"],
     ]
     static let intRanges: [String: ClosedRange<Int>] = ["fontSize": 12...24, "sidebarWidth": 160...480]
     static let doubleRanges: [String: ClosedRange<Double>] = ["lineHeight": 1.2...2.0]
@@ -144,7 +146,7 @@ struct Settings: Codable, Equatable {
         take(.sidebarCollapsed, \.sidebarCollapsed); take(.showHiddenFiles, \.showHiddenFiles); take(.minimalChrome, \.minimalChrome)
         if let n = try? c.decodeIfPresent(Double.self, forKey: .sidebarWidth), let v = Self.sanitize("sidebarWidth", n) as? Int { s.sidebarWidth = v }
         take(.toc, \.toc); take(.stats, \.stats); take(.mdLinks, \.mdLinks); take(.webLinks, \.webLinks)
-        take(.math, \.math); take(.mermaid, \.mermaid); take(.rawHTML, \.rawHTML); take(.remoteImages, \.remoteImages); take(.checkUpdates, \.checkUpdates)
+        take(.math, \.math); take(.mermaid, \.mermaid); take(.rawHTML, \.rawHTML); take(.remoteImages, \.remoteImages); take(.checkUpdates, \.checkUpdates); take(.htmlScripts, \.htmlScripts)
         self = s
     }
 

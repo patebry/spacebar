@@ -711,10 +711,11 @@ def main():
         H = lambda f: T('hostile', f)
         r = view(H('page.html'))
         page.cmd('@wait:0.5')
-        a = page.js("""const d = document.getElementById('doc'); return { view: document.documentElement.dataset.view, text: d.querySelector('pre.code').textContent.includes('<script>'),
+        # An HTML file is drawn by the extension's own web view over .pdf-area; the panel's page never takes in its markup.
+        a = page.js("""const d = document.getElementById('doc'); return { view: document.documentElement.dataset.view, area: !!d.querySelector('.pdf-area'),
           els: d.querySelectorAll('script, iframe, img, base, meta, a, object, embed').length, bases: document.querySelectorAll('base').length,
           base: document.getElementById('base').href.startsWith('spacebar://file/') }""")
-        check(a == {'view': 'code', 'text': True, 'els': 0, 'bases': 1, 'base': True} and not pwned(r), 'hostile .html: shown as source, never rendered', json.dumps(a))
+        check(a == {'view': 'html', 'area': True, 'els': 0, 'bases': 1, 'base': True} and not pwned(r), 'hostile .html: reserved for the native view, never rendered in the panel', json.dumps(a))
         r = view(H('image.svg'))
         page.cmd('@wait:0.5')
         a = page.js("const d = document.getElementById('doc'); return [document.documentElement.dataset.view, d.querySelectorAll('img').length, d.querySelectorAll('svg:not(.ic), script, iframe, object, embed').length, (d.querySelector('img') || {}).naturalWidth]")

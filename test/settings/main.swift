@@ -262,7 +262,7 @@ let kinds: [(String, FileKind)] = [("a.md", .markdown), ("A.MARKDOWN", .markdown
     ("p.gif", .image), ("p.webp", .image), ("p.heic", .image), ("x.svg", .image), ("d.pdf", .pdf), ("d.json", .json), ("d.csv", .csv),
     ("d.tsv", .csv), ("t.txt", .text), ("t.log", .text), ("s.js", .code), ("s.ts", .code), ("s.tsx", .code), ("s.jsx", .code), ("s.py", .code),
     ("s.rb", .code), ("s.go", .code), ("s.rs", .code), ("s.swift", .code), ("s.sh", .code), ("s.zsh", .code), ("s.c", .code), ("s.h", .code),
-    ("s.cpp", .code), ("s.java", .code), ("s.kt", .code), ("s.css", .code), ("s.scss", .code), ("page.html", .code), ("s.xml", .code),
+    ("s.cpp", .code), ("s.java", .code), ("s.kt", .code), ("s.css", .code), ("s.scss", .code), ("page.html", .html), ("page.htm", .html), ("page.xhtml", .code), ("s.xml", .code),
     ("s.yaml", .code), ("s.yml", .code), ("s.toml", .code), ("s.ini", .code), ("s.sql", .code), ("Dockerfile", .code), ("Makefile", .code),
     ("Gemfile", .code), (".env.example", .text), ("env.example", .text), ("LICENSE", .text), ("x.zip", .other), ("x.bin", .app), ("noext", .other)]
 let wrong = kinds.filter { FileTypes.kind(name: $0.0) != $0.1 }.map { "\($0.0)=\(FileTypes.kind(name: $0.0))" }

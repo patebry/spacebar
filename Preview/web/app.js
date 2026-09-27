@@ -805,8 +805,8 @@ window.sb = {
     root.dataset.view = isMarkdown(p) ? 'markdown' : p.view;
     syncOpen(p);
     // The popover's text settings do nothing for a PDF, and it would open under the native view.
-    $('aa').hidden = p.view === 'pdf';
-    if (p.view === 'pdf') showPopover(false);
+    $('aa').hidden = NATIVE_VIEWS.has(p.view);
+    if (NATIVE_VIEWS.has(p.view)) showPopover(false);
     showFolder(p);
     showCrumbs(p);
     draw();
@@ -1120,6 +1120,9 @@ function imageView(p) {
   return box;
 }
 
+/** Views the extension draws natively over `.pdf-area`: a PDF (PDFKit) and an HTML file (its own web view). */
+const NATIVE_VIEWS = new Set(['pdf', 'html']);
+
 /** The PDF itself is drawn by a native PDFView the extension lays over `.pdf-area`; the page only reserves the space and
  *  reports where it is (syncPdf), so WebKit's PDF plugin, and its unlabelled buttons, never load. */
 function pdfView(p) {
@@ -1142,7 +1145,7 @@ let pdfPosted = '';
 let pdfQueued = false;
 function pdfRect() {
   const area = document.querySelector('#doc .pdf-area');
-  if (!area || current.view !== 'pdf') return { path: current.path, hide: true };
+  if (!area || !NATIVE_VIEWS.has(current.view)) return { path: current.path, hide: true };
   const r = area.getBoundingClientRect();
   // The sidebar shown over the page in a narrow panel, and the Aa popover, sit above the page; the native view must not.
   let left = r.left;
@@ -1175,7 +1178,7 @@ function syncPdf() {
 function viewNode(p) {
   switch (p.view) {
     case 'image': if (typeof p.src === 'string') return imageView(p); break;
-    case 'pdf': return pdfView(p);
+    case 'pdf': case 'html': return pdfView(p);
     case 'loading': return loadingView(p);
     case 'overview': return overviewView(p);
     case 'json': if (typeof p.text === 'string') return jsonView(p); break;

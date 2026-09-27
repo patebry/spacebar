@@ -565,10 +565,14 @@ struct AdvancedPane: View {
                 }
                 .pickerStyle(.segmented)
                 Toggle("Load remote images", isOn: store.binding(\.remoteImages, "remoteImages"))
+                Picker("Scripts in HTML files", selection: store.binding(\.htmlScripts, "htmlScripts")) {
+                    Text("Files made on this Mac").tag("local")
+                    Text("Never").tag("off")
+                }
             } header: {
                 Text("Content")
             } footer: {
-                Text("Sanitized HTML keeps formatting tags but never runs scripts. Remote images are off by default: fetching one lets its server see when the document was opened. A blocked image offers to load that document's images once, without changing this setting.")
+                Text("Sanitized HTML keeps formatting tags but never runs scripts. Remote images are off by default: fetching one lets its server see when the document was opened. A blocked image offers to load that document's images once, without changing this setting. An HTML file you downloaded always opens with scripts off and nothing loaded from the web.")
                     .settingsFooter()
             }
 

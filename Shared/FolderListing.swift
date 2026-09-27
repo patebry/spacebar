@@ -4,12 +4,13 @@ import UniformTypeIdentifiers
 /// What a file is, from its name alone: the sidebar's icon, how the panel previews it, and the content type the `file` host
 /// serves it as. Nothing here reads the file; a file of an unknown kind is sniffed as text or not when it is opened.
 enum FileKind: String {
-    case folder, markdown, image, pdf, code, json, csv, text, app, other
+    case folder, markdown, image, pdf, html, code, json, csv, text, app, other
 
     /// One of the sidebar's eight icons.
     var icon: String {
         switch self {
         case .json, .csv: return "data"
+        case .html: return "code"
         case .app: return "other"
         default: return rawValue
         }
@@ -18,6 +19,7 @@ enum FileKind: String {
 
 enum FileTypes {
     static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "mkdn"]
+    static let htmlExtensions: Set<String> = ["html", "htm"]
     /// Rendered as `<img>` only. SVG is here: as an image it runs no script.
     static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "avif", "bmp", "tif", "tiff", "ico", "svg"]
     static let jsonExtensions: Set<String> = ["json", "geojson", "jsonc", "json5", "webmanifest", "har", "ipynb"]
@@ -85,6 +87,7 @@ enum FileTypes {
         if markdownExtensions.contains(ext) { return .markdown }
         if imageExtensions.contains(ext) { return .image }
         if ext == "pdf" { return .pdf }
+        if htmlExtensions.contains(ext) { return .html }
         if jsonExtensions.contains(ext) { return .json }
         if csvExtensions.contains(ext) { return .csv }
         if codeLanguages[ext] != nil || codeNames[lower] != nil || lower.hasPrefix("dockerfile.") || lower.hasSuffix(".dockerfile") { return .code }
@@ -239,6 +242,8 @@ enum FileView {
             p["src"] = FileTypes.fileURL(path, version: version)!.absoluteString
         case .pdf where regular && size <= FileTypes.maxFileBytes:
             view = "pdf"
+        case .html where regular && size <= FolderListing.maxDocumentBytes:
+            view = "html"
         case .code, .json, .csv, .text, .other, .app:
             // O_NONBLOCK and fstat: a file swapped for a FIFO since the stat can neither hang the open nor be read.
             let fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)

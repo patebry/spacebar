@@ -74,6 +74,9 @@ check("panel allow-list drops userTheme/editor/customCSS/editing/rawHTML/remoteI
       afterPanel.userTheme == nil && afterPanel.editorBundleID == nil && afterPanel.customCSS && afterPanel.inlineEditing
       && afterPanel.rawHTML == "sanitized" && !afterPanel.remoteImages)
 check("panel keys are cosmetic only", Settings.panelKeys.isSubset(of: ["theme", "appearance", "fontSize", "width", "bodyFont", "lineHeight", "sidebarCollapsed", "sidebarWidth"]))
+check("minimal chrome: off by default, a bool only, not a panel key", !Settings().minimalChrome && Settings(dictionary: ["minimalChrome": true]).minimalChrome
+      && !Settings(dictionary: ["minimalChrome": 1]).minimalChrome && decode(#"{"minimalChrome":true}"#)?.minimalChrome == true
+      && !Settings.panelKeys.contains("minimalChrome") && Settings.panelPatch("minimalChrome", true) == nil && Settings.allKeys.contains("minimalChrome"))
 check("hidden files off by default, a bool only, not a panel key", !Settings().showHiddenFiles && Settings(dictionary: ["showHiddenFiles": true]).showHiddenFiles
       && [1, "true", NSNull()].allSatisfy { !Settings(dictionary: ["showHiddenFiles": $0]).showHiddenFiles } && decode(#"{"showHiddenFiles":true}"#)?.showHiddenFiles == true
       && Settings.allKeys.contains("showHiddenFiles") && Settings.panelPatch("showHiddenFiles", true) == nil)
@@ -231,8 +234,10 @@ check("tree: payload names the root, the folder and each entry's icon", payload[
       && payload["more"] as? Int == 0 && pe.first?["dir"] as? Bool == true && pe.first?["icon"] as? String == "folder"
       && pe.first { $0["name"] as? String == "data.csv" }?["icon"] as? String == "data" && pe.first { $0["name"] as? String == "Tool.app" }?["icon"] as? String == "other")
 check("tree: a missing folder lists nothing", FolderListing.list(ld.path + "/nope", sort: "name", readmeFirst: true).entries.isEmpty)
-check("tree: a folder preview opens its first Markdown file, else its first file",
+check("tree: a folder preview opens its README, else its first Markdown file, else nothing (the scan takes over)",
       FolderListing.firstDocument(byName)?.name == "README.md"
+      && FolderListing.firstDocument(FolderListing.list(ld.path, sort: "name", readmeFirst: false))?.name == "README.md"
+      && FolderListing.firstDocument(FolderListing.list(ld.path + "/alpha", root: ld.path, sort: "name", readmeFirst: true))?.name == "inner.md"
       && FolderListing.firstDocument(FolderListing.list(ld.path + "/alpha/deep", root: ld.path, sort: "name", readmeFirst: true)) == nil)
 check("paths: inside the root, symlinks resolved", FolderListing.isInside(ld.path + "/b.md", root: ld.path) && FolderListing.isInside(ld.path + "/inside-link.md", root: ld.path)
       && !FolderListing.isInside(ld.path + "/outside-link.md", root: ld.path) && !FolderListing.isInside(ld.path + "/etc/hosts", root: ld.path)
@@ -277,6 +282,125 @@ check("content types: anything else is octet-stream, never HTML or script", ["/a
 check("text sniff: text yes, NUL or invalid UTF-8 no, a cut character yes", FileTypes.looksLikeText(Data("héllo\n".utf8))
       && !FileTypes.looksLikeText(Data([0x41, 0x00, 0x42])) && !FileTypes.looksLikeText(Data([0xff, 0xfe, 0x41, 0x80]))
       && FileTypes.looksLikeText(Data("ab".utf8) + Data([0xc3])))
+
+// Folder previews (Shared/FolderScan.swift): which folders are taken, what each opens on, the overview, the wikilink index
+let fx = dir.appendingPathComponent("folders", isDirectory: true)
+func put(_ rel: String, _ text: String = "x\n", age: Double = 0) {
+    let u = fx.appendingPathComponent(rel)
+    try! fm.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try! Data(text.utf8).write(to: u)
+    if age > 0 { try! fm.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -age)], ofItemAtPath: u.path) }
+}
+func mkdir(_ rel: String) { try! fm.createDirectory(at: fx.appendingPathComponent(rel), withIntermediateDirectories: true) }
+let vault = fx.path + "/Vault"
+put("Vault/.obsidian/app.json", "{}"); put("Vault/.obsidian/workspace.md", "# not a note\n")
+put("Vault/Daily/2026-09-20.md", "# Old day\n", age: 5000); put("Vault/Daily/2026-09-25.md", "# Day\n\nSee [[Projects/Plan]] and [[Ideas#Later|ideas]].\n", age: 100)
+put("Vault/Projects/Plan.md", "# Plan\n\n![[diagram.png]] ![[Ideas]]\n", age: 3000); put("Vault/Notes/Ideas.md", "# Ideas\n\n## Later\n", age: 4000)
+put("Vault/Archive/Old/Ideas.md", "# Old ideas\n", age: 9000); put("Vault/Attachments/diagram.png", "png")
+put("Vault/Projects/Deep/a/b/c/d/far.md", "# far\n")
+check("folder rules: a vault whose notes are all in subfolders is previewed (it was declined: no top-level Markdown)",
+      FolderRules.declineReason(vault) == nil && FolderListing.firstDocument(FolderListing.list(vault, sort: "name", readmeFirst: true)) == nil)
+let vs = FolderScan.scan(vault)
+check("finder: the vault opens on its newest note nearest the top, never inside .obsidian",
+      vs.bestMarkdown?.rel == "Daily/2026-09-25.md" && !vs.files.contains { $0.rel.hasPrefix(".obsidian") } && vs.hasObsidian && vs.complete)
+check("finder: depth stops at 3", !vs.files.contains { $0.rel.hasSuffix("far.md") } && vs.files.allSatisfy { $0.depth <= FolderScan.maxDepth })
+check("finder: a preferred name wins at the same depth", {
+    put("Vault/Projects/Index.md", "# index\n", age: 99999)
+    defer { try? fm.removeItem(atPath: vault + "/Projects/Index.md") }
+    put("Vault/Home.md", "# home\n", age: 99999)
+    defer { try? fm.removeItem(atPath: vault + "/Home.md") }
+    return FolderListing.firstDocument(FolderListing.list(vault, sort: "name", readmeFirst: true))?.name == "Home.md"
+        && FolderScan.scan(vault).bestMarkdown?.rel == "Home.md"
+}())
+let idx = LinkIndex.build(root: vault)
+check("wikilinks: by name anywhere under the root, the current folder first, then the shallowest",
+      idx.resolve("Ideas", from: vault + "/Daily/2026-09-25.md") == vault + "/Notes/Ideas.md"
+      && idx.resolve("Ideas", from: vault + "/Archive/Old/x.md") == vault + "/Archive/Old/Ideas.md"
+      && idx.resolve("ideas.md", from: nil) == vault + "/Notes/Ideas.md" && idx.resolve("diagram.png", from: nil) == vault + "/Attachments/diagram.png")
+check("wikilinks: a path from the root, or a partial path", idx.resolve("Projects/Plan", from: nil) == vault + "/Projects/Plan.md"
+      && idx.resolve("Old/Ideas", from: nil) == vault + "/Archive/Old/Ideas.md" && idx.resolve("Archive/Old/Ideas.md", from: nil) == vault + "/Archive/Old/Ideas.md" && idx.resolve("/Projects/Plan.md", from: nil) == vault + "/Projects/Plan.md")
+check("wikilinks: never outside the root, never .obsidian, never a dot step",
+      [ "../secret", "Vault/../../x", "./Ideas", "Projects/../Ideas", "workspace", ".obsidian/workspace", "app.json", "", "a\u{0}b", String(repeating: "a", count: 500)]
+        .allSatisfy { idx.resolve($0, from: nil) == nil })
+put("outside/secret.md", "# secret\n")
+try! fm.createSymbolicLink(atPath: vault + "/secret.md", withDestinationPath: fx.path + "/outside/secret.md")
+try! fm.createSymbolicLink(atPath: vault + "/Linked", withDestinationPath: fx.path + "/outside")
+try! fm.createSymbolicLink(atPath: vault + "/alias.md", withDestinationPath: "Notes/Ideas.md")
+let idx2 = LinkIndex.build(root: vault)
+check("wikilinks: a link out of the root is not indexed, a linked folder is not followed, a link inside is",
+      idx2.resolve("secret", from: nil) == nil && idx2.resolve("Linked/secret", from: nil) == nil && idx2.resolve("alias", from: nil) == vault + "/alias.md")
+check("wikilinks: parts and targets", LinkIndex.parse("Note#Head|Alias") == ("Note", "Head", "Alias") && LinkIndex.parse("a\\|b") == ("a", "", "b")
+      && LinkIndex.links(in: "[[A]] ![[b.png|30]] [[A|again]] [[#Local]] [[x\n]] [[C#h]]").map { "\($0.embed ? "!" : "")\($0.target)" } == ["A", "!b.png", "C"])
+let lp = idx2.payload(text: "[[Ideas]] ![[diagram.png]] ![[Projects/Plan]] [[nowhere]]", current: vault + "/Daily/2026-09-25.md")
+check("wikilinks: the render payload resolves links, gives images their file URL, embeds a note's text one level deep",
+      (lp.links["Ideas"] as? [String: Any])?["path"] as? String == vault + "/Notes/Ideas.md" && lp.links["nowhere"] == nil
+      && ((lp.links["diagram.png"] as? [String: Any])?["src"] as? String)?.hasPrefix("spacebar://file" + vault + "/Attachments/diagram.png?v=") == true
+      && ((lp.embeds["Projects/Plan"] as? [String: Any])?["text"] as? String)?.hasPrefix("# Plan") == true
+      && lp.paths == [vault + "/Notes/Ideas.md", vault + "/Attachments/diagram.png", vault + "/Projects/Plan.md"])
+let many = (0..<30).map { "![[n\($0)]]" }.joined(separator: " ")
+for i in 0..<30 { put("Vault/n\(i).md", String(repeating: "word ", count: 20_000)) }
+let lp2 = LinkIndex.build(root: vault).payload(text: many, current: nil)
+check("wikilinks: embeds are capped in number and size", lp2.embeds.count <= LinkIndex.maxEmbeds
+      && lp2.embeds.values.allSatisfy { (($0 as? [String: Any])?["text"] as? String)?.utf8.count ?? 0 <= LinkIndex.maxEmbedBytes })
+check("vault root: a note in a vault's subfolder is rooted at the vault; outside a vault there is none",
+      FolderRules.vaultRoot(containing: vault + "/Daily") == vault && FolderRules.vaultRoot(containing: vault) == vault
+      && FolderRules.vaultRoot(containing: fx.path + "/outside") == nil)
+check("vault root: never /tmp or /var, however they are spelled", FolderRules.vaultRoot(containing: "/tmp/x") == nil
+      && FolderRules.vaultRoot(containing: "/var/x") == nil && FolderRules.vaultRoot(containing: "/private/tmp/x") == nil)
+let downloaded = vault + "/Daily/2026-09-20.md"
+check("quarantine: a downloaded note is recognised (and so keeps its own folder as its root)", !FolderRules.isQuarantined(downloaded)
+      && setxattr(downloaded, "com.apple.quarantine", "0081;00000000;Safari;", 21, 0, 0) == 0 && FolderRules.isQuarantined(downloaded))
+
+// Folders of one kind: images, PDFs, a code repository, nothing at all
+for i in 0..<4 { put("images/p\(i).png", "png", age: Double(i * 10)) }
+for i in 0..<3 { put("pdfs/d\(i).pdf", "%PDF", age: Double(i * 10)) }
+put("repo/.git/HEAD", "ref\n"); put("repo/src/main.swift", "print(1)\n"); put("repo/package.json", "{}"); put("repo/node_modules/x/README.md", "# dep\n")
+put("repo/docs/guide.md", "# Guide\n")
+mkdir("empty")
+let imgs = FolderScan.scan(fx.path + "/images"), pdfs = FolderScan.scan(fx.path + "/pdfs"), repo = FolderScan.scan(fx.path + "/repo"),
+    empty = FolderScan.scan(fx.path + "/empty")
+check("overview: a folder of images has no Markdown to open: counts and recent files, newest first",
+      FolderRules.declineReason(fx.path + "/images") == nil && imgs.bestMarkdown == nil && imgs.counts == ["image": 4]
+      && imgs.recent.map(\.rel) == ["p0.png", "p1.png", "p2.png", "p3.png"])
+check("overview: a folder of PDFs", pdfs.bestMarkdown == nil && pdfs.counts == ["pdf": 3] && (pdfs.payload(reason: "open")["view"] as? String) == "overview")
+check("finder: a repository without a README opens its docs, never a dependency's README, and is labelled",
+      repo.bestMarkdown?.rel == "docs/guide.md" && !repo.files.contains { $0.rel.contains("node_modules") } && repo.hasGit
+      && repo.payload(reason: "open")["label"] as? String == "Git repository")
+check("overview: an empty folder is previewed, with nothing in it", FolderRules.declineReason(fx.path + "/empty") == nil && empty.files.isEmpty
+      && empty.folders == 0 && (empty.payload(reason: "open")["total"] as? Int) == 0)
+let op = imgs.payload(reason: "open"), recent = op["recent"] as? [[String: Any]] ?? []
+check("overview: payload names only files inside the root", op["path"] as? String == fx.path + "/images"
+      && recent.count == 4 && recent.allSatisfy { ($0["path"] as? String)?.hasPrefix(fx.path + "/images/") == true })
+
+// A huge folder: the listing and the scan stay bounded
+let huge = fx.appendingPathComponent("huge")
+mkdir("huge")
+for i in 0..<12_000 { fm.createFile(atPath: huge.appendingPathComponent(String(format: "f%05d.txt", i)).path, contents: nil) }
+var t1 = Date()
+let hl = FolderListing.list(huge.path, sort: "name", readmeFirst: true, pinned: huge.path + "/f11999.txt")
+let listMs = Int(Date().timeIntervalSince(t1) * 1000)
+t1 = Date()
+let hs = FolderScan.scan(huge.path)
+let scanMs = Int(Date().timeIntervalSince(t1) * 1000)
+t1 = Date()
+let hi = LinkIndex.build(root: huge.path, maxEntries: 5_000)
+let indexMs = Int(Date().timeIntervalSince(t1) * 1000)
+check("huge folder: 12,000 files list 500 plus the pinned file, the rest counted (\(listMs) ms)",
+      hl.entries.count == FolderListing.cap + 1 && hl.more == 12_000 - hl.entries.count && hl.entries.last?.name == "f11999.txt" && listMs < 1500)
+check("huge folder: the scan stops at its entry cap or time budget (\(scanMs) ms, \(hs.scanned) entries)",
+      !hs.complete && hs.scanned <= FolderScan.maxEntries && scanMs < 1000)
+check("huge folder: the index stops at its cap (\(indexMs) ms)", !hi.complete && hi.count <= 5_000 && indexMs < 1500)
+
+// Declines: packages, app bundles, volumes and system folders; everything else is previewed
+mkdir("Tool.app/Contents"); mkdir("Doc.rtfd"); mkdir("Proj.xcodeproj"); mkdir("plain.folder.name")
+check("declines: an app bundle and packages", FolderRules.declineReason(fx.path + "/Tool.app") != nil
+      && FolderRules.declineReason(fx.path + "/Doc.rtfd") != nil && FolderRules.declineReason(fx.path + "/Proj.xcodeproj") != nil)
+check("declines: the volume root and system folders", ["/", "/System", "/Library", "/usr", "/usr/bin", "/System/Library", "/private/var", "/Volumes",
+      "/Applications", FolderRules.home + "/Library"].allSatisfy { FolderRules.declineReason($0) != nil })
+check("declines: not an ordinary folder, a dotted name, the home folder or a folder in /tmp's subtree",
+      FolderRules.declineReason(fx.path + "/plain.folder.name") == nil && FolderRules.declineReason(fx.path) == nil
+      && FolderRules.declineReason(FolderRules.home) == nil && FolderRules.declineReason(FolderRules.home + "/Library/NoSuchFolder") != nil)
+try! fm.removeItem(at: fx)
 
 // The folder watch behind the sidebar's live list
 let wd = dir.appendingPathComponent("watched", isDirectory: true)

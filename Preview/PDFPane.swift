@@ -69,7 +69,7 @@ final class PDFPane: NSObject, PDFViewDelegate {
         view.isHidden = hidden
     }
 
-    /// A `pdfRect` message from the page: {path, x, y, w, h, hide, bg: [r, g, b], dark}. Only for the file on screen; a message
+    /// A `pdfRect` message from the page: {path, x, y, w, h, hide, bg: [r, g, b], dark, radius}. Only for the file on screen; a message
     /// with `hide` and no rect means no PDF is on the page any more.
     func place(message b: [String: Any], in web: NSView) {
         func num(_ k: String) -> CGFloat? {
@@ -83,6 +83,10 @@ final class PDFPane: NSObject, PDFViewDelegate {
             let c = bg.map { CGFloat(max(0, min(255, $0.doubleValue))) / 255 }
             style(background: NSColor(srgbRed: c[0], green: c[1], blue: c[2], alpha: 1), dark: b["dark"] as? Bool == true)
         }
+        let radius = num("radius").map { max(0, min(16, $0)) } ?? 0
+        view.wantsLayer = true
+        view.layer?.cornerRadius = radius * ((web as? WKWebView).map { $0.pageZoom * $0.magnification } ?? 1)
+        view.layer?.masksToBounds = radius > 0
         place(css: CGRect(x: x, y: y, width: w, height: h), in: web, hidden: hide)
     }
 

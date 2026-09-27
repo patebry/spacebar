@@ -23,6 +23,11 @@
 //   @relist            list the root and every folder the page expanded again and send them, as the folder watches do
 //   @root:<dir>        the sidebar's root for the renders that follow (a folder preview); empty: each file's own folder
 //   @session           a new preview of the same root: the next listings carry a new session number
+//   @folder:<dir>      a folder preview, as the extension starts one: declined (FolderRules), else its README or first Markdown
+//                      file, else the best Markdown FolderScan finds, else the overview; result "declined: …", "file:<path>" or
+//                      "overview". The overview's recent files and every wikilink target are "offered": the page may open them.
+// A single file's root is its vault (FolderRules.vaultRoot) when it sits in one. A Markdown render carries its resolved wikilinks
+// and embeds (LinkIndex, built here synchronously); "open" may name a path with an "anchor"; "overview" renders the root's.
 // Every render sends the sidebar listing of the root first (FolderListing, as the extension does) and renders the file by its
 // kind (FileView for anything but Markdown). The page's "list" lists a folder the tree named, "open" renders a listed file,
 // "openFile" and "reveal" are recorded as "_openFile" / "_reveal" (or "_openRefused"), each checked as the extension does;
@@ -122,10 +127,10 @@ var lastPDFPath: String?
 // What the page saw at document start and at its first DOMContentLoaded, to show the theme is set before anything paints.
 let probe = WKUserScript(source: """
   window.__sbProbe = { start: document.documentElement.getAttribute('data-theme'), head: !!document.head,
-    startSidebar: document.documentElement.getAttribute('data-sidebar') };
+    startSidebar: document.documentElement.getAttribute('data-sidebar'), startChrome: document.documentElement.getAttribute('data-chrome') };
   document.addEventListener('DOMContentLoaded', () => { const r = document.documentElement;
     Object.assign(window.__sbProbe, { dcl: r.getAttribute('data-theme'), dclFontSize: r.style.getPropertyValue('--font-size'),
-      dclWidth: r.getAttribute('data-width'), dclSidebar: r.getAttribute('data-sidebar') }); }, { once: true });
+      dclWidth: r.getAttribute('data-width'), dclSidebar: r.getAttribute('data-sidebar'), dclChrome: r.getAttribute('data-chrome') }); }, { once: true });
   """, injectionTime: .atDocumentStart, forMainFrameOnly: true)
 
 var settingsDict = Settings().dictionary
@@ -187,8 +192,26 @@ var root = ""
 var session = 1
 var currentKind: FileKind = .markdown
 var currentCanOpen = false
+var offered: Set<String> = []
+var linkIndex: LinkIndex?
+var pendingAnchor: String?
 
-func rootFor(_ url: URL) -> String { rootOverride ?? url.deletingLastPathComponent().resolvingSymlinksInPath().path }
+func rootFor(_ url: URL) -> String {
+    if let rootOverride { return rootOverride }
+    let dir = url.deletingLastPathComponent().resolvingSymlinksInPath().path
+    return FolderRules.isQuarantined(url.path) ? dir : FolderRules.vaultRoot(containing: dir) ?? dir
+}
+
+/// As the extension's showOverview: the root's scan as the overview page; its recent files may then be opened.
+func renderOverview(_ r: FolderScan.Result, reason: String) {
+    pdfPane?.close()
+    pdfPane = nil
+    currentFile = nil
+    currentKind = .other
+    offered.formUnion(r.recent.map(\.path))
+    _ = eval(web, "sb.render(\(jsonString(r.payload(reason: reason)))); 0")
+    spin(8) { rec.messages.contains { $0["type"] as? String == "rendered" } }
+}
 
 /// As the extension: one folder of the tree, listed with the settings and sent with sb.setFiles.
 func sendFolder(_ dir: String) {
@@ -205,9 +228,9 @@ func sendFolder(_ dir: String) {
 func renderFile(_ file: String, listFirst: Bool = true) {
     var url = URL(fileURLWithPath: file)
     let newRoot = rootFor(url)
-    // As the extension: a single file is named inside its resolved folder, as the sidebar lists it.
-    if rootOverride == nil { url = URL(fileURLWithPath: newRoot).appendingPathComponent(url.lastPathComponent) }
-    if newRoot != root { root = newRoot; listings = [:]; knownDirs = [root] }
+    // As the extension: a single file is named inside its resolved folder; in a vault, the vault is the root.
+    if rootOverride == nil { url = URL(fileURLWithPath: url.deletingLastPathComponent().resolvingSymlinksInPath().path).appendingPathComponent(url.lastPathComponent) }
+    if newRoot != root { root = newRoot; listings = [:]; knownDirs = [root]; offered = []; linkIndex = nil }
     scheme.fileRoot = root
     currentFile = url.path
     var st = stat()
@@ -225,6 +248,16 @@ func renderFile(_ file: String, listFirst: Bool = true) {
         payload["view"] = "markdown"
         payload["ver"] = 0
         if gate.allowedPath == url.path { payload[RemoteImageGate.payloadKey] = true }
+        if let a = pendingAnchor { payload["anchor"] = a; pendingAnchor = nil }
+        let text = payload["text"] as! String
+        if text.contains("[[") {
+            if linkIndex?.root != root { linkIndex = LinkIndex.build(root: root, showHidden: Settings(dictionary: settingsDict).showHiddenFiles) }
+            let r = linkIndex!.payload(text: text, current: url.path)
+            offered.formUnion(r.paths)
+            payload["links"] = r.links
+            payload["embeds"] = r.embeds
+            payload["linksReady"] = true
+        }
     } else {
         payload = FileView.payload(path: url.path, kind: currentKind, root: root, reason: "open", canOpen: LinkPolicy.fileRefusal(url) == nil)
         currentCanOpen = payload["canOpen"] as? Bool == true
@@ -255,12 +288,35 @@ func renderFile(_ file: String, listFirst: Bool = true) {
     spin(8) { rec.messages.contains { $0["type"] as? String == "rendered" } }
 }
 
-/// As the extension: a path the page names is taken only when plain, inside the root, and a file a listing named.
+/// As the extension: a path the page names is taken only when plain, inside the root, and a file a listing named or the
+/// overview or a wikilink offered.
 func listedFile(_ p: String?) -> String? {
     guard let p, FolderListing.isPlainPath(p, under: root),
-          listings.values.contains(where: { l in l.entries.contains { $0.path == p && !$0.isDirectory } }),
+          listings.values.contains(where: { l in l.entries.contains { $0.path == p && !$0.isDirectory } }) || offered.contains(p),
           FolderListing.isInside(p, root: root) else { return nil }
+    var st = stat()
+    guard stat(p, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return nil }
     return p
+}
+
+/// As the extension's startFolder: the folder's README or first Markdown file, else the scan's best Markdown, else the overview.
+func startFolder(_ dir: String) -> String {
+    if let why = FolderRules.declineReason(dir) { return "declined: \(why)" }
+    rootOverride = dir
+    root = dir
+    listings = [:]
+    knownDirs = [root]
+    offered = []
+    linkIndex = nil
+    scheme.fileRoot = root
+    let s = Settings(dictionary: settingsDict)
+    let l = FolderListing.list(root, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles)
+    if let first = FolderListing.firstDocument(l) { renderFile(first.path); return "file:" + first.path }
+    let r = FolderScan.scan(root, showHidden: s.showHiddenFiles)
+    if let md = r.bestMarkdown { offered.insert(md.path); renderFile(md.path); return "file:" + md.path }
+    sendFolder(root)
+    renderOverview(r, reason: "open")
+    return "overview"
 }
 
 func snapshot(_ path: String) -> String {
@@ -285,6 +341,12 @@ rec.onLoadRemoteImages = { path in
 // As the extension: only a listed file opens; a setting passes the extension's gate, then the writer's update.
 rec.onOpen = { path in
     guard let p = listedFile(path) else { rec.messages.append(["type": "_openRefused", "path": path]); return }
+    let anchor = rec.messages.last { $0["type"] as? String == "open" }?["anchor"] as? String
+    if p == currentFile, let anchor {
+        DispatchQueue.main.async { _ = eval(web, "sb.scrollToHeading(\(jsonString(["heading": anchor]))); 0") }
+        return
+    }
+    pendingAnchor = anchor.map { String($0.prefix(256)) }
     DispatchQueue.main.async { renderFile(p) }
 }
 rec.onMessage = { type, body in
@@ -297,6 +359,8 @@ rec.onMessage = { type, body in
         DispatchQueue.main.async { sendFolder(p) }
     case "pdfRect":
         if currentKind == .pdf { pdfPane?.place(message: body, in: web) }
+    case "overview":
+        DispatchQueue.main.async { renderOverview(FolderScan.scan(root, showHidden: Settings(dictionary: settingsDict).showHiddenFiles), reason: "overview") }
     case "openFile", "reveal":
         let ok = path != nil && path == currentFile && currentKind != .markdown
             && (type == "reveal" || (currentCanOpen && LinkPolicy.fileRefusal(URL(fileURLWithPath: path!)) == nil))
@@ -465,6 +529,8 @@ func run(_ cmd: String) -> String {
     case "@session":
         session += 1
         result = session
+    case "@folder":
+        result = startFolder(arg)
     case "@remotereset":
         gate.reset()
         result = gate.blocking

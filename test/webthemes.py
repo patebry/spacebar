@@ -23,7 +23,7 @@ class Page:
         subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-O', '-target', 'arm64-apple-macos13.0',
                         os.path.join(ROOT, 'test', 'web', 'main.swift'), os.path.join(ROOT, 'Shared', 'Settings.swift'),
                         os.path.join(ROOT, 'Shared', 'WebShell.swift'),
-                        os.path.join(ROOT, 'Shared', 'FolderListing.swift'), os.path.join(ROOT, 'Shared', 'LinkPolicy.swift'), os.path.join(ROOT, 'Preview', 'PDFPane.swift'), '-o', exe], check=True)
+                        os.path.join(ROOT, 'Shared', 'FolderListing.swift'), os.path.join(ROOT, 'Shared', 'FolderScan.swift'), os.path.join(ROOT, 'Shared', 'LinkPolicy.swift'), os.path.join(ROOT, 'Preview', 'PDFPane.swift'), '-o', exe], check=True)
         self.proc = subprocess.Popen([exe, WEB], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
                                      env=dict(os.environ, SPACEBAR_SUPPORT_DIR=self.support))
         self.logs = []
@@ -510,6 +510,116 @@ def main():
         check(all(outcome.get(str(i)) == 'error' for i in range(len(probes))) and refused,
               'the user host refuses anything but custom.css and themes/<file>.css',
               f"{json.dumps(outcome)}; handler refused: {'; '.join(refused)}")
+
+        # ---- the toolbar row and the outlined page (the default), in every theme, light and dark ----
+        vault = os.path.join(page.out, 'Vault')
+        for d in ('.obsidian', 'Notes', 'Attachments'):
+            os.makedirs(os.path.join(vault, d), exist_ok=True)
+        shutil.copy(os.path.join(ROOT, 'test', 'fixtures', 'img.png'), os.path.join(vault, 'Attachments', 'pic.png'))
+        open(os.path.join(vault, 'Notes', 'Other.md'), 'w').write('# Other\n\nEmbedded text.\n')
+        note = os.path.join(vault, 'Notes', 'Callouts.md')
+        open(note, 'w').write('# Callouts\n\nA #tag, a [[Other]] link and a [[Missing]] one.\n\n' + ''.join(
+            f'> [!{t}] {t.title()} title\n> Body of the {t} callout.\n\n' for t in
+            ('note', 'abstract', 'tip', 'success', 'question', 'warning', 'failure', 'example', 'quote')) + '![[Other]]\n')
+        page.cmd('@load:{}')
+        page.cmd('@size:1000x760')
+        page.render(note)
+        page.cmd('@wait:0.5')
+        FRAME = HELPERS + """const f = document.getElementById('frame'), cs = getComputedStyle(f), r = f.getBoundingClientRect();
+          const vis = (id) => { const e = document.getElementById(id), b = e.getBoundingClientRect(); return !e.hidden && getComputedStyle(e).display !== 'none' && b.width > 0; };
+          const side = document.getElementById('sidebar'), doc = document.getElementById('doc');
+          const out = [];
+          const pair = (name, ctx, fg, under) => out.push({ name, ...measure(ctx, fg, under) });
+          const B = 'var(--bg)', C = 'var(--chrome)';
+          pair('crumbs/chrome', document.getElementById('crumbs'), 'var(--muted)', [B, C]);
+          pair('toolbar button/chrome', bar, 'var(--fg)', [B, C]);
+          pair('toolbar button/hover', bar, 'var(--fg)', [B, C, 'color-mix(in srgb, var(--fg) 7%, transparent)']);
+          pair('toolbar button/pressed', bar, 'var(--fg)', [B, C, 'color-mix(in srgb, var(--fg) 9%, transparent)']);
+          pair('toolbar status/chrome', bar, 'var(--muted)', [B, C]);
+          pair('sidebar item/chrome', side, 'var(--fg)', [B, C]);
+          pair('sidebar active/chrome', side, 'var(--fg)', [B, C, 'color-mix(in srgb, var(--accent) 11%, transparent)']);
+          pair('sidebar folder name/chrome', side, 'var(--muted)', [B, C]);
+          for (const q of doc.querySelectorAll('blockquote.callout')) {
+            const t = q.querySelector('.callout-title'), bg = getComputedStyle(q).backgroundColor;
+            out.push({ name: 'callout ' + q.dataset.callout + ' title', ...measure(t, getComputedStyle(t).color, [B, bg]) });
+            out.push({ name: 'callout ' + q.dataset.callout + ' body', ...measure(q, getComputedStyle(q).color, [B, bg]) });
+          }
+          const tag = doc.querySelector('.tag');
+          out.push({ name: 'tag', ...measure(tag, getComputedStyle(tag).color, [B, getComputedStyle(tag).backgroundColor]) });
+          const un = doc.querySelector('a.wikilink.unresolved');
+          out.push({ name: 'unresolved wikilink', ...measure(un, getComputedStyle(un).color, [B]) });
+          const line = measure(root, 'var(--frame-line)', [B]).ratio, chromeStep = measure(root, 'var(--chrome)', [B]).ratio;
+          return { display: cs.display, border: cs.borderTopWidth + ' ' + cs.borderTopStyle, radius: cs.borderTopLeftRadius, rect: [r.left, r.top, r.right, r.bottom],
+            line, chromeStep, pairs: out, shown: ['side-toggle', 'crumbs', 'aa', 'edit'].map(vis),
+            titles: ['side-toggle', 'aa', 'edit'].map((id) => document.getElementById(id).title), callouts: doc.querySelectorAll('blockquote.callout').length };"""
+        low, bad = [], []
+        for mode in ('light', 'dark'):
+            page.cmd('@appearance:' + mode)
+            for t in THEMES:
+                page.apply(theme=t)
+                f = page.js(FRAME)
+                if not isinstance(f, dict): raise RuntimeError(f'FRAME: {f}')
+                low += [f"{t} {mode} {p['name']} {p['ratio']}" for p in f['pairs'] if p['ratio'] < 4.5]
+                # High Contrast keeps its strong borders, the outline included.
+                if not (f['display'] == 'block' and f['border'] == '1px solid' and f['radius'] == '10px' and 1.05 <= f['line'] <= (99 if t == 'contrast' else 2.2)
+                        and 1.0 < f['chromeStep'] < 1.35 and f['callouts'] == 9):
+                    bad.append(f"{t} {mode} {json.dumps({k: f[k] for k in ('display', 'border', 'radius', 'line', 'chromeStep', 'callouts')})}")
+                if t in ('apple', 'nord'):
+                    page.cmd('@eval:scrollTo(0, 0); 0')
+                    page.cmd(f'@shot:{SHOTS}/obsidian-{t}-{mode}.png')
+        check(not bad, 'outline: a 1 px hairline with a 10 px radius around the page, low contrast (1.05-2.2:1; High Contrast keeps a strong line) in every theme, light and dark',
+              '; '.join(bad))
+        check(not low, 'toolbar row, sidebar on the chrome, callouts, tags and wikilinks reach 4.5:1 in every theme, light and dark', '; '.join(low))
+        page.cmd('@appearance:light')
+        page.apply(theme='apple')
+        f = page.js(FRAME)
+        check(f['rect'] == [240, 40, 994, 754] and f['shown'] == [True, True, True, True] and all(f['titles']),
+              'the page sits right of the sidebar, under the toolbar row; toggle, breadcrumb, Aa and Open are all shown, each with a tooltip',
+              json.dumps({k: f[k] for k in ('rect', 'shown', 'titles')}))
+        row = page.js("""const ids = ['side-toggle', 'crumbs', 'aa', 'edit']; const r = ids.map((i) => document.getElementById(i).getBoundingClientRect());
+          return { tops: r.map((x) => Math.round(x.top + x.height / 2)), order: r.map((x) => Math.round(x.left)),
+            hit: ids.map((i, n) => { const e = document.elementFromPoint(r[n].left + 4, r[n].top + r[n].height / 2); return !!e && !!e.closest('#' + i); }) }""")
+        check(all(abs(t - 20) <= 1 for t in row['tops']) and row['order'] == sorted(row['order']) and all(row['hit']),
+              'toolbar row: toggle and breadcrumb on the left, Aa and Open on the right, centred in the 40 px row and clickable', json.dumps(row))
+        states = page.js("""const out = {}; const walk = (rules, media) => { for (const r of rules) { if (r.cssRules) walk(r.cssRules, r.media ? r.media.mediaText : media);
+            const s = r.selectorText || ''; if (/#toolbar > button:active/.test(s) && /scale/.test(r.style.transform)) out.press = true;
+            if (/#toolbar > button, #side-toggle\\)?:hover/.test(s.replace(/:is\\(/g, '')) || /#toolbar > button:hover/.test(s)) out.hover = true;
+            if (/#side-list a\\.row\\.folder:hover/.test(s) || (/#side-list a\\.row:hover/.test(s))) out.rowHover = true;
+            if (/a\\.row\\.active\\.arrive/.test(s) && r.style.animationName === 'row-in') out.arrive = true;
+            if (media && /prefers-reduced-motion/.test(media) && /arrive/.test(s) && r.style.animationName === 'none') out.arriveReduced = true;
+            if (media && /prefers-reduced-motion/.test(media) && /#toolbar > button/.test(s) && /none/.test(r.style.transform)) out.pressReduced = true;
+            if (media && /prefers-reduced-motion/.test(media) && /#frame/.test(s)) out.frameReduced = true; } };
+          for (const sh of document.styleSheets) { try { walk(sh.cssRules, ''); } catch (e) {} } return out""")
+        check(states == {'press': True, 'hover': True, 'rowHover': True, 'arrive': True, 'arriveReduced': True, 'pressReduced': True, 'frameReduced': True},
+              'buttons have hover and pressed states, rows highlight on hover, the current row settles in; all still under reduced motion', json.dumps(states))
+        side_click = page.js("""const r = document.getElementById('frame').getBoundingClientRect();
+          const e = document.elementFromPoint(r.left + 200, r.bottom + 2); return e ? e.id : null""")
+        page.cmd('@eval:scrollTo(0, 300); 0')
+        edges = page.js("""const f = document.getElementById('frame').getBoundingClientRect(), t = document.getElementById('toolbar').getBoundingClientRect();
+          const at = (x, y) => { const e = document.elementFromPoint(x, y); return e ? e.id || e.tagName : null; };
+          return [at(t.left - 40, 20), at(f.left + 300, 20)]""")
+        page.cmd('@eval:scrollTo(0, 0); 0')
+        check(side_click == 'frame' and all(e in ('BODY', 'crumbs') for e in edges), 'the edges around the page and the empty toolbar row take clicks, so nothing scrolled under them can be',
+              repr([side_click, edges]))
+        page.cmd('@size:470x700')
+        narrow_bar = page.js("return [getComputedStyle(document.getElementById('frame')).display, getComputedStyle(document.getElementById('toolbar').querySelector('#aa')).backdropFilter]")
+        page.cmd('@size:1000x760')
+        check(narrow_bar[0] == 'none', 'a very narrow panel drops the row and the outline for the floating buttons', json.dumps(narrow_bar))
+
+        # ---- Minimal chrome: the quieter look, in place from document start ----
+        page.cmd('@load:' + json.dumps({'minimalChrome': True}))
+        p = page.js('return window.__sbProbe')
+        page.render(note)
+        m = page.js("""const f = getComputedStyle(document.getElementById('frame')), b = document.getElementById('aa').getBoundingClientRect(),
+          s = getComputedStyle(document.getElementById('sidebar')), c = document.getElementById('crumbs');
+          return { frame: f.display, aaTop: Math.round(b.top), sideBorder: s.borderRightWidth, crumbs: getComputedStyle(c).position,
+            docPad: getComputedStyle(document.getElementById('doc')).paddingTop }""")
+        check(p.get('startChrome') == 'minimal' and p.get('dclChrome') == 'minimal' and m == {'frame': 'none', 'aaTop': 8, 'sideBorder': '1px', 'crumbs': 'static', 'docPad': '12px'},
+              'minimal chrome: no outline or row, floating buttons, set at document start (no flash)', json.dumps([p, m]))
+        page.cmd(f'@shot:{SHOTS}/minimal-chrome.png')
+        page.apply(minimalChrome=False)
+        check(page.js("return getComputedStyle(document.getElementById('frame')).display") == 'block', 'minimal chrome switches off live')
+        page.cmd('@load:{}')
 
         csp = [l for l in page.logs if 'csp blocked' in l]
         errs = [l for l in page.logs if l.startswith(('rejection', 'mermaid')) or ' @' in l]

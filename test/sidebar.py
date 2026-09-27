@@ -16,6 +16,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webthemes import Page, ROOT, THEMES, HELPERS, click
 import hostile
 
+# The outlined page's edge: a PDF sits inside it, the gap and the hairline in from the panel's edges.
+EDGE = 7
 HOSTILE = 'z<img src=x onerror="window.__pwned=1">.md'
 STATE = """const s = document.getElementById('sidebar'), t = document.getElementById('side-toggle'), d = document.getElementById('doc');
   const cs = getComputedStyle(s);
@@ -94,6 +96,47 @@ def make_tree(out):
     return tree
 
 
+def make_vault(fx):
+    """An Obsidian-style vault with its notes only in subfolders, a .obsidian folder, embeds, callouts, tags, a hostile note, and
+    beside it folders of images and PDFs, a repository, an empty folder, a huge folder and an app bundle."""
+    def put(rel, text='x\n', age=0):
+        path = os.path.join(fx, rel)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, 'wb' if isinstance(text, bytes) else 'w').write(text)
+        if age:
+            os.utime(path, (1.7e9 - age, 1.7e9 - age))
+    put('Vault/.obsidian/app.json', '{}')
+    put('Vault/Daily/2026-09-24.md', '# Yesterday\n', age=500)
+    put('Vault/Daily/2026-09-25.md', '# Today\n\nSee [[Projects/Plan|Plan]], [[Ideas#Later|ideas]], [[Nowhere]] and [[#Heading here]]. #project and #area/sub, not #123.\n\n'
+        '> [!warning] Careful\n> Body line.\n\n> [!info]-\n> Folded body.\n\n> A plain quote.\n\n![[pic.png|120]]\n\n![[Ideas]]\n\n'
+        '`[[not a link]]` and `#notatag`\n\n## Heading here\n', age=10)
+    put('Vault/Projects/Plan.md', '# Plan\n', age=300)
+    put('Vault/Notes/Ideas.md', '# Ideas\n\n- [ ] an embedded task\n\n' + 'Filler paragraph.\n\n' * 60 + '## Later\n\nLater ideas.\n' + 'More.\n\n' * 40, age=400)
+    shutil.copy(os.path.join(ROOT, 'test', 'fixtures', 'img.png'), os.path.join(fx, 'Vault', 'Attachments', 'pic.png')) if os.makedirs(os.path.join(fx, 'Vault', 'Attachments'), exist_ok=True) is None else None
+    put('outside/secret.md', '# secret\n')
+    os.symlink(os.path.join(fx, 'outside', 'secret.md'), os.path.join(fx, 'Vault', 'secret.md'))
+    put('Vault/Inbox/Hostile.md', '# Hostile\n\n[[../outside]] [[/etc/hosts]] [[../../../../etc/hosts]] [[secret]] [[.obsidian/app]] ![[../outside/secret]] ![[/etc/hosts]]\n\n'
+        '<a class="wikilink" data-wl="../outside/secret.md" href="#">forged</a> <img class="wl-img" data-wl="/etc/hosts"> '
+        '<span class="wl-embed" data-wl="../outside/secret"></span>\n', age=900)
+    put('Vault/Inbox/Repeat.md', '# Repeat\n\n' + '![[Ideas]] ' * 1000 + '\n', age=950)
+    for i, n in enumerate(('a.png', 'b.png', 'c.png')):
+        shutil.copy(os.path.join(ROOT, 'test', 'fixtures', 'img.png'), os.path.join(fx, 'images', n)) if os.makedirs(os.path.join(fx, 'images'), exist_ok=True) is None else None
+        os.utime(os.path.join(fx, 'images', n), (1.7e9 - 100 + i * 10, 1.7e9 - 100 + i * 10))
+    put('images/scan.pdf', make_pdf('scan'), age=500)
+    put('pdfs/one.pdf', make_pdf('one'), age=10)
+    put('pdfs/two.pdf', make_pdf('two'), age=20)
+    put('repo/.git/HEAD', 'ref\n')
+    put('repo/src/main.swift', 'print(1)\n')
+    put('repo/node_modules/dep/README.md', '# dep\n')
+    put('repo/docs/guide.md', '# Guide\n')
+    os.makedirs(os.path.join(fx, 'empty'))
+    os.makedirs(os.path.join(fx, 'huge'))
+    for i in range(6000):
+        open(os.path.join(fx, 'huge', f'f{i:05d}.txt'), 'w').close()
+    os.makedirs(os.path.join(fx, 'Tool.app', 'Contents'))
+    return os.path.join(fx, 'Vault')
+
+
 ENTITLEMENTS = """<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict><key>com.apple.security.app-sandbox</key><true/><key>com.apple.security.files.user-selected.read-only</key><true/>
 <key>com.apple.security.network.client</key><true/><key>com.apple.security.temporary-exception.files.absolute-path.read-only</key>
@@ -111,7 +154,7 @@ def sandboxed(tree, check):
     open(plist, 'w').write(f'<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>{SANDBOX_ID}</string></dict></plist>')
     subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-O', '-target', 'arm64-apple-macos13.0'] +
                    [os.path.join(ROOT, *p) for p in (('test', 'web', 'main.swift'), ('Shared', 'Settings.swift'), ('Shared', 'WebShell.swift'),
-                                                      ('Shared', 'FolderListing.swift'), ('Shared', 'LinkPolicy.swift'), ('Preview', 'PDFPane.swift'))] +
+                                                      ('Shared', 'FolderListing.swift'), ('Shared', 'FolderScan.swift'), ('Shared', 'LinkPolicy.swift'), ('Preview', 'PDFPane.swift'))] +
                    ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist', '-Xlinker', plist, '-o', exe], check=True)
     subprocess.run(['codesign', '--force', '--sign', '-', '-i', SANDBOX_ID, '--entitlements', ent, exe], check=True, capture_output=True)
     ents = subprocess.run(['codesign', '-d', '--entitlements', '-', exe], capture_output=True, text=True).stdout
@@ -244,6 +287,7 @@ def main():
         folder_html = page.js("return document.getElementById('sidebar').outerHTML + document.getElementById('side-toggle').outerHTML")
         page.cmd('@renderfile:' + os.path.join(folder, 'README.md'))
         file_html = page.js("return document.getElementById('sidebar').outerHTML + document.getElementById('side-toggle').outerHTML")
+        folder_html = folder_html.replace(' arrive', '')
         check(folder_html == file_html and 'README.md' in file_html, 'sidebar markup identical for a folder preview and a single file',
               f'{len(folder_html)} vs {len(file_html)} chars')
         page.render(os.path.join(lone, 'only.md'))
@@ -497,14 +541,16 @@ def main():
               'image: never larger than the panel')
         r = view(T('code.ts'))
         c = page.js("""return { kw: document.querySelectorAll('#doc .code-view .hljs-keyword').length, gutter: document.querySelector('#doc .gutter').textContent.split('\\n').length,
-          text: document.querySelector('#doc pre.code').textContent, edit: document.getElementById('edit').hidden, stats: document.getElementById('stats').textContent,
+          text: document.querySelector('#doc pre.code').textContent, edit: (() => { const e = document.getElementById('edit');
+            return [getComputedStyle(e).display !== 'none', e.textContent, e.dataset.kind, getComputedStyle(document.querySelector('#doc .viewer-head .viewer-open')).display]; })(), stats: document.getElementById('stats').textContent,
           kind: document.querySelector('#doc .viewer-kind').textContent, button: document.querySelector('#doc button.viewer-open').textContent }""")
         check(c['kind'].startswith('Source code') and c['button'] == 'Reveal in Finder', '.ts is named as source and never opened as a video', json.dumps(c['kind']))
         r = page.cmd("@eval:window.webkit.messageHandlers.sb.postMessage({type:'openFile', path: " + json.dumps(T('code.ts')) + "}); 0")
         page.cmd('@wait:0.1')
         check('_openRefused' in [m.get('type') for m in r['messages'] + page.cmd('@eval:0')['messages']], 'openFile for a .ts file is refused')
-        check(c['kw'] > 0 and c['gutter'] == 6 and c['text'] == open(T('code.ts')).read() and c['edit'] and c['stats'] == '6 lines',
-              'code: highlighted, with line numbers; no "Open in editor" for anything but Markdown', json.dumps({k: v for k, v in c.items() if k != 'text'}))
+        check(c['kw'] > 0 and c['gutter'] == 6 and c['text'] == open(T('code.ts')).read() and c['edit'] == [True, 'Reveal in Finder', 'file', 'none']
+              and c['stats'] == '6 lines',
+              'code: highlighted, with line numbers; the toolbar offers the viewer\'s action (not "Open in editor"), the viewer\'s own button moves there', json.dumps({k: v for k, v in c.items() if k != 'text'}))
         r = click(page, '#doc pre.code')
         check('editBlock' not in [m.get('type') for m in r['messages']] and not page.js("return document.querySelector('#doc .md-editing')"),
               'code: a click edits nothing (editing is for Markdown only)')
@@ -573,7 +619,7 @@ def main():
         pdf = page.cmd('@pdf')['result']
         area = page.js(PDF_AREA)
         check(pdf['open'] and pdf['placed'] and not pdf['hidden'] and pdf['above'] and pdf['inContainer'] and near(pdf['frame'], area)
-              and area[0] >= 240 and area[1] > 60 and area[1] + area[3] == 800,
+              and area[0] >= 240 and area[1] > 60 and area[1] + area[3] == 800 - EDGE,
               'PDF: a native view laid exactly over the area the page reserves, right of the sidebar and under the breadcrumb',
               f"frame {pdf.get('frame')} area {area}")
         check(pdf['pages'] == 1 and pdf['text'] == 'Hello PDF' and pdf['autoScales'] and pdf['continuous'] and pdf.get('pixel')
@@ -585,8 +631,9 @@ def main():
         check(doc == {'frames': 0, 'buttons': [['Open', 'openFile']], 'aa': True, 'crumbs': True, 'side': 'visible', 'scroll': True}
               and not [m for m in r['messages'] if m.get('type') in ('_frame', '_navigation')],
               'PDF: no frame or plugin; one labelled Open button through the writer; sidebar and breadcrumb stay', json.dumps(doc))
-        r = page.cmd('@nativeclick:#doc .viewer-pdf button.viewer-open')
-        check('_openFile' in [m.get('type') for m in r['messages']], 'PDF: its Open button posts openFile, checked like any viewer', json.dumps(r['messages'])[:200])
+        r = page.cmd('@nativeclick:#edit')
+        check('_openFile' in [m.get('type') for m in r['messages']] and page.js("return document.getElementById('edit').textContent") == 'Open',
+              'PDF: the toolbar Open button posts openFile, checked like any viewer', json.dumps(r['messages'])[:200])
         light = page.cmd('@appearance:light') and page.cmd('@wait:0.4') and page.cmd('@pdf')['result']
         dark = page.cmd('@appearance:dark') and page.cmd('@wait:0.4') and page.cmd('@pdf')['result']
         check(not light['dark'] and dark['dark'] and sum(light['bg']) > 600 and sum(dark['bg']) < 200,
@@ -598,16 +645,16 @@ def main():
         click(page, '#side-toggle')
         page.cmd('@wait:0.6')
         reopened, area2 = page.cmd('@pdf')['result'], page.js(PDF_AREA)
-        check(near(collapsed['frame'], area) and area[0] == 0 and area[2] == 1200 and near(reopened['frame'], area2) and area2[0] == 240,
+        check(near(collapsed['frame'], area) and area[0] == EDGE and area[2] == 1200 - 2 * EDGE and near(reopened['frame'], area2) and area2[0] == 240 + 1,
               'PDF: the view follows the sidebar collapsing and opening', f"{collapsed['frame']} / {reopened['frame']}")
         page.cmd('@nativedrag:#side-resize,60')
         dragged, area = page.cmd('@pdf')['result'], page.js(PDF_AREA)
         page.cmd("@eval:document.getElementById('side-resize').dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); 0")
         page.cmd('@wait:0.3')
-        check(near(dragged['frame'], area) and area[0] == 300, 'PDF: the view follows a drag of the sidebar edge', f"{dragged['frame']} area {area}")
+        check(near(dragged['frame'], area) and area[0] == 300 + 1, 'PDF: the view follows a drag of the sidebar edge', f"{dragged['frame']} area {area}")
         page.cmd('@size:1000x700')
         resized, area = page.cmd('@pdf')['result'], page.js(PDF_AREA)
-        check(near(resized['frame'], area) and area[1] + area[3] == 700, 'PDF: the view follows the panel resizing', f"{resized['frame']} area {area}")
+        check(near(resized['frame'], area) and area[1] + area[3] == 700 - EDGE, 'PDF: the view follows the panel resizing', f"{resized['frame']} area {area}")
         page.cmd('@size:600x700')
         click(page, '#side-toggle')
         page.cmd('@wait:0.3')
@@ -727,6 +774,123 @@ def main():
               f"{n['width']} -> {st()['width']}")
         page.cmd("@eval:document.getElementById('side-resize').dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); 0")
         page.cmd('@wait:0.3')
+
+        # ================= folder previews: any folder, and Obsidian vaults =================
+        page.cmd('@size:1100x760')
+        fx = os.path.join(page.out, 'fx')
+        vault = make_vault(fx)
+        V = lambda *p: os.path.join(vault, *p)
+        r = page.cmd('@folder:' + vault)
+        page.cmd('@wait:0.4')
+        s = st()
+        top = [x[0] for x in s['rows'] if x[1] == 1]
+        check(r['result'] == 'file:' + V('Daily', '2026-09-25.md') and s['title1'] == 'Today' and '.obsidian' not in top
+              and s['active'] == [['2026-09-25.md', 'page']] and 'Daily' in top,
+              'vault with notes only in subfolders: previewed (not declined), opens its newest note nearest the top; .obsidian hidden',
+              json.dumps([r['result'], top, s['active']]))
+        o = page.js("""const d = document.getElementById('doc'); return {
+          links: [...d.querySelectorAll('a.wikilink')].map((a) => [a.textContent, a.dataset.wl, a.classList.contains('unresolved')]),
+          tags: [...d.querySelectorAll('span.tag')].map((t) => t.textContent),
+          callout: (() => { const q = d.querySelector('blockquote.callout'); return q && [q.dataset.callout, q.querySelector('.callout-title').textContent,
+            q.querySelector('p').textContent.trim()]; })(),
+          fold: (() => { const q = d.querySelectorAll('blockquote.callout')[1]; return q && [q.dataset.callout, q.querySelector('.callout-title').textContent]; })(),
+          plain: d.querySelectorAll('blockquote:not(.callout)').length,
+          img: (() => { const i = d.querySelector('img.wl-img'); return i && [i.getAttribute('src').startsWith('spacebar://file' + VAULT), i.naturalWidth > 0, i.getAttribute('width')]; })(),
+          embed: (() => { const e = d.querySelector('.wl-embed'); return e && [e.querySelector('.wl-embed-head').textContent, (e.querySelector('.wl-embed-body h1') || {}).textContent,
+            e.querySelectorAll('[data-src]').length, [...e.querySelectorAll('input[type=checkbox]')].map((b) => [b.disabled, b.hasAttribute('data-line')])]; })(),
+          code: [...d.querySelectorAll('code')].map((c) => c.textContent), pwned: window.__pwned || null }""".replace('VAULT', json.dumps(vault)))
+        check(o['links'][:4] == [['Plan', 'Projects/Plan', False], ['ideas', 'Ideas', False], ['Nowhere', 'Nowhere', True], ['Heading here', '', False]]
+              and o['tags'] == ['#project', '#area/sub'] and o['plain'] == 1 and '[[not a link]]' in o['code'] and '#notatag' in ''.join(o['code']),
+              'wikilinks resolve (an alias shows its text, a missing one is marked), tags are pills, code is left alone', json.dumps(o))
+        check(o['callout'] == ['orange', 'Careful', 'Body line.'] and o['fold'] == ['blue', 'Info'],
+              'callouts: typed and titled, the type as title when there is none', json.dumps([o['callout'], o['fold']]))
+        check(o['img'] and o['img'][0] and o['img'][1] and o['img'][2] == '120', 'an embedded image loads from its resolved file, sized as asked', json.dumps(o['img']))
+        check(o['embed'] and o['embed'][0] == 'Ideas.md' and o['embed'][1] == 'Ideas' and o['embed'][2] == 0 and o['embed'][3] == [[True, False]],
+              'an embedded note shows its text, read only: no block to edit, its task can not be ticked', json.dumps(o['embed']))
+        r = click(page, '#doc .wl-embed-body p')
+        check('editBlock' not in types(r) and not st()['editing'], 'a click inside an embedded note starts no edit', json.dumps(types(r)))
+        r = click(page, '#doc a.wikilink[data-wl="Projects/Plan"]')
+        page.cmd('@wait:0.4')
+        check(st()['title1'] == 'Plan' and st()['active'] == [['Plan.md', 'page']] and [m.get('path') for m in r['messages'] if m.get('type') == 'open'] == [V('Projects', 'Plan.md')],
+              'a wikilink click opens the note in the panel, and the sidebar follows', json.dumps(types(r)))
+        page.cmd('@folder:' + vault)
+        r = click(page, '#doc a.wikilink[data-wl="Ideas"]')
+        page.cmd('@wait:0.5')
+        y = page.js("const h = [...document.querySelectorAll('#doc h2')].find((x) => x.textContent === 'Later'); return [window.scrollY, Math.round(h.getBoundingClientRect().top)]")
+        check(st()['title1'] == 'Ideas' and y[0] > 0 and 0 <= y[1] < 120, 'a [[Note#Heading]] link opens the note at its heading', json.dumps(y))
+        page.cmd('@folder:' + vault)
+        page.cmd('@wait:0.3')
+        r = click(page, '#doc a.wikilink.unresolved')
+        page.cmd('@wait:0.2')
+        check(not [m for m in r['messages'] if m.get('type') == 'open'] and 'Nothing named' in page.js("return document.getElementById('status').textContent"),
+              'an unresolved wikilink opens nothing and says so')
+        # Hostile: targets out of the root, forged link markup, and opens of files nothing offered.
+        page.render(V('Inbox', 'Hostile.md'))
+        page.cmd('@wait:0.3')
+        h = page.js("""const d = document.getElementById('doc'); return { un: [...d.querySelectorAll('a.wikilink')].map((a) => [a.dataset.wl, a.classList.contains('unresolved')]),
+          imgs: [...d.querySelectorAll('img')].map((i) => i.getAttribute('src')), embeds: d.querySelectorAll('.wl-embed-body').length, pwned: window.__pwned || null }""")
+        forged = [x for x in h['un'] if x[0] in ('../outside', '/etc/hosts', '../../../../etc/hosts', 'secret', '.obsidian/app')]
+        check(forged and all(u for _, u in forged) and not any(i and ('outside' in i or '/etc/' in i) for i in h['imgs']) and h['embeds'] == 0 and not h['pwned'],
+              'hostile: links out of the root, through a link to the outside or into .obsidian stay unresolved; nothing outside loads', json.dumps(h))
+        before = st()['title1']
+        opened = []
+        for a in page.js("return [...document.querySelectorAll('#doc a.wikilink')].map((a) => a.dataset.wl)"):
+            r = click(page, f'#doc a.wikilink[data-wl={json.dumps(a)}]')
+            page.cmd('@wait:0.15')
+            opened += [m for m in r['messages'] if m.get('type') in ('_openFile', '_reveal', 'link') or (m.get('type') == 'open' and not m.get('path', '').startswith(vault + '/'))]
+        bad_opens = [os.path.join(fx, 'outside', 'secret.md'), '/etc/hosts', V('..', 'outside', 'secret.md'), V('.obsidian', 'app.json'), V('Daily')]
+        refused = 0
+        for bp in bad_opens:
+            r = page.cmd('@eval:window.webkit.messageHandlers.sb.postMessage(' + json.dumps({'type': 'open', 'path': bp}) + '); 0')
+            page.cmd('@wait:0.1')
+            refused += '_openRefused' in types(r) + types(page.cmd('@eval:0'))
+        check(not opened and refused == len(bad_opens), 'hostile: forged wikilinks open nothing outside the root; opens of paths nothing offered are refused',
+              f'{opened} {refused}/{len(bad_opens)}')
+        page.render(V('Inbox', 'Repeat.md'))
+        rep = page.js("return [document.querySelectorAll('#doc .wl-embed-body').length, document.querySelectorAll('#doc a.wl-embed-head').length]")
+        check(rep == [1, 1000], 'a note embedding another 1,000 times gets one copy and 999 links', json.dumps(rep))
+        page.render(V('Daily', '2026-09-25.md'))
+        check(page.js("return document.querySelectorAll('#doc .wl-embed-body').length") == 1, 'the vault renders normally again after the hostile note')
+
+        # A single note inside a vault: the vault is the sidebar's root, so its links reach the whole vault.
+        page.cmd('@root:')
+        page.render(V('Projects', 'Plan.md'))
+        page.cmd('@wait:0.4')
+        s = st()
+        check(s['head'] == 'Vault' and s['crumbs'] == 'Vault›Projects›Plan.md' and page.js("return !document.querySelector('#doc a.wikilink.unresolved')"),
+              'a note previewed on its own is rooted at its vault', json.dumps([s['head'], s['crumbs']]))
+
+        # Folders without Markdown, a repository, an empty folder, a huge one, a package.
+        results_by = {}
+        for name in ('images', 'pdfs', 'repo', 'empty', 'huge', 'Tool.app'):
+            r = page.cmd('@folder:' + os.path.join(fx, name))
+            page.cmd('@wait:0.3')
+            results_by[name] = (r['result'], st()['view'], page.js("""const o = document.querySelector('#doc .overview'); return o && {
+              sub: o.querySelector('.ov-sub').textContent, chips: [...o.querySelectorAll('.ov-chip')].map((c) => c.textContent),
+              rows: [...o.querySelectorAll('a.ov-row')].map((a) => a.querySelector('.ov-row-name').textContent), empty: !!o.querySelector('.ov-empty'),
+              note: (o.querySelector('.viewer-note') || {}).textContent || '', crumbs: document.getElementById('crumbs').textContent,
+              open: document.getElementById('edit').hidden }"""))
+        img = results_by['images']
+        check(img[0] == 'overview' and img[1] == 'overview' and img[2]['chips'] == ['3 images', '1 PDF'] and img[2]['rows'][0] == 'c.png'
+              and img[2]['sub'] == 'Folder · 4 items' and img[2]['crumbs'] == 'images' and img[2]['open'],
+              'a folder of images: the overview, with counts and the newest files first', json.dumps(img))
+        check(results_by['pdfs'][0] == 'overview' and results_by['pdfs'][2]['chips'] == ['2 PDFs'], 'a folder of PDFs: the overview', json.dumps(results_by['pdfs']))
+        check(results_by['repo'][0] == 'file:' + os.path.join(fx, 'repo', 'docs', 'guide.md'), 'a repository without a README opens its docs, not a dependency',
+              json.dumps(results_by['repo']))
+        check(results_by['empty'][0] == 'overview' and results_by['empty'][2]['empty'] and results_by['empty'][2]['sub'] == 'Folder · Empty',
+              'an empty folder: an overview that says so', json.dumps(results_by['empty']))
+        hg = results_by['huge']
+        check(hg[0] == 'overview' and hg[2]['sub'].endswith('+ items') and 'large folder' in hg[2]['note'] and len(hg[2]['rows']) == 8,
+              'a huge folder: the overview from a bounded scan, marked as partial', json.dumps(hg))
+        check(results_by['Tool.app'][0].startswith('declined'), 'an app bundle is declined', results_by['Tool.app'][0])
+        page.cmd('@folder:' + os.path.join(fx, 'images'))
+        r = click(page, '#doc a.ov-row')
+        page.cmd('@wait:0.4')
+        check(st()['view'] == 'image' and st()['active'] == [['c.png', 'page']] and 'open' in types(r), 'an overview row opens its file', json.dumps(types(r)))
+        r = click(page, '#side-head')
+        page.cmd('@wait:0.4')
+        check('overview' in types(r) and st()['view'] == 'overview', "the sidebar's folder name brings the overview back", json.dumps(types(r)))
+        page.cmd('@root:')
 
         csp = [l for l in page.logs if 'csp blocked' in l]
         errs = [l for l in page.logs if l.startswith(('rejection', 'mermaid')) or ' @' in l]

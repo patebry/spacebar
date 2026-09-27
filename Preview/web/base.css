@@ -20,7 +20,13 @@
     --line-height: 1.6;
     --measure: 760px;
     --diagram-edge: color-mix(in srgb, var(--accent) 70%, var(--bg)); --diagram-line: var(--muted);
+    /* The toolbar row and outlined page: the chrome around the page, the page's hairline, and where the page sits. */
+    --chrome: color-mix(in srgb, var(--fg) 3.5%, var(--bg)); --frame-line: color-mix(in srgb, var(--border) 70%, var(--bg));
+    --bar-h: 40px; --gap: 6px; --frame-r: 10px;
+    --side-w: clamp(160px, var(--side-saved, 240px), max(160px, min(480px, 45vw)));
+    --frame-left: var(--side-w); --frame-inset: 0px;
   }
+  :root[data-sidebar=collapsed] { --frame-left: var(--gap); --frame-inset: var(--gap); }
   :root[data-font=serif] { --font-body: ui-serif, "New York", Charter, Georgia, serif; }
   :root[data-font=rounded] { --font-body: ui-rounded, "SF Pro Rounded", -apple-system, sans-serif; }
   :root[data-font=mono] { --font-body: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace; }
@@ -41,7 +47,7 @@
 
   /* The sidebar keeps its full width inside and is clipped as it collapses, so its text never reflows mid-animation.
      Transitions start only after the first paint (sb-anim), so a collapsed sidebar never shows open first. */
-  #sidebar { --side-w: clamp(160px, var(--side-saved, 240px), max(160px, min(480px, 45vw))); width: var(--side-w); flex: none; position: sticky; top: 0; height: 100vh; box-sizing: border-box;
+  #sidebar { width: var(--side-w); flex: none; position: sticky; top: 0; height: 100vh; box-sizing: border-box;
     display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border); }
   #sidebar > * { width: var(--side-w); box-sizing: border-box; flex: none; }
   #side-list { flex: 1 1 auto; min-height: 0; overflow: auto; position: relative; }
@@ -62,18 +68,54 @@
   :root[data-view]:not([data-view=markdown]):not([data-view=info]) :is(#doc, #crumbs) { max-width: none; }
   #toc { flex: none; width: 210px; position: sticky; top: 0; max-height: 100vh; overflow: auto; box-sizing: border-box; padding: 56px 20px 24px 4px; }
   #toolbar { position: fixed !important; top: 8px; right: 12px; display: flex; gap: 6px; align-items: center; z-index: 10 !important; }
-  :root.sb-embedded #toolbar, :root.sb-embedded #sidebar, :root.sb-embedded #side-toggle, :root.sb-embedded #crumbs { display: none !important; }
-  :root.sb-embedded #doc { padding-top: 24px; }
+  :root.sb-embedded #toolbar, :root.sb-embedded #sidebar, :root.sb-embedded #side-toggle, :root.sb-embedded #crumbs,
+  :root.sb-embedded #frame { display: none !important; }
+  :root.sb-embedded #doc { padding-top: 24px !important; }
   :root.sb-embedded body::after { content: ""; position: fixed; left: 0; right: 0; bottom: 0; height: 28px; pointer-events: none;
     background: linear-gradient(transparent, var(--bg)); }
   @media (max-width: 899px) { #toc { display: none !important; } }
   @media (max-width: 1099px) { :root:not([data-sidebar=collapsed]) #sidebar:not([hidden]) ~ #toc { display: none !important; } }
   /* Narrow: the sidebar collapses whatever the setting says (it is not changed), and the button shows it over the page. */
   @media (max-width: 639px) {
+    :root { --frame-left: var(--gap); --frame-inset: var(--gap); }
     #sidebar { width: 0; border-right-width: 0; visibility: hidden; }
     :root.sb-peek #sidebar { position: fixed; left: 0; top: 0; z-index: 9; width: var(--side-w); visibility: visible;
       background: var(--bg); border-right-width: 1px; box-shadow: 0 0 24px rgba(0, 0, 0, .18); }
   }
   @media (max-width: 560px) { #doc, #crumbs { padding-left: 20px; padding-right: 20px; } }
   @media (prefers-reduced-motion: reduce) { :root.sb-anim #sidebar { transition: none; } }
+
+  /* ---------- the toolbar row and the outlined page (not Minimal chrome, and not in a very narrow panel) ----------
+     #frame is drawn over the page: a hairline with the system's window radius, and outside it the chrome colour, which hides
+     the document as it scrolls under the toolbar row and the edges. The sidebar and the row sit above it. The page itself
+     still scrolls the window, so nothing about scrolling, the TOC or the PDF view changes. */
+  #frame { display: none; }
+  @media (min-width: 480px) {
+    :root:not([data-chrome=minimal]) #frame { display: block; position: fixed !important; z-index: 8 !important; pointer-events: none;
+      top: var(--bar-h); right: var(--gap); bottom: var(--gap); left: var(--frame-left); border: 1px solid var(--frame-line);
+      border-radius: var(--frame-r); box-shadow: 0 0 0 100vmax var(--chrome); }
+    /* The edges outside the page take clicks, so nothing hidden under them can be clicked. */
+    :root:not([data-chrome=minimal]) #frame::before, :root:not([data-chrome=minimal]) #frame::after { content: ""; position: absolute;
+      pointer-events: auto; }
+    :root:not([data-chrome=minimal]) #frame::before { top: -1px; bottom: calc(-1px - var(--gap)); left: 100%; width: calc(var(--gap) + 1px); }
+    :root:not([data-chrome=minimal]) #frame::after { top: 100%; height: calc(var(--gap) + 1px); left: calc(-1px - var(--frame-left)); right: -1px; }
+    /* So do the toolbar row and the left edge, where the page may be scrolled under the chrome. */
+    :root:not([data-chrome=minimal]):not(.sb-embedded) body::before { content: ""; position: fixed; z-index: 8; top: 0; left: 0; right: 0;
+      height: var(--bar-h); }
+    :root:not([data-chrome=minimal]):not(.sb-embedded) #main::before { content: ""; position: fixed; z-index: 8; top: 0; bottom: 0; left: 0;
+      width: calc(var(--frame-left) + 1px); }
+    :root.sb-anim:not([data-chrome=minimal]) #frame { transition: left .2s ease-out; }
+    :root.sb-resizing #frame { transition: none !important; }
+    :root:not([data-chrome=minimal]) #sidebar { z-index: 9; background: var(--chrome); border-right-width: 0; }
+    :root:not([data-chrome=minimal]) #side-toggle { top: calc((var(--bar-h) - 26px) / 2); left: 10px; }
+    :root:not([data-chrome=minimal]) #toolbar { top: calc((var(--bar-h) - 26px) / 2); right: 10px; }
+    :root:not([data-chrome=minimal]) #crumbs { position: fixed; z-index: 10; top: 0; height: var(--bar-h); line-height: var(--bar-h); padding: 0;
+      margin: 0; max-width: none; box-sizing: border-box; left: max(calc(var(--frame-left) + 14px), 52px); right: calc(var(--tb-w, 180px) + 24px); }
+    :root.sb-anim:not([data-chrome=minimal]) #crumbs { transition: left .2s ease-out; }
+    :root:not([data-chrome=minimal]) #doc, :root:not([data-chrome=minimal]) #crumbs:not([hidden]) + #doc { padding-top: calc(var(--bar-h) + 28px); }
+    :root:not([data-chrome=minimal]) #doc { padding-bottom: calc(80px + var(--gap)); }
+    :root:not([data-chrome=minimal]) #toc { padding-top: calc(var(--bar-h) + 30px); padding-right: calc(20px + var(--gap)); }
+    :root:not([data-chrome=minimal]) #doc > :is(h1, h2, h3, h4, h5, h6) { scroll-margin-top: calc(var(--bar-h) + 16px); }
+  }
+  @media (prefers-reduced-motion: reduce) { :root.sb-anim #frame, :root.sb-anim #crumbs { transition: none !important; } }
 }

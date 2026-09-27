@@ -229,6 +229,29 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     /// The root and every folder expanded in the sidebar, each re-listed when it changes.
     private var dirWatches: [String: FolderWatch] = [:]
     private static let maxWatches = 64
+    /// Files the page may open that no listing named: the overview's recent files and the targets of the document's wikilinks,
+    /// each found by a bounded scan inside the root.
+    private var offered: Set<String> = []
+    /// The folder overview is on screen (no file is).
+    private var showingOverview = false
+    /// A folder preview has not opened anything yet.
+    private var folderPending = false
+    private var scanGen = 0
+    /// One scan at a time: a request while one runs is kept (the latest) and run when it ends.
+    private var scanning = false
+    private var rescan: Bool?
+    private var rescanTimer = false
+    /// The sidebar's folder name was clicked: the overview is wanted even though a file is on screen.
+    private var overviewRequested = false
+    /// A heading to scroll to once the file at `path` renders (a wikilink's `#heading`).
+    private var pendingAnchor: (path: String, anchor: String)?
+    /// The wikilink index of the root, shared by the previews of one extension process; rebuilt when stale, used meanwhile.
+    private static var linkIndex: LinkIndex?
+    private static var indexBuilding: String?
+    private var indexStale = false
+    /// The links of the last Markdown render, reused while its set of targets is unchanged (every keystroke saves and renders).
+    private var linkMemo: (targets: [String], root: String, path: String, links: [String: Any], embeds: [String: Any])?
+    private var linkGen = 0
     private static var sessions = 0
     private let session: Int = { PreviewViewController.sessions += 1; return PreviewViewController.sessions }()
     /// Latest document the preview intends to be on disk (includes queued edits).
@@ -362,25 +385,27 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
         let resolved = url.resolvingSymlinksInPath()
         rootDir = isDir.boolValue ? resolved.path : resolved.deletingLastPathComponent().path
+        if !isDir.boolValue, !FolderRules.isQuarantined(resolved.path) { rootDir = FolderRules.vaultRoot(containing: rootDir) ?? rootDir }
         host.scheme.fileRoot = rootDir
         knownDirs = [rootDir]
         listings = [:]
+        offered = []
+        showingOverview = false
+        folderPending = false
+        overviewRequested = false
+        rescan = nil
+        scanGen += 1
+        pendingAnchor = nil
+        linkMemo = nil
         if isDir.boolValue {
-            // Folder previews are opt-in; declining hands the folder back to Quick Look's own preview.
+            // Folder previews are opt-in; declining hands the folder back to Quick Look's own preview. Everything else a
+            // folder preview declines (packages, volumes, system folders) is known here, before anything starts.
             guard SettingsStore.shared.settings.folderMode else { return decline(handler, "folder previews are off") }
-            // The folder opens on its first Markdown file (its README when that setting is on), else on its first file.
-            refreshListing(rootDir, then: { [weak self] l in
-                guard let self else { return }
-                log.info("folder preview: \(l.entries.count + l.more) items")
-                guard let first = FolderListing.firstDocument(l) else {
-                    if let c = self.completion { self.decline(c, "no files in the folder") }
-                    return
-                }
-                self.open(URL(fileURLWithPath: first.path))
-            })
+            if let why = FolderRules.declineReason(resolved.path) { return decline(handler, why) }
+            startFolder()
         } else {
-            // The path inside the resolved folder, as the sidebar lists it.
-            open(URL(fileURLWithPath: rootDir).appendingPathComponent(resolved.lastPathComponent))
+            // The path inside the resolved folder (in a vault, the vault), as the sidebar lists it.
+            open(URL(fileURLWithPath: resolved.deletingLastPathComponent().path).appendingPathComponent(resolved.lastPathComponent))
             refreshListing(rootDir)
         }
         watch(rootDir)
@@ -396,7 +421,93 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             helper { $0.ensureSupportDir { _ in DispatchQueue.main.async { SettingsStore.shared.checkNow(reason: "created") } } }
         }
         // Not while a folder waits for its first listing: the panel would show the previous preview's document.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in if self?.onListed == nil { self?.finishPrepare(nil) } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in if self?.folderPending == false { self?.finishPrepare(nil) } }
+    }
+
+    /// A folder preview opens on its README, else its first Markdown file, else the most relevant Markdown a bounded search of
+    /// its subfolders finds, else the folder overview. A folder that is slow to read shows the overview's loading state first.
+    private func startFolder() {
+        folderPending = true
+        refreshListing(rootDir, then: { [weak self] l in
+            guard let self else { return }
+            log.info("folder preview: \(l.entries.count + l.more) items")
+            if let first = FolderListing.firstDocument(l) {
+                self.folderPending = false
+                self.open(URL(fileURLWithPath: first.path))
+            } else {
+                self.scanFolder(openBest: true)
+            }
+        })
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self, self.folderPending else { return }
+            self.showOverview(FolderScan.Result(root: self.rootDir, complete: false), reason: "loading")
+        }
+    }
+
+    /// Scans the root off the main thread (FolderScan: bounded in depth, entries and time), then opens the Markdown it found
+    /// (`openBest`) or shows the overview.
+    private func scanFolder(openBest: Bool) {
+        if scanning { rescan = openBest || rescan == true; return }
+        scanning = true
+        scanGen += 1
+        let gen = scanGen, root = rootDir, hidden = SettingsStore.shared.settings.showHiddenFiles
+        DispatchQueue.global(qos: .userInitiated).async {
+            let r = FolderScan.scan(root, showHidden: hidden)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.scanning = false
+                if let again = self.rescan {
+                    self.rescan = nil
+                    self.scanFolder(openBest: again)
+                    return
+                }
+                self.rescan = nil
+                // A file opened since the scan started (open() moves scanGen on) wins over what the scan would show.
+                guard gen == self.scanGen, root == self.rootDir, !self.torn,
+                      openBest ? self.folderPending : (self.showingOverview || self.overviewRequested) else { return }
+                self.overviewRequested = false
+                log.info("folder scan: \(r.scanned) entries, \(r.files.count) files, complete=\(r.complete)")
+                if openBest, let md = r.bestMarkdown {
+                    self.folderPending = false
+                    self.offer([md.path])
+                    self.open(URL(fileURLWithPath: md.path))
+                    return
+                }
+                self.showOverview(r, reason: openBest ? "open" : "overview")
+            }
+        }
+    }
+
+    private func offer(_ paths: [String]) {
+        if offered.count > 4096 { offered = [] }
+        offered.formUnion(paths)
+    }
+
+    /// The folder overview: nothing else is on screen, so edits, the file watch and the PDF view end.
+    private func showOverview(_ r: FolderScan.Result, reason: String) {
+        guard !torn else { return }
+        if reason != "loading" { folderPending = false }
+        stopEdit(notifyWriter: true)
+        queuedSave = nil
+        closePDF()
+        host.remoteImages.reset()
+        fileURL = nil
+        fileKind = .other
+        watcher = nil
+        docText = nil
+        diskText = nil
+        shownStamp = nil
+        shownCanOpen = false
+        showingOverview = true
+        offer(r.recent.map(\.path))
+        let json = String(data: try! JSONSerialization.data(withJSONObject: r.payload(reason: reason)), encoding: .utf8)!
+        host.whenReady { [host] in
+            host.remoteImages.whenInPlace {
+                host.web.evaluateJavaScript("sb.render(\(json)); 0") { _, err in
+                    if let err { log.error("overview eval failed: \(String(describing: err), privacy: .public)") }
+                }
+            }
+        }
     }
 
     private func decline(_ handler: (Error?) -> Void, _ why: String) {
@@ -407,6 +518,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
 
     fileprivate func settingsChanged(_ s: Settings) {
         if !s.inlineEditing, edit != nil { stopEdit(notifyWriter: true) }
+        if let w = listedWith, w.hidden != s.showHiddenFiles { indexStale = true }
         if let w = listedWith, w != (s.folderSort, s.folderReadmeFirst, s.showHiddenFiles) {
             for dir in Set(listings.keys).union(dirWatches.keys) { refreshListing(dir) }
         }
@@ -415,7 +527,23 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     /// Watches `dir` (the root, or a folder expanded in the sidebar) and re-lists it when it changes.
     private func watch(_ dir: String) {
         guard dirWatches[dir] == nil, dirWatches.count < Self.maxWatches else { return }
-        dirWatches[dir] = FolderWatch(path: dir) { [weak self] in self?.refreshListing(dir) }
+        dirWatches[dir] = FolderWatch(path: dir) { [weak self] in
+            guard let self else { return }
+            self.indexStale = true
+            self.refreshListing(dir)
+            if dir == self.rootDir, self.showingOverview, !self.folderPending { self.scheduleRescan() }
+        }
+    }
+
+    /// The overview follows changes to the root, at most once a second (downloads and .DS_Store writes come in bursts).
+    private func scheduleRescan() {
+        guard !rescanTimer else { return }
+        rescanTimer = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self else { return }
+            self.rescanTimer = false
+            if self.showingOverview, !self.folderPending { self.scanFolder(openBest: false) }
+        }
     }
 
     /// Lists `dir` off the main thread, then sends the page the list when it changed. `then` sees the new listing first.
@@ -463,7 +591,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         return st.st_size <= FolderListing.maxDocumentBytes ? nil : "\(url.lastPathComponent) is too large to preview"
     }
 
-    private func open(_ url: URL) {
+    private func open(_ url: URL, anchor: String? = nil) {
         if torn { return status("NOT SAVED: file partly written; retrying before switching") }
         var st = stat()
         guard stat(url.path, &st) == 0 else { return status("cannot read \(url.lastPathComponent)") }
@@ -474,6 +602,11 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         stopEdit(notifyWriter: true)
         queuedSave = nil
         host.remoteImages.reset()
+        showingOverview = false
+        folderPending = false
+        overviewRequested = false
+        scanGen += 1
+        pendingAnchor = anchor.map { (url.path, $0) }
         fileURL = url
         fileKind = kind
         shownStamp = nil
@@ -529,10 +662,77 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         if let keyTime { payload["keyTime"] = keyTime }
         if host.remoteImages.allowedPath == path { payload[RemoteImageGate.payloadKey] = true }
         payload["ver"] = docVersion
+        if let a = pendingAnchor, a.path == path { payload["anchor"] = a.anchor; pendingAnchor = nil }
+        if text.contains("[[") { addLinks(&payload, text: text, path: path) }
         let json = String(data: try! JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!
         host.remoteImages.whenInPlace { [host] in
             host.web.evaluateJavaScript("sb.render(\(json)); 0") { _, err in
                 if let err { log.error("render eval failed: \(String(describing: err), privacy: .public)") }
+            }
+        }
+    }
+
+    /// The document's wikilinks and embeds, resolved against the root's index (LinkIndex) off the main thread: resolving stats
+    /// and realpaths every target and reads embedded notes, which may be in iCloud and not downloaded. A render uses the last
+    /// result for this file (exact while its set of targets is unchanged); a new result that differs renders the file again.
+    private func addLinks(_ payload: inout [String: Any], text: String, path: String) {
+        let hidden = SettingsStore.shared.settings.showHiddenFiles
+        let idx = Self.linkIndex.flatMap { $0.root == rootDir ? $0 : nil }
+        if idx == nil || indexStale || Date().timeIntervalSince(idx!.built) > 30 { buildIndex(hidden: hidden) }
+        let targets = LinkIndex.links(in: text).map { ($0.embed ? "!" : "") + $0.target }
+        payload["linksComplete"] = idx?.complete ?? true
+        if let m = linkMemo, m.root == rootDir, m.path == path {
+            payload["links"] = m.links
+            payload["embeds"] = m.embeds
+            payload["linksReady"] = true
+            if m.targets == targets { return }
+        } else {
+            payload["linksReady"] = false
+        }
+        if let idx { resolveLinks(idx, text: text, path: path, targets: targets) }
+    }
+
+    private func resolveLinks(_ idx: LinkIndex, text: String, path: String, targets: [String]) {
+        linkGen += 1
+        let gen = linkGen, root = rootDir
+        DispatchQueue.global(qos: .userInitiated).async {
+            let r = idx.payload(text: text, current: path)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, gen == self.linkGen, root == self.rootDir, self.fileURL?.path == path, self.fileKind == .markdown else { return }
+                self.offer(Array(r.paths))
+                let old = self.linkMemo
+                let same = old.map { $0.path == path && NSDictionary(dictionary: $0.links).isEqual(to: r.links)
+                    && NSDictionary(dictionary: $0.embeds).isEqual(to: r.embeds) } ?? false
+                self.linkMemo = (targets, root, path, r.links, r.embeds)
+                // An edit in progress keeps its view; the next save renders with these.
+                guard !same, self.edit == nil, !self.writing, !self.torn, let t = self.docText else { return }
+                self.push(text: t, path: path, reason: "links")
+            }
+        }
+    }
+
+    /// Every preview waiting on a build of a root, whichever of them started it (the build is shared).
+    private static var indexWaiters: [String: [(LinkIndex) -> Void]] = [:]
+
+    private func buildIndex(hidden: Bool) {
+        let root = rootDir
+        indexStale = false
+        // The document on screen resolved against no index, or an older one: resolve again when it lands (renders only on a change).
+        Self.indexWaiters[root, default: []].append { [weak self] idx in
+            guard let self, root == self.rootDir, let url = self.fileURL, self.fileKind == .markdown, let text = self.docText,
+                  text.contains("[[") else { return }
+            self.resolveLinks(idx, text: text, path: url.path, targets: LinkIndex.links(in: text).map { ($0.embed ? "!" : "") + $0.target })
+        }
+        guard Self.indexBuilding != root else { return }
+        Self.indexBuilding = root
+        DispatchQueue.global(qos: .userInitiated).async {
+            let idx = LinkIndex.build(root: root, showHidden: hidden)
+            DispatchQueue.main.async {
+                if Self.indexBuilding == root { Self.indexBuilding = nil }
+                Self.linkIndex = idx
+                log.info("link index: \(idx.count) entries, complete=\(idx.complete)")
+                let waiters = Self.indexWaiters.removeValue(forKey: root) ?? []
+                waiters.forEach { $0(idx) }
             }
         }
     }
@@ -617,6 +817,15 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         return p
     }
 
+    /// A path the overview or a wikilink offered: plain, inside the root (symlinks resolved), a regular file.
+    private func offeredFile(_ m: PageMessage) -> String? {
+        guard let p = m.string("path", max: 4096), offered.contains(p), FolderListing.isPlainPath(p, under: rootDir),
+              FolderListing.isInside(p, root: rootDir) else { return nil }
+        var st = stat()
+        guard stat(p, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return nil }
+        return p
+    }
+
     func handle(_ type: String, _ body: [String: Any]) {
         let m = PageMessage(body: body)
         switch type {
@@ -641,9 +850,16 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             guard let href = m.string("href", max: LinkPolicy.maxURLBytes), let url = URL(string: href) else { return refuse("link", "bad href") }
             followLink(url)
         case "open":
-            // Only a file the sidebar listed, checked again now: a listed file may since have been replaced by a link out of the root.
-            guard let p = listedFile(m) else { return refuse("open", "not in the folder list") }
-            open(URL(fileURLWithPath: p))
+            // Only a file the sidebar listed, or the overview or a wikilink offered, checked again now: a listed file may since
+            // have been replaced by a link out of the root.
+            guard let p = listedFile(m) ?? offeredFile(m) else { return refuse("open", "not in the folder list") }
+            if p == fileURL?.path, let a = m.string("anchor", max: 256) { return js("sb.scrollToHeading", ["heading": a]) }
+            open(URL(fileURLWithPath: p), anchor: m.string("anchor", max: 256))
+        case "overview":
+            // The sidebar's folder name: the overview of the root.
+            guard !torn else { return }
+            overviewRequested = true
+            scanFolder(openBest: false)
         case "list":
             // A folder expanded in the sidebar: the root or one a listing named, still inside the root once symlinks are resolved.
             guard let p = m.string("path", max: 4096), listings[p] == nil || dirWatches[p] == nil, knownDirs.contains(p), FolderListing.isPlainPath(p, under: rootDir),

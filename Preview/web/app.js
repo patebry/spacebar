@@ -16,14 +16,15 @@ const el = (tag, cls, text) => {
 // document-start script) is absent in a plain browser, so the page falls back to a minimal apply of its own.
 const DEFAULTS = { theme: 'apple', appearance: 'auto', codeTheme: 'auto', bodyFont: 'system', monoFont: 'system', fontSize: 15,
   lineHeight: 1.6, width: 'medium', frontMatter: 'table', toc: 'auto', stats: true, math: true, mermaid: true, rawHTML: 'sanitized',
-  remoteImages: false, inlineEditing: true, taskToggles: true, sidebarCollapsed: false, sidebarWidth: 240, customCSSURL: null, userThemeURL: null };
+  remoteImages: false, inlineEditing: true, taskToggles: true, sidebarCollapsed: false, sidebarWidth: 240, minimalChrome: false, customCSSURL: null,
+  userThemeURL: null };
 let settings = { ...DEFAULTS, ...(window.__sbInitial || {}) };
 const THEMES = { apple: 'Apple', github: 'GitHub', paper: 'Paper', solarized: 'Solarized', nord: 'Nord', contrast: 'High Contrast' };
 const theme = window.sbTheme && typeof window.sbTheme.apply === 'function' ? window.sbTheme : {
   apply(p) {
     const r = document.documentElement;
     Object.assign(r.dataset, { theme: p.theme, font: p.bodyFont, mono: p.monoFont, width: p.width, editing: p.inlineEditing ? 'on' : 'off',
-      sidebar: p.sidebarCollapsed === true ? 'collapsed' : 'open' });
+      sidebar: p.sidebarCollapsed === true ? 'collapsed' : 'open', chrome: p.minimalChrome === true ? 'minimal' : 'app' });
     r.style.setProperty('--font-size', p.fontSize + 'px');
     r.style.setProperty('--side-saved', p.sidebarWidth + 'px');
   },
@@ -77,12 +78,150 @@ function markdown(html) {
     }
   });
 
+  md.inline.ruler.before('link', 'wikilink', wikiRule);
+  md.inline.ruler.before('newline', 'tag', tagRule);
+  md.renderer.rules.wikilink = (tokens, idx) => wikiHTML(tokens[idx].meta);
+  md.renderer.rules.tag = (tokens, idx) => `<span class="tag">#${esc(tokens[idx].content)}</span>`;
+
   // Top-level blocks carry their source line range so a click can be mapped back to the markdown it came from.
   md.core.ruler.push('srcmap', (state) => {
     for (const t of state.tokens) if (t.level === 0 && t.nesting >= 0 && t.type !== 'inline' && t.map) t.attrSet('data-src', `${t.map[0]},${t.map[1]}`);
   });
   return md;
 }
+// ---------- Obsidian: [[wikilinks]], ![[embeds]], #tags and > [!callouts] ----------
+// A link's target is resolved by the extension (LinkIndex), never here: the page only draws what the render payload's `links`
+// and `embeds` name, and asks to open a path from them, which the extension checks again. Nothing of the document's own markup
+// chooses a path or an image URL.
+
+/** `[[target#heading|alias]]` or `![[...]]`, on one line, at most 400 characters. */
+function wikiRule(state, silent) {
+  const src = state.src, pos = state.pos;
+  const embed = src.charCodeAt(pos) === 0x21;
+  const open = embed ? pos + 1 : pos;
+  if (src.charCodeAt(open) !== 0x5B || src.charCodeAt(open + 1) !== 0x5B) return false;
+  const end = src.indexOf(']]', open + 2);
+  if (end < 0) return false;
+  const inner = src.slice(open + 2, end);
+  if (!inner || inner.length > 400 || /[[\]\n]/.test(inner)) return false;
+  if (!silent) state.push('wikilink', '', 0).meta = { inner, embed };
+  state.pos = end + 2;
+  return true;
+}
+
+/** `#tag` after a space or at the start: letters, digits, `_`, `-` and `/`, not only digits (so not `#1`). */
+function tagRule(state, silent) {
+  const pos = state.pos;
+  if (state.src.charCodeAt(pos) !== 0x23 || (pos > 0 && !/\s/.test(state.src[pos - 1]))) return false;
+  const m = /^#([\p{L}\p{N}_/-]{1,100})/u.exec(state.src.slice(pos, pos + 102));
+  if (!m || /^[\d/_-]*$/.test(m[1])) return false;
+  if (!silent) state.push('tag', '', 0).content = m[1];
+  state.pos = pos + m[0].length;
+  return true;
+}
+
+/** The parts of a link, as the extension parses them: `\|` (escaped inside a table) separates the alias too. */
+function parseWiki(inner) {
+  const s = inner.replace(/\\\|/g, '|');
+  const bar = s.indexOf('|');
+  const head = bar < 0 ? s : s.slice(0, bar);
+  const hash = head.indexOf('#');
+  return { target: (hash < 0 ? head : head.slice(0, hash)).trim(), heading: hash < 0 ? '' : head.slice(hash + 1).trim(),
+           alias: bar < 0 ? '' : s.slice(bar + 1).trim() };
+}
+
+const own = (o, k) => !!o && typeof o === 'object' && Object.prototype.hasOwnProperty.call(o, k);
+/** What the extension resolved `target` to in the document being drawn: {path, name, icon, kind, src?}, or null. */
+function wikiTarget(target) {
+  const r = own(current.links, target) ? current.links[target] : null;
+  return r && typeof r === 'object' && typeof r.path === 'string' ? r : null;
+}
+
+let renderDepth = 0;
+function wikiHTML(m) {
+  const w = parseWiki(m.inner);
+  const r = w.target ? wikiTarget(w.target) : null;
+  const label = w.alias || (w.target ? w.target + (w.heading ? ' › ' + w.heading : '') : w.heading);
+  if (m.embed && r && r.kind === 'image') {
+    const size = /^(\d{1,4})(?:x(\d{1,4}))?$/.exec(w.alias);
+    return `<img class="wl-img" data-wl="${esc(w.target)}" alt="${esc(size ? w.target : label)}"` +
+      (size ? ` width="${size[1]}"${size[2] ? ` height="${size[2]}"` : ''}` : '') + '>';
+  }
+  if (m.embed && r && r.kind === 'markdown' && renderDepth === 0) return `<span class="wl-embed" data-wl="${esc(w.target)}"></span>`;
+  // Until the extension has indexed the folder, a link it has not resolved yet looks like any other.
+  // A folder too big to index completely may hold the note all the same.
+  const missing = w.target && !r && current.linksReady !== false && current.linksComplete !== false;
+  return `<a href="#" class="wikilink${missing ? ' unresolved' : ''}" data-wl="${esc(w.target)}" data-wl-h="${esc(w.heading)}">${esc(label)}</a>`;
+}
+
+// Callout types, as Obsidian names them, by colour family; anything else is a note.
+const CALLOUTS = { note: 'blue', info: 'blue', todo: 'blue', abstract: 'cyan', summary: 'cyan', tldr: 'cyan', tip: 'teal', hint: 'teal',
+  important: 'teal', success: 'green', check: 'green', done: 'green', question: 'yellow', help: 'yellow', faq: 'yellow',
+  warning: 'orange', caution: 'orange', attention: 'orange', failure: 'red', fail: 'red', missing: 'red', danger: 'red', error: 'red',
+  bug: 'red', example: 'purple', quote: 'gray', cite: 'gray' };
+
+/** `> [!type] Title` blockquotes become callouts: a title row (the rest of the first line, or the type) above the body. */
+function callouts(frag) {
+  frag.querySelectorAll('blockquote').forEach((bq) => {
+    const p = bq.firstElementChild;
+    const first = p && p.tagName === 'P' ? p.firstChild : null;
+    const m = first && first.nodeType === 3 ? /^\[!([A-Za-z][\w-]{0,30})\]([+-]?)[ \t]*/.exec(first.data) : null;
+    if (!m) return;
+    first.data = first.data.slice(m[0].length);
+    const type = m[1].toLowerCase();
+    const title = el('div', 'callout-title');
+    const text = el('span', 'callout-text');
+    for (let n = p.firstChild; n;) {
+      const next = n.nextSibling;
+      if (n.nodeName === 'BR') { n.remove(); break; }
+      if (n.nodeType === 3 && n.data.includes('\n')) {
+        const rest = n.splitText(n.data.indexOf('\n'));
+        rest.data = rest.data.slice(1);
+        if (n.data) text.append(n);
+        break;
+      }
+      text.append(n);
+      n = next;
+    }
+    if (!text.textContent.trim()) text.textContent = type[0].toUpperCase() + type.slice(1);
+    title.append(el('span', 'callout-icon'), text);
+    bq.classList.add('callout');
+    bq.dataset.callout = CALLOUTS[type] || 'blue';
+    bq.insertBefore(title, p);
+    if (!p.textContent.trim() && !p.querySelector('img, input, .katex')) p.remove();
+  });
+}
+
+/** After sanitizing: callouts, embedded images from the payload's URLs, and embedded notes one level deep (read only: their
+ *  blocks cannot be edited and their tasks cannot be ticked, since their lines are another file's). */
+function obsidian(frag, depth) {
+  callouts(frag);
+  frag.querySelectorAll('img.wl-img').forEach((img) => {
+    const r = wikiTarget(img.dataset.wl || '');
+    if (r && typeof r.src === 'string' && r.src.startsWith('spacebar://file/')) img.src = r.src;
+    else img.replaceWith(el('span', 'wl-missing', img.alt || ''));
+  });
+  // Each note is embedded once, at most 16 times in all (as many as the extension sends): a document repeating an embed
+  // thousands of times gets links, not thousands of copies.
+  const filled = new Set();
+  frag.querySelectorAll('span.wl-embed').forEach((span) => {
+    const t = span.dataset.wl || '', r = wikiTarget(t);
+    const e = depth === 0 && !filled.has(t) && filled.size < 16 && own(current.embeds, t) ? current.embeds[t] : null;
+    if (e) filled.add(t);
+    const head = el('a', 'wikilink wl-embed-head', r ? plainName(r.name || t) : t);
+    head.href = '#';
+    head.dataset.wl = t;
+    head.dataset.wlH = '';
+    if (!r || !e || typeof e.text !== 'string') { span.replaceWith(head); return; }
+    head.prepend(icon('markdown', 14));
+    const body = el('span', 'wl-embed-body');
+    body.append(render(e.text, depth + 1));
+    body.querySelectorAll('[data-src]').forEach((n) => n.removeAttribute('data-src'));
+    body.querySelectorAll('input[type=checkbox]').forEach((n) => { n.removeAttribute('data-line'); n.disabled = true; });
+    span.append(head, body);
+  });
+}
+
 // rawHTML 'off' renders the document's HTML as text; 'sanitized' parses it. Both outputs go through the same sanitizer.
 const mdHTML = markdown(true);
 const mdText = markdown(false);
@@ -149,10 +288,13 @@ function frontMatterNode(fm) {
   return table;
 }
 
-function render(text) {
+function render(text, depth = 0) {
   const fm = frontMatter(text);
   const md = settings.rawHTML === 'off' ? mdText : mdHTML;
-  const frag = DOMPurify.sanitize(md.render(fm ? fm.body : text), PURIFY);
+  renderDepth = depth;
+  let html;
+  try { html = md.render(fm ? fm.body : text); } finally { renderDepth = 0; }
+  const frag = DOMPurify.sanitize(html, PURIFY);
   frag.querySelectorAll('input:not([type=checkbox]), textarea, select').forEach((n) => n.remove());
   frag.querySelectorAll('span.tex[data-tex]').forEach((n) => {
     if (!settings.math) {
@@ -164,6 +306,7 @@ function render(text) {
     try { katex.render(n.dataset.tex, n, { displayMode: n.dataset.display === '1', throwOnError: false }); }
     catch (e) { n.textContent = n.dataset.tex; }
   });
+  obsidian(frag, depth);
   if (!settings.taskToggles) frag.querySelectorAll('input[type=checkbox]').forEach((n) => { n.disabled = true; });
   if (settings.remoteImages !== true && current.remoteImagesOnce !== true) blockRemoteImages(frag);
   const head = fm && frontMatterNode(fm);
@@ -559,6 +702,16 @@ function beginEdit(block, e, tClick) {
 // ---------- table of contents and reading stats (outside #doc, rebuilt after every draw) ----------
 
 let tocTargets = [];
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
+/** Scrolls to the document's heading named `h` (a wikilink's #heading, or a TOC entry's), exactly or else by prefix. */
+function scrollToHeading(h, smooth) {
+  const want = String(h).trim().toLowerCase();
+  if (!want) return;
+  const hs = [...$('doc').querySelectorAll(':scope > :is(h1, h2, h3, h4, h5, h6)')];
+  const t = hs.find((x) => headingText(x).toLowerCase() === want) || hs.find((x) => headingText(x).toLowerCase().startsWith(want));
+  if (t) t.scrollIntoView({ behavior: smooth && !reducedMotion.matches ? 'smooth' : 'auto', block: 'start' });
+}
 
 function headingText(h) {
   const c = h.cloneNode(true);
@@ -609,7 +762,7 @@ function updateStats() {
     return;
   }
   statsTimer = setTimeout(() => {
-    const skip = '.katex-mathml, pre.mermaid, .frontmatter, .frontmatter-raw, svg';
+    const skip = '.katex-mathml, pre.mermaid, .frontmatter, .frontmatter-raw, svg, .wl-embed-body';
     const walk = document.createTreeWalker($('doc'), NodeFilter.SHOW_TEXT,
       { acceptNode: (n) => (n.parentElement && n.parentElement.closest(skip) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
     let text = '';
@@ -650,7 +803,7 @@ window.sb = {
     $('base').href = p.base;
     document.title = p.name;
     root.dataset.view = isMarkdown(p) ? 'markdown' : p.view;
-    $('edit').hidden = !isMarkdown(p);
+    syncOpen(p);
     // The popover's text settings do nothing for a PDF, and it would open under the native view.
     $('aa').hidden = p.view === 'pdf';
     if (p.view === 'pdf') showPopover(false);
@@ -658,6 +811,7 @@ window.sb = {
     showCrumbs(p);
     draw();
     window.scrollTo(0, y);
+    if (typeof p.anchor === 'string' && p.anchor) scrollToHeading(p.anchor, false);
     const t1 = performance.now();
     const nodes = document.querySelectorAll('#doc pre.mermaid');
     post({ type: 'painted', parseMs: t1 - t0, reason: p.reason || '' });
@@ -743,11 +897,13 @@ window.sb = {
   },
   /** One folder of the sidebar's tree: the root, or a folder expanded in it. */
   setFiles(f) { setFolder(f); },
+  /** A wikilink to a heading of the document already on screen. */
+  scrollToHeading(m) { if (m && typeof m.heading === 'string') scrollToHeading(m.heading, true); },
   /** The app the viewer's Open button would use, named once the writer has looked it up. */
   setOpener(o) {
     if (!o || o.path !== current.path || typeof o.app !== 'string') return;
     current.app = o.app;
-    document.querySelectorAll('#doc .viewer-open[data-action=openFile]').forEach((b) => { b.textContent = `Open with ${o.app}`; });
+    document.querySelectorAll('#doc .viewer-open[data-action=openFile], #edit[data-action=openFile]').forEach((b) => { b.textContent = `Open with ${o.app}`; });
   },
   status(s, sticky) {
     if (sticky) stickyStatus = s;
@@ -968,7 +1124,7 @@ function pdfRect() {
   const c = themeColors();
   const bg = mixc(c.bg, c.fg, 0.06).map(Math.round);
   return { path: current.path, x: Math.round(left), y: Math.round(r.top), w: Math.max(0, Math.round(r.right - left)), h: Math.max(0, Math.round(bottom - r.top)),
-    hide: !pop.hidden, bg, dark: (0.2126 * c.bg[0] + 0.7152 * c.bg[1] + 0.0722 * c.bg[2]) / 255 < 0.45 };
+    hide: !pop.hidden, bg, dark: (0.2126 * c.bg[0] + 0.7152 * c.bg[1] + 0.0722 * c.bg[2]) / 255 < 0.45, radius: appChrome() ? 8 : 0 };
 }
 const pdfObserver = new ResizeObserver(() => syncPdf());
 window.addEventListener('resize', () => syncPdf());
@@ -992,6 +1148,7 @@ function viewNode(p) {
   switch (p.view) {
     case 'image': if (typeof p.src === 'string') return imageView(p); break;
     case 'pdf': return pdfView(p);
+    case 'overview': return overviewView(p);
     case 'json': if (typeof p.text === 'string') return jsonView(p); break;
     case 'csv': if (typeof p.text === 'string') return csvView(p); break;
     case 'code': case 'text':
@@ -1010,10 +1167,83 @@ function viewNode(p) {
   return infoCard(p, typeof p.note === 'string' ? p.note : undefined);
 }
 
+// ---------- the folder overview: what a folder holds, when it has no Markdown to open (text nodes only) ----------
+
+const OVERVIEW_KINDS = [['markdown', 'Markdown file', 'Markdown files', 'markdown'], ['image', 'image', 'images', 'image'], ['pdf', 'PDF', 'PDFs', 'pdf'],
+  ['code', 'code file', 'code files', 'code'], ['data', 'data file', 'data files', 'data'], ['text', 'text file', 'text files', 'text'],
+  ['other', 'other item', 'other items', 'other']];
+
+function shortDate(ms) {
+  if (typeof ms !== 'number' || !isFinite(ms)) return '';
+  const d = new Date(ms), now = new Date();
+  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  if (now - d < 6 * 864e5 && now > d) return d.toLocaleDateString(undefined, { weekday: 'short' });
+  return d.toLocaleDateString(undefined, d.getFullYear() === now.getFullYear() ? { day: 'numeric', month: 'short' } : { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function overviewView(p) {
+  const box = el('div', 'viewer overview');
+  const counts = p.counts && typeof p.counts === 'object' ? p.counts : {};
+  const total = Math.max(0, +p.total || 0), folders = Math.max(0, +p.folders || 0);
+  const loading = p.reason === 'loading';
+  const head = el('div', 'ov-head');
+  const title = el('div', 'ov-title');
+  const sub = loading ? 'Reading this folder…'
+    : [typeof p.label === 'string' ? p.label : 'Folder', total ? `${total.toLocaleString()}${p.complete === false ? '+' : ''} ${total === 1 ? 'item' : 'items'}` : 'Empty'].join(' · ');
+  title.append(el('div', 'ov-name', plainName(p.name || '')), el('div', 'ov-sub', sub));
+  head.append(icon('folder', 40), title);
+  box.append(head);
+  if (loading) return box;
+  const chips = el('div', 'ov-counts');
+  const chip = (ic, n, one, many) => {
+    const c = el('span', 'ov-chip');
+    c.append(icon(ic, 14), el('b', '', n.toLocaleString()), document.createTextNode(' ' + (n === 1 ? one : many)));
+    chips.append(c);
+  };
+  if (folders) chip('folder', folders, 'folder', 'folders');
+  for (const [k, one, many, ic] of OVERVIEW_KINDS) { const n = Math.max(0, +counts[k] || 0); if (n) chip(ic, n, one, many); }
+  if (chips.childNodes.length) box.append(chips);
+  const recent = Array.isArray(p.recent) ? p.recent.filter((r) => r && typeof r.path === 'string' && typeof r.name === 'string') : [];
+  if (recent.length) {
+    box.append(el('div', 'ov-section', 'Recently modified'));
+    const list = el('div', 'ov-list');
+    for (const r of recent) {
+      const a = el('a', 'ov-row');
+      a.href = '#';
+      a.dataset.path = r.path;
+      a.title = typeof r.rel === 'string' ? r.rel : r.name;
+      const where = typeof r.rel === 'string' && r.rel.includes('/') ? r.rel.slice(0, r.rel.lastIndexOf('/')) : '';
+      a.append(icon(typeof r.icon === 'string' ? r.icon : 'other', 16), el('span', 'ov-row-name', plainName(r.name)),
+        el('span', 'ov-row-where', plainName(where)), el('span', 'ov-row-date', shortDate(r.modified)));
+      list.append(a);
+    }
+    box.append(list);
+  } else if (!total) {
+    box.append(el('div', 'ov-empty', 'Nothing here yet.'));
+  }
+  if (p.complete === false) box.append(note(`A large folder: counted what could be read quickly, ${+p.depth || 3} folders deep.`));
+  return box;
+}
+
+/** The toolbar's Open button: the editor for Markdown, else what the viewer offers (Open with, or Reveal in Finder). */
+function syncOpen(p) {
+  const b = $('edit');
+  const doc = isMarkdown(p);
+  b.hidden = !doc && (p.view === 'overview' || !p.path);
+  b.dataset.kind = doc ? 'doc' : 'file';
+  if (doc) { b.dataset.action = 'edit'; b.textContent = 'Open in editor'; b.title = 'Open this file in your editor'; return; }
+  b.dataset.action = p.canOpen === true ? 'openFile' : 'reveal';
+  b.textContent = p.canOpen === true ? (p.app ? `Open with ${p.app}` : 'Open') : 'Reveal in Finder';
+  b.title = p.canOpen === true ? 'Open this file in its default app' : 'Show this file in Finder';
+}
+
 // ---------- the sidebar: the previewed folder as a tree, for a file and a folder alike (outside #doc, text only) ----------
 
 const root = document.documentElement;
 const narrow = matchMedia('(max-width: 639px)');
+const tiny = matchMedia('(max-width: 479px)');
+/** The toolbar row and outlined page are on: not Minimal chrome, and the panel is not too narrow for them. */
+const appChrome = () => root.dataset.chrome !== 'minimal' && !tiny.matches;
 // The tree of the root on screen: each listed folder by path. Expanded folders are remembered per root for this session
 // (the page lives as long as the extension process), never saved.
 let tree = { root: '', name: '', session: 0, dirs: new Map() };
@@ -1131,7 +1361,7 @@ function renderSidebar() {
   const moved = sideDrawn.split('\n')[1] !== current.path;
   sideDrawn = key;
   $('side-head').textContent = tree.name;
-  $('side-head').title = tree.root;
+  $('side-head').title = `${tree.root}\nClick for an overview of this folder`;
   const list = $('side-list');
   const rows = [];
   const exp = expanded();
@@ -1154,6 +1384,7 @@ function renderSidebar() {
   $('side-more').textContent = top && top.more ? `${top.more.toLocaleString()} more not listed` : '';
   // Keep the document on screen in view; the list scrolls on its own, never the page.
   const at = list.querySelector('a.active');
+  if (at && moved) at.classList.add('arrive');
   if (at && (moved || at.offsetTop < list.scrollTop || at.offsetTop + at.offsetHeight > list.scrollTop + list.clientHeight)) {
     list.scrollTop = Math.max(0, at.offsetTop - list.clientHeight / 3);
   }
@@ -1163,8 +1394,9 @@ function renderSidebar() {
 function showCrumbs(p) {
   const c = $('crumbs');
   const r = typeof p.root === 'string' ? p.root : '';
-  if (!r || typeof p.path !== 'string' || !p.path.startsWith(r === '/' ? '/' : r + '/')) { c.hidden = true; c.replaceChildren(); return; }
-  const parts = [p.rootName || r.split('/').pop() || r, ...p.path.slice(r.length + (r === '/' ? 0 : 1)).split('/')];
+  const atRoot = !!r && p.path === r;
+  if (!r || typeof p.path !== 'string' || (!atRoot && !p.path.startsWith(r === '/' ? '/' : r + '/'))) { c.hidden = true; c.replaceChildren(); return; }
+  const parts = [p.rootName || r.split('/').pop() || r, ...(atRoot ? [] : p.path.slice(r.length + (r === '/' ? 0 : 1)).split('/'))];
   c.replaceChildren(...parts.flatMap((name, i) => {
     const s = el('span', i === parts.length - 1 ? 'crumb here' : 'crumb', plainName(name));
     return i ? [el('span', 'crumb-sep', '›'), s] : [s];
@@ -1172,6 +1404,9 @@ function showCrumbs(p) {
   c.title = p.path;
   c.hidden = false;
 }
+
+// The breadcrumb in the toolbar row ends where the toolbar's buttons begin.
+new ResizeObserver(() => root.style.setProperty('--tb-w', Math.ceil($('toolbar').getBoundingClientRect().width) + 'px')).observe($('toolbar'));
 
 /** Open or collapsed as the setting says; below the narrow width it is always collapsed and the button shows it over the page. */
 function sidebarShown() { return narrow.matches ? root.classList.contains('sb-peek') : settings.sidebarCollapsed !== true; }
@@ -1298,7 +1533,13 @@ document.addEventListener('dblclick', (e) => {
 document.addEventListener('click', (e) => {
   const tClick = performance.timeOrigin + e.timeStamp;
   const toc = e.target.closest('#toc a');
-  if (toc) { e.preventDefault(); const h = tocTargets[+toc.dataset.toc]; if (h && h.isConnected) h.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
+  if (toc) {
+    e.preventDefault();
+    const h = tocTargets[+toc.dataset.toc];
+    if (h && h.isConnected) h.scrollIntoView({ behavior: reducedMotion.matches ? 'auto' : 'smooth', block: 'start' });
+    return;
+  }
+  if (e.target.closest('#side-head') && tree.root) { e.preventDefault(); peek(false); post({ type: 'overview' }); return; }
   const row = e.target.closest('#side-list a.row');
   if (row) {
     e.preventDefault();
@@ -1310,9 +1551,15 @@ document.addEventListener('click', (e) => {
   if (e.target.closest('#sidebar, #crumbs')) return;
   const act = e.target.closest('#doc .viewer [data-action]');
   if (act) { e.preventDefault(); viewerAction(act, e); return; }
+  const ov = e.target.closest('#doc .overview a.ov-row');
+  if (ov) { e.preventDefault(); if (ov.dataset.path !== current.path) post({ type: 'open', path: ov.dataset.path }); return; }
+  const wl = e.target.closest('#doc a.wikilink');
+  if (wl) { e.preventDefault(); followWiki(wl); return; }
   const a = e.target.closest('a[href], a[*|href]');
   const href = a && (a.getAttribute('href') ?? a.getAttributeNS('http://www.w3.org/1999/xlink', 'href'));
   if (a && href && !href.startsWith('#')) { e.preventDefault(); post({ type: 'link', href: new URL(href, document.baseURI).href }); return; }
+  // An embedded note is another file: it is read here, never edited.
+  if (e.target.closest('#doc .wl-embed')) return;
   const el = e.target.closest('#doc > .md-editing');
   if (editing && el) { if (e.detail < 2) select(editorOffset(el, e.clientX, e.clientY), 0); return; }
   if (a || e.target.closest('input, button, #toolbar') || getSelection().toString()) return;
@@ -1343,6 +1590,26 @@ document.addEventListener('change', (e) => {
   post({ type: 'toggle', path: current.path, line, text, checked: box.checked, ver: docVer });
 });
 
-$('edit').onclick = () => post({ type: 'edit' });
+/** A wikilink: the file the extension resolved it to, opened in the panel (at its heading), or a heading of this document. */
+function followWiki(a) {
+  const t = a.dataset.wl || '', h = a.dataset.wlH || '';
+  const r = t ? wikiTarget(t) : null;
+  if (!t || (r && r.path === current.path)) { if (h) scrollToHeading(h, true); return; }
+  if (!r) {
+    window.sb.status(current.linksReady === false ? 'Still indexing this folder…'
+      : current.linksComplete === false ? `“${plainName(t)}” was not found in the part of this folder that was indexed`
+      : `Nothing named “${plainName(t)}” in ${plainName(tree.name || 'this folder')}`);
+    return;
+  }
+  peek(false);
+  post(h ? { type: 'open', path: r.path, anchor: h } : { type: 'open', path: r.path });
+}
+
+// The toolbar's Open button; a file's Open or Reveal is posted only for a real click, and the extension checks it again.
+$('edit').addEventListener('click', (e) => {
+  if (isMarkdown(current)) { post({ type: 'edit' }); return; }
+  const a = $('edit').dataset.action;
+  if ((a === 'openFile' || a === 'reveal') && e.isTrusted && current.path) post({ type: a, path: current.path });
+});
 
 post({ type: 'ready' });

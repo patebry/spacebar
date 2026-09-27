@@ -41,8 +41,11 @@ Swift calls into the page through `window.sb`, and the page calls back through t
 | Mermaid without a flash | `mermaid.run` drew in the diagram's own element, so the source showed, then an empty block, then a half-laid-out SVG; a re-theme's `mermaid.render` drew into `<body>`, a flex row, beside the page. Every diagram is now drawn off screen (`#mm-stage`) and swapped in whole: its source is taken out before the first paint, a blank placeholder the height of the diagram last in its place holds the space, the first reveal fades in (not under reduced motion), a re-theme swaps finished SVGs, and finished SVGs are cached by colours and source so a redraw puts an unchanged diagram straight back | `test/webthemes.py` samples every diagram at each DOM mutation and animation frame |
 | Live reload | DispatchSource watch that re-arms across atomic saves, 15 ms debounce; covers append, temp+rename and rename-away saves | `test/livereload.py` |
 | Images and links | Relative images load via `<base href="spacebar://file/<dir>/">`. Markdown links inside the previewed folder open in the panel; others go through the link policy to the default app | `test/webcheck.py`, `test/linkpolicy/run.sh` |
-| Folder mode (opt-in) | The folders extension claims `public.folder`/`public.directory`; it is enabled only while `folderMode` is on and declines otherwise. Ships; verified by hand in Finder | `docs/evidence/themes/settings-folders.png`; `test/folders.py` (Quick Look) |
-| Sidebar file browser | Every preview, a single file or a folder, shows the previewed folder (the root) as a tree: folders first, then files, README first, sorted by `folderSort`, each with an inline-SVG type icon. Folders expand lazily and are re-listed by a watch while open; expansion is remembered per root for the life of the extension process, and the current file's folders open. Hidden files are skipped unless `showHiddenFiles`; links out of the root, FIFOs and devices always are; packages are single items; at most 500 entries per folder, with an "N more" note. A click shows the file in the panel by kind (FileView): Markdown as before; images fitted with dimensions; PDF natively (below); code highlighted with line numbers (HTML as source); JSON pretty-printed with a Raw toggle; CSV/TSV as a table capped at 1,000 rows; text; anything else an info card with Open with its default app, or Reveal in Finder where LinkPolicy refuses it. A breadcrumb shows the path from the root; the panel title stays the file Quick Look opened | `test/sidebar.py` (99), `test/settings/run.sh` (tree, types), `test/scheme/run.sh` |
+| Folder mode (opt-in) | The folders extension claims `public.folder`/`public.directory`; it is enabled only while `folderMode` is on and declines otherwise. With it on, every ordinary folder is previewed (see [Folder previews](#folder-previews)); only packages and app bundles, the top of a volume or a mount point, and system folders are declined, decided in `preparePreviewOfFile` before anything starts (`FolderRules.declineReason`) | `test/settings/run.sh` (rules, finder, declines), `test/sidebar.py` (`@folder:`); `test/folders.py` (Quick Look) |
+| Folder overview | A folder with no Markdown to open shows its overview: folders and files by kind, and the 8 most recently modified files as rows that open in the panel, from one bounded scan (`FolderScan`: breadth first, 3 folders deep, 5,000 entries, 250 ms, off the main thread). A folder not listed within 1.5 s shows the overview's loading state rather than hold the panel. The sidebar's folder name shows it again | `test/sidebar.py`, `test/settings/run.sh` |
+| Obsidian | `[[wikilinks]]` (alias, heading, folder path), `![[image]]` (with a width) and `![[note]]` (inline, one level, read only), `> [!type]` callouts in nine colour families, `#tags` as pills. A note inside a vault (an ancestor with `.obsidian/`, at most 8 levels up, never the home or a system folder) is rooted at the vault. Targets are resolved by the extension (`LinkIndex`: by name anywhere under the root, the note's own folder first, then the shallowest; 20,000 entries, 12 deep, 400 ms, built off the main thread and reused while it is rebuilt) | `test/settings/run.sh`, `test/sidebar.py`, `test/webthemes.py` (contrast) |
+| Toolbar row and outlined page | The default look: a 40 px row (sidebar button and breadcrumb on the left, Aa and Open on the right, quiet buttons with hover and pressed states and tooltips) and a 1 px hairline with a 10 px radius around the page, in the theme's border colour at low contrast (1.05 to 2.2:1; High Contrast keeps its strong line), on a chrome tint of the theme's background. `#frame` is a fixed overlay whose shadow is the chrome, so the window still scrolls the page and nothing about scrolling, the TOC or the PDF view changed; the edges outside the page take clicks. Below 480 px, and with **Minimal chrome** (`minimalChrome`, applied at document start), the floating buttons return. The current sidebar row settles into its highlight, rows highlight on hover, buttons press, the TOC scrolls smoothly; none of it under reduced motion | `test/webthemes.py` (every theme, light and dark: geometry, 4.5:1 for the row, sidebar, callouts, tags and wikilinks), `test/sidebar.py` |
+| Sidebar file browser | Every preview, a single file or a folder, shows the previewed folder (the root) as a tree: folders first, then files, README first, sorted by `folderSort`, each with an inline-SVG type icon. Folders expand lazily and are re-listed by a watch while open; expansion is remembered per root for the life of the extension process, and the current file's folders open. Hidden files are skipped unless `showHiddenFiles`; links out of the root, FIFOs and devices always are; packages are single items; at most 500 entries per folder, with an "N more" note. A click shows the file in the panel by kind (FileView): Markdown as before; images fitted with dimensions; PDF natively (below); code highlighted with line numbers (HTML as source); JSON pretty-printed with a Raw toggle; CSV/TSV as a table capped at 1,000 rows; text; anything else an info card with Open with its default app, or Reveal in Finder where LinkPolicy refuses it. A breadcrumb shows the path from the root; the panel title stays the file Quick Look opened | `test/sidebar.py`, `test/settings/run.sh` (tree, types), `test/scheme/run.sh` |
 | Sidebar chrome | A toolbar button collapses it (animated, off under reduced motion); `sidebarCollapsed` is saved through the writer and applied at document start. Its right edge resizes it: 160 px to 45% of the panel or 480 px, saved as `sidebarWidth` once when the drag ends, applied at document start, reset by a double-click; dragging never collapses it. Below 640 px it collapses on screen only and the button shows it over the page; below 1100 px an open sidebar hides the TOC rail | `test/sidebar.py` |
 | PDF in the panel | A PDFKit `PDFView` (Preview/PDFPane.swift) laid over the page's `.pdf-area`, under the breadcrumb and beside the sidebar: fitted, continuous pages, a backdrop from the theme. The page posts the area's rect whenever it moves (the sidebar's animation, a drag of its edge, the panel resizing); between posts the view keeps its margins. The iframe it replaced showed WebKit's PDF plugin and its unlabelled HUD buttons. Links in a PDF go through LinkPolicy and the writer. Anything else on screen closes the view and frees the document. Verified off screen, and in a copy of the harness signed with the extension's sandbox entitlements | `test/pdfpane/run.sh`, `test/sidebar.py` |
 | Task toggles | The checkbox sends its line and text; Swift re-locates the line and the writer saves it with compare-and-swap | 2338549; `test/corpus.py` |
@@ -100,8 +103,9 @@ The threat is a downloaded Markdown file, and whatever sits beside it, driving t
 3. **Swift message gate**
    - Only messages from the main frame of `spacebar://bundle` are accepted, and every field is type- and size-checked.
    - Toggles and edits apply only to the previewed file.
-   - `open` is limited to files the sidebar listed, `list` to the root and folders a listing named; both must be plain paths
-     (no `.`, `..` or empty step) that still resolve inside the root when asked, so nothing above the root is reachable.
+   - `open` is limited to files the sidebar listed, or that the overview or a wikilink offered (each found by a bounded scan
+     inside the root), `list` to the root and folders a listing named; both must be plain paths (no `.`, `..` or empty step)
+     that still resolve inside the root when asked, so nothing above the root is reachable. `overview` takes no argument.
    - Editing, task toggles and "Open in editor" apply only to Markdown. `openFile` and `reveal` apply only to the file on screen;
      `openFile` only when the viewer offered it and LinkPolicy allows it (a `.ts` is not handed to QuickTime), and the page posts
      either only for a trusted click.
@@ -134,10 +138,44 @@ The threat is a downloaded Markdown file, and whatever sits beside it, driving t
    (Markdown files only, LinkPolicy) still bound what that connection can do. Text, code, JSON and CSV reach the page as
    strings and are put in with `textContent`; highlight.js output is sanitized to `<span class>` only. SVG is shown only as
    `<img>`.
+9. **Wikilinks and embeds:** the page never chooses a path. The extension resolves each target against its index of the root
+   (files only; a symbolic link only when it resolves inside the root; linked folders, hidden folders, `.obsidian`, `.git` and
+   `node_modules` never entered; a target with `..`, `.` or an empty step, a NUL, or over 400 bytes resolves to nothing), checks
+   the result against the root again, and sends it in the render payload. An embedded image's `src` is set after DOMPurify from
+   that payload (DOMPurify would drop a `spacebar:` URL, and the document's markup never supplies one); an embedded note is
+   rendered through the same sanitizer, at most 16 per document and 64 KB each, one level deep, with its source lines and task
+   boxes removed so a click or a tick can never edit the file on screen at another file's line numbers. Targets are looked up
+   as own properties only, so `[[__proto__]]` is just an unresolved link, and each note is embedded once (a note repeating
+   `![[X]]` a thousand times gets one copy and links). Resolving stats every target and reads embedded notes, which may be in
+   iCloud and not downloaded, so it runs off the main thread; a render uses the file's last result until the new one lands.
+   A note inside a vault is rooted at the vault, so its links reach the vault's other notes; a note carrying the quarantine
+   attribute (downloaded) is not, and keeps its own folder as its root. Notes Obsidian writes itself (the Web Clipper's, say)
+   carry no such attribute and are rooted at the vault like any other.
 
-Tests: `test/webcheck.py` (10/10), `test/linkpolicy/run.sh` (44/44), `test/remoteimages.py` (19/19), `test/sidebar.py` (99/99, with the
-hostile file-browser fixtures in `test/hostile/browser`, a link to `/etc` and names made of dots), `test/hostile.py` (runs the
+Tests: `test/webcheck.py` (10/10), `test/linkpolicy/run.sh` (44/44), `test/remoteimages.py` (19/19), `test/sidebar.py` (121/121, with the
+hostile file-browser fixtures in `test/hostile/browser`, a link to `/etc`, names made of dots, and a hostile vault note whose
+wikilinks and embeds point out of the root, through a link to the outside and into `.obsidian`), `test/hostile.py` (runs the
 hostile fixtures through Quick Look). The two-round adversarial review's findings are fixed in 1c207e0.
+
+## Folder previews
+
+A tester reported that folder previews worked for some folders and not others, Obsidian vaults among the ones that did not.
+The rule was the cause, not the platform: v0.1.0 declined any folder with no Markdown file at its top level (it listed only the
+folder itself), and the file browser that replaced it (9e0aeac) declined any folder with no visible file at its top level. A
+vault or a repository whose notes all sit in subfolders, a folder of folders, a folder of only hidden files and an empty
+folder were each handed back to Quick Look, while a mixed folder with one top-level `.md` worked. The second rule also declined
+late, after the first listing came back, where every other decline happens before the preview starts.
+
+Now every folder is previewed and the decision is made up front from cheap checks (a realpath, two stats and the URL's
+resource values): packages and app bundles (by the system's package flag and a list of extensions such as `.app`, `.rtfd`,
+`.xcodeproj`, `.photoslibrary`), a volume's top or a mount point (another device than its parent), and system folders (`/`,
+`/System`, `/Library`, `/Applications`, `/Users`, `/Volumes`, `/usr`, `/bin`, `/sbin`, `/private` and its `etc`, `tmp` and
+`var`, `/dev`, `/opt`, `/cores`, `/Network`, `~/Library`, and anything below `/System`, `/usr` (except `/usr/local`), `/bin`,
+`/sbin` and `/dev`). Temporary folders under `/private/var/folders` are ordinary folders.
+
+Big trees stay off the main thread and bounded: a folder's listing stats at most 5,000 names and counts the rest, the start
+scan and the overview share one scan (3 deep, 5,000 entries, 250 ms), and the link index stops at 20,000 entries or 400 ms.
+`test/settings/run.sh` times a 12,000-file folder through all three and prints the times of each run.
 
 ## Platform findings
 

@@ -54,6 +54,59 @@
   /* A document's SVG or math inside a link must not reach past its own box and take clicks meant for the text around it. */
   #doc svg { overflow: hidden !important; } #doc a .katex { pointer-events: none !important; } pre.mermaid { contain: paint !important; }
 
+  /* ---------- Obsidian: wikilinks, embeds, tags and callouts ---------- */
+  a.wikilink.unresolved { color: var(--muted); text-decoration: underline dotted; text-underline-offset: 3px; }
+  .tag { display: inline-block; padding: 0 .5em; border-radius: 999px; font-size: .86em; line-height: 1.55; white-space: nowrap;
+    background: color-mix(in srgb, var(--accent) 9%, transparent); color: var(--fg); }
+  img.wl-img { vertical-align: middle; }
+  .wl-missing { color: var(--muted); font-style: italic; }
+  .wl-embed { display: block; margin: .6em 0; padding: .7em 1em; border: 1px solid var(--border); border-radius: 8px;
+    background: color-mix(in srgb, var(--code-bg) 45%, var(--bg)); }
+  .wl-embed > a.wl-embed-head { display: inline-flex; align-items: center; gap: .4em; margin-bottom: .4em; font-size: .8em; font-weight: 600; }
+  .wl-embed-body { display: block; max-height: 30em; overflow: auto; }
+  .wl-embed-body > :last-child { margin-bottom: 0; }
+  .wl-embed-body > :first-child { margin-top: 0; }
+  .wl-embed-body :is(h1, h2) { font-size: 1.3em; }
+  blockquote.callout { --c: #0a6ed1; color: var(--fg); padding: .6em 1em; border: 1px solid color-mix(in srgb, var(--c) 28%, var(--bg));
+    border-left: 3px solid var(--c); border-radius: 8px; background: color-mix(in srgb, var(--c) 6%, var(--bg)); }
+  .callout[data-callout=cyan] { --c: #0e7f97; } .callout[data-callout=teal] { --c: #0b7a70; } .callout[data-callout=green] { --c: #1a7f37; }
+  .callout[data-callout=yellow] { --c: #9a6700; } .callout[data-callout=orange] { --c: #bc4c00; } .callout[data-callout=red] { --c: #cf222e; }
+  .callout[data-callout=purple] { --c: #8250df; } .callout[data-callout=gray] { --c: #6e7781; }
+  @media (prefers-color-scheme: dark) {
+    blockquote.callout { --c: #4c9cf5; }
+    .callout[data-callout=cyan] { --c: #3fb8d4; } .callout[data-callout=teal] { --c: #3cc3b0; } .callout[data-callout=green] { --c: #4ec46a; }
+    .callout[data-callout=yellow] { --c: #d8a82b; } .callout[data-callout=orange] { --c: #f0883e; } .callout[data-callout=red] { --c: #f47067; }
+    .callout[data-callout=purple] { --c: #b392f0; } .callout[data-callout=gray] { --c: #9198a1; }
+  }
+  .callout-title { display: flex; align-items: center; gap: .5em; font-weight: 650; margin: 0 0 .3em; color: color-mix(in srgb, var(--c) 35%, var(--fg)); }
+  .callout-title:only-child { margin-bottom: 0; }
+  .callout-icon { flex: none; width: .95em; height: .95em; border-radius: 50%; background: var(--c);
+    box-shadow: inset 0 0 0 .22em color-mix(in srgb, var(--c) 45%, var(--bg)); }
+
+  /* ---------- the folder overview ---------- */
+  :root[data-view=overview] #doc { max-width: 720px; }
+  #doc .overview { font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; padding-top: 4px; }
+  #doc .ov-head { display: flex; align-items: center; gap: 14px; margin: 0 0 16px; }
+  #doc .ov-head .ic { width: 40px; height: 40px; stroke-width: .75; }
+  #doc .ov-name { font-size: 20px; font-weight: 650; letter-spacing: -.01em; line-height: 1.25; overflow-wrap: anywhere; }
+  #doc .ov-sub { color: var(--muted); margin-top: 2px; }
+  #doc .ov-counts { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 24px; }
+  #doc .ov-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px 4px 8px; border-radius: 999px;
+    background: var(--code-bg); color: var(--muted); font-size: 12px; }
+  #doc .ov-chip b { color: var(--fg); font-weight: 600; }
+  #doc .ov-section { font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px 2px; }
+  #doc .ov-list { border: 1px solid var(--frame-line); border-radius: 10px; overflow: hidden; }
+  #doc a.ov-row { display: grid; grid-template-columns: 16px minmax(0, max-content) minmax(0, 1fr) auto; gap: 10px; align-items: center;
+    padding: 7px 12px; color: var(--fg); text-decoration: none; transition: background-color .12s; }
+  #doc a.ov-row + a.ov-row { border-top: 1px solid var(--frame-line); }
+  #doc a.ov-row:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }
+  #doc a.ov-row:active { background: color-mix(in srgb, var(--fg) 9%, transparent); }
+  #doc .ov-row-name, #doc .ov-row-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #doc .ov-row-where, #doc .ov-row-date { color: var(--muted); }
+  #doc .ov-row-date { font-variant-numeric: tabular-nums; }
+  #doc .ov-empty { color: var(--muted); padding: 24px 0; }
+  #doc .overview .viewer-note { margin-top: 12px; }
+
   /* ---------- front matter ---------- */
   .frontmatter { display: table; width: 100%; margin: 0 0 1.75em; font-size: .85em; border-collapse: separate; border-spacing: 0;
     border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
@@ -77,8 +130,17 @@
   #side-list { padding: 0 8px 12px; }
   #side-list a.row { display: flex; align-items: center; gap: 5px; padding: 3px 8px 3px calc(2px + var(--depth, 0) * 14px); border-radius: 6px;
     color: var(--fg); text-decoration: none; white-space: nowrap; }
+  #side-list a.row { transition: background-color .12s; }
   #side-list a.row:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
+  #side-list a.row.folder:hover .twisty { color: var(--fg); }
+  #side-list a.row:active { background: color-mix(in srgb, var(--fg) 10%, transparent); }
   #side-list a.row.active { background: color-mix(in srgb, var(--accent) 12%, transparent); font-weight: 600; }
+  /* The row of the file just opened settles into its highlight. */
+  #side-list a.row.active.arrive { animation: row-in .24s ease-out; }
+  @keyframes row-in { from { background-color: color-mix(in srgb, var(--accent) 26%, transparent); transform: scale(.985); } }
+  #sidebar > #side-head { width: calc(var(--side-w) - 16px); }
+  #side-head { cursor: default; border-radius: 6px; margin: 0 8px; padding-left: 8px; padding-right: 8px; transition: background-color .12s; }
+  #side-head:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 6%, transparent); }
   #side-list .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   #side-list .twisty { flex: none; width: 12px; height: 12px; display: inline-grid; place-items: center; color: var(--muted); }
   #side-list .twisty svg { width: 10px; height: 10px; fill: currentColor; transition: transform .12s ease-out; }
@@ -87,7 +149,11 @@
   #side-more { padding: 4px 16px 14px; font-size: 11.5px; color: var(--muted); }
   #side-resize::after { content: ""; position: absolute; top: 0; bottom: 0; right: 0; width: 2px; background: transparent; transition: background .12s; }
   #side-resize:hover::after, :root.sb-resizing #side-resize::after { background: color-mix(in srgb, var(--accent) 60%, transparent); }
-  @media (prefers-reduced-motion: reduce) { #side-list .twisty svg { transition: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    #side-list .twisty svg, #side-list a.row, #side-head, #doc a.ov-row { transition: none; }
+    #side-list a.row.active.arrive { animation: none; }
+    #toolbar > button, #side-toggle, #doc .viewer button { transition: none !important; transform: none !important; }
+  }
 
   /* ---------- file icons (sidebar and info card) ---------- */
   .ic { flex: none; fill: none; stroke: currentColor; stroke-width: 1.1; stroke-linejoin: round; stroke-linecap: round; color: var(--muted); }
@@ -107,6 +173,8 @@
   #doc .viewer button { font: 500 12px/1 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--fg); background: var(--code-bg); border: 1px solid var(--border);
     border-radius: 6px; height: 24px; padding: 0 10px; cursor: default; flex: none; }
   #doc .viewer button:hover { background: color-mix(in srgb, var(--code-bg) 80%, var(--fg) 8%); }
+  #doc .viewer button:active { background: color-mix(in srgb, var(--code-bg) 70%, var(--fg) 14%); transform: scale(.97); }
+  #doc .viewer button { transition: background-color .12s, transform .08s; }
   #doc .viewer-note { font: 12px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--muted); margin: 0 0 10px; }
   #doc .code-view { display: flex; align-items: flex-start; background: var(--hl-bg); border-radius: 8px; overflow: auto; font: 12.5px/1.5 var(--font-mono); }
   #doc .code-view pre { margin: 0; padding: 12px 14px; background: none; border-radius: 0; overflow: visible; font: inherit; }
@@ -207,4 +275,29 @@
   .pop-sep { height: .5px; background: var(--ui-edge); margin: 0 -12px; }
   #aa-pop #aa-settings { text-align: left; height: 26px; padding: 0 8px; margin: -4px; border-radius: 6px; }
   #aa-pop #aa-settings:hover { background: var(--ui-accent); color: #fff; }
+  #toolbar > button, #side-toggle { transition: background-color .12s, transform .08s; }
+  #toolbar > button:active, #side-toggle:active { transform: scale(.96); }
+
+  /* ---------- the toolbar row (not Minimal chrome): quiet buttons on the chrome, in the theme's own colours ---------- */
+  @media (max-width: 479px) { #edit[data-kind=file] { display: none; } }
+  :root[data-chrome=minimal] #edit[data-kind=file] { display: none; }
+  @media (min-width: 480px) {
+    :root:not([data-chrome=minimal]) #toolbar { color: var(--muted); gap: 4px; }
+    :root:not([data-chrome=minimal]) :is(#toolbar > button, #side-toggle) { height: 26px; color: var(--fg); background: transparent; box-shadow: none;
+      -webkit-backdrop-filter: none; backdrop-filter: none; }
+    :root:not([data-chrome=minimal]) #side-toggle { color: var(--muted); }
+    :root:not([data-chrome=minimal]) :is(#toolbar > button, #side-toggle):hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 7%, transparent); }
+    :root:not([data-chrome=minimal]) :is(#toolbar > button:active, #toolbar > #aa[aria-expanded=true], #side-toggle:active) {
+      background: color-mix(in srgb, var(--fg) 9%, transparent); }
+    :root:not([data-chrome=minimal]) #side-list a.row.active { background: color-mix(in srgb, var(--accent) 11%, transparent); }
+    :root:not([data-chrome=minimal]) #toolbar > #edit { padding: 0 10px; box-shadow: inset 0 0 0 1px var(--frame-line); }
+    :root:not([data-chrome=minimal]) #crumbs { color: var(--muted); font-size: 12.5px; line-height: var(--bar-h); }
+    :root:not([data-chrome=minimal]) #side-head { padding-top: calc(var(--bar-h) + 8px); }
+    /* A PDF stays inside the page's outline; the extension rounds the native view's corners to match. */
+    :root:not([data-chrome=minimal])[data-view=pdf] #main { height: calc(100vh - var(--gap) - 1px); }
+    :root:not([data-chrome=minimal])[data-view=pdf] #doc { padding-top: calc(var(--bar-h) + 12px); }
+    :root:not([data-chrome=minimal]) #doc .pdf-area { margin: 0 calc(var(--gap) + 1px) 0 calc(var(--frame-inset) + 1px); border-top-color: var(--frame-line); }
+    /* The viewer's Open button moves up into the toolbar row. */
+    :root:not([data-chrome=minimal]) #doc .viewer-head .viewer-open { display: none; }
+  }
 }

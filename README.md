@@ -4,7 +4,8 @@ Press Space on a Markdown file in Finder and read it properly: headings, tables,
 Mermaid diagrams, in six themes. The sidebar is a file browser for the folder: its subfolders open in place, and a click shows
 any file in the panel, so you can read the Markdown, images, PDFs, code, JSON and CSV beside a document without leaving Quick
 Look. Drag its edge to resize it; its button collapses it, and every preview remembers both. Click a block of Markdown to edit
-it in place, or tick a task box, and the file is saved. Free and open source, for macOS 13 and later (Apple silicon and Intel).
+it in place, or tick a task box, and the file is saved. Obsidian vaults read as they do in Obsidian: `[[wikilinks]]`,
+`![[embeds]]`, callouts and tags. Free and open source, for macOS 13 and later (Apple silicon and Intel).
 
 What the panel shows for each file in the sidebar:
 
@@ -20,6 +21,34 @@ What the panel shows for each file in the sidebar:
 | Anything else | an info card: kind, size, date modified, and Open with its default app (Reveal in Finder for apps, scripts and executables) |
 
 Text over 2 MB shows its first 2 MB. Images over 50 MB get the info card.
+
+The preview sits in a thin outlined page under a toolbar row: the sidebar button and the path on the left, Aa and Open on the
+right. **Minimal chrome** (Settings, Appearance) goes back to floating buttons over the page.
+
+### Folders and Obsidian vaults
+
+Turn on **Preview folders** (Settings, Folders) and press Space on any folder. It opens on:
+
+1. its README;
+2. else its first Markdown file;
+3. else the Markdown file a quick look through its subfolders finds: the nearest the top, then one named like `index` or
+   `Home`, then the newest. It looks at most 3 folders deep and 5,000 items, for at most a quarter of a second, and never inside
+   hidden folders, `node_modules` or packages;
+4. else an overview of the folder: how many folders, notes, images, PDFs and other files it holds, and the files changed most
+   recently, each a click away.
+
+App bundles and other packages, the top of a volume and system folders (`/System`, `/Library`, `/usr` and the like, and
+`~/Library`) keep Quick Look's usual preview. Click the folder's name at the top of the sidebar to see its overview again.
+
+In a vault (a folder with `.obsidian` in it), and in any other folder:
+
+- `[[Note]]`, `[[Note|alias]]`, `[[folder/Note]]` and `[[Note#Heading]]` open that note in the panel. A name is looked for
+  anywhere under the folder the sidebar shows; a link that matches nothing is greyed out.
+- `![[image.png]]` (`![[image.png|300]]` for a width) shows the image; `![[Note]]` shows the note inline, read only, one level
+  deep.
+- `> [!note] Title` callouts (note, tip, warning, danger, example, quote and the rest) are drawn as boxes, and `#tags` as pills.
+- A note you press Space on inside a vault shows the whole vault in the sidebar, so its links reach every note.
+- `.obsidian` is hidden, like every hidden file, unless you turn hidden files on.
 
 [spacebar.patebryant.com](https://spacebar.patebryant.com)
 
@@ -125,8 +154,10 @@ writer service; Finder stays in front. Saves are compare-and-swap: if the file c
   accepts messages from the extension's own page. Apps, scripts and executables in the sidebar can only be revealed in Finder.
 - The file browser never leaves the previewed folder: links that lead out of it are not listed, a file or folder the page asks
   for must be one the sidebar listed and must still resolve inside the folder, and hidden files are left out unless you turn
-  them on. Nothing in a file is ever run: HTML and scripts are shown as source, SVG only as an image, a PDF by PDFKit (which runs
-  no PDF scripts; the PDF is parsed in the sandboxed preview extension itself), and the page loads files only as images.
+  them on. A wikilink or embed resolves only to a file found inside the folder the sidebar shows; `..`, absolute paths and links
+  that lead out of it resolve to nothing. Nothing in a file is ever run: HTML and scripts are shown as source, SVG only as an
+  image, a PDF by PDFKit (which runs no PDF scripts; the PDF is parsed in the sandboxed preview extension itself), and the page
+  loads files only as images.
 - The preview extension has a read-only sandbox exception for the whole disk, so relative images beside a document load and
   the sidebar can show the folder's files.
 - The preview extension has the `com.apple.security.network.client` entitlement. WKWebView's helper processes crash-loop

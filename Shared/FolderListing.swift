@@ -185,6 +185,8 @@ enum FileView {
 enum FolderListing {
     static let markdownExtensions = FileTypes.markdownExtensions
     static let cap = 500
+    /// Past this many names a folder is listed from its first names only (see `list`).
+    static let statCap = 5_000
     static let maxDocumentBytes = 64 << 20
 
     struct Entry: Equatable {
@@ -245,7 +247,21 @@ enum FolderListing {
         let root = root ?? dir
         guard let realRoot = realPath(root), isInside(dir, root: root, allowRoot: true) else { return Listing(dir: dir, entries: [], more: 0) }
         let inside = realRoot == "/" ? "/" : realRoot + "/"
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+        var names = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+        // A huge folder: only the first `statCap` names (by name) are looked at; the rest are counted, never stat'ed.
+        var unseen = 0
+        if names.count > statCap {
+            names.sort()
+            unseen = names.count - statCap
+            let pin = pinned.map { ($0 as NSString).lastPathComponent }
+            let keep = names.prefix(statCap)
+            if let pin, (pinned as NSString?)?.deletingLastPathComponent == dir, !keep.contains(pin), names.contains(pin) {
+                names = Array(keep) + [pin]
+                unseen -= 1
+            } else {
+                names = Array(keep)
+            }
+        }
         var found: [Entry] = []
         for name in names {
             let path = (dir as NSString).appendingPathComponent(name)
@@ -279,12 +295,13 @@ enum FolderListing {
         if let pinned, !shown.contains(where: { $0.path == pinned }), let pin = found.first(where: { $0.path == pinned }) {
             shown.append(pin)
         }
-        return Listing(dir: dir, entries: shown, more: found.count - shown.count)
+        return Listing(dir: dir, entries: shown, more: found.count - shown.count + unseen)
     }
 
-    /// The file a folder preview opens first: its first Markdown file (README first when that is on), else its first file.
+    /// The Markdown file a folder preview opens on when the folder itself holds one: its README, else its first Markdown file in
+    /// the sidebar's order. Nil sends the preview to FolderScan.
     static func firstDocument(_ l: Listing) -> Entry? {
-        l.files.first(where: \.isMarkdown) ?? l.files.first
+        l.files.first { $0.isMarkdown && isReadme($0.name) } ?? l.files.first(where: \.isMarkdown)
     }
 }
 

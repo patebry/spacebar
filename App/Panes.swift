@@ -358,8 +358,17 @@ struct AppearancePane: View {
                     }
                     .pickerStyle(.segmented)
                 }
+
+                Section {
+                    Toggle(isOn: store.binding(\.minimalChrome, "minimalChrome")) {
+                        Text("Minimal chrome")
+                        Text("Floating buttons over the page instead of the toolbar row and the outlined page.")
+                    }
+                } header: {
+                    Text("Window")
+                }
             }
-            .frame(idealHeight: 640)
+            .frame(idealHeight: 700)
         }
         .frame(width: paneWidth)
     }
@@ -434,7 +443,7 @@ struct FoldersPane: View {
             Section {
                 Toggle(isOn: folderMode) {
                     Text("Preview folders")
-                    Text("Press Space on a folder to browse the files in it. It opens on its README or first Markdown file.")
+                    Text("Press Space on a folder to browse the files in it. It opens on its README or the Markdown file nearest the top, else on an overview of the folder.")
                 }
                 if let mismatch {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -474,7 +483,7 @@ struct FoldersPane: View {
     }
 
     private var folderNote: String {
-        let base = "Folders without Markdown files keep their usual preview. Quick Look restarts when you change this."
+        let base = "App bundles, packages, volumes and system folders keep their usual preview. Quick Look restarts when you change this."
         if system.folders == .missing { return "The spacebar Folders extension isn't registered, so this setting has no effect yet. " + base }
         return base
     }

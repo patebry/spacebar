@@ -912,18 +912,13 @@ window.sb = {
     current.app = o.app;
     document.querySelectorAll('#doc .viewer-open[data-action=openFile], #edit[data-action=openFile]').forEach((b) => { b.textContent = `Open with ${o.app}`; });
   },
-  /** A newer release than this one: a dot on the Aa button and a row at the top of its popover. */
-  updateAvailable(u) {
-    if (!u || typeof u.version !== 'string') return;
-    showUpdate('available', u.version);
-    $('aa-update').hidden = false;
-    $('aa').dataset.update = '';
-    $('aa').title = `Appearance · spacebar ${u.version} is available`;
+  /** A newer release than this one: a dot on the Aa button and a row at the top of its popover. `state` is available,
+   *  elsewhere (this copy is not the one the installer replaces), started or failed (with the reason, and whether the install
+   *  command or the Update button is offered again). */
+  update(u) {
+    if (!u || typeof u.version !== 'string' || !['available', 'elsewhere', 'started', 'failed'].includes(u.state)) return;
+    showUpdate(u);
   },
-  /** The installer is running: it quits Quick Look when it swaps the app. */
-  updateStarted() { showUpdate('started'); },
-  /** The update could not start: the install command, run in Terminal, does the same. */
-  updateFailed() { showUpdate('failed'); },
   installCopied(r) {
     const b = $('aa-copy');
     b.textContent = r && r.ok ? 'Copied' : 'Could not copy';
@@ -1539,16 +1534,27 @@ function syncPopover() {
   pop.querySelectorAll('[data-key]').forEach((b) => b.setAttribute('aria-checked', String(settings[b.dataset.key] === b.dataset.value)));
 }
 
-let updateVersion = '';
-function showUpdate(state, version) {
-  if (version) updateVersion = version;
-  $('aa-update-title').textContent = state === 'failed' ? 'Update failed' : state === 'started' ? `Updating to spacebar ${updateVersion}…`
-    : `spacebar ${updateVersion} is available`;
-  $('aa-update-sub').textContent = state === 'failed' ? 'Paste the install command into Terminal to update.' : 'Quick Look closes for a moment while it updates.';
-  $('aa-install').hidden = state === 'failed';
-  $('aa-install').disabled = state === 'started';
-  $('aa-install').textContent = state === 'started' ? 'Updating…' : 'Update';
-  $('aa-copy').hidden = state !== 'failed';
+let updateTimer = 0;
+function showUpdate(u) {
+  const v = u.version, failed = u.state === 'failed', started = u.state === 'started';
+  clearTimeout(updateTimer);
+  const title = failed ? 'Update failed' : started ? `Updating to spacebar ${v}…` : `spacebar ${v} is available`;
+  $('aa-update-title').textContent = title;
+  $('aa-update-sub').textContent = failed ? String(u.reason || 'The update did not start.')
+    : u.state === 'elsewhere' ? `This copy is in ${u.place}, which the installer does not update. Replace it with the download on the release page.`
+    : 'Quick Look closes for a moment while it updates.';
+  $('aa-install').hidden = !(u.state === 'available' || started || (failed && u.retry));
+  $('aa-install').disabled = started;
+  $('aa-install').textContent = started ? 'Updating…' : 'Update';
+  $('aa-copy').hidden = !(failed && u.copy);
+  $('aa-update').hidden = false;
+  $('aa').dataset.update = '';
+  $('aa').title = `Appearance · ${title}`;
+  // Quick Look is quit and reopened by a successful update, so a page still here long after has seen it fail.
+  if (started) {
+    updateTimer = setTimeout(() => showUpdate({ state: 'failed', version: v, copy: true,
+      reason: 'It has not finished after 2 minutes. See ~/Library/Logs/spacebar-update.log.' }), 120000);
+  }
 }
 
 function showPopover(open) {
@@ -1570,7 +1576,13 @@ pop.addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b || b.disabled) return;
   if (b.id === 'aa-settings') { showPopover(false); post({ type: 'openSettings', tab: 'appearance' }); return; }
-  if (b.id === 'aa-install') { b.disabled = true; post({ type: 'installUpdate' }); return; }
+  if (b.id === 'aa-install') {
+    // The update quits Quick Look: the edit ends first, so its last keys are saved before the writer starts it.
+    if (editing) stopEditing();
+    b.disabled = true;
+    post({ type: 'installUpdate' });
+    return;
+  }
   if (b.id === 'aa-copy') { post({ type: 'copyInstall' }); return; }
   if (b.id === 'aa-notes') { showPopover(false); post({ type: 'releaseNotes' }); return; }
   if (b.dataset.step) choose('fontSize', Math.min(24, Math.max(12, settings.fontSize + Number(b.dataset.step))));

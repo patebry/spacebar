@@ -1,5 +1,6 @@
-// Checks Shared/Updates.swift: version parsing and comparison, the release response, and the cache. Build and run with
-// test/updates/run.sh. Touches no network.
+// Checks Shared/Updates.swift: version parsing and comparison, the release response, the cache and the last run's status, what
+// the popover offers, the detached run (against a stub), and scripts/install.sh's exit record in a dry run that fails its
+// download from a missing file:// URL. Build and run with test/updates/run.sh. Touches no network and installs nothing.
 import Foundation
 
 var failures = 0
@@ -21,6 +22,7 @@ check("junk not newer", !Updates.isNewer("zzz", than: "0.1.2"))
 check("release parsed", Updates.parseLatest(Data(#"{"tag_name":"v0.2.0","name":"x"}"#.utf8)) == "0.2.0")
 check("release bad tag", Updates.parseLatest(Data(#"{"tag_name":"<script>"}"#.utf8)) == nil)
 check("release not json", Updates.parseLatest(Data("nope".utf8)) == nil)
+check("release tag without v refused", Updates.parseLatest(Data(#"{"tag_name":"0.2.0"}"#.utf8)) == nil)
 
 let dir = FileManager.default.temporaryDirectory.appendingPathComponent("spacebar-updates-\(UUID().uuidString)")
 try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -30,6 +32,48 @@ Updates.writeCache(.init(checked: 100, latest: "0.1.3"), at: cache)
 check("cache round trip", Updates.readCache(at: cache) == .init(checked: 100, latest: "0.1.3"))
 try! Data(#"{"checked":5,"latest":"1.0; rm -rf"}"#.utf8).write(to: cache)
 check("cache bad version dropped", Updates.readCache(at: cache) == .init(checked: 5, latest: nil))
+Updates.writeCache(.init(checked: 100, latest: "0.1.3", started: .init(version: "0.1.3", at: 90)), at: cache)
+check("cache keeps the started update", Updates.readCache(at: cache)?.started == .init(version: "0.1.3", at: 90))
+try! Data(#"{"checked":5,"latest":"0.1.3","started":{"version":"v0.1.3","at":1}}"#.utf8).write(to: cache)
+check("cache bad started dropped", Updates.readCache(at: cache) == .init(checked: 5, latest: "0.1.3"))
+let statusFile = dir.appendingPathComponent("update-status.json")
+check("no status", Updates.readStatus(at: statusFile) == nil)
+Updates.writeStatus(.init(version: "0.1.3", exitStatus: 1, finishedAt: 120), at: statusFile)
+check("status round trip", Updates.readStatus(at: statusFile) == .init(version: "0.1.3", exitStatus: 1, finishedAt: 120))
+try! Data(#"{"version":"x","exitStatus":0,"finishedAt":1}"#.utf8).write(to: statusFile)
+check("status bad version refused", Updates.readStatus(at: statusFile) == nil)
+
+check("release build checks", Updates.checks(build: "42", testFlag: false))
+check("dev build does not check", !Updates.checks(build: "1", testFlag: false))
+check("dev build checks with the test flag", Updates.checks(build: "1", testFlag: true))
+
+// What the popover offers.
+let started = Updates.Started(version: "0.1.3", at: 1000)
+func offer(latest: String? = "0.1.3", started: Updates.Started? = nil, finished: Updates.Finished? = nil, place: String? = nil, now: Double = 1100) -> Updates.Offer {
+    Updates.offer(current: "0.1.2", latest: latest, started: started, finished: finished, place: place, now: now)
+}
+check("offer: nothing newer", offer(latest: "0.1.2") == .none && offer(latest: nil) == .none)
+check("offer: available", offer() == .available("0.1.3"))
+check("offer: elsewhere is never installable", offer(place: "/Applications/spacebar.app") == .elsewhere("0.1.3", place: "/Applications/spacebar.app"))
+check("offer: started, still running", offer(started: started) == .inProgress("0.1.3"))
+check("offer: a start for an older release does not hide this one", offer(started: .init(version: "0.1.2", at: 1000)) == .available("0.1.3"))
+if case .failed(_, let reason) = offer(started: started, finished: .init(version: "0.1.3", exitStatus: 1, finishedAt: 1050)) {
+    check("offer: failed run shows its status and the log", reason.contains("status 1") && reason.contains("spacebar-update.log"))
+} else { check("offer: failed run", false) }
+check("offer: an earlier run's end does not count", offer(started: started, finished: .init(version: "0.1.3", exitStatus: 1, finishedAt: 900)) == .inProgress("0.1.3"))
+check("offer: finished fine, old copy still running", offer(started: started, finished: .init(version: "0.1.3", exitStatus: 0, finishedAt: 1050)) == .none)
+if case .failed = offer(started: started, now: 1000 + Updates.staleAfter + 1) { check("offer: a run that never ended fails", true) } else { check("offer: a run that never ended fails", false) }
+for o: Updates.Offer in [.none, .available("0.1.3"), .elsewhere("0.1.3", place: "~/x"), .inProgress("0.1.3"), .failed("0.1.3", reason: "r")] {
+    check("offer json round trip \(o)", Updates.Offer(json: o.json) == o)
+}
+for bad in [#"{"state":"available"}"#, #"{"state":"available","version":"v0.1.3"}"#, #"{"state":"install","version":"0.1.3"}"#, "[]", "x"] {
+    check("offer json refused \(bad)", Updates.Offer(json: Data(bad.utf8)) == nil)
+}
+let busy = Updates.advice(for: "an update is already running"), cannot = Updates.advice(for: "could not start the installer: x")
+check("advice: already running, no install command", busy == ("An update is already running.", false))
+check("advice: start failure offers the install command", cannot.copy && cannot.text == "Could not start the installer: x.")
+check("advice: not in ~/Applications, no install command", !Updates.advice(for: "spacebar is not in ~/Applications").copy)
+check("advice: installer failure offers the install command", Updates.advice(for: "The installer stopped with status 1. See x.").copy)
 
 check("checkUpdates defaults on", Settings().checkUpdates)
 check("checkUpdates read", Settings(dictionary: ["checkUpdates": false]).checkUpdates == false)
@@ -89,6 +133,49 @@ for _ in 0..<100 { if kill(pid, 0) != 0 { gone = true; break }; usleep(50_000) }
 check("stub reaped", gone)
 check("log keeps the run's header", log1.contains("=== ") && log1.contains(" --version v9.9.9 --no-prompt ==="))
 check("a missing script is an error", (try? Updates.runDetached(script: stub, arguments: [], log: logURL, environment: env).get()) == nil)
+
+// The exit status reaches onExit, and a log past its limit is cut to its tail first.
+let exiting = dir.appendingPathComponent("exit.sh")
+try! "echo tail-marker; exit 3\n".write(to: exiting, atomically: true, encoding: .utf8)
+var big = String(repeating: "old line\n", count: Updates.logLimit / 9 + 100)
+big += "last old line\n"
+try! big.write(to: logURL, atomically: true, encoding: .utf8)
+let exited = DispatchSemaphore(value: 0)
+var code = -1
+_ = Updates.runDetached(script: exiting, arguments: [], log: logURL, environment: env) { code = $0; exited.signal() }
+check("exit status reported", exited.wait(timeout: .now() + 10) == .success && code == 3)
+let trimmed = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
+check("long log trimmed to its tail", trimmed.utf8.count <= Updates.logKeep + 200 && trimmed.hasPrefix("old line") && trimmed.contains("last old line\n")
+      && trimmed.contains("tail-marker"))
+try! "sleep 30\n".write(to: exiting, atomically: true, encoding: .utf8)
+let killed = DispatchSemaphore(value: 0)
+if case .success(let p) = Updates.runDetached(script: exiting, arguments: [], log: logURL, environment: env, onExit: { code = $0; killed.signal() }) {
+    usleep(200_000)
+    kill(p, SIGTERM)
+}
+check("a killed installer reports 128 + the signal", killed.wait(timeout: .now() + 10) == .success && code == 128 + Int(SIGTERM))
+
+// install.sh itself, in a dry run whose download fails at once: it records the run's end and removes its private copy.
+let own = dir.appendingPathComponent("spacebar-update-test", isDirectory: true)
+try! FileManager.default.createDirectory(at: own, withIntermediateDirectories: true)
+let script = own.appendingPathComponent("install.sh")
+try! FileManager.default.copyItem(at: URL(fileURLWithPath: "scripts/install.sh"), to: script)
+let recorded = dir.appendingPathComponent("recorded.json")
+let sh = Process()
+sh.executableURL = URL(fileURLWithPath: "/bin/sh")
+sh.arguments = [script.path, "--dry-run", "--no-prompt", "--version", "v9.9.9"]
+sh.environment = ["HOME": dir.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": dir.path + "/",
+                  "SPACEBAR_RELEASE_URL": "file://\(dir.path)/no-such-release", "SPACEBAR_UPDATE_STATUS": recorded.path]
+let out = Pipe()
+sh.standardOutput = out
+sh.standardError = out
+try! sh.run()
+let said = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+sh.waitUntilExit()
+let rec = Updates.readStatus(at: recorded)
+check("install.sh: a failed download exits 1", sh.terminationStatus == 1 && said.contains("download failed"))
+check("install.sh: records the version and exit status", rec?.version == "9.9.9" && rec?.exitStatus == 1 && (rec?.finishedAt ?? 0) > 1_700_000_000)
+check("install.sh: removes its private copy", !FileManager.default.fileExists(atPath: own.path))
 close(leaked)
 
 try? FileManager.default.removeItem(at: dir)

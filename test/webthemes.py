@@ -157,10 +157,7 @@ UPDATE_FIT = """const pop = document.getElementById('aa-pop').getBoundingClientR
     if (e.scrollWidth > e.clientWidth || r.left < pop.left + 11 || r.right > pop.right - 11 || (e.tagName === 'BUTTON' && r.height > parseFloat(cs.fontSize) * 2.5))
       bad.push([e.id, e.textContent, Math.round(r.width), e.scrollWidth, e.clientWidth]);
   }
-  return { bad, shown };"""
-UPDATE_SHOWN = {'available': ['aa-update-title', 'aa-update-sub', 'aa-install', 'aa-notes'],
-                'failed': ['aa-update-title', 'aa-update-sub', 'aa-copy', 'aa-notes']}
-
+  return { bad, shown, dot: document.getElementById('aa').dataset.update === '' };"""
 CLICK = """(sel) => { const t = document.querySelector(sel); if (!t) return false; const r = t.getBoundingClientRect();
   for (const type of ['mouseover', 'mousedown', 'mouseup', 'click'])
     t.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: r.left + 3, clientY: r.top + 3, detail: 1 }));
@@ -433,20 +430,44 @@ def main():
               'a click outside closes the popover and starts no edit', json.dumps(still))
 
         # ---- the update row: fits the popover in every state, and the page never names the version it asks for ----
-        page.js("sb.updateAvailable({ version: '10.10.10', current: '0.1.2' }); return 0")
+        long_place = '~/Library/Mobile Documents/com~apple~CloudDocs/Some Long Folder Name/spacebar.app'
+        states = [('available', {}), ('elsewhere', {'place': long_place}), ('started', {}),
+                  ('failed', {'reason': 'The installer stopped with status 1. See ~/Library/Logs/spacebar-update.log.', 'copy': True}),
+                  ('failed', {'reason': 'An update is already running.'}), ('failed', {'reason': 'Not started: save failed; edit again to retry.', 'retry': True})]
         click(page, '#aa')
         page.cmd('@wait:0.3')
-        for state in ('available', 'failed'):
+        for state, extra in states:
+            page.js('sb.update(' + json.dumps({'state': state, 'version': '10.10.10', **extra}) + '); return 0')
             fit = page.js(UPDATE_FIT)
-            check(fit['bad'] == [] and fit['shown'] == UPDATE_SHOWN[state], f'update row ({state}): nothing overflows the popover', json.dumps(fit))
-            if state == 'available':
-                r = click(page, '#aa-install')
-                u = [m for m in r['messages'] if m.get('type') == 'installUpdate']
-                check(len(u) == 1 and {k for k in u[0] if not k.startswith('_')} == {'type'} and page.js("return document.getElementById('aa-install').disabled"),
-                      'Update posts installUpdate with no version and waits', json.dumps(u))
-                page.js("sb.updateFailed({ error: 'x' }); return 0")
+            want = ['aa-update-title', 'aa-update-sub'] + (['aa-install'] if state in ('available', 'started') or extra.get('retry') else []) \
+                + (['aa-copy'] if extra.get('copy') else []) + ['aa-notes']
+            check(fit['bad'] == [] and fit['shown'] == want and fit['dot'], f'update row ({state} {sorted(extra)}): shows {want[2:-1] or "no button"}, nothing overflows',
+                  json.dumps(fit))
+        page.js("sb.update({ state: 'available', version: '10.10.10' }); return 0")
+        r = click(page, '#aa-install')
+        u = [m for m in r['messages'] if m.get('type') == 'installUpdate']
+        check(len(u) == 1 and {k for k in u[0] if not k.startswith('_')} == {'type'} and page.js("return document.getElementById('aa-install').disabled"),
+              'Update posts installUpdate with no version and waits', json.dumps(u))
+        page.js("sb.update({ state: 'failed', version: '10.10.10', reason: 'Could not start the installer.', copy: true }); return 0")
         r = click(page, '#aa-copy')
         check([m.get('type') for m in r['messages']] == ['copyInstall'], 'a failed update offers the install command', json.dumps(r['messages']))
+        # "Updating…" gives up after 2 minutes: the timer is run at once here.
+        t = page.js("""const real = window.setTimeout; let due = null;
+          window.setTimeout = (f, ms) => { if (ms === 120000) { due = f; return 0; } return real(f, ms); };
+          sb.update({ state: 'started', version: '10.10.10' }); window.setTimeout = real;
+          const before = document.getElementById('aa-update-title').textContent; if (due) due();
+          return [before, document.getElementById('aa-update-title').textContent, document.getElementById('aa-update-sub').textContent,
+            document.getElementById('aa-copy').hidden, document.getElementById('aa-install').hidden]""")
+        check(t[0].startswith('Updating to') and t[1] == 'Update failed' and 'spacebar-update.log' in t[2] and t[3] is False and t[4] is True,
+              '"Updating…" turns into the failure after 2 minutes', json.dumps(t))
+        click(page, '#doc')
+        # Update ends an inline edit first, so its keys are saved before the installer quits Quick Look.
+        click(page, '#doc > p')
+        page.js("sb.update({ state: 'available', version: '10.10.10' }); document.getElementById('aa-pop').hidden = false; return 0")
+        editing = page.js("return !!document.querySelector('#doc > .md-editing')")
+        t = [m.get('type') for m in click(page, '#aa-install')['messages']]
+        check(editing and 'editStop' in t and 'installUpdate' in t and t.index('editStop') < t.index('installUpdate'),
+              'Update ends the edit before it asks for the update', json.dumps([editing, t]))
         click(page, '#doc')
         page.apply(theme='apple', width='medium', bodyFont='system', fontSize=15)
 

@@ -682,6 +682,7 @@ const afterPaint = (f) => requestAnimationFrame(() => setTimeout(f, 0));
 
 /** Shows the editor with its caret at once; the native side is told in parallel and ends the edit if it cannot take the keyboard. */
 function beginEdit(block, e, tClick) {
+  if (updateBusy) { window.sb.status('Updating…'); return; }
   let [start, end] = blockRange(block);
   const all = current.text.split('\n');
   // A list's source range can take in the blank line after it; the editor shows the block's own lines only.
@@ -1535,9 +1536,13 @@ function syncPopover() {
 }
 
 let updateTimer = 0;
+/** An update has started: the installer quits this preview, so no edit or task toggle starts meanwhile. */
+let updateBusy = false;
 function showUpdate(u) {
   const v = u.version, failed = u.state === 'failed', running = u.state === 'started' || u.state === 'inProgress';
   clearTimeout(updateTimer);
+  updateBusy = running;
+  if (running && editing) stopEditing();
   const title = failed ? 'Update failed' : u.state === 'started' ? `Updating to spacebar ${v}…` : u.state === 'inProgress'
     ? `Still updating to spacebar ${v}…` : u.state === 'done' ? `spacebar ${v} is installed` : `spacebar ${v} is available`;
   $('aa-update-title').textContent = title;
@@ -1661,6 +1666,7 @@ function stopEditing() {
 document.addEventListener('change', (e) => {
   const box = e.target;
   if (!box.matches('input[type=checkbox][data-line]') || !settings.taskToggles) return;
+  if (updateBusy) { box.checked = !box.checked; window.sb.status('Updating…'); return; }
   // Keep the page's copy in step: a push of the saved text is skipped while a block is being edited.
   let line = +box.dataset.line;
   const ed = editorEl();

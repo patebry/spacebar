@@ -399,7 +399,9 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         switch p {
         case .file(let url, let anchor): open(url, anchor: anchor)
         case .overview(let r, let reason): showOverview(r, reason: reason)
-        case .update: startUpdate()
+        case .update:
+            // The edit and its saves are done by now; anything left unsaved keeps the update from starting.
+            if edit == nil, !hasUnsavedText { startUpdate() } else { refuseToLeave(.update, "unsaved text") }
         }
     }
 
@@ -1179,6 +1181,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             helper { $0.openSettings(tab) { ok in if !ok { DispatchQueue.main.async { self.status("could not open settings") } } } }
         case "toggle":
             guard SettingsStore.shared.settings.taskToggles else { return refuse("toggle", "task toggles are off") }
+            guard !updateBusy else { return status("Updating…") }
             guard isCurrent(m), let line = m.int("line"), let checked = m.bool("checked"), let text = m.string("text", max: 1 << 16) else {
                 return refuse("toggle", "bad request or not the previewed file")
             }
@@ -1187,6 +1190,11 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         case "editBlock":
             guard SettingsStore.shared.settings.inlineEditing, isCurrent(m) else {
                 refuse("editBlock", "not the previewed file")
+                if let seq = m.int("seq") { js("sb.editEnd", ["seq": seq]) }
+                return
+            }
+            guard !updateBusy else {
+                status("Updating…")
                 if let seq = m.int("seq") { js("sb.editEnd", ["seq": seq]) }
                 return
             }
@@ -1296,6 +1304,12 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private var installable = false
     /// The version this preview started installing.
     private var updating: String?
+    /// No edit starts while an update waits to start or runs: the installer quits the preview.
+    private var updateBusy: Bool {
+        if updating != nil { return true }
+        if case .update = pending { return true }
+        return false
+    }
 
     /// Once per preview, after it is on screen: the writer answers from its daily cache, so this rarely touches the network.
     private func checkForUpdate() {
@@ -1336,12 +1350,13 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         helper(onError: {
             let a = Updates.advice(for: "the helper stopped before it could say how the update went")
             self.js("sb.update", ["state": "failed", "version": v, "reason": a.text, "copy": a.copy])
+            self.updating = nil
         }) {
             $0.updateOffer { data in
                 guard let data, let offer = Updates.Offer(json: data) else { return }
                 DispatchQueue.main.async {
                     switch offer {
-                    case .inProgress(v): self.js("sb.update", ["state": "inProgress", "version": v])
+                    case .inProgress(v): return self.js("sb.update", ["state": "inProgress", "version": v])
                     case .failed(v, let reason):
                         let a = Updates.advice(for: reason)
                         self.js("sb.update", ["state": "failed", "version": v, "reason": a.text, "copy": a.copy])
@@ -1350,6 +1365,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
                         let a = Updates.advice(for: "The installer did not finish. \(Updates.logHint)")
                         self.js("sb.update", ["state": "failed", "version": v, "reason": a.text, "copy": a.copy])
                     }
+                    self.updating = nil
                 }
             }
         }

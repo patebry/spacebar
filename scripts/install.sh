@@ -84,6 +84,19 @@ run_quiet() {
 # The bundle path as an anchored regex, so pkill/pgrep match processes running from this exact bundle only.
 path_regex() { printf '^%s/' "$1" | sed 's/[][\.*$+?(){}|]/\\&/g'; }
 
+# quit_extensions <bundle path>: quits the Quick Look extensions running from it. Their writers go first and are given up to
+# 6 seconds: a writer on SIGTERM finishes the file write it is in before it exits, and the extension would retry a lost one.
+quit_extensions() {
+  writers="$(path_regex "$1")Contents/PlugIns/[^/]*/Contents/XPCServices/"
+  pkill -f "$writers" || true
+  tries=0
+  while [ "$tries" -lt 30 ] && pgrep -f "$writers" >/dev/null 2>&1; do
+    sleep 0.2
+    tries=$((tries + 1))
+  done
+  pkill -f "$(path_regex "$1")Contents/PlugIns/" || true
+}
+
 # Re-registers a copy that was unregistered for a swap that did not happen.
 reregister() {
   [ "$SKIP_REGISTER" = 1 ] && return 0
@@ -209,7 +222,10 @@ if [ "$DRY_RUN" = 1 ]; then
       say "would run: $LSREGISTER -u $DEST"
     fi
     say "would move $DEST to $OLD, move $NEW to $DEST, then delete $OLD"
-    if [ "$SKIP_REGISTER" != 1 ]; then say "would run: pkill -f $(path_regex "$DEST")Contents/PlugIns/ after the first move"; fi
+    if [ "$SKIP_REGISTER" != 1 ]; then
+      say "after the first move, would run: pkill -f $(path_regex "$DEST")Contents/PlugIns/[^/]*/Contents/XPCServices/,"
+      say "  wait up to 6 s for those writers to exit, then run: pkill -f $(path_regex "$DEST")Contents/PlugIns/ (and the same for $OLD)"
+    fi
   else
     say "would move $NEW to $DEST"
   fi
@@ -243,8 +259,8 @@ else
     fi
     # Quick Look extensions (and their writers) still running the old code would keep serving it from a deleted bundle.
     if [ "$SKIP_REGISTER" != 1 ]; then
-      pkill -f "$(path_regex "$DEST")Contents/PlugIns/" || true
-      pkill -f "$(path_regex "$OLD")Contents/PlugIns/" || true
+      quit_extensions "$DEST"
+      quit_extensions "$OLD"
     fi
     if ! mv "$NEW" "$DEST"; then
       mv "$OLD" "$DEST" || fail "could not move the new copy in, nor put the previous one back: it is at $OLD."

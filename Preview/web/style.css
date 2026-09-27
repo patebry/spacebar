@@ -62,7 +62,8 @@
   .wl-missing { color: var(--muted); font-style: italic; }
   .wl-embed { display: block; margin: .6em 0; padding: .7em 1em; border: 1px solid var(--border); border-radius: 8px;
     background: color-mix(in srgb, var(--code-bg) 45%, var(--bg)); }
-  .wl-embed > a.wl-embed-head { display: inline-flex; align-items: center; gap: .4em; margin-bottom: .4em; font-size: .8em; font-weight: 600; }
+  .wl-embed > a.wl-embed-head { display: inline-flex; align-items: center; gap: .4em; margin-bottom: .4em; font-size: .8em; font-weight: 600;
+    color: color-mix(in srgb, var(--link) 90%, var(--fg)); }
   .wl-embed-body { display: block; max-height: 30em; overflow: auto; }
   .wl-embed-body > :last-child { margin-bottom: 0; }
   .wl-embed-body > :first-child { margin-top: 0; }
@@ -290,6 +291,7 @@
     :root:not([data-chrome=minimal]) :is(#toolbar > button:active, #toolbar > #aa[aria-expanded=true], #side-toggle:active) {
       background: color-mix(in srgb, var(--fg) 9%, transparent); }
     :root:not([data-chrome=minimal]) #side-list a.row.active { background: color-mix(in srgb, var(--accent) 11%, transparent); }
+    :root[data-theme=solarized] #side-list a.row.active { background: color-mix(in srgb, var(--accent) 9%, transparent); }
     :root:not([data-chrome=minimal]) #toolbar > #edit { padding: 0 10px; box-shadow: inset 0 0 0 1px var(--frame-line); }
     :root:not([data-chrome=minimal]) #crumbs { color: var(--muted); font-size: 12.5px; line-height: var(--bar-h); }
     :root:not([data-chrome=minimal]) #side-head { padding-top: calc(var(--bar-h) + 8px); }

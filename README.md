@@ -27,7 +27,7 @@ right. **Minimal chrome** (Settings, Appearance) goes back to floating buttons o
 
 ### Folders and Obsidian vaults
 
-Turn on **Preview folders** (Settings, Folders) and press Space on any folder. It opens on:
+Turn on **Preview folders** (Settings, Sidebar) and press Space on any folder. It opens on:
 
 1. its README;
 2. else its first Markdown file;

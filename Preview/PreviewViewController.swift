@@ -321,14 +321,62 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private var editCounter = 0
     private var writing = false
     private var queuedSave: (url: URL, text: String, keyTime: Double?)?
-    /// A file to show once the current document's edit and saves are finished.
-    private var pendingOpen: (url: URL, anchor: String?)?
+    /// What leaves the current document once its edit's last keys and saves have landed.
+    private enum Pending {
+        case file(URL, anchor: String?)
+        case overview(FolderScan.Result, reason: String)
+        case update
+    }
+    private var pending: Pending?
     private var pendingGen = 0
 
-    private func openPending() {
-        guard !writing, retired.isEmpty, let p = pendingOpen else { return }
-        pendingOpen = nil
-        open(p.url, anchor: p.anchor)
+    /// Ends the edit and, while its keys or saves are still landing, holds `action` until they have. True when it was held.
+    private func holdUntilSaved(_ action: Pending) -> Bool {
+        if let e = edit { stopEdit(notifyWriter: true, keepRetired: true); retired.append(e) }
+        guard writing || !retired.isEmpty else { pending = nil; return false }
+        log.info("switch waits for the edit's saves (writing=\(self.writing) retired=\(self.retired.count))")
+        if pending == nil { armPending() }
+        pending = action
+        return true
+    }
+
+    private func armPending() {
+        pendingGen += 1
+        let gen = pendingGen
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, self.pending != nil, self.pendingGen == gen else { return }
+            // A write in flight is never given up on: its reply, or the writer's loss, decides.
+            if self.writing {
+                self.status("still saving…")
+                return self.armPending()
+            }
+            // A writer that never reports an edit's end (hung, not crashed) must not keep the panel on this document.
+            log.error("switch: writer did not end the edit within 2s")
+            self.retired = []
+            self.runPending()
+        }
+    }
+
+    private func runPending() {
+        guard !writing, retired.isEmpty, let p = pending else { return }
+        pending = nil
+        switch p {
+        case .file(let url, let anchor): open(url, anchor: anchor)
+        case .overview(let r, let reason): showOverview(r, reason: reason)
+        case .update: startUpdate()
+        }
+    }
+
+    /// A save failed while something waited on it: the panel stays on this document, with its unsaved text.
+    private func cancelPending(_ why: String) {
+        guard let p = pending else { return }
+        pending = nil
+        pendingGen += 1
+        if case .update = p, let v = offeredVersion {
+            js("sb.update", ["state": "failed", "version": v, "reason": "Not started: \(why).", "retry": true])
+        } else {
+            status("not switched: \(why)")
+        }
     }
     /// Set after a write failed part-way and could not be undone: the exact bytes it left on disk (the torn file need not be
     /// valid UTF-8), snapshotted once per such failure and used as the base of every retry, so a save by anyone else in the
@@ -519,8 +567,12 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     /// The folder overview: nothing else is on screen, so edits, the file watch and the PDF view end.
     private func showOverview(_ r: FolderScan.Result, reason: String) {
         guard !torn else { return }
-        if reason != "loading" { folderPending = false }
-        pendingOpen = nil
+        if reason == "loading" {
+            pending = nil
+        } else {
+            if holdUntilSaved(.overview(r, reason: reason)) { return }
+            folderPending = false
+        }
         stopEdit(notifyWriter: true)
         queuedSave = nil
         closePDF()
@@ -637,24 +689,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         if kind != .markdown, st.st_mode & S_IFMT != S_IFREG, st.st_mode & S_IFMT != S_IFDIR { return status("\(url.lastPathComponent) is not a regular file") }
         // The document being edited keeps its last keys: the edit ends, and the switch waits for the writer to flush them and
         // for every save of this document to land.
-        if let e = edit { stopEdit(notifyWriter: true, keepRetired: true); retired.append(e) }
-        if writing || !retired.isEmpty {
-            log.info("switch waits for the edit's saves (writing=\(self.writing) retired=\(self.retired.count))")
-            if pendingOpen == nil {
-                pendingGen += 1
-                let gen = pendingGen
-                // A writer that never reports the end (hung, not crashed) must not keep the panel on this document.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
-                    guard let self, self.pendingOpen != nil, self.pendingGen == gen else { return }
-                    log.error("switch: writer did not finish within 2s")
-                    self.retired = []
-                    self.openPending()
-                }
-            }
-            pendingOpen = (url, anchor)
-            return
-        }
-        pendingOpen = nil
+        if holdUntilSaved(.file(url, anchor: anchor)) { return }
         stopEdit(notifyWriter: true)
         queuedSave = nil
         loader.cancel()
@@ -1074,23 +1109,12 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         case "copyInstall":
             helper { $0.copyInstallCommand { ok in DispatchQueue.main.async { self.js("sb.installCopied", ["ok": ok]) } } }
         case "installUpdate":
-            // Only the version this controller was told about by the writer; the page names none.
-            guard let v = availableVersion else { return refuse("installUpdate", "no update shown") }
-            helper(onError: { self.js("sb.updateFailed", [:]) }) {
-                $0.installUpdate(v) { err in
-                    DispatchQueue.main.async {
-                        if let err {
-                            log.error("update: \(err, privacy: .public)")
-                            self.js("sb.updateFailed", ["error": err])
-                        } else {
-                            self.status("Updating to \(v)…")
-                            self.js("sb.updateStarted", ["version": v])
-                        }
-                    }
-                }
-            }
+            guard installable, offeredVersion != nil else { return refuse("installUpdate", "no update offered") }
+            // The installer quits Quick Look: the edit's last keys and saves land first.
+            if holdUntilSaved(.update) { return }
+            startUpdate()
         case "releaseNotes":
-            guard let v = availableVersion, let url = URL(string: "https://github.com/patebry/spacebar/releases/tag/v\(v)") else {
+            guard let v = offeredVersion, let url = URL(string: "https://github.com/patebry/spacebar/releases/tag/v\(v)") else {
                 return refuse("releaseNotes", "no update shown")
             }
             helper { $0.open(url) { _ in } }
@@ -1147,8 +1171,9 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
 
     private var helperConnection: NSXPCConnection?
     private var updateAsked = false
-    /// The newer release the toolbar is showing, if any.
-    private var availableVersion: String?
+    /// The newer release the popover is showing, if any, and whether its Update button may install it.
+    private var offeredVersion: String?
+    private var installable = false
 
     /// Once per preview, after it is on screen: the writer answers from its daily cache, so this rarely touches the network.
     private func checkForUpdate() {
@@ -1156,11 +1181,47 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
               let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String else { return }
         updateAsked = true
         helper {
-            $0.latestVersion { latest in
-                guard let latest, Updates.isNewer(latest, than: current) else { return }
+            $0.updateOffer { data in
+                guard let data, let offer = Updates.Offer(json: data) else { return }
                 DispatchQueue.main.async {
-                    self.availableVersion = latest
-                    self.js("sb.updateAvailable", ["version": latest, "current": current])
+                    switch offer {
+                    case .available(let v) where Updates.isNewer(v, than: current):
+                        self.offer(v, installable: true, ["state": "available"])
+                    case .elsewhere(let v, let place) where Updates.isNewer(v, than: current):
+                        self.offer(v, installable: false, ["state": "elsewhere", "place": place])
+                    case .failed(let v, let reason) where Updates.isNewer(v, than: current):
+                        let a = Updates.advice(for: reason)
+                        self.offer(v, installable: false, ["state": "failed", "reason": a.text, "copy": a.copy])
+                    default:
+                        // None newer, or an update from this Mac still running: nothing to offer.
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    private func offer(_ version: String, installable: Bool, _ state: [String: Any]) {
+        offeredVersion = version
+        self.installable = installable
+        js("sb.update", state.merging(["version": version]) { a, _ in a })
+    }
+
+    /// Asks the writer to start the installer for the offered version, never one the page names; once per preview.
+    private func startUpdate() {
+        guard installable, let v = offeredVersion else { return }
+        installable = false
+        let failed = { (reason: String) in
+            log.error("update: \(reason, privacy: .public)")
+            let a = Updates.advice(for: reason)
+            self.js("sb.update", ["state": "failed", "version": v, "reason": a.text, "copy": a.copy])
+        }
+        helper(onError: { failed("the helper stopped before the update started") }) {
+            $0.installUpdate(v) { err in
+                DispatchQueue.main.async {
+                    if let err { return failed(err) }
+                    self.status("Updating to \(v)…")
+                    self.js("sb.update", ["state": "started", "version": v])
                 }
             }
         }
@@ -1187,11 +1248,12 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
 
     private func writerLost() {
         stopEdit(notifyWriter: false)
+        let lostWrite = writing
         if writing { writing = false; queuedSave = nil; status("save failed: edit again to retry") }
         if torn, let url = fileURL { retryTorn(url) }
         // No more keys will arrive for ended sessions.
         retired = []
-        openPending()
+        if lostWrite { cancelPending("save failed; edit again to retry") } else { runPending() }
     }
 
     private func retryTorn(_ url: URL) {
@@ -1248,8 +1310,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private func saved(_ url: URL, _ text: String, keyTime: Double?, error: String?) {
         guard writing else { return }
         writing = false
-        defer { if !writing { openPending() } }
-        guard url == fileURL else { queuedSave = nil; return }
+        guard url == fileURL else { queuedSave = nil; return runPending() }
         if let error, error == "conflict", torn, tornStatus.isEmpty {
             // Someone else wrote the file after it was torn and no recovery copy exists: stop writing but keep the text on screen.
             log.error("save failed: conflict after a partial write, no recovery copy")
@@ -1257,6 +1318,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             queuedSave = nil
             stopEdit(notifyWriter: true)
             stickyStatus("file changed on disk; your unsaved text is only in this preview: copy it now")
+            cancelPending("save failed")
             return
         }
         if let error, error == "conflict", torn {
@@ -1271,6 +1333,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             docText = nil
             diskText = nil
             reload(reason: "conflict")
+            cancelPending("changed on disk, not saved")
             return
         }
         if let error, error == "conflict" {
@@ -1281,6 +1344,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             docText = nil
             diskText = nil
             reload(reason: "conflict")
+            cancelPending("changed on disk, not saved")
             return
         }
         if let error {
@@ -1299,6 +1363,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             } else {
                 status("save failed: edit again to retry")
             }
+            cancelPending("save failed; edit again to retry")
             return
         }
         diskText = onDisk(text)
@@ -1311,6 +1376,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         push(text: text, path: url.path, reason: edit != nil ? "edit" : "save", keyTime: keyTime)
         // Catch an external change that landed while writes were in flight (watcher reloads are skipped during a write).
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.reload(reason: "change") }
+        runPending()
     }
 
     // MARK: inline editing
@@ -1401,10 +1467,10 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         if let i = retired.firstIndex(where: { $0.id == id }) {
             let r = retired.remove(at: i)
             dropIfEmpty(start: r.start, lines: r.lines)
-            openPending()
+            runPending()
             return
         }
-        guard let e = edit, e.id == id else { return openPending() }
+        guard let e = edit, e.id == id else { return runPending() }
         log.info("edit \(id) ended: \(reason, privacy: .public)")
         stopEdit(notifyWriter: false)
         dropIfEmpty(start: e.start, lines: e.lines)

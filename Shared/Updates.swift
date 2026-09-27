@@ -8,6 +8,18 @@ enum Updates {
     static let interval: TimeInterval = 24 * 60 * 60
 
     static var cacheURL: URL { SettingsFile.supportDir.appendingPathComponent("update.json") }
+    /// How the last installer run ended, written by the writer when it reaps it and by install.sh itself as it exits.
+    static var statusURL: URL { SettingsFile.supportDir.appendingPathComponent("update-status.json") }
+    /// While this file exists a development build (CFBundleVersion 1) checks for updates like a release.
+    static var testFlagURL: URL { SettingsFile.supportDir.appendingPathComponent("update-test") }
+    static let logHint = "See ~/Library/Logs/spacebar-update.log."
+    /// An update started this long ago with no end recorded is taken to have failed.
+    static let staleAfter: TimeInterval = 15 * 60
+    static let logLimit = 1 << 20
+    static let logKeep = 256 << 10
+
+    /// Whether this build checks for updates: a development build only while the test flag file exists.
+    static func checks(build: String, testFlag: Bool) -> Bool { build != "1" || testFlag }
 
     /// "1.2.3" from a tag like "v1.2.3", or nil when it is not up to four dot-separated numbers.
     static func version(fromTag tag: String) -> String? {
@@ -30,20 +42,109 @@ enum Updates {
         return v.split(separator: ".").map { Int($0) ?? 0 }
     }
 
+    struct Started: Codable, Equatable {
+        var version: String
+        var at: Double
+    }
+
     struct Cache: Codable, Equatable {
         var checked: Double
         var latest: String?
+        /// The update this Mac last started, so a preview opened while it runs does not offer it again.
+        var started: Started? = nil
+    }
+
+    struct Finished: Codable, Equatable {
+        var version: String
+        var exitStatus: Int
+        var finishedAt: Double
     }
 
     static func readCache(at url: URL = cacheURL) -> Cache? {
-        guard let data = try? Data(contentsOf: url), data.count <= 4096, var c = try? JSONDecoder().decode(Cache.self, from: data) else { return nil }
-        if let l = c.latest, version(fromTag: l) == nil { c.latest = nil }
+        guard var c: Cache = load(url) else { return nil }
+        if let l = c.latest, version(fromTag: l) != l { c.latest = nil }
+        if let st = c.started, version(fromTag: st.version) != st.version { c.started = nil }
         return c
     }
 
-    static func writeCache(_ c: Cache, at url: URL = cacheURL) {
-        guard let data = try? JSONEncoder().encode(c) else { return }
+    static func writeCache(_ c: Cache, at url: URL = cacheURL) { save(c, to: url) }
+
+    static func readStatus(at url: URL = statusURL) -> Finished? {
+        guard let f: Finished = load(url), version(fromTag: f.version) == f.version else { return nil }
+        return f
+    }
+
+    static func writeStatus(_ f: Finished, at url: URL = statusURL) { save(f, to: url) }
+
+    private static func load<T: Decodable>(_ url: URL) -> T? {
+        guard let data = try? Data(contentsOf: url), data.count <= 4096 else { return nil }
+        return try? JSONDecoder().decode(T.self, from: data)
+    }
+
+    private static func save<T: Encodable>(_ value: T, to url: URL) {
+        guard let data = try? JSONEncoder().encode(value) else { return }
         try? data.write(to: url, options: .atomic)
+    }
+
+    /// What the preview offers for the latest release.
+    enum Offer: Equatable {
+        case none
+        /// Installable here with one click.
+        case available(String)
+        /// Newer, but this copy is not the one the installer replaces (`place`), so it is not offered to install.
+        case elsewhere(String, place: String)
+        /// Started from this Mac and not finished yet.
+        case inProgress(String)
+        case failed(String, reason: String)
+
+        var json: Data {
+            let d: [String: String]
+            switch self {
+            case .none: d = ["state": "none"]
+            case .available(let v): d = ["state": "available", "version": v]
+            case .elsewhere(let v, let place): d = ["state": "elsewhere", "version": v, "place": place]
+            case .inProgress(let v): d = ["state": "inProgress", "version": v]
+            case .failed(let v, let reason): d = ["state": "failed", "version": v, "reason": reason]
+            }
+            return try! JSONSerialization.data(withJSONObject: d)
+        }
+
+        /// Read back from the writer; nil for anything malformed or naming no plain version.
+        init?(json: Data) {
+            guard json.count <= 4096, let d = (try? JSONSerialization.jsonObject(with: json)) as? [String: String], let state = d["state"] else { return nil }
+            if state == "none" { self = .none; return }
+            guard let v = d["version"], Updates.version(fromTag: v) == v else { return nil }
+            switch state {
+            case "available": self = .available(v)
+            case "elsewhere": self = .elsewhere(v, place: String((d["place"] ?? "").prefix(512)))
+            case "inProgress": self = .inProgress(v)
+            case "failed": self = .failed(v, reason: String((d["reason"] ?? "").prefix(512)))
+            default: return nil
+            }
+        }
+    }
+
+    static func offer(current: String, latest: String?, started: Started?, finished: Finished?, place: String?, now: Double) -> Offer {
+        guard let latest, isNewer(latest, than: current) else { return .none }
+        if let place { return .elsewhere(latest, place: place) }
+        guard let s = started, s.version == latest else { return .available(latest) }
+        if let f = finished, f.version == latest, f.finishedAt >= s.at {
+            // Installed, but this is still the old copy running: it goes when Quick Look next restarts it.
+            if f.exitStatus == 0 { return .none }
+            return .failed(latest, reason: "The installer stopped with status \(f.exitStatus). \(logHint)")
+        }
+        return now - s.at < staleAfter ? .inProgress(latest) : .failed(latest, reason: "The installer did not finish. \(logHint)")
+    }
+
+    /// The popover's text for a reason an update failed or did not start, and whether it offers the install command: only when
+    /// running it in Terminal does what the button meant to (not beside a running update, not for a copy it would not replace).
+    static func advice(for reason: String) -> (text: String, copy: Bool) {
+        let retryable = ["cannot create the log folder", "cannot open the log", "cannot copy the installer", "could not start the installer",
+                         "the helper stopped", "the installer"]
+        let copy = retryable.contains { reason.lowercased().hasPrefix($0) }
+        var text = reason.prefix(1).uppercased() + reason.dropFirst()
+        if !text.hasSuffix(".") { text += "." }
+        return (text, copy)
     }
 
     /// Why the writer must not start an update to `requested` from `current`, or nil when it may: the check must be on, and the
@@ -64,14 +165,18 @@ enum Updates {
     /// /dev/null, stdout and stderr are appended to `log`, and it inherits no other descriptor and only `environment`. The log
     /// is opened under an exclusive lock that the script's processes hold until they exit, so a second update cannot start
     /// while one runs, from this writer or the other extension's.
-    static func runDetached(script: URL, arguments: [String], log: URL, environment: [String: String]) -> Result<pid_t, SpawnError> {
+    /// `onExit` gets the exit status (128 + the signal for a killed shell) when it is reaped. A log past `logLimit` is cut to its
+    /// last `logKeep` bytes first.
+    static func runDetached(script: URL, arguments: [String], log: URL, environment: [String: String],
+                            onExit: @escaping (Int) -> Void = { _ in }) -> Result<pid_t, SpawnError> {
         let fm = FileManager.default
         let fail = { (what: String) in Result<pid_t, SpawnError>.failure(SpawnError(message: what)) }
         guard (try? fm.createDirectory(at: log.deletingLastPathComponent(), withIntermediateDirectories: true)) != nil else { return fail("cannot create the log folder") }
-        let fd = open(log.path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC | O_EXLOCK | O_NONBLOCK, 0o644)
+        let fd = open(log.path, O_RDWR | O_CREAT | O_APPEND | O_CLOEXEC | O_EXLOCK | O_NONBLOCK, 0o644)
         guard fd >= 0 else { return fail(errno == EWOULDBLOCK ? "an update is already running" : "cannot open the log") }
         defer { close(fd) }
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK)
+        trimLog(fd)
         let dir = fm.temporaryDirectory.appendingPathComponent("spacebar-update-\(UUID().uuidString)", isDirectory: true)
         let copy = dir.appendingPathComponent("install.sh")
         guard (try? fm.createDirectory(at: dir, withIntermediateDirectories: true)) != nil, (try? fm.copyItem(at: script, to: copy)) != nil else {
@@ -108,15 +213,28 @@ enum Updates {
         // Reaped here while the writer lives; the copy goes with it.
         DispatchQueue.global(qos: .utility).async {
             var status: Int32 = 0
-            waitpid(pid, &status, 0)
+            while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
             try? FileManager.default.removeItem(at: dir)
+            onExit(Int(status & 0x7f == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f)))
         }
         return .success(pid)
     }
 
-    /// The version in a GitHub "latest release" response, or nil when it is not one.
+    /// Keeps the last `logKeep` bytes of a log past `logLimit`, from the first whole line.
+    private static func trimLog(_ fd: Int32) {
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_size > logLimit else { return }
+        var tail = [UInt8](repeating: 0, count: logKeep)
+        let n = pread(fd, &tail, logKeep, st.st_size - off_t(logKeep))
+        guard n > 0, ftruncate(fd, 0) == 0 else { return }
+        let from = tail[..<n].firstIndex(of: 10).map { $0 + 1 } ?? 0
+        _ = tail[from..<n].withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+    }
+
+    /// The version in a GitHub "latest release" response, or nil when it is not one. Release tags always start with "v".
     static func parseLatest(_ data: Data) -> String? {
-        guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let tag = obj["tag_name"] as? String else { return nil }
+        guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let tag = obj["tag_name"] as? String,
+              tag.hasPrefix("v") else { return nil }
         return version(fromTag: tag)
     }
 }

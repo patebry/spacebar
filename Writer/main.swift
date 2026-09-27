@@ -109,19 +109,26 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         }
     }
 
-    func latestVersion(reply: @escaping (String?) -> Void) {
-        guard SettingsFile.load().checkUpdates else { return reply(nil) }
+    func updateOffer(reply: @escaping (Data?) -> Void) {
+        guard SettingsFile.load().checkUpdates, updatesAllowed else { return reply(nil) }
+        let answer = { (latest: String?) in
+            reply(Updates.offer(current: self.currentVersion, latest: latest, started: Updates.readCache()?.started, finished: Updates.readStatus(),
+                                place: self.misplaced(), now: Date().timeIntervalSince1970).json)
+        }
         let cached = Updates.readCache()
-        if let c = cached, (0..<Updates.interval).contains(Date().timeIntervalSince1970 - c.checked) { return reply(c.latest) }
+        if let c = cached, (0..<Updates.interval).contains(Date().timeIntervalSince1970 - c.checked) { return answer(c.latest) }
         var req = URLRequest(url: Updates.latestURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("spacebar", forHTTPHeaderField: "User-Agent")
         URLSession.shared.dataTask(with: req) { data, resp, err in
             let found = (resp as? HTTPURLResponse)?.statusCode == 200 ? data.flatMap(Updates.parseLatest) : nil
             // A failed check still counts as a check, so an offline Mac does not ask on every preview.
-            Updates.writeCache(Updates.Cache(checked: Date().timeIntervalSince1970, latest: found ?? cached?.latest))
+            var c = Updates.readCache() ?? Updates.Cache(checked: 0, latest: nil)
+            c.checked = Date().timeIntervalSince1970
+            c.latest = found ?? c.latest
+            Updates.writeCache(c)
             log.info("update check -> \(found ?? "none", privacy: .public)\(err == nil ? "" : " (failed)", privacy: .public)")
-            reply(found ?? cached?.latest)
+            answer(c.latest)
         }.resume()
     }
 
@@ -133,27 +140,51 @@ final class Writer: NSObject, SpacebarWriterProtocol {
     }
 
     func installUpdate(_ version: String, reply: @escaping (String?) -> Void) {
-        let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
-        if let why = Updates.installRefusal(version, current: current, enabled: SettingsFile.load().checkUpdates) {
+        if let why = Updates.installRefusal(version, current: currentVersion, enabled: SettingsFile.load().checkUpdates && updatesAllowed) {
             log.error("refused update to \(version, privacy: .private): \(why, privacy: .public)")
             return reply(why)
         }
-        let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         guard let app = containingApp() else { return reply("the spacebar app was not found") }
         // The installer only ever replaces ~/Applications/spacebar.app; from anywhere else it would add a second copy.
-        guard app.resolvingSymlinksInPath().path == home.appendingPathComponent("Applications/spacebar.app").resolvingSymlinksInPath().path else {
-            return reply("spacebar is not in ~/Applications")
+        guard misplaced() == nil else { return reply("spacebar is not in ~/Applications") }
+        let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        let env = ["HOME": home.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": NSTemporaryDirectory(),
+                   "SPACEBAR_UPDATE_STATUS": Updates.statusURL.path]
+        // Recorded before the start, so an installer that fails at once still ends after it.
+        let before = Updates.readCache()
+        var c = before ?? Updates.Cache(checked: 0, latest: nil)
+        c.started = Updates.Started(version: version, at: Date().timeIntervalSince1970)
+        Updates.writeCache(c)
+        let run = Updates.runDetached(script: app.appendingPathComponent("Contents/Resources/install.sh"), arguments: Updates.installerArguments(version),
+                                      log: home.appendingPathComponent("Library/Logs/spacebar-update.log"), environment: env) { code in
+            Updates.writeStatus(Updates.Finished(version: version, exitStatus: code, finishedAt: Date().timeIntervalSince1970))
+            log.info("update to \(version, privacy: .public) ended with \(code)")
         }
-        let env = ["HOME": home.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": NSTemporaryDirectory()]
-        switch Updates.runDetached(script: app.appendingPathComponent("Contents/Resources/install.sh"), arguments: Updates.installerArguments(version),
-                                   log: home.appendingPathComponent("Library/Logs/spacebar-update.log"), environment: env) {
+        switch run {
         case .success(let pid):
             log.info("update to \(version, privacy: .public) started (pid \(pid))")
             reply(nil)
         case .failure(let e):
+            if var c = Updates.readCache() { c.started = before?.started; Updates.writeCache(c) }
             log.error("update to \(version, privacy: .public): \(e.message, privacy: .public)")
             reply(e.message)
         }
+    }
+
+    private var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "" }
+
+    /// A development build checks only while the test flag file exists.
+    private var updatesAllowed: Bool {
+        Updates.checks(build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "",
+                       testFlag: FileManager.default.fileExists(atPath: Updates.testFlagURL.path))
+    }
+
+    /// Where this copy of spacebar is, for the popover, when it is not ~/Applications/spacebar.app; nil when it is.
+    private func misplaced() -> String? {
+        let home = NSHomeDirectory()
+        guard let app = containingApp()?.resolvingSymlinksInPath().path else { return "an unknown folder" }
+        if app == URL(fileURLWithPath: home).appendingPathComponent("Applications/spacebar.app").resolvingSymlinksInPath().path { return nil }
+        return app.hasPrefix(home + "/") ? "~" + app.dropFirst(home.count) : app
     }
 
     /// The app that contains this service.

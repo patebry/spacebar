@@ -10,8 +10,9 @@
 #      rate-limited.
 #   3. Unzips the new spacebar.app and copies it into ~/Applications as .spacebar.app.new (no sudo).
 #   4. If ~/Applications/spacebar.app exists: quits that copy and unregisters its Quick Look extensions, renames it to
-#      .spacebar.app.old, renames the new copy into its place, then deletes .spacebar.app.old. If the new copy cannot be
-#      moved in, the old one is put back. Nothing outside those three exact paths is removed.
+#      .spacebar.app.old, quits its extensions still running, renames the new copy into its place, then deletes
+#      .spacebar.app.old. If the new copy cannot be moved in, the old one is put back. Nothing outside those three exact
+#      paths is removed (and, when spacebar's Update button started this run, the private copy of this script it ran).
 #   5. Registers it with Launch Services and pluginkit, turns on the Markdown preview extension, and resets
 #      Quick Look's cache.
 #   6. Lists any other Quick Look extensions that claim Markdown and are turned on, and warns about a second copy in
@@ -24,6 +25,8 @@ INSTALL_URL=https://spacebar.patebryant.com/install.sh
 APP_NAME=spacebar.app
 APPEX_ID=md.spacebar.preview
 FOLDERS_ID=md.spacebar.preview.folders
+# A stalled connection gives up instead of hanging the install.
+CURL_LIMITS="--connect-timeout 15 --max-time 600"
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 QL_SETTINGS='x-apple.systempreferences:com.apple.ExtensionsPreferences?extensionPointIdentifier=com.apple.quicklook.preview'
 
@@ -93,12 +96,22 @@ reregister() {
 
 # Runs on every exit. Removes only what this run created, and puts the previous copy back if a swap was cut short.
 cleanup() {
+  code=$?
   if [ "$SWAPPING" = 1 ] && [ ! -e "$DEST" ] && [ -e "$OLD" ]; then
     mv "$OLD" "$DEST" && printf 'Put the previous copy back at %s\n' "$DEST" >&2
   fi
   if [ "$UNREGISTERED" = 1 ] && [ -e "$DEST" ]; then reregister "$DEST"; fi
   if [ "$MADE_NEW" = 1 ]; then rm -rf "$NEW"; fi
   if [ -n "$TMP" ]; then rm -rf "$TMP"; fi
+  # Started by spacebar's Update button: record how the run ended for the preview, and remove the private copy it ran.
+  if [ -n "${SPACEBAR_UPDATE_STATUS:-}" ]; then
+    v=${VERSION#v}
+    case $v in '' | *[!0-9.]*) v="" ;; esac
+    [ -n "$v" ] && printf '{"version":"%s","exitStatus":%d,"finishedAt":%s}\n' "$v" "$code" "$(date +%s)" >"$SPACEBAR_UPDATE_STATUS.tmp" &&
+      mv -f "$SPACEBAR_UPDATE_STATUS.tmp" "$SPACEBAR_UPDATE_STATUS" || true
+  fi
+  self_dir=${0%/install.sh}
+  case $self_dir in "$0") ;; *) case ${self_dir##*/} in spacebar-update-*) rm -rf "$self_dir" ;; esac ;; esac
 }
 
 # Everything runs from main, called on the last line, so a download cut short by the network runs nothing.
@@ -149,7 +162,7 @@ elif [ -n "$VERSION" ]; then
   BASE="https://github.com/$REPO/releases/download/$VERSION"
 else
   BASE="https://github.com/$REPO/releases/latest/download"
-  landed=$(curl -fsSIL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null || true)
+  landed=$(curl -fsSIL $CURL_LIMITS -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null || true)
   case $landed in
     */releases/tag/?*) VERSION="${landed##*/releases/tag/} (latest)" ;;
     *) VERSION="(latest)" ;;
@@ -159,8 +172,8 @@ fi
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/spacebar-install.XXXXXX")
 
 say "Downloading spacebar $VERSION"
-curl -fSL --progress-bar -o "$TMP/spacebar.zip" "$BASE/spacebar.zip" || fail "download failed: $BASE/spacebar.zip"
-curl -fsSL -o "$TMP/spacebar.zip.sha256" "$BASE/spacebar.zip.sha256" || fail "download failed: $BASE/spacebar.zip.sha256"
+curl -fSL $CURL_LIMITS --progress-bar -o "$TMP/spacebar.zip" "$BASE/spacebar.zip" || fail "download failed: $BASE/spacebar.zip"
+curl -fsSL $CURL_LIMITS -o "$TMP/spacebar.zip.sha256" "$BASE/spacebar.zip.sha256" || fail "download failed: $BASE/spacebar.zip.sha256"
 
 expected=$(awk '{ print $1; exit }' "$TMP/spacebar.zip.sha256")
 actual=$(shasum -a 256 "$TMP/spacebar.zip" | awk '{ print $1 }')
@@ -186,6 +199,7 @@ if [ "$DRY_RUN" = 1 ]; then
       say "would run: $LSREGISTER -u $DEST"
     fi
     say "would move $DEST to $OLD, move $NEW to $DEST, then delete $OLD"
+    if [ "$SKIP_REGISTER" != 1 ]; then say "would run: pkill -f $(path_regex "$DEST")Contents/PlugIns/ after the first move"; fi
   else
     say "would move $NEW to $DEST"
   fi
@@ -216,6 +230,11 @@ else
     if ! mv "$DEST" "$OLD"; then
       SWAPPING=0
       fail "could not move the previous copy aside; it is still installed at $DEST."
+    fi
+    # Quick Look extensions (and their writers) still running the old code would keep serving it from a deleted bundle.
+    if [ "$SKIP_REGISTER" != 1 ]; then
+      pkill -f "$(path_regex "$DEST")Contents/PlugIns/" || true
+      pkill -f "$(path_regex "$OLD")Contents/PlugIns/" || true
     fi
     if ! mv "$NEW" "$DEST"; then
       mv "$OLD" "$DEST" || fail "could not move the new copy in, nor put the previous one back: it is at $OLD."

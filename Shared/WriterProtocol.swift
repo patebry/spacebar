@@ -18,8 +18,9 @@ protocol SpacebarWriterProtocol {
     func updateSettings(_ patch: Data, reply: @escaping (Bool) -> Void)
     /// Opens the host app's settings window on `tab` (one of SettingsTab.all).
     func openSettings(_ tab: String, reply: @escaping (Bool) -> Void)
-    /// The newest released version when the update check is on: cached, and asked of GitHub at most once a day.
-    func latestVersion(reply: @escaping (String?) -> Void)
+    /// What to offer for the newest release (an Updates.Offer as JSON), or nil when the update check is off: the version is
+    /// cached and asked of GitHub at most once a day.
+    func updateOffer(reply: @escaping (Data?) -> Void)
     /// Puts the install command, which also updates, on the clipboard.
     func copyInstallCommand(reply: @escaping (Bool) -> Void)
     /// Starts the installer bundled in the app, detached, to update to `version`: only a release newer than this one, and only

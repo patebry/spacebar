@@ -1,6 +1,6 @@
 // Checks Shared/Updates.swift: version parsing and comparison, the release response, the cache and the last run's status, what
-// the popover offers, the detached run (against a stub), and scripts/install.sh's exit record in a dry run that fails its
-// download from a missing file:// URL. Build and run with test/updates/run.sh. Touches no network and installs nothing.
+// the popover offers, the detached run (against a stub), scripts/install.sh's exit record in a dry run that fails its
+// download from a missing file:// URL, and the order its quit_extensions stops stand-in processes in. Build and run with test/updates/run.sh. Touches no network and installs nothing.
 import Foundation
 
 var failures = 0
@@ -190,6 +190,41 @@ check("install.sh: records the version and exit status", rec?.version == "9.9.9"
 check("install.sh: removes its private copy", !run1.copyLeft)
 check("install.sh: keeps a copy outside $TMPDIR", dryRun(tmp: dir.path + "/elsewhere/", status: recorded).copyLeft)
 check("install.sh: keeps a copy when not started by the Update button", dryRun(tmp: dir.path + "/", status: nil).copyLeft)
+
+// install.sh's quit_extensions on a fake bundle of stand-in processes: the writer goes first and is waited for (it takes 1 s
+// to finish, like a write in flight), then the extension; a process of another app is left alone.
+if let proc = ProcessInfo.processInfo.environment["SPACEBAR_TEST_PROC"] {
+    let bundle = dir.appendingPathComponent("Apps/spacebar.app")
+    let marker = dir.appendingPathComponent("quit-order.txt")
+    let exes = [("writer", bundle.appendingPathComponent("Contents/PlugIns/P.appex/Contents/XPCServices/w.xpc/Contents/MacOS/W"), "1000"),
+                ("extension", bundle.appendingPathComponent("Contents/PlugIns/P.appex/Contents/MacOS/P"), "0"),
+                ("other", dir.appendingPathComponent("Other.app/Contents/PlugIns/P.appex/Contents/MacOS/P"), "0")]
+    var procs: [String: Process] = [:]
+    for (name, exe, delay) in exes {
+        try! FileManager.default.createDirectory(at: exe.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try! FileManager.default.copyItem(atPath: proc, toPath: exe.path)
+        let p = Process()
+        p.executableURL = exe
+        p.arguments = [marker.path, name, delay]
+        try! p.run()
+        procs[name] = p
+    }
+    usleep(300_000)
+    let quit = Process()
+    quit.executableURL = URL(fileURLWithPath: "/bin/sh")
+    quit.arguments = ["-c", #"eval "$(sed -n '/^path_regex()/p; /^quit_extensions() {/,/^}/p' scripts/install.sh)"; quit_extensions "$1""#, "sh", bundle.path]
+    let t0 = Date()
+    try! quit.run()
+    quit.waitUntilExit()
+    let took = Date().timeIntervalSince(t0)
+    usleep(300_000)
+    let ended = ((try? String(contentsOf: marker, encoding: .utf8)) ?? "").split(separator: "\n").reduce(into: [String: Int64]()) {
+        let f = $1.split(separator: " "); if f.count == 2 { $0[String(f[0])] = Int64(f[1]) }
+    }
+    check("install.sh: quits the writer before the extension", (ended["writer"] ?? .max) <= (ended["extension"] ?? .min) && took >= 0.9 && took < 7)
+    check("install.sh: leaves another app's extension running", ended["other"] == nil && procs["other"]!.isRunning)
+    procs.values.forEach { if $0.isRunning { $0.terminate() } }
+}
 close(leaked)
 
 try? FileManager.default.removeItem(at: dir)

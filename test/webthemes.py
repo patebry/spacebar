@@ -464,6 +464,17 @@ def main():
         t = page.js("return [window.__due, document.getElementById('aa-update-title').textContent, document.getElementById('aa-install').disabled]")
         check([m.get('type') for m in r['messages']] == ['updateCheck'] and t == [[60000], 'Still updating to spacebar 10.10.10…', True],
               'a long update shows "Still updating…" and asks again a minute later', json.dumps([r['messages'], t]))
+        # While an update runs no edit or task toggle starts: the installer is about to quit the preview.
+        page.js("sb.update({ state: 'started', version: '10.10.10' }); return 0")
+        click(page, '#doc')
+        r = click(page, '#doc > p')
+        rb = page.cmd("@eval:(() => { const b = document.querySelector('#doc input[type=checkbox][data-line]'); const was = b.checked; b.click(); return JSON.stringify([was, b.checked]); })()")
+        box = json.loads(rb['result'])
+        r['messages'] += rb['messages']
+        busy = page.js("return [!!document.querySelector('#doc > .md-editing'), document.getElementById('status').textContent]")
+        check(not [m for m in r['messages'] if m.get('type') in ('editBlock', 'toggle')] and busy == [False, 'Updating…'] and box[0] == box[1],
+              'no edit or task toggle starts while an update runs', json.dumps([busy, box, [m.get('type') for m in r['messages']]]))
+        page.js("sb.update({ state: 'failed', version: '10.10.10', reason: 'x' }); return 0")
         click(page, '#doc')
         # Update ends an inline edit first, so its keys are saved before the installer quits Quick Look.
         click(page, '#doc > p')

@@ -4,16 +4,20 @@ private let writeLock = NSLock()
 
 /// Holds the writer's exit on SIGTERM while a write is in flight. Writes rewrite the file in place, so a kill in the middle
 /// would leave it partly written (the installer quits the writer this way when it updates the app). After the signal no new
-/// write starts; the process exits when the last one ends, or after `cap` seconds whatever is in flight.
+/// write starts; the process exits `grace` seconds after the last one ends (so its reply still reaches the preview), or after
+/// `cap` seconds whatever is in flight. `quit` runs once.
 final class WriteGate {
     private let lock = NSLock()
     private var inFlight = 0
     private var stopping = false
+    private var quitting = false
     private let cap: TimeInterval
+    private let grace: TimeInterval
     private let quit: () -> Void
 
-    init(cap: TimeInterval = 5, quit: @escaping () -> Void = { exit(0) }) {
+    init(cap: TimeInterval = 5, grace: TimeInterval = 0.2, quit: @escaping () -> Void = { exit(0) }) {
         self.cap = cap
+        self.grace = grace
         self.quit = quit
     }
 
@@ -31,7 +35,7 @@ final class WriteGate {
         inFlight -= 1
         let now = stopping && inFlight == 0
         lock.unlock()
-        if now { quit() }
+        if now { quitOnce(after: grace) }
     }
 
     func terminate() {
@@ -40,8 +44,17 @@ final class WriteGate {
         stopping = true
         let now = inFlight == 0
         lock.unlock()
-        if now { return quit() }
-        if first { DispatchQueue.global().asyncAfter(deadline: .now() + cap) { self.quit() } }
+        if now { return quitOnce(after: 0) }
+        if first { DispatchQueue.global().asyncAfter(deadline: .now() + cap) { self.quitOnce(after: 0) } }
+    }
+
+    private func quitOnce(after delay: TimeInterval) {
+        lock.lock()
+        let first = !quitting
+        quitting = true
+        lock.unlock()
+        guard first else { return }
+        if delay == 0 { quit() } else { DispatchQueue.global().asyncAfter(deadline: .now() + delay, execute: quit) }
     }
 
     /// Routes SIGTERM to `terminate`. Keep the returned source alive.

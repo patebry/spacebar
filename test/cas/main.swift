@@ -46,12 +46,26 @@ busy.terminate()
 check("gate: a write in flight holds the exit", quits == 0)
 check("gate: no write starts once quitting", !busy.begin())
 busy.end()
-check("gate: quits when the write ends", quits == 1)
+check("gate: the exit waits a moment after the write, so its reply is sent", quits == 0)
+usleep(600_000)
+check("gate: quits after the write ends", quits == 1)
 let quitCapped = DispatchSemaphore(value: 0)
 let stuck = WriteGate(cap: 0.3) { quitCapped.signal() }
 _ = stuck.begin()
 stuck.terminate()
 check("gate: a stuck write is given up on after the cap", quitCapped.wait(timeout: .now() + 0.1) == .timedOut && quitCapped.wait(timeout: .now() + 2) == .success)
+// A write ending near the cap: the cap and the end must not both quit.
+let counted = NSLock()
+var raced = 0
+let race = WriteGate(cap: 0.3, grace: 0.2) { counted.lock(); raced += 1; counted.unlock() }
+_ = race.begin()
+race.terminate()
+usleep(250_000)
+race.end()
+usleep(700_000)
+counted.lock()
+check("gate: quits once when the cap and the write's end meet", raced == 1)
+counted.unlock()
 let signalled = DispatchSemaphore(value: 0)
 let real = WriteGate(cap: 0.3) { signalled.signal() }
 let source = real.handleSIGTERM()

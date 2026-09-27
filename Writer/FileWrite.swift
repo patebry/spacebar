@@ -2,6 +2,58 @@ import Foundation
 
 private let writeLock = NSLock()
 
+/// Holds the writer's exit on SIGTERM while a write is in flight. Writes rewrite the file in place, so a kill in the middle
+/// would leave it partly written (the installer quits the writer this way when it updates the app). After the signal no new
+/// write starts; the process exits when the last one ends, or after `cap` seconds whatever is in flight.
+final class WriteGate {
+    private let lock = NSLock()
+    private var inFlight = 0
+    private var stopping = false
+    private let cap: TimeInterval
+    private let quit: () -> Void
+
+    init(cap: TimeInterval = 5, quit: @escaping () -> Void = { exit(0) }) {
+        self.cap = cap
+        self.quit = quit
+    }
+
+    /// False once termination has begun: the write must not start.
+    func begin() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !stopping else { return false }
+        inFlight += 1
+        return true
+    }
+
+    func end() {
+        lock.lock()
+        inFlight -= 1
+        let now = stopping && inFlight == 0
+        lock.unlock()
+        if now { quit() }
+    }
+
+    func terminate() {
+        lock.lock()
+        let first = !stopping
+        stopping = true
+        let now = inFlight == 0
+        lock.unlock()
+        if now { return quit() }
+        if first { DispatchQueue.global().asyncAfter(deadline: .now() + cap) { self.quit() } }
+    }
+
+    /// Routes SIGTERM to `terminate`. Keep the returned source alive.
+    func handleSIGTERM() -> DispatchSourceSignal {
+        signal(SIGTERM, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .global())
+        source.setEventHandler { [weak self] in self?.terminate() }
+        source.resume()
+        return source
+    }
+}
+
 /// Writes `data` only while the file still holds `base`.
 ///
 /// The compare and the write go through one descriptor: the content is read from it, its size and modification time are

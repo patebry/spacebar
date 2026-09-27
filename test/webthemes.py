@@ -431,7 +431,7 @@ def main():
 
         # ---- the update row: fits the popover in every state, and the page never names the version it asks for ----
         long_place = '~/Library/Mobile Documents/com~apple~CloudDocs/Some Long Folder Name/spacebar.app'
-        states = [('available', {}), ('elsewhere', {'place': long_place}), ('started', {}),
+        states = [('available', {}), ('elsewhere', {'place': long_place}), ('started', {}), ('inProgress', {}), ('done', {}),
                   ('failed', {'reason': 'The installer stopped with status 1. See ~/Library/Logs/spacebar-update.log.', 'copy': True}),
                   ('failed', {'reason': 'An update is already running.'}), ('failed', {'reason': 'Not started: save failed; edit again to retry.', 'retry': True})]
         click(page, '#aa')
@@ -439,7 +439,7 @@ def main():
         for state, extra in states:
             page.js('sb.update(' + json.dumps({'state': state, 'version': '10.10.10', **extra}) + '); return 0')
             fit = page.js(UPDATE_FIT)
-            want = ['aa-update-title', 'aa-update-sub'] + (['aa-install'] if state in ('available', 'started') or extra.get('retry') else []) \
+            want = ['aa-update-title', 'aa-update-sub'] + (['aa-install'] if state in ('available', 'started', 'inProgress') or extra.get('retry') else []) \
                 + (['aa-copy'] if extra.get('copy') else []) + ['aa-notes']
             check(fit['bad'] == [] and fit['shown'] == want and fit['dot'], f'update row ({state} {sorted(extra)}): shows {want[2:-1] or "no button"}, nothing overflows',
                   json.dumps(fit))
@@ -451,15 +451,19 @@ def main():
         page.js("sb.update({ state: 'failed', version: '10.10.10', reason: 'Could not start the installer.', copy: true }); return 0")
         r = click(page, '#aa-copy')
         check([m.get('type') for m in r['messages']] == ['copyInstall'], 'a failed update offers the install command', json.dumps(r['messages']))
-        # "Updating…" gives up after 2 minutes: the timer is run at once here.
-        t = page.js("""const real = window.setTimeout; let due = null;
-          window.setTimeout = (f, ms) => { if (ms === 120000) { due = f; return 0; } return real(f, ms); };
-          sb.update({ state: 'started', version: '10.10.10' }); window.setTimeout = real;
-          const before = document.getElementById('aa-update-title').textContent; if (due) due();
-          return [before, document.getElementById('aa-update-title').textContent, document.getElementById('aa-update-sub').textContent,
-            document.getElementById('aa-copy').hidden, document.getElementById('aa-install').hidden]""")
-        check(t[0].startswith('Updating to') and t[1] == 'Update failed' and 'spacebar-update.log' in t[2] and t[3] is False and t[4] is True,
-              '"Updating…" turns into the failure after 2 minutes', json.dumps(t))
+        # "Updating…" asks after 2 minutes, then every minute, whether the installer still runs: the timers are run at once here.
+        hook = """(() => { const real = window.setTimeout; window.__due = []; window.setTimeout = (f, ms) => { if (ms >= 60000) { window.__due.push(ms); window.__run = f; return 0; } return real(f, ms); };
+          sb.update(STATE); window.setTimeout = real; })(); 0"""
+        page.cmd('@eval:' + hook.replace('STATE', json.dumps({'state': 'started', 'version': '10.10.10'})))
+        r = page.cmd('@eval:window.__run(); 0')
+        t = page.js("return [window.__due, document.getElementById('aa-update-title').textContent]")
+        check([m.get('type') for m in r['messages']] == ['updateCheck'] and t == [[120000], 'Updating to spacebar 10.10.10…'],
+              '"Updating…" asks after 2 minutes whether the installer still runs, and keeps waiting', json.dumps([r['messages'], t]))
+        page.cmd('@eval:' + hook.replace('STATE', json.dumps({'state': 'inProgress', 'version': '10.10.10'})))
+        r = page.cmd('@eval:window.__run(); 0')
+        t = page.js("return [window.__due, document.getElementById('aa-update-title').textContent, document.getElementById('aa-install').disabled]")
+        check([m.get('type') for m in r['messages']] == ['updateCheck'] and t == [[60000], 'Still updating to spacebar 10.10.10…', True],
+              'a long update shows "Still updating…" and asks again a minute later', json.dumps([r['messages'], t]))
         click(page, '#doc')
         # Update ends an inline edit first, so its keys are saved before the installer quits Quick Look.
         click(page, '#doc > p')

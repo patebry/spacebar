@@ -13,8 +13,6 @@ enum Updates {
     /// While this file exists a development build (CFBundleVersion 1) checks for updates like a release.
     static var testFlagURL: URL { SettingsFile.supportDir.appendingPathComponent("update-test") }
     static let logHint = "See ~/Library/Logs/spacebar-update.log."
-    /// An update started this long ago with no end recorded is taken to have failed.
-    static let staleAfter: TimeInterval = 15 * 60
     static let logLimit = 1 << 20
     static let logKeep = 256 << 10
 
@@ -124,7 +122,8 @@ enum Updates {
         }
     }
 
-    static func offer(current: String, latest: String?, started: Started?, finished: Finished?, place: String?, now: Double) -> Offer {
+    /// `running`: an installer holds the log's lock (isRunning).
+    static func offer(current: String, latest: String?, started: Started?, finished: Finished?, place: String?, running: Bool) -> Offer {
         guard let latest, isNewer(latest, than: current) else { return .none }
         if let place { return .elsewhere(latest, place: place) }
         guard let s = started, s.version == latest else { return .available(latest) }
@@ -133,7 +132,7 @@ enum Updates {
             if f.exitStatus == 0 { return .none }
             return .failed(latest, reason: "The installer stopped with status \(f.exitStatus). \(logHint)")
         }
-        return now - s.at < staleAfter ? .inProgress(latest) : .failed(latest, reason: "The installer did not finish. \(logHint)")
+        return running ? .inProgress(latest) : .failed(latest, reason: "The installer did not finish. \(logHint)")
     }
 
     /// The popover's text for a reason an update failed or did not start, and whether it offers the install command: only when
@@ -218,6 +217,13 @@ enum Updates {
             onExit(Int(status & 0x7f == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f)))
         }
         return .success(pid)
+    }
+
+    /// Whether an installer started by runDetached is still running: its processes hold the log's lock until they exit.
+    static func isRunning(log: URL) -> Bool {
+        let fd = open(log.path, O_RDONLY | O_CLOEXEC | O_EXLOCK | O_NONBLOCK)
+        if fd >= 0 { close(fd); return false }
+        return errno == EWOULDBLOCK
     }
 
     /// Keeps the last `logKeep` bytes of a log past `logLimit`, from the first whole line.

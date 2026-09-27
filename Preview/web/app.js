@@ -1286,6 +1286,9 @@ let treeVersion = 0;
 // The filter's text, lower-cased, and the row the arrow keys move from (a file or a folder, by path).
 let sideQuery = '';
 let cursor = '';
+// The filter field holding the writer's key panel ({ seq }), and the last sequence number used.
+let filterSession = null;
+let filterSeq = 0;
 // Files the keys opened, by path, with when: their renders, and any render while one is pending, leave the cursor where the
 // keys put it since.
 const keyed = new Map();
@@ -1305,6 +1308,7 @@ function resetTree(rootPath, name) {
   tree = { root: rootPath, name: name || rootPath.split('/').pop() || rootPath, session: 0, dirs: new Map() };
   requested.clear();
   treeVersion++;
+  if (filterSession) endFilter();
   sideQuery = '';
   $('side-q').value = '';
 }
@@ -1467,6 +1471,8 @@ function sidebarShown() { return narrow.matches ? root.classList.contains('sb-pe
 
 function syncToggle() {
   const open = sidebarShown(), t = $('side-toggle');
+  // The filter must not keep the keyboard for a sidebar that is gone: collapsed, peeked away, or narrowed out of view.
+  if (!open) endFilter();
   t.setAttribute('aria-expanded', String(open));
   t.title = open ? 'Hide sidebar' : 'Show sidebar';
 }
@@ -1566,60 +1572,95 @@ function moveCursor(r, open, repeat) {
   if (repeat) openTimer = setTimeout(go, 90); else go();
 }
 
-function focusFilter() {
-  if (!sidebarShown()) { if (narrow.matches) peek(true); else choose('sidebarCollapsed', false); }
-  filterField.focus();
-  filterField.select();
+/** One of Finder's keys for the tree, by KeyboardEvent key name; false when it does nothing here. */
+function sideKey(key, inFilter, repeat) {
+  if (editing || !pop.hidden || !tree.root || !sidebarShown()) return false;
+  const rows = [...$('side-list').querySelectorAll('a.row')];
+  if (!rows.length) return false;
+  const i = rows.findIndex((r) => r.dataset.path === cursor);
+  const r = rows[i];
+  const step = (d) => rows[i < 0 ? (d > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, i + d))];
+  switch (key) {
+    case 'ArrowDown': moveCursor(step(1), true, repeat); break;
+    case 'ArrowUp': moveCursor(step(-1), true, repeat); break;
+    case 'Home': moveCursor(rows[0], true, false); break;
+    case 'End': moveCursor(rows[rows.length - 1], true, false); break;
+    case 'ArrowRight':
+      if (!r || !r.dataset.dir) return false;
+      if (r.getAttribute('aria-expanded') !== 'true') toggleFolder(r.dataset.path);
+      else if (rows[i + 1] && +rows[i + 1].getAttribute('aria-level') > +r.getAttribute('aria-level')) moveCursor(rows[i + 1], true, false);
+      break;
+    case 'ArrowLeft': {
+      if (!r) return false;
+      if (r.dataset.dir && expanded().has(r.dataset.path) && r.getAttribute('aria-expanded') === 'true') { toggleFolder(r.dataset.path); break; }
+      const up = rows.find((x) => x.dataset.path === parentOf(r.dataset.path));
+      if (!up) return false;
+      moveCursor(up, false, false);
+      break;
+    }
+    case 'Enter':
+      if (!r) { if (inFilter) moveCursor(rows[0], true, false); else return false; }
+      else if (r.dataset.dir) toggleFolder(r.dataset.path);
+      else moveCursor(r, true, false);
+      break;
+    default: return false;
+  }
+  $('side-list').classList.add('keyed');
+  return true;
 }
 
-// Finder's keys for the tree, while the page has the keyboard: never during an edit (the writer's panel has it then), with the
-// Aa popover open, or in a field other than the filter, which passes on only ↑, ↓ and Return. Space is never taken: Quick Look
-// closes on it.
+// The keys, when the page has the keyboard: never during an edit (the writer's panel has it then), with the Aa popover open, or
+// in a field other than the filter, which passes on only ↑, ↓ and Return. Space is never taken: Quick Look closes on it.
 document.addEventListener('keydown', (e) => {
-  if (e.defaultPrevented || e.isComposing || editing || !pop.hidden || !tree.root) return;
+  if (e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey) return;
   const inFilter = e.target === filterField;
-  if (e.key === 'f' && e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) { e.preventDefault(); focusFilter(); return; }
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (inFilter && e.key === 'Escape') {
+  if (inFilter && e.key === 'Escape' && !editing) {
     e.preventDefault();
     if (filterField.value) { filterField.value = ''; sideQuery = ''; renderSidebar(); } else filterField.blur();
     return;
   }
   if (inFilter ? !['ArrowUp', 'ArrowDown', 'Enter'].includes(e.key) : e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable]')) return;
-  if (!sidebarShown()) return;
-  const rows = [...$('side-list').querySelectorAll('a.row')];
-  if (!rows.length) return;
-  const i = rows.findIndex((r) => r.dataset.path === cursor);
-  const r = rows[i];
-  const step = (d) => rows[i < 0 ? (d > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, i + d))];
-  switch (e.key) {
-    case 'ArrowDown': moveCursor(step(1), true, e.repeat); break;
-    case 'ArrowUp': moveCursor(step(-1), true, e.repeat); break;
-    case 'Home': moveCursor(rows[0], true, false); break;
-    case 'End': moveCursor(rows[rows.length - 1], true, false); break;
-    case 'ArrowRight':
-      if (!r || !r.dataset.dir) return;
-      if (r.getAttribute('aria-expanded') !== 'true') toggleFolder(r.dataset.path);
-      else if (rows[i + 1] && +rows[i + 1].getAttribute('aria-level') > +r.getAttribute('aria-level')) moveCursor(rows[i + 1], true, false);
-      break;
-    case 'ArrowLeft': {
-      if (!r) return;
-      if (r.dataset.dir && expanded().has(r.dataset.path) && r.getAttribute('aria-expanded') === 'true') { toggleFolder(r.dataset.path); break; }
-      const up = rows.find((x) => x.dataset.path === parentOf(r.dataset.path));
-      if (!up) return;
-      moveCursor(up, false, false);
-      break;
-    }
-    case 'Enter':
-      if (!r) { if (inFilter) moveCursor(rows[0], true, false); else return; }
-      else if (r.dataset.dir) toggleFolder(r.dataset.path);
-      else moveCursor(r, true, false);
-      break;
-    default: return;
-  }
-  e.preventDefault();
-  $('side-list').classList.add('keyed');
+  if (sideKey(e.key, inFilter, e.repeat)) e.preventDefault();
 });
+
+// In Quick Look the page never gets keys, so a click in the filter field asks the writer's key panel (the one inline editing
+// uses) to hold them over the field: it sends back the text and the list keys, and Esc on an empty field, a click outside the
+// sidebar, an edit, or another preview ends it. Return opens a file and keeps the field, like the arrows do.
+const FILTER_KEYS = { up: 'ArrowUp', down: 'ArrowDown', home: 'Home', end: 'End', return: 'Enter' };
+
+function beginFilter(e) {
+  if (filterSession || editing || !tree.root) return;
+  const r = filterField.getBoundingClientRect();
+  filterSession = { seq: ++filterSeq };
+  filterField.classList.add('held');
+  post({ type: 'filterBegin', seq: filterSession.seq, text: filterField.value, clickX: e.clientX - r.left, clickY: e.clientY - r.top,
+    width: r.width, height: r.height });
+}
+
+function endFilter() {
+  if (!filterSession) return;
+  post({ type: 'filterStop', seq: filterSession.seq });
+  filterDone();
+}
+
+function filterDone() {
+  filterSession = null;
+  filterField.classList.remove('held');
+}
+
+const ofFilter = (m) => !!m && !!filterSession && m.seq === filterSession.seq;
+Object.assign(window.sb, {
+  filterText(m) {
+    if (!ofFilter(m) || typeof m.text !== 'string') return;
+    filterField.value = m.text;
+    sideQuery = m.text.trim().toLowerCase();
+    renderSidebar();
+  },
+  filterKey(m) { if (ofFilter(m) && Object.hasOwn(FILTER_KEYS, m.key)) sideKey(FILTER_KEYS[m.key], true, m.repeat === true); },
+  /** One session's end, or with `all` any session: a new preview's controller never began the one the page may hold. */
+  filterEnd(m) { if (ofFilter(m) || (m && m.all === true && filterSession)) filterDone(); },
+});
+document.addEventListener('click', (e) => { if (filterSession && !e.target.closest('#sidebar')) endFilter(); }, true);
 
 // ---------- the Aa popover (in #toolbar, outside #doc: nothing the document renders can reach these messages) ----------
 
@@ -1711,6 +1752,7 @@ document.addEventListener('click', (e) => {
     if (h && h.isConnected) h.scrollIntoView({ behavior: reducedMotion.matches ? 'auto' : 'smooth', block: 'start' });
     return;
   }
+  if (e.target === filterField) { if (e.isTrusted) beginFilter(e); return; }
   if (e.target.closest('#side-head') && tree.root) { e.preventDefault(); peek(false); post({ type: 'overview' }); return; }
   const row = e.target.closest('#side-list a.row');
   if (row) {

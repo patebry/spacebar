@@ -37,6 +37,15 @@ final class EditHost: NSObject, SpacebarEditHostProtocol {
     func editSplit(_ session: Int, before: String, after: String, tail: String) {
         DispatchQueue.main.async { self.controller?.splitRequested(session, before: before, after: after, tail: tail) }
     }
+    func filterChanged(_ session: Int, text: String) {
+        DispatchQueue.main.async { self.controller?.filterChanged(session, text: text) }
+    }
+    func filterKey(_ session: Int, key: String, isRepeat: Bool) {
+        DispatchQueue.main.async { self.controller?.filterKey(session, key: key, isRepeat: isRepeat) }
+    }
+    func filterEnded(_ session: Int, reason: String) {
+        DispatchQueue.main.async { self.controller?.filterEnded(session, reason: reason) }
+    }
 }
 
 /// While an edit holds the keyboard the preview's window is not key, and WKWebView takes the first click into a non-key
@@ -295,6 +304,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private var edit: (id: Int, seq: Int, start: Int, lines: Int)?
     /// The session a click just replaced: keys typed into it before the writer switched arrive late and are still applied.
     private var retired: [(id: Int, seq: Int, start: Int, lines: Int)] = []
+    /// The sidebar filter holding the keyboard: writer session id (from editCounter) and the page's sequence number.
+    private var filter: (id: Int, seq: Int)?
 
     /// Moves every retired range that starts at or below `line` by `delta` lines.
     private func shiftRetired(from line: Int, by delta: Int) {
@@ -397,12 +408,14 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     override func viewWillDisappear() {
         super.viewWillDisappear()
         stopEdit(notifyWriter: true)
+        stopFilter(notifyWriter: true)
         host.remoteImages.reset()
         closePDF()
     }
 
     deinit {
         if let id = edit?.id { (helperConnection?.remoteObjectProxy as? SpacebarWriterProtocol)?.endEdit(id) }
+        if let id = filter?.id { (helperConnection?.remoteObjectProxy as? SpacebarWriterProtocol)?.endFilter(id) }
         helperConnection?.invalidate()
         log.info("controller deinit")
     }
@@ -415,6 +428,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         _ = url.startAccessingSecurityScopedResource()
         host.controller = self
         completion = handler
+        // The page outlives the controller that began a filter session; the new preview starts with none.
+        js("sb.filterEnd", ["all": true])
 
         var isDir: ObjCBool = false
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
@@ -1082,6 +1097,17 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             // Keys the writer flushes as it ends still land; the block is dropped if it ends up empty (editEnded).
             retired.append(e)
             if let url = fileURL, let text = docText { push(text: text, path: url.path, reason: "editEnd") }
+        case "filterBegin":
+            // A click in the sidebar's filter field; an edit is ended by the page (editStop) before it asks.
+            guard let seq = m.int("seq"), fileURL != nil || !rootDir.isEmpty, edit == nil else {
+                refuse("filterBegin", "no sidebar or an edit is open")
+                if let seq = m.int("seq") { js("sb.filterEnd", ["seq": seq]) }
+                return
+            }
+            beginFilter(seq, text: FilterKeys.clean(m.string("text", max: 4 * FilterKeys.maxLength) ?? ""), m)
+        case "filterStop":
+            guard let f = filter, m.int("seq") == f.seq else { return }
+            stopFilter(notifyWriter: true)
         case "editPainted":
             if let kt = m.double("keyTime") { log.info("keystroke->painted \(uptimeMs(since: kt), privacy: .public)ms") }
         case "edit":
@@ -1215,6 +1241,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
 
     private func writerLost() {
         stopEdit(notifyWriter: false)
+        stopFilter(notifyWriter: false)
         if writing { writing = false; queuedSave = nil; status("save failed: edit again to retry") }
         if torn, let url = fileURL { retryTorn(url) }
         // No more keys will arrive for ended sessions.
@@ -1356,6 +1383,9 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     /// Clicks are accepted while writes are in flight: docText already holds every queued edit, and saves stay serialized.
     private func beginEdit(_ m: PageMessage) {
         guard let seq = m.int("seq") else { return }
+        // The writer ends a filter session as an edit begins; a begin that fails here must end it there too.
+        let previousFilter = filter
+        stopFilter(notifyWriter: false)
         // The writer keeps its panel key when a new session replaces the old one, so only a failed begin ends the old one there.
         let previous = edit
         stopEdit(notifyWriter: false, keepRetired: true)
@@ -1364,6 +1394,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             log.error("editBlock: \(why, privacy: .public)")
             // Keys already typed into the previous block (and flushed as the writer ends it) still land.
             if let p = previous { self.helper { $0.endEdit(p.id) } }
+            if let f = previousFilter { self.helper { $0.endFilter(f.id) } }
             self.js("sb.editEnd", ["seq": seq])
         }
         guard let text = docText, let start = m.int("start"), let end = m.int("end"), let block = m.string("text"),
@@ -1556,6 +1587,47 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         let ver = nextVersion(splicingAt: at + removed, delta: -removed)
         js("sb.spliceLines", ["at": at, "old": removed, "lines": [String](), "ver": ver])
         save(lines.joined(separator: "\n"))
+    }
+
+    // MARK: the sidebar filter
+
+    private func beginFilter(_ seq: Int, text: String, _ m: PageMessage) {
+        // The writer ends a previous filter session itself, keeping its panel key for this one.
+        if let f = filter { js("sb.filterEnd", ["seq": f.seq]) }
+        editCounter += 1
+        let id = editCounter
+        filter = (id, seq)
+        // The panel goes over the field: never wider than the page, nor taller than a line.
+        let clamp = { (k: String, hi: Double) in min(max(m.double(k) ?? 0, 0), hi) }
+        let w = clamp("width", Double(host.web.bounds.width)), h = clamp("height", 48)
+        helper(onError: { [weak self] in if self?.filter?.id == id { self?.stopFilter(notifyWriter: false) } }) {
+            $0.beginFilter(id, text: text, clickX: clamp("clickX", w), clickY: clamp("clickY", h), fieldWidth: w, fieldHeight: h) { ok in
+                DispatchQueue.main.async { if !ok, self.filter?.id == id { self.stopFilter(notifyWriter: false) } }
+            }
+        }
+    }
+
+    fileprivate func filterChanged(_ id: Int, text: String) {
+        guard let f = filter, f.id == id else { return }
+        js("sb.filterText", ["seq": f.seq, "text": FilterKeys.clean(text)])
+    }
+
+    fileprivate func filterKey(_ id: Int, key: String, isRepeat: Bool) {
+        guard let f = filter, f.id == id, FilterKeys.names.contains(key) else { return }
+        js("sb.filterKey", ["seq": f.seq, "key": key, "repeat": isRepeat])
+    }
+
+    fileprivate func filterEnded(_ id: Int, reason: String) {
+        guard let f = filter, f.id == id else { return }
+        log.info("filter \(id) ended: \(reason, privacy: .public)")
+        stopFilter(notifyWriter: false)
+    }
+
+    private func stopFilter(notifyWriter: Bool) {
+        guard let f = filter else { return }
+        filter = nil
+        if notifyWriter { helper { $0.endFilter(f.id) } }
+        js("sb.filterEnd", ["seq": f.seq])
     }
 
     /// `keepRetired` keeps ended sessions whose last keys may still arrive; otherwise the document is being replaced.

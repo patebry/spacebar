@@ -269,15 +269,15 @@ def keys_and_filter(page, check, T, st, types):
     page.render(T('README.md'))
     page.cmd('@wait:0.3')
     click(page, '#doc > p')
-    during = [key('ArrowDown'), key('f', metaKey=True), key('End')]
+    during = [key('ArrowDown'), key('End'), key('ArrowUp', "document.getElementById('side-q')")]
     ed = st()['editing']
-    check(ed and not any(k['taken'] or opened(k) for k in during) and page.js(CURSOR)['focus'] != 'side-q' and 'editStop' not in sum((k['types'] for k in during), []),
-          'keys: nothing is taken while a block is being edited, not even ⌘F', json.dumps([k['types'] for k in during]))
+    check(ed and not any(k['taken'] or opened(k) for k in during) and 'editStop' not in sum((k['types'] for k in during), []),
+          'keys: nothing is taken while a block is being edited', json.dumps([k['types'] for k in during]))
+    fk = key('f', metaKey=True)
+    check(not fk['taken'] and page.js(CURSOR)['focus'] != 'side-q', 'keys: ⌘F is not bound (Quick Look never passes it to the page)')
     page.cmd('@eval:sb.editEnd({}); 0')
 
-    # ---- the filter ----
-    k = key('f', metaKey=True)
-    check(k['taken'] and page.js(CURSOR)['focus'] == 'side-q', '⌘F focuses the filter', json.dumps(page.js(CURSOR)['focus']))
+    # ---- the filter, typed into the page's own field ----
     c = typed('rdme')
     check([r[0] for r in c['rows']] == ['README.md'], 'filter: fuzzy, the letters in order ("rdme" finds README.md)', json.dumps(c['rows']))
     c = typed('INNER')
@@ -316,6 +316,124 @@ def keys_and_filter(page, check, T, st, types):
     check(page.js(CURSOR)['q'] == 'inner', 'filter: kept while the same folder shows another file')
     typed('')
     page.cmd("@eval:document.getElementById('side-q').blur(); 0")
+    filter_session(page, check, T, st, types, key, opened)
+
+
+def filter_session(page, check, T, st, types, key, opened):
+    """The filter in Quick Look, page side: a real click asks for the writer's key panel (filterBegin), and the native side's
+    sb.filterText, sb.filterKey and sb.filterEnd stand in for it here."""
+    held = lambda: page.js("return document.getElementById('side-q').classList.contains('held')")
+    msgs = lambda r, t: [m for m in r['messages'] if m.get('type') == t]
+    page.cmd('@root:' + T())
+    page.render(T('README.md'))
+    page.cmd('@wait:0.3')
+
+    r = click(page, '#side-q')
+    check(not msgs(r, 'filterBegin') and not held(), 'filter session: a synthetic click does not start one')
+    r = page.cmd('@nativeclick:#side-q')
+    fb = msgs(r, 'filterBegin')
+    seq = int(fb[0]['seq']) if fb else -1
+    check(len(fb) == 1 and fb[0].get('text') == '' and float(fb[0].get('width', 0)) > 100 and 0 < float(fb[0].get('height', 0)) < 40
+          and 0 <= float(fb[0].get('clickX', -1)) <= float(fb[0].get('width', 0)) and held(),
+          'filter session: a real click in the field asks for the key panel over it', json.dumps(fb))
+    r = page.cmd('@nativeclick:#side-q')
+    check(not msgs(r, 'filterBegin'), 'filter session: a second click in the field keeps the one session')
+
+    def native(fn, arg):
+        r = page.cmd('@eval:sb.' + fn + '(' + json.dumps(arg) + '); 0')
+        w = page.cmd('@wait:0.3')
+        return {'types': types(r) + types(w), 'msgs': r['messages'] + w['messages']}
+
+    native('filterText', {'seq': seq, 'text': 'inner'})
+    c = page.js(CURSOR)
+    check([x[0] for x in c['rows']] == ['sub', 'inner.md'] and c['q'] == 'inner', 'filter session: the text the writer sends filters the tree', json.dumps(c['rows']))
+    native('filterText', {'seq': seq + 1, 'text': 'zzz'})
+    native('filterText', {'seq': seq, 'text': 5})
+    check(page.js(CURSOR)['q'] == 'inner', 'filter session: text for another session, or not text, is ignored')
+    k = native('filterKey', {'seq': seq, 'key': 'down'})
+    c = page.js(CURSOR)
+    check(c['cursor'] == 'sub' and not opened(k), 'filter session: ↓ from the writer moves to the first match (a folder: nothing opens)', json.dumps(c['cursor']))
+    k = native('filterKey', {'seq': seq, 'key': 'down'})
+    c = page.js(CURSOR)
+    check(opened(k) == [T('sub', 'inner.md')] and c['cursor'] == 'inner.md' and c['active'] == 'inner.md' and held(),
+          'filter session: ↓ again opens the match, and the session stays', json.dumps([opened(k), c['cursor']]))
+    k = native('filterKey', {'seq': seq, 'key': 'home'})
+    check(page.js(CURSOR)['cursor'] == 'sub', 'filter session: Home from the writer jumps to the first match')
+    k = native('filterKey', {'seq': seq, 'key': 'return'})
+    check(page.js(CURSOR)['cursor'] == 'sub' and not opened(k) and held(), 'filter session: Return on a folder opens no file and keeps the session')
+    for bad in ('escape', 'ArrowDown', '__proto__', 'toString'):
+        before = page.js(CURSOR)
+        k = native('filterKey', {'seq': seq, 'key': bad})
+        if page.js(CURSOR) != before or opened(k):
+            check(False, f'filter session: unknown key {bad!r} ignored')
+            break
+    else:
+        check(True, 'filter session: keys other than up, down, home, end and return are ignored')
+    k = native('filterKey', {'seq': seq, 'key': ' '})
+    check(not opened(k) and held(), 'filter session: Space is not a list key')
+
+    r = click(page, '#side-list a.row[data-path$="/inner.md"]')
+    check(held() and not msgs(r, 'filterStop'), 'filter session: a click in the sidebar keeps it')
+    page.render(T('README.md'))
+    page.cmd('@wait:0.3')
+    check(held(), 'filter session: kept while the same folder shows another file')
+    r = click(page, '#doc > p')
+    t = types(r)
+    check(not held() and msgs(r, 'filterStop') and int(msgs(r, 'filterStop')[0]['seq']) == seq and 'editBlock' in t and t.index('filterStop') < t.index('editBlock'),
+          'filter session: a click outside the sidebar ends it before an edit starts', json.dumps(t))
+    native('filterText', {'seq': seq, 'text': 'late'})
+    check(page.js(CURSOR)['q'] == 'inner', 'filter session: text arriving after the end is ignored')
+
+    r = page.cmd('@nativeclick:#side-q')
+    t = types(r)
+    fb = msgs(r, 'filterBegin')
+    check('editStop' in t and fb and t.index('editStop') < t.index('filterBegin') and not st()['editing'] and int(fb[0]['seq']) > seq
+          and fb[0].get('text') == 'inner', 'filter session: clicking the field ends the edit first, then asks with the text so far', json.dumps(t))
+    seq = int(fb[0]['seq']) if fb else -1
+    native('filterEnd', {'seq': seq + 1})
+    check(held(), 'filter session: an end for another session is ignored')
+    native('filterEnd', {'seq': seq})
+    check(not held(), 'filter session: the native side can end it (Esc, blur, an edit, a closed preview)')
+
+    r = page.cmd('@nativeclick:#side-q')
+    seq = int(msgs(r, 'filterBegin')[0]['seq'])
+    native('filterText', {'seq': seq, 'text': 'md'})
+    r = page.cmd("@eval:[1, 2, 3].forEach(() => sb.filterKey({ seq: %d, key: 'down', repeat: true })); 0" % seq)
+    w = page.cmd('@wait:0.4')
+    held_opens = [m for m in r['messages'] if m.get('type') == 'open']
+    check(not held_opens and len([m for m in w['messages'] if m.get('type') == 'open']) == 1,
+          'filter session: a held ↓ (auto-repeat) opens only the file it stops on', json.dumps(types(r) + types(w)))
+    r = page.cmd('@size:600x700')
+    w = page.cmd('@wait:0.3')
+    check(not held() and [int(m['seq']) for m in r['messages'] + w['messages'] if m.get('type') == 'filterStop'] == [seq],
+          'filter session: narrowing the panel hides the sidebar and ends the session', json.dumps(types(r) + types(w)))
+    page.cmd('@size:1200x800')
+    r = page.cmd('@nativeclick:#side-q')
+    r2 = page.cmd('@eval:sb.filterEnd({ all: true }); 0')
+    check(msgs(r, 'filterBegin') and not held() and not msgs(r2, 'filterStop'), "filter session: a new preview clears the page's session without asking the writer")
+    page.cmd('@size:600x700')
+    click(page, '#side-toggle')
+    page.cmd('@wait:0.4')
+    r = page.cmd('@nativeclick:#side-q')
+    seq = int(msgs(r, 'filterBegin')[0]['seq'])
+    native('filterText', {'seq': seq, 'text': 'v2'})
+    k = native('filterKey', {'seq': seq, 'key': 'down'})
+    peeking = page.js("return document.documentElement.classList.contains('sb-peek')")
+    check(opened(k) and not peeking and not held() and [int(m['seq']) for m in k['msgs'] if m.get('type') == 'filterStop'] == [seq],
+          'filter session: in a narrow panel, opening a file hides the sidebar and ends the session with it', json.dumps(k['types']))
+    page.cmd('@size:1200x800')
+    native('filterText', {'seq': seq, 'text': ''})
+    page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.value = ''; q.dispatchEvent(new Event('input')); return 0; })()")
+
+    r = page.cmd('@nativeclick:#side-q')
+    seq = int(msgs(r, 'filterBegin')[0]['seq'])
+    other = os.path.join(page.out, 'lone')
+    page.cmd('@root:' + other)
+    r = page.render(os.path.join(other, 'only.md'))
+    page.cmd('@wait:0.3')
+    check(not held() and [int(m['seq']) for m in msgs(r, 'filterStop')] == [seq] and page.js(CURSOR)['q'] == '',
+          'filter session: another folder ends it and clears the field', json.dumps(types(r)))
+    page.cmd('@root:')
 
 
 def main():

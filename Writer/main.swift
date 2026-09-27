@@ -99,9 +99,7 @@ final class Writer: NSObject, SpacebarWriterProtocol {
     func openSettings(_ tab: String, reply: @escaping (Bool) -> Void) {
         guard let url = SettingsTab.url(tab) else { return reply(false) }
         // The app that contains this service, not whichever app claims the scheme.
-        var app = Bundle.main.bundleURL
-        while app.pathExtension != "app", app.pathComponents.count > 1 { app.deleteLastPathComponent() }
-        guard app.pathExtension == "app", Bundle(url: app)?.bundleIdentifier == "md.spacebar" else {
+        guard let app = containingApp() else {
             log.error("open settings: containing app not found")
             return reply(false)
         }
@@ -109,6 +107,60 @@ final class Writer: NSObject, SpacebarWriterProtocol {
             log.info("open settings \(tab, privacy: .public) -> \(err == nil)")
             reply(err == nil)
         }
+    }
+
+    func latestVersion(reply: @escaping (String?) -> Void) {
+        guard SettingsFile.load().checkUpdates else { return reply(nil) }
+        let cached = Updates.readCache()
+        if let c = cached, (0..<Updates.interval).contains(Date().timeIntervalSince1970 - c.checked) { return reply(c.latest) }
+        var req = URLRequest(url: Updates.latestURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
+        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        req.setValue("spacebar", forHTTPHeaderField: "User-Agent")
+        URLSession.shared.dataTask(with: req) { data, resp, err in
+            let found = (resp as? HTTPURLResponse)?.statusCode == 200 ? data.flatMap(Updates.parseLatest) : nil
+            // A failed check still counts as a check, so an offline Mac does not ask on every preview.
+            Updates.writeCache(Updates.Cache(checked: Date().timeIntervalSince1970, latest: found ?? cached?.latest))
+            log.info("update check -> \(found ?? "none", privacy: .public)\(err == nil ? "" : " (failed)", privacy: .public)")
+            reply(found ?? cached?.latest)
+        }.resume()
+    }
+
+    func copyInstallCommand(reply: @escaping (Bool) -> Void) {
+        DispatchQueue.main.async {
+            NSPasteboard.general.clearContents()
+            reply(NSPasteboard.general.setString(Updates.installCommand, forType: .string))
+        }
+    }
+
+    func installUpdate(_ version: String, reply: @escaping (String?) -> Void) {
+        let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+        if let why = Updates.installRefusal(version, current: current, enabled: SettingsFile.load().checkUpdates) {
+            log.error("refused update to \(version, privacy: .private): \(why, privacy: .public)")
+            return reply(why)
+        }
+        let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        guard let app = containingApp() else { return reply("the spacebar app was not found") }
+        // The installer only ever replaces ~/Applications/spacebar.app; from anywhere else it would add a second copy.
+        guard app.resolvingSymlinksInPath().path == home.appendingPathComponent("Applications/spacebar.app").resolvingSymlinksInPath().path else {
+            return reply("spacebar is not in ~/Applications")
+        }
+        let env = ["HOME": home.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": NSTemporaryDirectory()]
+        switch Updates.runDetached(script: app.appendingPathComponent("Contents/Resources/install.sh"), arguments: Updates.installerArguments(version),
+                                   log: home.appendingPathComponent("Library/Logs/spacebar-update.log"), environment: env) {
+        case .success(let pid):
+            log.info("update to \(version, privacy: .public) started (pid \(pid))")
+            reply(nil)
+        case .failure(let e):
+            log.error("update to \(version, privacy: .public): \(e.message, privacy: .public)")
+            reply(e.message)
+        }
+    }
+
+    /// The app that contains this service.
+    private func containingApp() -> URL? {
+        var app = Bundle.main.bundleURL
+        while app.pathExtension != "app", app.pathComponents.count > 1 { app.deleteLastPathComponent() }
+        return app.pathExtension == "app" && Bundle(url: app)?.bundleIdentifier == "md.spacebar" ? app : nil
     }
 
     func prepare() {

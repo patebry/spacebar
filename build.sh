@@ -82,19 +82,21 @@ plist() {
 }
 
 WRITER_BIN=$OBJ/$WRITER_EXE
-compile "$WRITER_BIN" -module-name "$WRITER_EXE" Writer/main.swift Writer/EditTextView.swift Writer/FileWrite.swift Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift
+compile "$WRITER_BIN" -module-name "$WRITER_EXE" Writer/main.swift Writer/EditTextView.swift Writer/FileWrite.swift Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/Updates.swift
 PREVIEW_BIN=$OBJ/$APPEX_EXE
 PROBE_FLAGS=()
 [ "${PROBE:-0}" = 1 ] && PROBE_FLAGS=(-D PROBE)
 compile "$PREVIEW_BIN" -application-extension -module-name "$APPEX_EXE" \
   Preview/PreviewViewController.swift Preview/PDFPane.swift Preview/SettingsStore.swift Preview/Probe.swift \
-  Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift \
+  Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/Updates.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift \
   ${PROBE_FLAGS[@]+"${PROBE_FLAGS[@]}"} \
   -framework QuickLookUI -framework WebKit -framework PDFKit -Xlinker -e -Xlinker _NSExtensionMain
 compile "$APP/Contents/MacOS/$APP_EXE" -parse-as-library -module-name "$APP_EXE" App/*.swift Shared/Settings.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift \
   -framework WebKit -framework SwiftUI
 plist App/Info.plist "$APP/Contents/Info.plist"
 cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
+# The writer runs this copy for the one-click update, so it is sealed by the app's signature.
+cp scripts/install.sh "$APP/Contents/Resources/install.sh"
 if [ -f App/AppIcon.icns ]; then cp App/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"; fi
 
 ENT=$OUT/Preview.entitlements

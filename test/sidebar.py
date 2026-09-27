@@ -359,6 +359,14 @@ def main():
         check(tg and tg[0].get('line') == '4' and tg[0].get('checked') in ('1', 'true'), 'a task toggle posts with the sidebar open', json.dumps(tg))
         r = click(page, '#sidebar')
         check(not {'editBlock', 'editStop', 'open', 'link'} & set(types(r)), 'a click on the sidebar background does nothing', json.dumps(types(r)))
+        click(page, '#doc > p')
+        r = click(page, '#sidebar')
+        check('editStop' in types(r) and not st()['editing'], 'a click in the sidebar ends the edit', json.dumps(types(r)))
+        click(page, '#doc > p')
+        r = click(page, '#side-list a.row:not([data-dir])')
+        t = types(r)
+        check('editStop' in t and t.index('editStop') < (t.index('open') if 'open' in t else len(t)) and not st()['editing'],
+              'a click on a sidebar file ends the edit before anything opens', json.dumps(t))
 
         # ---- the TOC rail, the Aa popover and narrow panels ----
         page.render(os.path.join(folder, 'a.md'))

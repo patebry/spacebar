@@ -148,6 +148,19 @@ MM_SAMPLER = """
 """
 MM_STOP = "window.__mm.stop = true; return window.__mm.samples"
 
+# The update row's shown parts, each inside the popover's padding and none clipped or wrapped past its box.
+UPDATE_FIT = """const pop = document.getElementById('aa-pop').getBoundingClientRect(), bad = [], shown = [];
+  for (const e of document.querySelectorAll('#aa-update > *')) {
+    if (e.hidden) continue;
+    const r = e.getBoundingClientRect(), cs = getComputedStyle(e);
+    shown.push(e.id);
+    if (e.scrollWidth > e.clientWidth || r.left < pop.left + 11 || r.right > pop.right - 11 || (e.tagName === 'BUTTON' && r.height > parseFloat(cs.fontSize) * 2.5))
+      bad.push([e.id, e.textContent, Math.round(r.width), e.scrollWidth, e.clientWidth]);
+  }
+  return { bad, shown };"""
+UPDATE_SHOWN = {'available': ['aa-update-title', 'aa-update-sub', 'aa-install', 'aa-notes'],
+                'failed': ['aa-update-title', 'aa-update-sub', 'aa-copy', 'aa-notes']}
+
 CLICK = """(sel) => { const t = document.querySelector(sel); if (!t) return false; const r = t.getBoundingClientRect();
   for (const type of ['mouseover', 'mousedown', 'mouseup', 'click'])
     t.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: r.left + 3, clientY: r.top + 3, detail: 1 }));
@@ -418,6 +431,23 @@ def main():
         still = page.js("return [document.getElementById('aa-pop').hidden, !!document.querySelector('#doc > .md-editing')]")
         check(opened and still == [True, False] and not [m for m in r['messages'] if m.get('type') == 'editBlock'],
               'a click outside closes the popover and starts no edit', json.dumps(still))
+
+        # ---- the update row: fits the popover in every state, and the page never names the version it asks for ----
+        page.js("sb.updateAvailable({ version: '10.10.10', current: '0.1.2' }); return 0")
+        click(page, '#aa')
+        page.cmd('@wait:0.3')
+        for state in ('available', 'failed'):
+            fit = page.js(UPDATE_FIT)
+            check(fit['bad'] == [] and fit['shown'] == UPDATE_SHOWN[state], f'update row ({state}): nothing overflows the popover', json.dumps(fit))
+            if state == 'available':
+                r = click(page, '#aa-install')
+                u = [m for m in r['messages'] if m.get('type') == 'installUpdate']
+                check(len(u) == 1 and {k for k in u[0] if not k.startswith('_')} == {'type'} and page.js("return document.getElementById('aa-install').disabled"),
+                      'Update posts installUpdate with no version and waits', json.dumps(u))
+                page.js("sb.updateFailed({ error: 'x' }); return 0")
+        r = click(page, '#aa-copy')
+        check([m.get('type') for m in r['messages']] == ['copyInstall'], 'a failed update offers the install command', json.dumps(r['messages']))
+        click(page, '#doc')
         page.apply(theme='apple', width='medium', bodyFont='system', fontSize=15)
 
         # ---- front matter ----

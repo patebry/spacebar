@@ -36,6 +36,7 @@ struct Settings: Codable, Equatable {
     var mermaid = true
     var rawHTML = "sanitized"
     var remoteImages = false
+    var checkUpdates = true
 
     static let themes = ["apple", "github", "paper", "solarized", "nord", "contrast"]
     /// Allowed values of every string-enum key. rawHTML has no "on": unsanitized HTML would hand a downloaded document the page.
@@ -56,7 +57,7 @@ struct Settings: Codable, Equatable {
     static let intRanges: [String: ClosedRange<Int>] = ["fontSize": 12...24, "sidebarWidth": 160...480]
     static let doubleRanges: [String: ClosedRange<Double>] = ["lineHeight": 1.2...2.0]
     static let boolKeys: Set<String> = ["customCSS", "inlineEditing", "taskToggles", "folderMode", "folderReadmeFirst", "stats", "math",
-                                        "mermaid", "remoteImages", "sidebarCollapsed", "showHiddenFiles", "minimalChrome"]
+                                        "mermaid", "remoteImages", "sidebarCollapsed", "showHiddenFiles", "minimalChrome", "checkUpdates"]
     /// Keys whose value is a string or null, each checked by its own pattern.
     static let optionalKeys: Set<String> = ["userTheme", "editorBundleID"]
     static var allKeys: Set<String> { Set(choices.keys).union(intRanges.keys).union(doubleRanges.keys).union(boolKeys).union(optionalKeys) }
@@ -143,7 +144,7 @@ struct Settings: Codable, Equatable {
         take(.sidebarCollapsed, \.sidebarCollapsed); take(.showHiddenFiles, \.showHiddenFiles); take(.minimalChrome, \.minimalChrome)
         if let n = try? c.decodeIfPresent(Double.self, forKey: .sidebarWidth), let v = Self.sanitize("sidebarWidth", n) as? Int { s.sidebarWidth = v }
         take(.toc, \.toc); take(.stats, \.stats); take(.mdLinks, \.mdLinks); take(.webLinks, \.webLinks)
-        take(.math, \.math); take(.mermaid, \.mermaid); take(.rawHTML, \.rawHTML); take(.remoteImages, \.remoteImages)
+        take(.math, \.math); take(.mermaid, \.mermaid); take(.rawHTML, \.rawHTML); take(.remoteImages, \.remoteImages); take(.checkUpdates, \.checkUpdates)
         self = s
     }
 

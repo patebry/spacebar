@@ -905,6 +905,23 @@ window.sb = {
     current.app = o.app;
     document.querySelectorAll('#doc .viewer-open[data-action=openFile], #edit[data-action=openFile]').forEach((b) => { b.textContent = `Open with ${o.app}`; });
   },
+  /** A newer release than this one: a dot on the Aa button and a row at the top of its popover. */
+  updateAvailable(u) {
+    if (!u || typeof u.version !== 'string') return;
+    showUpdate('available', u.version);
+    $('aa-update').hidden = false;
+    $('aa').dataset.update = '';
+    $('aa').title = `Appearance · spacebar ${u.version} is available`;
+  },
+  /** The installer is running: it quits Quick Look when it swaps the app. */
+  updateStarted() { showUpdate('started'); },
+  /** The update could not start: the install command, run in Terminal, does the same. */
+  updateFailed() { showUpdate('failed'); },
+  installCopied(r) {
+    const b = $('aa-copy');
+    b.textContent = r && r.ok ? 'Copied' : 'Could not copy';
+    setTimeout(() => { b.textContent = 'Copy Install Command'; }, 1600);
+  },
   status(s, sticky) {
     if (sticky) stickyStatus = s;
     $('status').textContent = s;
@@ -1499,6 +1516,18 @@ function syncPopover() {
   pop.querySelectorAll('[data-key]').forEach((b) => b.setAttribute('aria-checked', String(settings[b.dataset.key] === b.dataset.value)));
 }
 
+let updateVersion = '';
+function showUpdate(state, version) {
+  if (version) updateVersion = version;
+  $('aa-update-title').textContent = state === 'failed' ? 'Update failed' : state === 'started' ? `Updating to spacebar ${updateVersion}…`
+    : `spacebar ${updateVersion} is available`;
+  $('aa-update-sub').textContent = state === 'failed' ? 'Paste the install command into Terminal to update.' : 'Quick Look closes for a moment while it updates.';
+  $('aa-install').hidden = state === 'failed';
+  $('aa-install').disabled = state === 'started';
+  $('aa-install').textContent = state === 'started' ? 'Updating…' : 'Update';
+  $('aa-copy').hidden = state !== 'failed';
+}
+
 function showPopover(open) {
   pop.hidden = !open;
   $('aa').setAttribute('aria-expanded', String(open));
@@ -1518,6 +1547,9 @@ pop.addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b || b.disabled) return;
   if (b.id === 'aa-settings') { showPopover(false); post({ type: 'openSettings', tab: 'appearance' }); return; }
+  if (b.id === 'aa-install') { b.disabled = true; post({ type: 'installUpdate' }); return; }
+  if (b.id === 'aa-copy') { post({ type: 'copyInstall' }); return; }
+  if (b.id === 'aa-notes') { showPopover(false); post({ type: 'releaseNotes' }); return; }
   if (b.dataset.step) choose('fontSize', Math.min(24, Math.max(12, settings.fontSize + Number(b.dataset.step))));
   else if (b.dataset.key) choose(b.dataset.key, b.dataset.value);
 });
@@ -1544,6 +1576,9 @@ document.addEventListener('dblclick', (e) => {
 
 document.addEventListener('click', (e) => {
   const tClick = performance.timeOrigin + e.timeStamp;
+  // The chrome around the document ends an edit like a click on the page's margin does; hiding or resizing the sidebar
+  // only changes the layout, so the edit stays open.
+  if (editing && e.target.closest('#sidebar, #crumbs, #toolbar, #toc') && !e.target.closest('#side-resize')) stopEditing();
   const toc = e.target.closest('#toc a');
   if (toc) {
     e.preventDefault();

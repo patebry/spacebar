@@ -321,6 +321,15 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private var editCounter = 0
     private var writing = false
     private var queuedSave: (url: URL, text: String, keyTime: Double?)?
+    /// A file to show once the current document's edit and saves are finished.
+    private var pendingOpen: (url: URL, anchor: String?)?
+    private var pendingGen = 0
+
+    private func openPending() {
+        guard !writing, retired.isEmpty, let p = pendingOpen else { return }
+        pendingOpen = nil
+        open(p.url, anchor: p.anchor)
+    }
     /// Set after a write failed part-way and could not be undone: the exact bytes it left on disk (the torn file need not be
     /// valid UTF-8), snapshotted once per such failure and used as the base of every retry, so a save by anyone else in the
     /// meantime still turns the retry into a conflict. Until a retry succeeds docText is the only good copy in memory, so
@@ -511,6 +520,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private func showOverview(_ r: FolderScan.Result, reason: String) {
         guard !torn else { return }
         if reason != "loading" { folderPending = false }
+        pendingOpen = nil
         stopEdit(notifyWriter: true)
         queuedSave = nil
         closePDF()
@@ -625,6 +635,26 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
                                   executable: st.st_mode & 0o111 != 0)
         if kind == .markdown, let why = Self.unreadable(url) { log.error("open: \(why, privacy: .private)"); return status(why) }
         if kind != .markdown, st.st_mode & S_IFMT != S_IFREG, st.st_mode & S_IFMT != S_IFDIR { return status("\(url.lastPathComponent) is not a regular file") }
+        // The document being edited keeps its last keys: the edit ends, and the switch waits for the writer to flush them and
+        // for every save of this document to land.
+        if let e = edit { stopEdit(notifyWriter: true, keepRetired: true); retired.append(e) }
+        if writing || !retired.isEmpty {
+            log.info("switch waits for the edit's saves (writing=\(self.writing) retired=\(self.retired.count))")
+            if pendingOpen == nil {
+                pendingGen += 1
+                let gen = pendingGen
+                // A writer that never reports the end (hung, not crashed) must not keep the panel on this document.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                    guard let self, self.pendingOpen != nil, self.pendingGen == gen else { return }
+                    log.error("switch: writer did not finish within 2s")
+                    self.retired = []
+                    self.openPending()
+                }
+            }
+            pendingOpen = (url, anchor)
+            return
+        }
+        pendingOpen = nil
         stopEdit(notifyWriter: true)
         queuedSave = nil
         loader.cancel()
@@ -930,6 +960,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
                 log.info("painted[\(m.string("reason", max: 32) ?? "", privacy: .public)] \(ms(self.prepareStart), privacy: .public)ms after prepare wall=\(Date().timeIntervalSince1970, privacy: .public)")
             }
             finishPrepare(nil)
+            checkForUpdate()
         case "rendered":
             let parse = m.double("parseMs") ?? 0, total = m.double("totalMs") ?? 0
             let reason = m.string("reason", max: 32) ?? ""
@@ -1040,6 +1071,29 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         case "pdfRect":
             // Where the page reserved the PDF's place, in CSS pixels of the viewport; `hide` while the page has something above it.
             if fileKind == .pdf { pdfPane?.place(message: body, in: host.web) }
+        case "copyInstall":
+            helper { $0.copyInstallCommand { ok in DispatchQueue.main.async { self.js("sb.installCopied", ["ok": ok]) } } }
+        case "installUpdate":
+            // Only the version this controller was told about by the writer; the page names none.
+            guard let v = availableVersion else { return refuse("installUpdate", "no update shown") }
+            helper(onError: { self.js("sb.updateFailed", [:]) }) {
+                $0.installUpdate(v) { err in
+                    DispatchQueue.main.async {
+                        if let err {
+                            log.error("update: \(err, privacy: .public)")
+                            self.js("sb.updateFailed", ["error": err])
+                        } else {
+                            self.status("Updating to \(v)…")
+                            self.js("sb.updateStarted", ["version": v])
+                        }
+                    }
+                }
+            }
+        case "releaseNotes":
+            guard let v = availableVersion, let url = URL(string: "https://github.com/patebry/spacebar/releases/tag/v\(v)") else {
+                return refuse("releaseNotes", "no update shown")
+            }
+            helper { $0.open(url) { _ in } }
         case "log":
             log.info("js: \(String((body["msg"] as? String ?? "").prefix(2000)), privacy: .private)")
         default: break
@@ -1092,6 +1146,25 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     }
 
     private var helperConnection: NSXPCConnection?
+    private var updateAsked = false
+    /// The newer release the toolbar is showing, if any.
+    private var availableVersion: String?
+
+    /// Once per preview, after it is on screen: the writer answers from its daily cache, so this rarely touches the network.
+    private func checkForUpdate() {
+        guard !updateAsked, SettingsStore.shared.settings.checkUpdates,
+              let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String else { return }
+        updateAsked = true
+        helper {
+            $0.latestVersion { latest in
+                guard let latest, Updates.isNewer(latest, than: current) else { return }
+                DispatchQueue.main.async {
+                    self.availableVersion = latest
+                    self.js("sb.updateAvailable", ["version": latest, "current": current])
+                }
+            }
+        }
+    }
 
     private func helper(onError: (() -> Void)? = nil, _ body: (SpacebarWriterProtocol) -> Void) {
         let conn = helperConnection ?? NSXPCConnection(serviceName: writerServiceName)
@@ -1116,6 +1189,9 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         stopEdit(notifyWriter: false)
         if writing { writing = false; queuedSave = nil; status("save failed: edit again to retry") }
         if torn, let url = fileURL { retryTorn(url) }
+        // No more keys will arrive for ended sessions.
+        retired = []
+        openPending()
     }
 
     private func retryTorn(_ url: URL) {
@@ -1172,6 +1248,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private func saved(_ url: URL, _ text: String, keyTime: Double?, error: String?) {
         guard writing else { return }
         writing = false
+        defer { if !writing { openPending() } }
         guard url == fileURL else { queuedSave = nil; return }
         if let error, error == "conflict", torn, tornStatus.isEmpty {
             // Someone else wrote the file after it was torn and no recovery copy exists: stop writing but keep the text on screen.
@@ -1324,9 +1401,10 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         if let i = retired.firstIndex(where: { $0.id == id }) {
             let r = retired.remove(at: i)
             dropIfEmpty(start: r.start, lines: r.lines)
+            openPending()
             return
         }
-        guard let e = edit, e.id == id else { return }
+        guard let e = edit, e.id == id else { return openPending() }
         log.info("edit \(id) ended: \(reason, privacy: .public)")
         stopEdit(notifyWriter: false)
         dropIfEmpty(start: e.start, lines: e.lines)

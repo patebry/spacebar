@@ -573,6 +573,15 @@ struct AdvancedPane: View {
             }
 
             Section {
+                Toggle("Check for updates", isOn: store.binding(\.checkUpdates, "checkUpdates"))
+            } header: {
+                Text("Updates")
+            } footer: {
+                Text("Once a day spacebar asks GitHub for the latest version number, and nothing else. A newer version shows as a dot on the Aa button in the preview, and its Update button installs it.")
+                    .settingsFooter()
+            }
+
+            Section {
                 LabeledContent("Location") {
                     Text(abbreviated(SettingsFile.url.path))
                         .truncationMode(.middle)

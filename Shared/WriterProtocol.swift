@@ -18,6 +18,13 @@ protocol SpacebarWriterProtocol {
     func updateSettings(_ patch: Data, reply: @escaping (Bool) -> Void)
     /// Opens the host app's settings window on `tab` (one of SettingsTab.all).
     func openSettings(_ tab: String, reply: @escaping (Bool) -> Void)
+    /// The newest released version when the update check is on: cached, and asked of GitHub at most once a day.
+    func latestVersion(reply: @escaping (String?) -> Void)
+    /// Puts the install command, which also updates, on the clipboard.
+    func copyInstallCommand(reply: @escaping (Bool) -> Void)
+    /// Starts the installer bundled in the app, detached, to update to `version`: only a release newer than this one, and only
+    /// while the update check is on. Replies nil once it is running, or why it is not. It logs to ~/Library/Logs/spacebar-update.log.
+    func installUpdate(_ version: String, reply: @escaping (String?) -> Void)
     /// Starts AppKit and builds the edit panel hidden (not key, not visible) so the first edit does not pay for either.
     func prepare()
     /// Shows the key-capturing panel over the clicked block. clickX/clickY locate the click inside the block, so the panel is

@@ -17,8 +17,11 @@ final class HTMLPane: NSObject, WKNavigationDelegate, WKUIDelegate {
     private var file: URL?
     private static var offlineRules: WKContentRuleList?
 
-    /// Blocks every web load: a downloaded file must not tell a server it was opened.
-    static let offlineRuleSource = #"[{"trigger":{"url-filter":"^(https?|wss?|ftp)://"},"action":{"type":"block"}}]"#
+    /// Blocks every web load: a downloaded file must not tell a server it was opened. One rule per scheme: WebKit's url-filter
+    /// has no disjunction, and a list with one fails to compile.
+    static let offlineRuleSource = "[" + ["^https?://", "^wss?://", "^ftp://"].map {
+        #"{"trigger":{"url-filter":"\#($0)"},"action":{"type":"block"}}"#
+    }.joined(separator: ",") + "]"
 
     init(scripts: Bool) {
         self.scripts = scripts

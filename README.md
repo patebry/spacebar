@@ -14,13 +14,16 @@ What the panel shows for each file in the sidebar:
 | Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`, `.mkdn`) | rendered, with inline editing and task toggles |
 | Images (`.png`, `.jpg`, `.gif`, `.webp`, `.heic`, `.avif`, `.bmp`, `.tiff`, `.ico`, `.svg`) | fitted to the panel, with its dimensions and size; SVG as an image only |
 | PDF | drawn natively by PDFKit in the panel, fitted to its width, pages in one scroll |
-| Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.html`, `.xml`, `.yaml`, `.toml`, `.sql`, `Dockerfile`, `Makefile` and more) | highlighted source with line numbers; HTML is shown as source, never rendered |
+| HTML (`.html`, `.htm`) | rendered in its own web view: with its scripts and web content when made on this Mac, with neither when downloaded |
+| Video (`.mp4`, `.m4v`, `.mov`) | played by AVKit in the panel, paused on its first frame until you press play |
+| Audio (`.mp3`, `.m4a`, `.aac`, `.wav`, `.aif`, `.aiff`, `.flac`, `.caf`) | the same player, under the file's artwork or icon |
+| Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.xml`, `.yaml`, `.toml`, `.sql`, `Dockerfile`, `Makefile` and more) | highlighted source with line numbers |
 | JSON | pretty-printed and highlighted, with a Raw toggle |
 | CSV and TSV | a table, first row as the header, up to 1,000 rows |
 | Text (`.txt`, `.log`, `LICENSE`, `.env.example` and other text) | as is, with line numbers |
-| Anything else | an info card: kind, size, date modified, and Open with its default app (Reveal in Finder for apps, scripts and executables) |
+| Anything else | an info card: Finder's large thumbnail when there is one, kind, size, date modified, and Open with its default app (Reveal in Finder for apps, scripts and executables) |
 
-Text over 2 MB shows its first 2 MB. Images over 50 MB get the info card.
+Text over 2 MB shows its first 2 MB. Images over 50 MB, and PDFs, video and audio over 512 MB, get the info card.
 
 The preview sits in a thin outlined page under a toolbar row: the sidebar button and the path on the left, Aa and Open on the
 right. **Minimal chrome** (Settings, Appearance) goes back to floating buttons over the page.

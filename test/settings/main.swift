@@ -264,12 +264,34 @@ let kinds: [(String, FileKind)] = [("a.md", .markdown), ("A.MARKDOWN", .markdown
     ("s.rb", .code), ("s.go", .code), ("s.rs", .code), ("s.swift", .code), ("s.sh", .code), ("s.zsh", .code), ("s.c", .code), ("s.h", .code),
     ("s.cpp", .code), ("s.java", .code), ("s.kt", .code), ("s.css", .code), ("s.scss", .code), ("page.html", .html), ("page.htm", .html), ("page.xhtml", .code), ("s.xml", .code),
     ("s.yaml", .code), ("s.yml", .code), ("s.toml", .code), ("s.ini", .code), ("s.sql", .code), ("Dockerfile", .code), ("Makefile", .code),
-    ("Gemfile", .code), (".env.example", .text), ("env.example", .text), ("LICENSE", .text), ("x.zip", .other), ("x.bin", .app), ("noext", .other)]
+    ("Gemfile", .code), (".env.example", .text), ("env.example", .text), ("LICENSE", .text), ("x.zip", .other), ("x.bin", .app), ("noext", .other),
+    ("v.mp4", .video), ("v.M4V", .video), ("v.mov", .video), ("v.webm", .other), ("a.mp3", .audio), ("a.m4a", .audio), ("a.aac", .audio),
+    ("a.wav", .audio), ("a.aif", .audio), ("a.AIFF", .audio), ("a.flac", .audio), ("a.caf", .audio), ("a.ogg", .other)]
 let wrong = kinds.filter { FileTypes.kind(name: $0.0) != $0.1 }.map { "\($0.0)=\(FileTypes.kind(name: $0.0))" }
 check("types: every listed kind detected by name (\(wrong.joined(separator: " ")))", wrong.isEmpty)
 check("types: an executable with no extension is an app; a folder a folder; a package an item",
       FileTypes.kind(name: "tool", executable: true) == .app && FileTypes.kind(name: "src", isDirectory: true) == .folder
       && FileTypes.kind(name: "X.app", isDirectory: true, isPackage: true) == .app && FileTypes.kind(name: "d.rtfd", isDirectory: true, isPackage: true) == .other)
+check("types: video and audio share the media icon and overview bucket; HTML is listed as code",
+      FileKind.video.icon == "media" && FileKind.audio.icon == "media" && FolderScan.bucket(.video) == "media" && FolderScan.bucket(.audio) == "media"
+      && FileKind.html.icon == "code" && FolderScan.bucket(.html) == "code")
+do {
+    let media = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("spacebar-media-\(getpid())")
+    try! fm.createDirectory(at: media, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: media) }
+    let clip = media.appendingPathComponent("clip.mp4"), song = media.appendingPathComponent("song.wav"), huge = media.appendingPathComponent("huge.mov")
+    try! Data(count: 4096).write(to: clip)
+    try! Data(count: 2048).write(to: song)
+    fm.createFile(atPath: huge.path, contents: nil)
+    truncate(huge.path, off_t(FileTypes.maxFileBytes + 1))
+    let v = FileView.payload(path: clip.path, kind: .video, root: media.path, reason: "open", canOpen: true)
+    let a = FileView.payload(path: song.path, kind: .audio, root: media.path, reason: "open", canOpen: true)
+    let h = FileView.payload(path: huge.path, kind: .video, root: media.path, reason: "open", canOpen: true)
+    let d = FileView.payload(path: media.path, kind: .video, root: media.path, reason: "open", canOpen: true)
+    check("payload: a video or audio file is played natively, with its kind and size; one past 512 MB or not a file is its info card",
+          v["view"] as? String == "video" && v["size"] as? Int64 == 4096 && (v["kindName"] as? String)?.isEmpty == false && v["icon"] as? String == "media"
+          && a["view"] as? String == "audio" && a["size"] as? Int64 == 2048 && h["view"] as? String == "info" && d["view"] as? String == "info")
+}
 check("types: highlight.js languages", FileTypes.language(name: "a.ts") == "typescript" && FileTypes.language(name: "a.tsx") == "typescript"
       && FileTypes.language(name: "page.html") == "xml" && FileTypes.language(name: "Makefile") == "makefile" && FileTypes.language(name: "Dockerfile") == nil
       && FileTypes.language(name: "a.sh") == "bash" && FileTypes.language(name: "a.toml") == "ini")

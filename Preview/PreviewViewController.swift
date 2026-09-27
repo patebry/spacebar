@@ -218,6 +218,14 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private var pdfPane: PDFPane?
     /// The HTML file on screen, rendered natively over the same reserved area; nil for every other view.
     private var htmlPane: HTMLPane?
+    /// The video or audio file on screen, played natively over the same reserved area; nil for every other view.
+    private var mediaPane: MediaPane?
+    /// Bumped by every render, so a thumbnail made for an info card no longer on screen is dropped.
+    private var renderGen = 0
+    /// The file a thumbnail is being made for: a file changing on disk re-renders its card without starting another.
+    private var thumbPending: String?
+    /// The app the viewer's Open button names, once the writer has said.
+    private var opener: (path: String, app: String)?
     /// Bumped by every show and close, so a PDF still opening in the background for an older one is dropped.
     private var pdfGen = 0
     /// Every read of the file on screen, off the main thread: a file iCloud has evicted downloads first, which can take long or
@@ -360,8 +368,9 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     override func viewWillAppear() {
         super.viewWillAppear()
         disableHostDoubleClick()
-        // Shown again without a new prepare: the PDF view closed when the preview disappeared, so bring it back.
-        if (fileKind == .pdf && pdfPane == nil) || (fileKind == .html && htmlPane == nil), let url = fileURL, host.controller === self {
+        // Shown again without a new prepare: the native view closed when the preview disappeared, so bring it back.
+        let closed = (fileKind == .pdf && pdfPane == nil) || (fileKind == .html && htmlPane == nil) || ([.video, .audio].contains(fileKind) && mediaPane == nil)
+        if closed, let url = fileURL, host.controller === self {
             shownStamp = nil
             host.whenReady { [weak self] in self?.show(url, reason: "open") }
         }
@@ -413,6 +422,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         let warm = host.ready
         log.info("prepare \(url.path, privacy: .private) warm=\(warm) processAge=\(processAgeMs(), privacy: .public)ms wall=\(Date().timeIntervalSince1970, privacy: .public)")
         _ = url.startAccessingSecurityScopedResource()
+        // The previous preview's native views go now, not whenever Quick Look lets its controller go: a player must fall silent.
+        if host.controller !== self { host.controller?.stopNativeViews() }
         host.controller = self
         completion = handler
 
@@ -660,6 +671,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         stopEdit(notifyWriter: true)
         queuedSave = nil
         loader.cancel()
+        // The next file's view replaces the player once it is read; it is silent from now.
+        mediaPane?.pause()
         unavailablePath = nil
         host.remoteImages.reset()
         showingOverview = false
@@ -745,6 +758,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             self.pdfPane = nil
             self.htmlPane?.close()
             self.htmlPane = nil
+            self.mediaPane?.close()
+            self.mediaPane = nil
             var p = FileView.base(path: url.path, root: self.rootDir, reason: "open")
             p["view"] = "loading"
             p["cloud"] = cloud
@@ -763,6 +778,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     }
 
     private func render(_ payload: [String: Any]) {
+        renderGen += 1
         let json = String(data: try! JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!
         host.remoteImages.whenInPlace { [host] in
             host.web.evaluateJavaScript("sb.render(\(json)); 0") { _, err in
@@ -872,10 +888,12 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             case "pdf": pdf = PDFPane.open(url)
             case "image" where cloud: _ = try? SchemeHandler.readImage(url)
             case "html" where cloud: _ = FileTypes.materializing { try? Data(contentsOf: url) }
+            // One byte downloads the whole file; AVFoundation, reading it later on its own threads, could not.
+            case "video" where cloud, "audio" where cloud: _ = FileTypes.materializing { try? FileHandle(forReadingFrom: url).read(upToCount: 1) }
             default: break
             }
-            // Only what FileView downloads counts: an evicted archive or video is its info card without a download.
-            let fetched = ["pdf", "image", "html"].contains(p["view"] as? String)
+            // Only what FileView downloads counts: an evicted archive is its info card without a download.
+            let fetched = ["pdf", "image", "html", "video", "audio"].contains(p["view"] as? String)
                 || ([.code, .json, .csv, .text].contains(kind) && (p["size"] as? Int64 ?? .max) <= FolderListing.maxDocumentBytes)
             return (p, pdf, cloud && fetched && FileTypes.isDataless(url.path))
         }) { [weak self] outcome in
@@ -894,10 +912,11 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             case nil: break
             }
             if r.stuck { return self.showUnavailable(url, reason: reason, cloud: true) }
-            // The panel closed while a PDF opened: it is shown again when the panel reappears (viewWillAppear).
-            if doc != nil, gen != self.pdfGen { return }
+            // The panel closed while a PDF or media opened: it is shown again when the panel reappears (viewWillAppear).
+            if doc != nil || ["video", "audio"].contains(p["view"] as? String), gen != self.pdfGen { return }
             self.shownCanOpen = p["canOpen"] as? Bool == true
             self.finishShow(url, p, pdf: doc, reason: reason)
+            if p["view"] as? String == "info", !cloud, self.thumbPending != url.path { self.addThumbnail(url, icon: kind == .app) }
         }
         if cloud, let s = Self.stamp(url) { downloading = (url, id, s) }
         if reason != "change" { showLoading(url, load: id, cloud: cloud) }
@@ -906,21 +925,26 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private func finishShow(_ url: URL, _ p: [String: Any], pdf: PDFDocument?, reason: String) {
         unavailablePath = nil
         let canOpen = p["canOpen"] as? Bool == true
+        let view = p["view"] as? String ?? ""
+        closePDF(keeping: view)
         if let pdf {
             let pane = pdfPane ?? PDFPane()
             pane.onLink = { [weak self] in self?.pdfLink($0) }
             pane.show(pdf, path: url.path, over: host.web)
             pdfPane = pane
-        } else {
-            closePDF()
         }
-        if p["view"] as? String == "html" {
+        if view == "video" || view == "audio" {
+            let pane = mediaPane ?? MediaPane()
+            pane.onFailed = { [weak self] in self?.mediaFailed($0, p) }
+            pane.show(url, audio: view == "audio", over: host.web)
+            mediaPane = pane
+        }
+        if view == "html" {
             let scripts = HTMLPane.runsScripts(url, setting: SettingsStore.shared.settings.htmlScripts)
             if htmlPane?.scripts != scripts { htmlPane?.close(); htmlPane = HTMLPane(scripts: scripts) }
             htmlPane?.onLink = { [weak self] in self?.htmlLink($0) }
             htmlPane?.show(url, over: host.web)
         }
-        let view = p["view"] as? String ?? ""
         log.info("show \(view, privacy: .public) (\(self.fileKind.rawValue, privacy: .public))")
         render(p)
         // The button names the app the writer would open it with; an app, a script or an executable gets Reveal in Finder only.
@@ -928,18 +952,61 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             let path = url.path
             helper { $0.defaultApp(url) { name in
                 guard let name else { return }
-                DispatchQueue.main.async { if self.fileURL?.path == path { self.js("sb.setOpener", ["path": path, "app": name]) } }
+                DispatchQueue.main.async {
+                    guard self.fileURL?.path == path else { return }
+                    self.opener = (path, name)
+                    self.js("sb.setOpener", ["path": path, "app": name])
+                }
             } }
         }
     }
 
-    /// Takes down the native view of a PDF or an HTML file.
-    private func closePDF() {
-        pdfGen += 1
-        pdfPane?.close()
-        pdfPane = nil
-        htmlPane?.close()
-        htmlPane = nil
+    fileprivate func stopNativeViews() { closePDF() }
+
+    /// Takes down the native views of a PDF, an HTML file and media, all but the one for `keep`, the view about to be shown:
+    /// that one is reused, so a PDF keeps its page and media its time when the same file is shown again.
+    private func closePDF(keeping keep: String = "") {
+        if keep != "pdf" {
+            pdfGen += 1
+            pdfPane?.close()
+            pdfPane = nil
+        }
+        if keep != "html" {
+            htmlPane?.close()
+            htmlPane = nil
+        }
+        if keep != "video" && keep != "audio" {
+            mediaPane?.close()
+            mediaPane = nil
+        }
+    }
+
+    /// A file AVFoundation cannot play (not media after all, or a codec it lacks): its info card, as for a PDF PDFKit cannot open.
+    private func mediaFailed(_ path: String, _ p: [String: Any]) {
+        guard let url = fileURL, url.path == path, mediaPane?.path == path else { return }
+        closePDF()
+        var card = p
+        card["view"] = "info"
+        card["note"] = "This file can’t be played here."
+        if let o = opener, o.path == path { card["app"] = o.app }
+        render(card)
+        addThumbnail(url)
+    }
+
+    /// Apple's own large thumbnail (a Keynote slide, a document's first page, an app's icon when `icon`) for the info card on
+    /// screen, made off the main thread; the card keeps its icon when there is none within 3 seconds.
+    private func addThumbnail(_ url: URL, icon: Bool = false) {
+        let gen = renderGen
+        thumbPending = url.path
+        DispatchQueue.global(qos: .userInitiated).async {
+            let thumb = Thumbnail.dataURL(url, icon: icon)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if self.thumbPending == url.path { self.thumbPending = nil }
+                guard let thumb, gen == self.renderGen, self.host.controller === self, self.fileURL == url else { return }
+                self.js("sb.setThumb", ["path": url.path, "thumb": thumb])
+            }
+        }
     }
 
     /// A link in the HTML file on screen: a file beside it opens in the panel like a sidebar click, a web link in the browser.
@@ -1099,6 +1166,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             // Where the page reserved the PDF's place, in CSS pixels of the viewport; `hide` while the page has something above it.
             if fileKind == .pdf { pdfPane?.place(message: body, in: host.web) }
             if fileKind == .html { htmlPane?.place(message: body, in: host.web) }
+            if [.video, .audio].contains(fileKind) { mediaPane?.place(message: body, in: host.web) }
         case "copyInstall":
             helper { $0.copyInstallCommand { ok in DispatchQueue.main.async { self.js("sb.installCopied", ["ok": ok]) } } }
         case "installUpdate":

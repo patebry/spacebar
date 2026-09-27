@@ -899,6 +899,13 @@ window.sb = {
   setFiles(f) { setFolder(f); },
   /** A wikilink to a heading of the document already on screen. */
   scrollToHeading(m) { if (m && typeof m.heading === 'string') scrollToHeading(m.heading, true); },
+  /** The file's thumbnail, made after its info card was shown: it takes the icon's place. */
+  setThumb(t) {
+    if (!t || t.path !== current.path || current.view !== 'info' || typeof t.thumb !== 'string') return;
+    current.thumb = t.thumb;
+    const old = document.querySelector('#doc .info-card > svg.ic'), img = thumbNode(current);
+    if (old && img) old.replaceWith(img);
+  },
   /** The app the viewer's Open button would use, named once the writer has looked it up. */
   setOpener(o) {
     if (!o || o.path !== current.path || typeof o.app !== 'string') return;
@@ -959,6 +966,7 @@ const ICONS = {
   markdown: [DOC, FOLD, 'M5.8 12V8.6l1.3 1.6 1.3-1.6V12', 'M10.6 8.6V12M9.6 11l1 1 1-1'],
   image: ['M2 3.5h12v9H2z', 'M2.5 12l3.5-4 2.5 3 1.8-1.8L13.5 12', 'M10.5 5.6a1 1 0 1 0 0 2 1 1 0 1 0 0-2z'],
   pdf: [DOC, FOLD, 'M6 8h5M6 10h5M6 12h3'],
+  media: [DOC, FOLD, 'M7 7.6v4.3l3.4-2.15z'],
   code: [DOC, FOLD, 'M7.2 8.3 5.7 10l1.5 1.7M9.8 8.3l1.5 1.7-1.5 1.7'],
   data: [DOC, FOLD, 'M5.8 7.6h5.4v4.6H5.8zM5.8 9.9h5.4M8.5 7.6v4.6'],
   text: [DOC, FOLD, 'M6 7.5h5M6 9.5h5M6 11.5h3'],
@@ -1080,9 +1088,20 @@ function csvView(p) {
   return box;
 }
 
+/** Apple's thumbnail of the file (the extension makes it with QuickLookThumbnailing): a PNG data: URL only, else nothing. */
+function thumbNode(p) {
+  if (typeof p.thumb !== 'string' || !p.thumb.startsWith('data:image/png;base64,')) return null;
+  const img = document.createElement('img');
+  img.className = 'info-thumb';
+  img.alt = '';
+  img.src = p.thumb;
+  img.addEventListener('error', () => { if (img.isConnected) img.replaceWith(icon(p.icon, 64)); });
+  return img;
+}
+
 function infoCard(p, why) {
   const card = el('div', 'viewer info-card');
-  card.append(icon(p.icon, 64), el('div', 'info-name', plainName(p.name)), el('div', 'info-kind', p.kindName || 'Document'));
+  card.append(thumbNode(p) || icon(p.icon, 64), el('div', 'info-name', plainName(p.name)), el('div', 'info-kind', p.kindName || 'Document'));
   const dl = el('dl');
   const rel = typeof p.root === 'string' && p.path.startsWith(p.root + '/') ? p.path.slice(p.root.length + 1) : p.path;
   for (const [k, v] of [['Size', typeof p.size === 'number' ? `${fmtSize(p.size)}${p.size >= 1000 ? ` (${p.size.toLocaleString()} bytes)` : ''}` : ''],
@@ -1120,13 +1139,13 @@ function imageView(p) {
   return box;
 }
 
-/** Views the extension draws natively over `.pdf-area`: a PDF (PDFKit) and an HTML file (its own web view). */
-const NATIVE_VIEWS = new Set(['pdf', 'html']);
+/** Views the extension draws natively over `.pdf-area`: a PDF (PDFKit), an HTML file (its own web view), video and audio (AVKit). */
+const NATIVE_VIEWS = new Set(['pdf', 'html', 'video', 'audio']);
 
 /** The PDF itself is drawn by a native PDFView the extension lays over `.pdf-area`; the page only reserves the space and
  *  reports where it is (syncPdf), so WebKit's PDF plugin, and its unlabelled buttons, never load. */
 function pdfView(p) {
-  const box = el('div', 'viewer viewer-pdf');
+  const box = el('div', `viewer viewer-pdf${p.view === 'audio' ? ' viewer-audio' : ''}`);
   box.append(viewHead(p));
   const area = el('div', 'pdf-area');
   area.setAttribute('role', 'document');
@@ -1155,7 +1174,7 @@ function pdfRect() {
   const c = themeColors();
   const bg = mixc(c.bg, c.fg, 0.06).map(Math.round);
   return { path: current.path, x: Math.round(left), y: Math.round(r.top), w: Math.max(0, Math.round(r.right - left)), h: Math.max(0, Math.round(bottom - r.top)),
-    hide: !pop.hidden, bg, dark: (0.2126 * c.bg[0] + 0.7152 * c.bg[1] + 0.0722 * c.bg[2]) / 255 < 0.45, radius: appChrome() ? 8 : 0 };
+    hide: !pop.hidden, bg, dark: (0.2126 * c.bg[0] + 0.7152 * c.bg[1] + 0.0722 * c.bg[2]) / 255 < 0.45, radius: appChrome() || current.view === 'audio' ? 8 : 0 };
 }
 const pdfObserver = new ResizeObserver(() => syncPdf());
 window.addEventListener('resize', () => syncPdf());
@@ -1178,7 +1197,7 @@ function syncPdf() {
 function viewNode(p) {
   switch (p.view) {
     case 'image': if (typeof p.src === 'string') return imageView(p); break;
-    case 'pdf': case 'html': return pdfView(p);
+    case 'pdf': case 'html': case 'video': case 'audio': return pdfView(p);
     case 'loading': return loadingView(p);
     case 'overview': return overviewView(p);
     case 'json': if (typeof p.text === 'string') return jsonView(p); break;
@@ -1202,6 +1221,7 @@ function viewNode(p) {
 // ---------- the folder overview: what a folder holds, when it has no Markdown to open (text nodes only) ----------
 
 const OVERVIEW_KINDS = [['markdown', 'Markdown file', 'Markdown files', 'markdown'], ['image', 'image', 'images', 'image'], ['pdf', 'PDF', 'PDFs', 'pdf'],
+  ['media', 'video or audio file', 'video and audio files', 'media'],
   ['code', 'code file', 'code files', 'code'], ['data', 'data file', 'data files', 'data'], ['text', 'text file', 'text files', 'text'],
   ['other', 'other item', 'other items', 'other']];
 

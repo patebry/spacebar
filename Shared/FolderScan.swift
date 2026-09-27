@@ -130,6 +130,7 @@ enum FolderScan {
         case .markdown: return "markdown"
         case .image: return "image"
         case .pdf: return "pdf"
+        case .video, .audio: return "media"
         case .code, .html: return "code"
         case .json, .csv: return "data"
         case .text: return "text"

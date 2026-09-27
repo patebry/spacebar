@@ -87,10 +87,10 @@ PREVIEW_BIN=$OBJ/$APPEX_EXE
 PROBE_FLAGS=()
 [ "${PROBE:-0}" = 1 ] && PROBE_FLAGS=(-D PROBE)
 compile "$PREVIEW_BIN" -application-extension -module-name "$APPEX_EXE" \
-  Preview/PreviewViewController.swift Preview/PDFPane.swift Preview/HTMLPane.swift Preview/SettingsStore.swift Preview/Probe.swift \
+  Preview/PreviewViewController.swift Preview/PDFPane.swift Preview/HTMLPane.swift Preview/MediaPane.swift Preview/Thumbnail.swift Preview/SettingsStore.swift Preview/Probe.swift \
   Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/Updates.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift \
   ${PROBE_FLAGS[@]+"${PROBE_FLAGS[@]}"} \
-  -framework QuickLookUI -framework WebKit -framework PDFKit -Xlinker -e -Xlinker _NSExtensionMain
+  -framework QuickLookUI -framework WebKit -framework PDFKit -framework AVKit -framework AVFoundation -framework QuickLookThumbnailing -Xlinker -e -Xlinker _NSExtensionMain
 compile "$APP/Contents/MacOS/$APP_EXE" -parse-as-library -module-name "$APP_EXE" App/*.swift Shared/Settings.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift \
   -framework WebKit -framework SwiftUI
 plist App/Info.plist "$APP/Contents/Info.plist"

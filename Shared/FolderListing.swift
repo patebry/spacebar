@@ -4,13 +4,14 @@ import UniformTypeIdentifiers
 /// What a file is, from its name alone: the sidebar's icon, how the panel previews it, and the content type the `file` host
 /// serves it as. Nothing here reads the file; a file of an unknown kind is sniffed as text or not when it is opened.
 enum FileKind: String {
-    case folder, markdown, image, pdf, html, code, json, csv, text, app, other
+    case folder, markdown, image, pdf, html, video, audio, code, json, csv, text, app, other
 
-    /// One of the sidebar's eight icons.
+    /// One of the sidebar's nine icons.
     var icon: String {
         switch self {
         case .json, .csv: return "data"
         case .html: return "code"
+        case .video, .audio: return "media"
         case .app: return "other"
         default: return rawValue
         }
@@ -20,6 +21,9 @@ enum FileKind: String {
 enum FileTypes {
     static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "mkdn"]
     static let htmlExtensions: Set<String> = ["html", "htm"]
+    /// Played by AVFoundation. WebM, Ogg and Matroska are not: AVFoundation cannot open them.
+    static let videoExtensions: Set<String> = ["mp4", "m4v", "mov"]
+    static let audioExtensions: Set<String> = ["mp3", "m4a", "aac", "wav", "aif", "aiff", "flac", "caf"]
     /// Rendered as `<img>` only. SVG is here: as an image it runs no script.
     static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "avif", "bmp", "tif", "tiff", "ico", "svg"]
     static let jsonExtensions: Set<String> = ["json", "geojson", "jsonc", "json5", "webmanifest", "har", "ipynb"]
@@ -88,6 +92,8 @@ enum FileTypes {
         if imageExtensions.contains(ext) { return .image }
         if ext == "pdf" { return .pdf }
         if htmlExtensions.contains(ext) { return .html }
+        if videoExtensions.contains(ext) { return .video }
+        if audioExtensions.contains(ext) { return .audio }
         if jsonExtensions.contains(ext) { return .json }
         if csvExtensions.contains(ext) { return .csv }
         if codeLanguages[ext] != nil || codeNames[lower] != nil || lower.hasPrefix("dockerfile.") || lower.hasSuffix(".dockerfile") { return .code }
@@ -183,8 +189,8 @@ final class FileLoader {
     }
 }
 
-/// What the page is sent to show a file: `view` says how (markdown, image, pdf, code, json, csv, text or info), and nothing in
-/// it is ever rendered as HTML. A PDF is drawn natively (PDFPane); the page only reserves its place.
+/// What the page is sent to show a file: `view` says how (markdown, image, pdf, html, video, audio, code, json, csv, text or info),
+/// and nothing in it is ever rendered as HTML. A PDF, an HTML file and media are drawn natively; the page only reserves their place.
 enum FileView {
     /// What every render names: the file, its folder as the page's base URL, and the sidebar's root.
     static func base(path: String, root: String, reason: String) -> [String: Any] {
@@ -244,6 +250,8 @@ enum FileView {
             view = "pdf"
         case .html where regular && size <= FolderListing.maxDocumentBytes:
             view = "html"
+        case .video where regular && size <= FileTypes.maxFileBytes, .audio where regular && size <= FileTypes.maxFileBytes:
+            view = kind.rawValue
         case .code, .json, .csv, .text, .other, .app:
             // O_NONBLOCK and fstat: a file swapped for a FIFO since the stat can neither hang the open nor be read.
             let fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)

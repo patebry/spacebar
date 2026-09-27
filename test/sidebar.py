@@ -11,7 +11,7 @@ document-start state, the toggle and its persistence, the message gate, and that
 popover, themes and narrow panels still work with the sidebar open or collapsed, and the native PDF view: laid over the page's
 PDF area, following the sidebar and the panel, and torn down cleanly. A sandboxed copy of the harness, signed with the
 extension's entitlements, shows that a PDF and an image render under the extension's sandbox."""
-import json, os, random, shutil, subprocess, sys, tempfile
+import base64, json, os, random, shutil, struct, subprocess, sys, tempfile, wave, zlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webthemes import Page, ROOT, THEMES, HELPERS, click
 import hostile
@@ -51,6 +51,13 @@ def make_pdf(text, catalog=''):
     return (out + f"trailer\n<< /Size {len(objs) + 1} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n").encode('latin-1')
 
 
+def make_png(w, h, rgb=(230, 70, 90)):
+    """A solid PNG, for the info card's thumbnail."""
+    chunk = lambda t, d: struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d) & 0xffffffff)
+    raw = b''.join(b'\0' + bytes(rgb) * w for _ in range(h))
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b'')
+
+
 def make_tree(out):
     """The file browser's fixture: one of every kind, a subfolder two deep, a folder past the cap, hidden files, the hostile
     files of test/hostile/browser, a link to /etc, to /etc/hosts and to the parent, a dangling link, and names made of dots."""
@@ -72,7 +79,7 @@ def make_tree(out):
     for name, text in files.items():
         open(os.path.join(tree, name), 'w').write(text)
     open(os.path.join(tree, 'huge.log'), 'w').write(('x' * 99 + '\n') * 31000)
-    for name, n in (('archive.zip', 4096), ('movie.mp4', 2048), ('tool', 3000)):
+    for name, n in (('archive.zip', 4096), ('movie.mp4', 2048), ('movie.webm', 2048), ('tool', 3000)):
         open(os.path.join(tree, name), 'wb').write(b'\0' + bytes(rnd.randrange(256) for _ in range(n - 1)))
     for name in ('tool', 'run.sh'):
         os.chmod(os.path.join(tree, name), 0o755)
@@ -81,6 +88,8 @@ def make_tree(out):
     shutil.copy(os.path.join(ROOT, 'test', 'fixtures', 'img.png'), os.path.join(tree, 'photo.png'))
     open(os.path.join(tree, 'doc.pdf'), 'wb').write(make_pdf('Hello PDF'))
     open(os.path.join(tree, 'broken.pdf'), 'wb').write(b'%PDF-1.4\nnot really a pdf\n')
+    with wave.open(os.path.join(tree, 'song.wav'), 'wb') as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(8000), w.writeframes(b'\0\0' * 8000)
     hdir = os.path.join(tree, 'hostile')
     src = os.path.join(hostile.HERE, 'browser')
     for f in os.listdir(src):
@@ -466,7 +475,8 @@ def main():
               'tree: the root, folders first, then README, then files', json.dumps(names))
         icons = {r[0]: r[3] for r in top}
         want_icons = {'hostile': 'ic-folder', 'README.md': 'ic-markdown', 'photo.png': 'ic-image', 'doc.pdf': 'ic-pdf', 'code.ts': 'ic-code',
-                      'data.json': 'ic-data', 'table.csv': 'ic-data', 'notes.txt': 'ic-text', 'archive.zip': 'ic-other', 'tool': 'ic-other'}
+                      'data.json': 'ic-data', 'table.csv': 'ic-data', 'notes.txt': 'ic-text', 'archive.zip': 'ic-other', 'tool': 'ic-other',
+                      'movie.mp4': 'ic-media', 'song.wav': 'ic-media', 'movie.webm': 'ic-other'}
         check(all(icons.get(k) == v for k, v in want_icons.items()), 'tree: every row has its type icon',
               json.dumps({k: icons.get(k) for k in want_icons}))
         check(not {'etc', 'up', 'hosts.txt', '.secret.md', 'dangling.md', '...', '..txt'} & set(names) and 'notes..v2.txt' in names,
@@ -624,8 +634,8 @@ def main():
         check(card == ['This file is in iCloud and couldn’t be downloaded.', 'Reveal in Finder', 'reveal']
               and [m.get('path') for m in r['messages'] if m.get('type') == 'reveal'] == [T('notes.md')],
               'iCloud: the card for a file that could not be downloaded, with Reveal in Finder (a Markdown file too)', json.dumps([card, r['messages']])[:300])
-        view(T('movie.mp4'))
-        r = page.cmd("@eval:sb.setOpener({ path: " + json.dumps(T('movie.mp4')) + ", app: 'QuickTime Player' }); 0")
+        view(T('movie.webm'))
+        r = page.cmd("@eval:sb.setOpener({ path: " + json.dumps(T('movie.webm')) + ", app: 'QuickTime Player' }); 0")
         b = page.js("return [document.querySelector('#doc .info-card button').textContent, document.querySelector('#doc .info-card button').dataset.action]")
         r = page.cmd('@nativeclick:#doc .info-card button')
         check(b == ['Open with QuickTime Player', 'openFile'] and '_openFile' in [m.get('type') for m in r['messages']],
@@ -706,6 +716,65 @@ def main():
         card = page.js("const c = document.querySelector('#doc .info-card'); return c && [document.documentElement.dataset.view, c.querySelector('.viewer-note').textContent]")
         check(card == ['info', 'This PDF can’t be shown here.'] and not page.cmd('@pdf')['result']['open'],
               'PDF PDFKit cannot open: the info card with a note, no native view', json.dumps(card))
+
+        # ---- video and audio: the page reserves the area the extension's AVPlayerView is laid over, and reports where it is ----
+        MEDIA = """const d = document.getElementById('doc'), a = d.querySelector('.pdf-area'), r = a && a.getBoundingClientRect();
+          return { view: document.documentElement.dataset.view, area: r && [r.left, r.top, r.width, r.height], docMid: Math.round(d.getBoundingClientRect().left + d.getBoundingClientRect().width / 2),
+            frames: document.querySelectorAll('iframe, embed, object, video, audio').length, aa: document.getElementById('aa').hidden,
+            buttons: [...d.querySelectorAll('button')].map((b) => [b.textContent, b.dataset.action]), kind: (d.querySelector('.viewer-kind') || {}).textContent,
+            fits: document.scrollingElement.scrollHeight <= innerHeight && document.scrollingElement.scrollWidth <= innerWidth }"""
+
+        def media(path):
+            r = page.render(path)
+            w = page.cmd('@wait:0.4')
+            rects = [m for m in r['messages'] + w['messages'] if m.get('type') == 'pdfRect' and 'x' in m]
+            return page.js(MEDIA), (rects[-1] if rects else None)
+        v, rect = media(T('movie.mp4'))
+        check(v['view'] == 'video' and v['aa'] and v['frames'] == 0 and v['buttons'] == [['Open', 'openFile']] and v['kind'].startswith('MPEG-4')
+              and v['area'][0] >= 240 and v['area'][1] > 60 and v['area'][1] + v['area'][3] == 800 - EDGE and v['fits'],
+              'video: the page reserves the rest of the panel under its toolbar, with a labelled Open button and no <video>', json.dumps(v))
+        check(rect and rect['path'] == T('movie.mp4') and near([float(rect[k]) for k in 'xywh'], v['area']) and rect['hide'] in ('0', 'false'),
+              'video: the page posts the area for the native player', json.dumps(rect))
+        v, rect = media(T('song.wav'))
+        check(v['view'] == 'audio' and v['area'][3] == 220 and abs(v['area'][0] + v['area'][2] / 2 - v['docMid']) <= 1 and v['area'][2] <= 560 and v['fits']
+              and v['buttons'] == [['Open', 'openFile']], 'audio: a player 220 px tall, centred under the toolbar', json.dumps(v))
+        check(rect and rect['path'] == T('song.wav') and near([float(rect[k]) for k in 'xywh'], v['area']) and float(rect['radius']) == 8,
+              'audio: the page posts its area, corners rounded', json.dumps(rect))
+        page.cmd('@size:520x320')
+        page.cmd('@wait:0.4')
+        small = page.js(MEDIA)
+        page.cmd('@size:1200x800')
+        check(small['fits'] and small['area'][3] <= 220 and small['area'][1] + small['area'][3] <= 320, 'audio: a small panel still fits, nothing overflows', json.dumps(small))
+        v, rect = media(T('movie.webm'))
+        check(v['view'] == 'info' and v['area'] is None, 'WebM, which AVFoundation cannot play, keeps its info card', json.dumps(v))
+
+        # ---- the info card with Apple's thumbnail of the file, from the payload or sent once made ----
+        png = 'data:image/png;base64,' + base64.b64encode(make_png(64, 48)).decode()
+        card = dict(stub, path=T('deck.key'), name='deck.key', view='info', icon='other', kindName='Keynote Presentation', canOpen=True, size=5000)
+        THUMB = """const c = document.querySelector('#doc .info-card'), i = c && c.querySelector('img.info-thumb');
+          return c && { thumb: i ? [i.naturalWidth, i.naturalHeight, i.getBoundingClientRect().width <= 320, !!(i.compareDocumentPosition(c.querySelector('dl')) & 4)] : null,
+            icon: !!c.querySelector('svg.ic'), button: c.querySelector('button').textContent,
+            fits: document.scrollingElement.scrollWidth <= innerWidth }"""
+        page.cmd('@eval:sb.render(' + json.dumps(dict(card, thumb=png)) + '); 0')
+        page.cmd('@wait:0.2')
+        t = page.js(THUMB)
+        check(t and t['thumb'] == [64, 48, True, True] and not t['icon'] and t['button'] == 'Open' and t['fits'],
+              "info card: the file's thumbnail in the icon's place, above its details, the Open button kept", json.dumps(t))
+        page.cmd('@eval:sb.render(' + json.dumps(card) + '); 0')
+        page.cmd('@eval:sb.setThumb(' + json.dumps({'path': T('other.key'), 'thumb': png}) + '); 0')
+        page.cmd('@eval:sb.setThumb(' + json.dumps({'path': T('deck.key'), 'thumb': 'data:image/svg+xml;base64,' + base64.b64encode(b'<svg xmlns="http://www.w3.org/2000/svg"/>').decode()}) + '); 0')
+        before = page.js(THUMB)
+        page.cmd('@eval:sb.setThumb(' + json.dumps({'path': T('deck.key'), 'thumb': png}) + '); 0')
+        page.cmd('@wait:0.2')
+        after = page.js(THUMB)
+        check(before['icon'] and before['thumb'] is None and after['thumb'] == [64, 48, True, True] and not after['icon'],
+              'info card: a thumbnail sent later replaces the icon; one for another file, or not a PNG, is ignored', json.dumps([before, after]))
+        page.cmd('@size:420x300')
+        page.cmd('@eval:sb.render(' + json.dumps(dict(card, thumb='data:image/png;base64,' + base64.b64encode(make_png(1024, 1024)).decode())) + '); 0')
+        page.cmd('@wait:0.2')
+        big = page.js(THUMB)
+        page.cmd('@size:1200x800')
+        check(big['thumb'] and big['thumb'][2] and big['fits'], 'info card: a large thumbnail in a small panel is scaled down, nothing overflows sideways', json.dumps(big))
 
         # ---- hostile files: nothing runs, nothing renders as a document ----
         H = lambda f: T('hostile', f)

@@ -200,6 +200,16 @@
     max-height: 100%; margin: auto; border: 1px solid var(--border); border-radius: 8px; }
   #doc .viewer-csv table { font-size: 13px; }
   #doc .viewer-csv th, #doc .viewer-csv td { max-width: 32em; vertical-align: top; white-space: pre-wrap; }
+  #doc .viewer-archive table.archive { display: table; width: 100%; font-size: 13px; }
+  #doc .viewer-archive th, #doc .viewer-archive td { padding-top: 3px; padding-bottom: 3px; vertical-align: middle; }
+  #doc .viewer-archive th:nth-child(2), #doc .viewer-archive td.arc-size { text-align: right; white-space: nowrap; }
+  #doc .viewer-archive td.arc-date { color: var(--muted); white-space: nowrap; }
+  #doc .viewer-archive td.arc-name { overflow-wrap: anywhere; }
+  #doc .viewer-archive button.arc-dir { all: unset; display: inline-flex; align-items: center; gap: 6px; cursor: default; border-radius: 4px; }
+  #doc .viewer-archive button.arc-dir:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #doc .viewer-archive td.arc-name > .ic { margin: 0 6px 0 0; vertical-align: -3px; }
+  #doc .viewer-archive .arc-chevron { display: inline-block; width: 12px; color: var(--muted); }
+  #doc .viewer-archive td.arc-name > .arc-chevron { margin-right: 6px; }
   #doc .viewer-loading { display: grid; justify-items: center; gap: 10px; padding: 96px 0 24px; font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--muted); }
   #doc .viewer-loading .viewer-note { margin: 0; }
   #doc .viewer-loading .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--muted) 25%, transparent);

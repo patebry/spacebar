@@ -1,0 +1,139 @@
+# The file types spacebar takes Space for in Finder. build.sh reads this file for two things:
+#   - the preview extension's QLSupportedContentTypes: every `claim` and every `declare`d type, plus md.spacebar.qlmanage
+#   - the app's UTImportedTypeDeclarations: every `declare`, after the hand-written Markdown declaration in App/Info.plist
+#
+#   claim <UTI>
+#       A type the system already declares.
+#   declare <ext[,ext...]> <conforms-to[,...]> <description>
+#       An extension the system has no type for (it resolves to a dyn.* ID, which no extension can claim). The app imports
+#       md.spacebar.type.<first ext> for it. An imported type never overrides a type the system or another app exports.
+#
+# Quick Look hands a third-party extension a file only when its exact type is claimed: a parent type (public.source-code,
+# public.text) never routes, and types Apple previews itself never do (plain text, HTML, CSV, PDF, images, movies, audio,
+# RTF, Word, .ts streams, certificates, disk images). Those are not listed. Neither are .mkv, .flv, .ogv, .opus and .webm:
+# AVFoundation cannot play them, so spacebar would show no more than Finder does.
+
+# Markdown
+claim net.daringfireball.markdown
+claim public.markdown
+
+# Source code and scripts
+claim public.swift-source
+claim public.python-script
+claim public.ruby-script
+claim public.perl-script
+claim public.php-script
+claim public.shell-script
+claim public.bash-script
+claim public.zsh-script
+claim public.ksh-script
+claim com.apple.terminal.shell-script
+claim public.c-source
+claim public.c-header
+claim public.c-plus-plus-source
+claim public.c-plus-plus-header
+claim public.objective-c-source
+claim public.objective-c-plus-plus-source
+claim com.sun.java-source
+claim com.netscape.javascript-source
+claim com.microsoft.typescript
+claim public.css
+claim public.make-source
+claim public.patch-file
+claim public.protobuf-source
+claim com.apple.applescript.text
+claim com.apple.rez-source
+
+# Data and configuration
+claim public.json
+claim public.geojson
+claim public.yaml
+claim public.xml
+claim com.apple.property-list
+claim public.tab-separated-values-text
+claim com.apple.log
+claim org.w3.webvtt
+
+# Archives: listed by the writer with /usr/bin/bsdtar
+claim public.zip-archive
+claim public.tar-archive
+claim org.gnu.gnu-zip-archive
+claim org.gnu.gnu-zip-tar-archive
+claim public.bzip2-archive
+claim org.tukaani.xz-archive
+claim org.7-zip.7-zip-archive
+
+# Files with no extension (Dockerfile, CHANGELOG, dotfiles) and unknown data: text is shown as text, anything else as an info card
+claim public.data
+
+# Source code the system has no type for. An interpreted language is a script, as the system's JavaScript, Python and Ruby
+# types are: the viewer offers Reveal in Finder for it, never Open (its default app could run it).
+declare go public.source-code Go source
+declare rs public.source-code Rust source
+declare kt,kts public.source-code Kotlin source
+declare cs public.source-code C Sharp source
+declare dart public.source-code Dart source
+declare scala public.source-code Scala source
+declare groovy,gradle public.script Groovy source
+declare clj public.script Clojure source
+declare ex public.script Elixir source
+declare erl public.script Erlang source
+declare hs public.script Haskell source
+declare lua public.script Lua source
+declare nim public.source-code Nim source
+declare zig public.source-code Zig source
+declare vb public.source-code Visual Basic source
+declare wat public.source-code WebAssembly text
+declare sql public.source-code SQL source
+declare graphql,gql public.source-code GraphQL document
+declare jsx,cjs public.script JavaScript source
+declare cts public.script TypeScript source
+declare pyi public.script Python stub
+declare scss,sass public.source-code Sass stylesheet
+declare less public.source-code Less stylesheet
+declare vue public.source-code Vue component
+declare svelte public.source-code Svelte component
+declare tf public.source-code Terraform configuration
+declare hcl public.source-code HCL configuration
+declare cmake public.source-code CMake script
+declare dockerfile public.source-code Dockerfile
+declare fish public.script fish script
+declare ps1 public.script PowerShell script
+declare bat public.script Batch file
+
+# Data the system has no type for
+declare ipynb public.json Jupyter notebook
+declare har public.json HTTP archive
+declare webmanifest public.json Web app manifest
+declare jsonc,json5 public.plain-text JSON with comments
+declare xsd public.xml XML schema
+declare xsl public.xml XSL stylesheet
+
+# Plain text and configuration the system has no type for
+declare toml public.plain-text TOML document
+declare ini public.plain-text INI configuration
+declare cfg,conf public.plain-text Configuration file
+declare properties public.plain-text Properties file
+declare env public.plain-text Environment file
+declare editorconfig public.plain-text EditorConfig file
+declare gitignore,dockerignore public.plain-text Ignore file
+declare gitattributes public.plain-text Git attributes file
+declare gitmodules public.plain-text Git submodules file
+declare npmrc,nvmrc public.plain-text Node configuration
+declare lock public.plain-text Lock file
+declare sum public.plain-text Checksum list
+declare mod public.plain-text Module file
+declare example,sample public.plain-text Example file
+declare rst public.plain-text reStructuredText document
+declare adoc,asciidoc public.plain-text AsciiDoc document
+declare org public.plain-text Org document
+declare tex public.plain-text TeX document
+declare bib public.plain-text BibTeX bibliography
+declare srt public.plain-text SubRip subtitles
+declare nfo,diz public.plain-text Info text
+declare out,err public.plain-text Output log
+declare csr public.plain-text Certificate signing request
+
+# Archives the system has no type for
+declare rar public.archive RAR archive
+declare zst public.archive Zstandard archive

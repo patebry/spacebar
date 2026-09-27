@@ -906,6 +906,21 @@ window.sb = {
     const old = document.querySelector('#doc .info-card > svg.ic'), img = thumbNode(current);
     if (old && img) old.replaceWith(img);
   },
+  /** An archive's contents, listed by the writer once its view is up, or why they could not be (then it is an info card). */
+  setArchive(a) {
+    if (!a || a.path !== current.path || current.view !== 'archive' || Array.isArray(current.entries)) return;
+    if (Array.isArray(a.entries)) {
+      current.entries = a.entries;
+      current.truncated = a.truncated === true;
+      // The same archive listed again (it changed on disk) keeps its open folders.
+      if (archiveOpenPath !== current.path) archiveOpen = null;
+    } else {
+      current.view = 'info';
+      current.note = typeof a.error === 'string' ? a.error : 'This archive’s contents can’t be listed.';
+      root.dataset.view = 'info';
+    }
+    draw();
+  },
   /** The app the viewer's Open button would use, named once the writer has looked it up. */
   setOpener(o) {
     if (!o || o.path !== current.path || typeof o.app !== 'string') return;
@@ -1006,6 +1021,15 @@ function viewerAction(b, e) {
   const a = b.dataset.action;
   if ((a === 'openFile' || a === 'reveal') && e.isTrusted) post({ type: a, path: current.path });
   else if (a === 'raw') { jsonRaw = !jsonRaw; draw(); }
+  else if (a === 'archiveDir' && archiveOpen) {
+    const path = b.dataset.path;
+    if (!archiveOpen.delete(path)) archiveOpen.add(path);
+    const y = window.scrollY;
+    draw();
+    window.scrollTo(0, y);
+    const again = [...document.querySelectorAll('#doc .arc-dir')].find((d) => d.dataset.path === path);
+    if (again) again.focus({ preventScroll: true });
+  }
 }
 
 function viewHead(p, ...extra) {
@@ -1139,6 +1163,112 @@ function imageView(p) {
   return box;
 }
 
+// An archive's listing (sent by the extension from the writer's bsdtar) as a tree of folders and files, built from text nodes.
+const ARCHIVE_ALL_OPEN = 300;
+/** The folders open in the archive on screen (archiveOpenPath), by path; null until its listing is first drawn. */
+let archiveOpen = null;
+let archiveOpenPath = null;
+
+/** The flat listing as a tree: a folder with no entry of its own is implied by the files in it. */
+function archiveTree(entries) {
+  const top = { name: '', path: '', dir: true, kids: new Map(), size: null, modified: null };
+  for (const e of entries) {
+    if (!e || typeof e.name !== 'string') continue;
+    const parts = e.name.split('/').filter((x) => x && x !== '.');
+    let node = top;
+    parts.forEach((part, i) => {
+      const last = i === parts.length - 1;
+      let k = node.kids.get(part);
+      if (!k) {
+        k = { name: part, path: node.path ? `${node.path}/${part}` : part, dir: !last, kids: new Map(), size: null, modified: null };
+        node.kids.set(part, k);
+      }
+      if (!last || e.isDir === true) k.dir = true;
+      if (last) {
+        if (typeof e.size === 'number' && isFinite(e.size)) k.size = e.size;
+        if (typeof e.modified === 'number' && isFinite(e.modified)) k.modified = e.modified;
+      }
+      node = k;
+    });
+  }
+  let files = 0, folders = 0, total = 0;
+  const walk = (n) => n.kids.forEach((k) => { if (k.dir) { folders++; walk(k); } else { files++; total += k.size || 0; } });
+  walk(top);
+  return { top, files, folders, total };
+}
+
+const archiveKids = (n) => [...n.kids.values()].sort((a, b) => (a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name, undefined, { numeric: true })));
+
+/** Which folders start open: all of them in a small archive; in a large one, only a chain of lone folders from the top. */
+function archiveInitialOpen(tree, count) {
+  const open = new Set();
+  const all = (n) => n.kids.forEach((k) => { if (k.dir) { open.add(k.path); all(k); } });
+  if (count <= ARCHIVE_ALL_OPEN) { all(tree.top); return open; }
+  let n = tree.top;
+  while (n.kids.size === 1) {
+    const k = n.kids.values().next().value;
+    if (!k.dir) break;
+    open.add(k.path);
+    n = k;
+  }
+  return open;
+}
+
+function archiveView(p) {
+  const box = el('div', 'viewer viewer-archive');
+  box.append(viewHead(p));
+  if (!Array.isArray(p.entries)) {
+    const wait = el('div', 'viewer-loading');
+    wait.setAttribute('role', 'status');
+    const spin = el('span', 'spinner');
+    spin.setAttribute('aria-hidden', 'true');
+    wait.append(spin, el('div', 'loading-text', 'Reading contents…'));
+    box.append(wait);
+    return box;
+  }
+  const tree = archiveTree(p.entries);
+  // Folders kept open from an earlier listing of this archive count only while one of them is still in it.
+  const dirs = new Set();
+  const collect = (n) => n.kids.forEach((k) => { if (k.dir) { dirs.add(k.path); collect(k); } });
+  collect(tree.top);
+  if (archiveOpen && archiveOpen.size && ![...archiveOpen].some((d) => dirs.has(d))) archiveOpen = null;
+  if (!archiveOpen) { archiveOpen = archiveInitialOpen(tree, p.entries.length); archiveOpenPath = p.path; }
+  const plural = (n, one, many) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
+  const summary = [plural(tree.files, 'file', 'files'), tree.folders ? plural(tree.folders, 'folder', 'folders') : ''].filter(Boolean).join(', ');
+  box.append(el('div', 'viewer-note archive-summary', [summary, tree.total ? `${fmtSize(tree.total)} uncompressed` : ''].filter(Boolean).join(' · ')));
+  if (p.truncated === true) box.append(note(`Showing the first ${p.entries.length.toLocaleString()} entries.`));
+  if (!tree.top.kids.size) { box.append(note('This archive is empty.')); return box; }
+  const table = el('table', 'archive');
+  const hr = table.appendChild(el('thead')).appendChild(el('tr'));
+  ['Name', 'Size', 'Modified'].forEach((h) => hr.appendChild(el('th', '', h)));
+  const tb = table.appendChild(el('tbody'));
+  const rows = (n, depth) => {
+    for (const k of archiveKids(n)) {
+      const tr = tb.appendChild(el('tr', k.dir ? 'arc-folder' : 'arc-file'));
+      const td = tr.appendChild(el('td', 'arc-name'));
+      td.style.paddingLeft = `${8 + depth * 16}px`;
+      const open = k.dir && archiveOpen.has(k.path);
+      if (k.dir) {
+        const b = el('button', 'arc-dir');
+        b.type = 'button';
+        b.dataset.action = 'archiveDir';
+        b.dataset.path = k.path;
+        b.setAttribute('aria-expanded', String(open));
+        b.append(el('span', 'arc-chevron', open ? '▾' : '▸'), icon('folder'), el('span', 'arc-label', plainName(k.name)));
+        td.append(b);
+      } else {
+        td.append(el('span', 'arc-chevron', ''), icon('other'), el('span', 'arc-label', plainName(k.name)));
+      }
+      tr.appendChild(el('td', 'arc-size', k.dir ? '' : fmtSize(k.size)));
+      tr.appendChild(el('td', 'arc-date', fmtDate(k.modified)));
+      if (open) rows(k, depth + 1);
+    }
+  };
+  rows(tree.top, 0);
+  box.append(table);
+  return box;
+}
+
 /** Views the extension draws natively over `.pdf-area`: a PDF (PDFKit), an HTML file (its own web view), video and audio (AVKit). */
 const NATIVE_VIEWS = new Set(['pdf', 'html', 'video', 'audio']);
 
@@ -1202,6 +1332,7 @@ function viewNode(p) {
     case 'overview': return overviewView(p);
     case 'json': if (typeof p.text === 'string') return jsonView(p); break;
     case 'csv': if (typeof p.text === 'string') return csvView(p); break;
+    case 'archive': return archiveView(p);
     case 'code': case 'text':
       if (typeof p.text === 'string') {
         const box = el('div', 'viewer viewer-code');

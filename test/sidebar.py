@@ -79,7 +79,7 @@ def make_tree(out):
     for name, text in files.items():
         open(os.path.join(tree, name), 'w').write(text)
     open(os.path.join(tree, 'huge.log'), 'w').write(('x' * 99 + '\n') * 31000)
-    for name, n in (('archive.zip', 4096), ('movie.mp4', 2048), ('movie.webm', 2048), ('tool', 3000)):
+    for name, n in (('blob.dat', 4096), ('movie.mp4', 2048), ('movie.webm', 2048), ('tool', 3000)):
         open(os.path.join(tree, name), 'wb').write(b'\0' + bytes(rnd.randrange(256) for _ in range(n - 1)))
     for name in ('tool', 'run.sh'):
         os.chmod(os.path.join(tree, name), 0o755)
@@ -475,7 +475,7 @@ def main():
               'tree: the root, folders first, then README, then files', json.dumps(names))
         icons = {r[0]: r[3] for r in top}
         want_icons = {'hostile': 'ic-folder', 'README.md': 'ic-markdown', 'photo.png': 'ic-image', 'doc.pdf': 'ic-pdf', 'code.ts': 'ic-code',
-                      'data.json': 'ic-data', 'table.csv': 'ic-data', 'notes.txt': 'ic-text', 'archive.zip': 'ic-other', 'tool': 'ic-other',
+                      'data.json': 'ic-data', 'table.csv': 'ic-data', 'notes.txt': 'ic-text', 'blob.dat': 'ic-other', 'tool': 'ic-other',
                       'movie.mp4': 'ic-media', 'song.wav': 'ic-media', 'movie.webm': 'ic-other'}
         check(all(icons.get(k) == v for k, v in want_icons.items()), 'tree: every row has its type icon',
               json.dumps({k: icons.get(k) for k in want_icons}))
@@ -603,18 +603,18 @@ def main():
         view(T('huge.log'))
         h = page.js("return [document.querySelector('#doc pre.code').textContent.length, [...document.querySelectorAll('#doc .viewer-note')].map((n) => n.textContent)]")
         check(h[0] == 2 * 1024 * 1024 and h[1] == ['Showing the first 2 MB of 3.1 MB.'], 'text over 2 MB: its first 2 MB, with a note', json.dumps(h))
-        r = view(T('archive.zip'))
+        r = view(T('blob.dat'))
         card = page.js("""const c = document.querySelector('#doc .info-card'); return c && { name: c.querySelector('.info-name').textContent,
           dt: [...c.querySelectorAll('dt')].map((x) => x.textContent), size: c.querySelector('dd').textContent, icon: !!c.querySelector('svg.ic'),
           button: c.querySelector('button').textContent, action: c.querySelector('button').dataset.action }""")
-        check(card and card['name'] == 'archive.zip' and card['dt'] == ['Size', 'Modified', 'Where'] and card['size'] == '4.1 KB (4,096 bytes)'
-              and card['icon'] and card['button'] == 'Reveal in Finder', 'other: an info card with icon, name, kind, size and date; an archive only reveals',
+        check(card and card['name'] == 'blob.dat' and card['dt'] == ['Size', 'Modified', 'Where'] and card['size'] == '4.1 KB (4,096 bytes)'
+              and card['icon'] and card['button'] == 'Reveal in Finder', 'other: an info card with icon, name, kind, size and date; unknown data only reveals',
               json.dumps(card))
         r = click(page, '#doc .info-card button')
         synthetic = [m for m in r['messages'] if m.get('type') in ('reveal', 'openFile')]
         r = page.cmd('@nativeclick:#doc .info-card button')
         check(not synthetic and [m.get('type') for m in r['messages'] if m.get('type', '').startswith('_')] == ['_reveal'] and
-              [m for m in r['messages'] if m.get('type') == 'reveal'][0].get('path') == T('archive.zip'),
+              [m for m in r['messages'] if m.get('type') == 'reveal'][0].get('path') == T('blob.dat'),
               'Reveal in Finder posts reveal for the file on screen, for a real click only', json.dumps(r['messages'])[:300])
         # A file still being read (an iCloud download): a quiet "Loading…" with no Open button, then, when it could not be
         # downloaded, the info card with Reveal in Finder, for a Markdown file too.
@@ -775,6 +775,70 @@ def main():
         big = page.js(THUMB)
         page.cmd('@size:1200x800')
         check(big['thumb'] and big['thumb'][2] and big['fits'], 'info card: a large thumbnail in a small panel is scaled down, nothing overflows sideways', json.dumps(big))
+
+        # ---- an archive: the writer's listing (fixed here) as a tree of folders and files ----
+        arc = dict(stub, path=T('pack.zip'), name='pack.zip', view='archive', icon='other', kindName='ZIP archive', canOpen=True, size=9000)
+        ARC = """const b = document.querySelector('#doc .viewer-archive');
+          return b && { view: document.documentElement.dataset.view, loading: !!b.querySelector('.viewer-loading'),
+            summary: (b.querySelector('.archive-summary') || {}).textContent || null,
+            rows: [...b.querySelectorAll('tbody tr')].map((r) => [r.querySelector('.arc-label').textContent, r.className,
+              +r.querySelector('.arc-name').style.paddingLeft.replace('px', ''), r.querySelector('.arc-size').textContent,
+              !!r.querySelector('.arc-date').textContent, (r.querySelector('.arc-dir') || { getAttribute: () => null }).getAttribute('aria-expanded')]),
+            button: (b.querySelector('.viewer-head .viewer-open') || {}).textContent, scripts: b.querySelectorAll('script, img, iframe').length,
+            notes: [...b.querySelectorAll('.viewer-note')].map((n) => n.textContent), fits: document.scrollingElement.scrollWidth <= innerWidth }"""
+        page.cmd('@eval:sb.render(' + json.dumps(arc) + '); 0')
+        page.cmd('@wait:0.2')
+        a0 = page.js(ARC)
+        check(a0 and a0['view'] == 'archive' and a0['loading'] and a0['rows'] == [] and a0['button'] == 'Open',
+              'archive: its head and a loading state until the listing arrives', json.dumps(a0))
+        entries = [{'name': 'proj/', 'size': None, 'modified': 1.7e12, 'isDir': True}, {'name': 'proj/README.md', 'size': 1200, 'modified': 1.7e12, 'isDir': False},
+                   {'name': 'proj/src/b.js', 'size': 3000, 'modified': 1.7e12, 'isDir': False}, {'name': 'proj/src/a.js', 'size': 800, 'modified': None, 'isDir': False},
+                   {'name': 'proj/<img src=x onerror="window.__pwned=1">.txt', 'size': 5, 'modified': 1.7e12, 'isDir': False},
+                   {'name': 'top.txt', 'size': 0, 'modified': 1.7e12, 'isDir': False}, {'name': 'empty/', 'size': None, 'modified': None, 'isDir': True}]
+        page.cmd('@eval:sb.setArchive(' + json.dumps({'path': T('other.zip'), 'entries': entries[:1]}) + '); 0')
+        check(page.js(ARC)['loading'], 'archive: a listing for another file is ignored')
+        page.cmd('@eval:sb.setArchive(' + json.dumps({'path': T('pack.zip'), 'entries': entries}) + '); 0')
+        page.cmd('@eval:sb.setOpener(' + json.dumps({'path': T('pack.zip'), 'app': 'Archive Utility'}) + '); 0')
+        page.cmd('@wait:0.2')
+        a1 = page.js(ARC)
+        names = [r[0] for r in a1['rows']]
+        check(names == ['empty', 'proj', 'src', 'a.js', 'b.js', '<img src=x onerror="window.__pwned=1">.txt', 'README.md', 'top.txt']
+              and [r[2] for r in a1['rows']] == [8, 8, 24, 40, 40, 24, 24, 8] and a1['rows'][1][5] == 'true' and a1['rows'][0][1] == 'arc-folder'
+              and a1['rows'][3][3] == '800 bytes' and not a1['rows'][3][4] and a1['rows'][4][3] == '3.0 KB' and a1['rows'][4][4] and a1['rows'][1][3] == '',
+              'archive: folders first, sorted, nested and indented, an implied folder added, sizes and dates, nothing unknown shown', json.dumps(a1['rows']))
+        check(a1['summary'] == '5 files, 3 folders · 5.0 KB uncompressed' and a1['button'] == 'Open with Archive Utility' and a1['scripts'] == 0
+              and not page.js('return window.__pwned || null') and a1['fits'],
+              'archive: a header with the count and total size, the Open with button, names only ever text', json.dumps(a1))
+        page.cmd("@eval:[...document.querySelectorAll('#doc .arc-dir')].find((b) => b.dataset.path === 'proj/src').click(); 0")
+        a2 = page.js(ARC)
+        page.cmd("@eval:[...document.querySelectorAll('#doc .arc-dir')].find((b) => b.dataset.path === 'proj').click(); 0")
+        a3 = page.js(ARC)
+        focused = page.js("return document.activeElement && document.activeElement.dataset.path")
+        page.cmd("@eval:[...document.querySelectorAll('#doc .arc-dir')].find((b) => b.dataset.path === 'proj').click(); 0")
+        a4 = page.js(ARC)
+        check([r[0] for r in a2['rows']] == ['empty', 'proj', 'src', '<img src=x onerror="window.__pwned=1">.txt', 'README.md', 'top.txt'] and a2['rows'][2][5] == 'false'
+              and [r[0] for r in a3['rows']] == ['empty', 'proj', 'top.txt'] and focused == 'proj' and [r[0] for r in a4['rows']] == [r[0] for r in a2['rows']],
+              'archive: a folder row collapses and expands, keeping focus and what was collapsed inside it', json.dumps([a2['rows'], a3['rows'], focused]))
+        page.cmd('@eval:sb.render(' + json.dumps(arc) + '); 0')
+        page.cmd('@wait:0.2')
+        page.cmd('@eval:sb.setArchive(' + json.dumps({'path': T('pack.zip'), 'entries': entries}) + '); 0')
+        again = page.js(ARC)
+        check([r[0] for r in again['rows']] == [r[0] for r in a4['rows']] and again['rows'][2][5] == 'false' and not [n for n in again['notes'] if n.startswith('Showing')],
+              'archive: listed again after a change on disk, it keeps its collapsed folders; a whole listing says nothing about a cut', json.dumps(again['rows']))
+        big_entries = [{'name': f'root/d{i // 100}/f{i}.txt', 'size': 10, 'modified': 1.7e12, 'isDir': False} for i in range(5000)]
+        page.cmd('@eval:sb.render(' + json.dumps(arc) + '); 0')
+        page.cmd('@wait:0.2')
+        page.cmd('@eval:sb.setArchive(' + json.dumps({'path': T('pack.zip'), 'entries': big_entries, 'truncated': True}) + '); 0')
+        a5 = page.js(ARC)
+        check(len(a5['rows']) == 51 and a5['rows'][0][5] == 'true' and a5['rows'][1][5] == 'false' and 'Showing the first 5,000 entries.' in a5['notes']
+              and a5['summary'].startswith('5,000 files, 51 folders'),
+              'archive: a large listing opens only its lone top folder, and says it was cut', json.dumps([len(a5['rows']), a5['notes'], a5['summary']]))
+        page.cmd('@eval:sb.render(' + json.dumps(arc) + '); 0')
+        page.cmd('@wait:0.2')
+        page.cmd('@eval:sb.setArchive(' + json.dumps({'path': T('pack.zip'), 'error': 'This archive’s contents can’t be listed.'}) + '); 0')
+        page.cmd('@wait:0.2')
+        e = page.js("const c = document.querySelector('#doc .info-card'); return c && [document.documentElement.dataset.view, c.querySelector('.viewer-note').textContent, c.querySelector('button').textContent]")
+        check(e == ['info', 'This archive’s contents can’t be listed.', 'Open'], 'archive: one that cannot be listed becomes its info card, with why', json.dumps(e))
 
         # ---- hostile files: nothing runs, nothing renders as a document ----
         H = lambda f: T('hostile', f)

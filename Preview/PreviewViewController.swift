@@ -878,7 +878,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         pdfGen += 1
         // Read off the main thread: text is read, an image in iCloud is downloaded before the page loads it, and PDFKit may
         // scan a large or damaged file to rebuild it. A newer show or open supersedes this one.
-        let gen = pdfGen, kind = fileKind, root = rootDir, canOpen = LinkPolicy.fileRefusal(url) == nil
+        let gen = pdfGen, kind = fileKind, root = rootDir, canOpen = LinkPolicy.fileRefusal(url, allowArchives: kind == .archive) == nil
         let cloud = FileTypes.isDataless(url.path)
         // Only a download times out: PDFKit rebuilding a large local PDF may take longer, and is still shown when done.
         let id = loader.load(timesOut: cloud, { () -> (payload: [String: Any], pdf: Result<PDFDocument, PDFPane.LoadError>?, stuck: Bool) in
@@ -947,6 +947,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         }
         log.info("show \(view, privacy: .public) (\(self.fileKind.rawValue, privacy: .public))")
         render(p)
+        if view == "archive" { listArchive(url) }
         // The button names the app the writer would open it with; an app, a script or an executable gets Reveal in Finder only.
         if canOpen, reason == "open" {
             let path = url.path
@@ -959,6 +960,24 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
                 }
             } }
         }
+    }
+
+    /// Asks the writer for the archive's contents (the extension cannot run bsdtar) and sends them to the page; an archive it
+    /// cannot list turns into its info card.
+    private func listArchive(_ url: URL) {
+        let path = url.path, gen = renderGen
+        let done: (Data?) -> Void = { [weak self] data in
+            DispatchQueue.main.async {
+                guard let self, self.renderGen == gen, self.fileURL?.path == path else { return }
+                if let data, let list = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let entries = list["entries"] as? [[String: Any]] {
+                    self.js("sb.setArchive", ["path": path, "entries": entries, "truncated": list["truncated"] as? Bool ?? false])
+                } else {
+                    self.js("sb.setArchive", ["path": path, "error": "This archive’s contents can’t be listed."])
+                    self.addThumbnail(url)
+                }
+            }
+        }
+        helper(onError: { done(nil) }) { $0.listArchive(path, reply: done) }
     }
 
     fileprivate func stopNativeViews() { closePDF() }
@@ -1092,7 +1111,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             dirWatches.removeValue(forKey: p)
         case "openFile":
             // The viewer's "Open with" button, for the file on screen only; the writer applies LinkPolicy again.
-            guard let url = fileURL, m.string("path", max: 4096) == url.path, fileKind != .markdown, shownCanOpen, LinkPolicy.fileRefusal(url) == nil else {
+            guard let url = fileURL, m.string("path", max: 4096) == url.path, fileKind != .markdown, shownCanOpen, LinkPolicy.fileRefusal(url, allowArchives: fileKind == .archive) == nil else {
                 return refuse("openFile", "not the file on screen or not allowed")
             }
             openExternally(url)

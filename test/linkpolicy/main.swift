@@ -12,14 +12,22 @@ func file(_ name: String, _ text: String = "x\n", mode: Int = 0o644) -> URL {
     return u
 }
 
+for name in ["a.zip", "a.tar", "a.tar.gz", "a.tgz", "a.tar.bz2", "a.tar.xz", "a.7z"] {
+    check("archive \(name): refused as a link, allowed for the viewer's Open", LinkPolicy.refusal(file(name)) != nil
+          && LinkPolicy.refusal(file(name), allowArchives: true) == nil && LinkPolicy.opener(for: file(name), allowArchives: true) != nil)
+}
+for name in ["x.jar", "x.epub", "x.ipa", "x.xip", "x.pkg", "x.dmg"] {
+    check("refused \(name) even where archives are allowed", LinkPolicy.refusal(file(name), allowArchives: true) != nil)
+}
 for name in ["notes.txt", "readme.md", "photo.png", "paper.pdf", "data.csv", "clip.mp4", "doc.rtf"] {
     check("allowed \(name)", LinkPolicy.refusal(file(name)) == nil)
 }
 for name in ["run.command", "run.sh", "tool.py", "page.html", "page.xhtml", "pic.svg", "go.webloc", "go.inetloc", "go.fileloc",
              "go.url", "x.terminal", "x.mobileconfig", "x.configprofile", "x.ics", "x.vcf", "x.pkg", "x.dmg", "x.jar", "x.scpt",
-             "x.workflow", "x.shortcut", "x.webarchive", "x.xml", "noextension"] {
+             "x.workflow", "x.shortcut", "x.webarchive", "x.xml", "noextension", "x.epub", "x.ipa", "x.xip", "x.cpio", "x.a"] {
     check("refused \(name)", LinkPolicy.refusal(file(name)) != nil)
 }
+check("refused executable .zip", LinkPolicy.refusal(file("exec.zip", mode: 0o755), allowArchives: true) != nil)
 check("refused executable .txt", LinkPolicy.refusal(file("exec.txt", mode: 0o755)) != nil)
 check("refused missing file", LinkPolicy.refusal(dir.appendingPathComponent("gone.pdf")) != nil)
 check("refused folder", LinkPolicy.refusal(dir) != nil)

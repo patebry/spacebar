@@ -1,0 +1,11 @@
+drwxr-xr-x  0 runner staff       0 Sep 20 10:15 src/
+-rw-r--r--  0 runner staff       6 Sep 20 10:15 src/hard.txt
+drwxr-xr-x  0 runner staff       0 Sep 20 10:15 src/sub/
+lrwxr-xr-x  0 runner staff       0 Sep 20 10:15 src/link -> a.txt
+hrw-r--r--  0 runner staff       0 Sep 20 10:15 src/a.txt link to src/hard.txt
+drwxr-xr-x  0 runner staff       0 Sep 20 10:15 src/sub/deep/
+-rw-r--r--  0 runner staff       1 Sep 20 10:15 src/sub/new\nline.txt
+-rw-r--r--  0 runner staff       4 Sep 20 10:15 src/sub/file with space.md
+-rw-r--r--  0 runner staff       1 Sep 20 10:15 src/sub/back\\slash.txt
+-rw-r--r--  0 runner staff       2 Sep 20 10:15 src/sub/é ünï 日本.txt
+-rw-r--r--  0 runner staff    5000 Jan  2  2020 src/sub/deep/blob.bin

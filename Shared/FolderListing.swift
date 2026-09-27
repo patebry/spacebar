@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 /// What a file is, from its name alone: the sidebar's icon, how the panel previews it, and the content type the `file` host
 /// serves it as. Nothing here reads the file; a file of an unknown kind is sniffed as text or not when it is opened.
 enum FileKind: String {
-    case folder, markdown, image, pdf, html, video, audio, code, json, csv, text, app, other
+    case folder, markdown, image, pdf, html, video, audio, code, json, csv, text, archive, app, other
 
     /// One of the sidebar's nine icons.
     var icon: String {
@@ -12,7 +12,7 @@ enum FileKind: String {
         case .json, .csv: return "data"
         case .html: return "code"
         case .video, .audio: return "media"
-        case .app: return "other"
+        case .app, .archive: return "other"
         default: return rawValue
         }
     }
@@ -28,21 +28,25 @@ enum FileTypes {
     static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "avif", "bmp", "tif", "tiff", "ico", "svg"]
     static let jsonExtensions: Set<String> = ["json", "geojson", "jsonc", "json5", "webmanifest", "har", "ipynb"]
     static let csvExtensions: Set<String> = ["csv", "tsv"]
+    /// Listed by the writer with bsdtar. A lone compressed file (notes.txt.gz) is shown as the one file it holds.
+    static let archiveExtensions: Set<String> = ["zip", "tar", "gz", "gzip", "tgz", "bz2", "bz", "tbz", "tbz2", "xz", "txz", "7z", "rar", "zst", "tzst"]
     static let textExtensions: Set<String> = ["txt", "text", "log", "out", "err", "rst", "adoc", "asciidoc", "org", "tex", "bib", "srt", "vtt", "nfo",
                                               "diz", "cfg", "conf", "properties", "lock", "sum", "mod", "example", "sample", "gitignore",
                                               "gitattributes", "gitmodules", "dockerignore", "editorconfig", "npmrc", "nvmrc", "env", "csr", "pem"]
     /// Source code, by extension, with its highlight.js language (nil: shown as plain text with line numbers).
     static let codeLanguages: [String: String?] = [
         "js": "javascript", "mjs": "javascript", "cjs": "javascript", "jsx": "javascript", "ts": "typescript", "mts": "typescript",
-        "cts": "typescript", "tsx": "typescript", "py": "python", "pyi": "python", "rb": "ruby", "go": "go", "rs": "rust", "swift": "swift",
-        "sh": "bash", "bash": "bash", "zsh": "bash", "fish": "bash", "ksh": "bash", "command": "bash", "c": "c", "h": "c", "m": "objectivec",
-        "mm": "objectivec", "cc": "cpp", "cpp": "cpp", "cxx": "cpp", "hpp": "cpp", "hh": "cpp", "hxx": "cpp", "java": "java", "kt": "kotlin",
+        "javascript": "javascript", "jscript": "javascript",
+        "cts": "typescript", "tsx": "typescript", "py": "python", "pyi": "python", "rb": "ruby", "rbw": "ruby", "go": "go", "rs": "rust", "swift": "swift",
+        "sh": "bash", "bash": "bash", "zsh": "bash", "fish": "bash", "ksh": "bash", "command": "bash", "tool": "bash", "c": "c", "h": "c", "m": "objectivec",
+        "mm": "objectivec", "cc": "cpp", "cp": "cpp", "cpp": "cpp", "cxx": "cpp", "c++": "cpp", "hpp": "cpp", "hp": "cpp", "hh": "cpp", "hxx": "cpp", "h++": "cpp",
+        "ipp": "cpp", "java": "java", "jav": "java", "kt": "kotlin",
         "kts": "kotlin", "cs": "csharp", "css": "css", "scss": "scss", "sass": "scss", "less": "less", "html": "xml", "htm": "xml",
         "xhtml": "xml", "xml": "xml", "plist": "xml", "xsd": "xml", "xsl": "xml", "vue": "xml", "svelte": "xml", "yaml": "yaml",
-        "yml": "yaml", "toml": "ini", "ini": "ini", "sql": "sql", "php": "php", "pl": "perl", "pm": "perl", "lua": "lua", "r": "r",
-        "graphql": "graphql", "gql": "graphql", "diff": "diff", "patch": "diff", "mk": "makefile", "gradle": "java", "groovy": "java",
+        "yml": "yaml", "toml": "ini", "ini": "ini", "sql": "sql", "php": "php", "php3": "php", "php4": "php", "ph3": "php", "ph4": "php", "phtml": "php", "pl": "perl", "pm": "perl", "lua": "lua", "r": "r",
+        "graphql": "graphql", "gql": "graphql", "diff": "diff", "patch": "diff", "mk": "makefile", "mak": "makefile", "make": "makefile", "gmk": "makefile", "gradle": "java", "groovy": "java",
         "vb": "vbnet", "wat": "wasm", "dart": nil, "scala": nil, "ex": nil, "exs": nil, "erl": nil, "hs": nil, "clj": nil, "ml": nil,
-        "zig": nil, "nim": nil, "proto": nil, "tf": nil, "hcl": nil, "cmake": nil, "bat": nil, "ps1": nil, "applescript": nil,
+        "zig": nil, "nim": nil, "proto": nil, "tf": nil, "hcl": nil, "cmake": nil, "bat": nil, "ps1": nil, "applescript": nil, "dockerfile": nil,
     ]
     /// Files known by their whole name (lowercased), with their language.
     static let codeNames: [String: String?] = [
@@ -96,6 +100,7 @@ enum FileTypes {
         if audioExtensions.contains(ext) { return .audio }
         if jsonExtensions.contains(ext) { return .json }
         if csvExtensions.contains(ext) { return .csv }
+        if archiveExtensions.contains(ext) { return .archive }
         if codeLanguages[ext] != nil || codeNames[lower] != nil || lower.hasPrefix("dockerfile.") || lower.hasSuffix(".dockerfile") { return .code }
         if textNames.contains(lower) || textNames.contains((lower as NSString).deletingPathExtension) || textExtensions.contains(ext)
             || (lower.hasPrefix(".env.") && lower.hasSuffix("example")) { return .text }
@@ -220,6 +225,26 @@ enum FileView {
         return p
     }
 
+    /// A binary property list as XML text, or nil when `data` is not a whole binary plist (a file cut at 2 MB is not). A
+    /// binary plist can name one object many times, so a small file can stand for an exponentially large tree: past
+    /// `maxPlistNodes` objects, counted as written out, or `maxTextBytes` of XML, it is not converted.
+    static let maxPlistNodes = 100_000
+    static func binaryPlistAsXML(_ data: Data) -> Data? {
+        guard data.starts(with: Data("bplist".utf8)),
+              let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) else { return nil }
+        var budget = maxPlistNodes
+        func fits(_ o: Any) -> Bool {
+            budget -= 1
+            if budget < 0 { return false }
+            if let a = o as? [Any] { return a.allSatisfy(fits) }
+            if let d = o as? [String: Any] { return d.values.allSatisfy(fits) }
+            return true
+        }
+        guard fits(obj), let xml = try? PropertyListSerialization.data(fromPropertyList: obj, format: .xml, options: 0),
+              xml.count <= FileTypes.maxTextBytes else { return nil }
+        return xml
+    }
+
     /// A file that is not Markdown. `canOpen`: whether the link policy lets the writer open it (else Reveal in Finder only).
     static func payload(path: String, kind: FileKind, root: String, reason: String, canOpen: Bool) -> [String: Any] {
         var p = base(path: path, root: root, reason: reason)
@@ -252,6 +277,9 @@ enum FileView {
             view = "html"
         case .video where regular && size <= FileTypes.maxFileBytes, .audio where regular && size <= FileTypes.maxFileBytes:
             view = kind.rawValue
+        // Its contents come later, from the writer. An archive in iCloud is not downloaded to list it.
+        case .archive where regular && !FileTypes.isDataless(path):
+            view = "archive"
         case .code, .json, .csv, .text, .other, .app:
             // O_NONBLOCK and fstat: a file swapped for a FIFO since the stat can neither hang the open nor be read.
             let fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
@@ -263,7 +291,11 @@ enum FileView {
             // Only a text kind is downloaded when evicted, and within Markdown's bound: the download is the whole file, and
             // anything else only turns into its info card.
             let fetch = [.code, .json, .csv, .text].contains(kind) && size <= FolderListing.maxDocumentBytes
-            guard let data = fetch ? FileTypes.materializing(read) : read() else { break }
+            guard var data = fetch ? FileTypes.materializing(read) : read() else { break }
+            if ext.lowercased() == "plist", let xml = FileView.binaryPlistAsXML(data) {
+                data = xml
+                p["kindName"] = "Binary property list, shown as XML"
+            }
             guard size == 0 || FileTypes.looksLikeText(data) else { break }
             view = kind == .code ? "code" : kind == .json ? "json" : kind == .csv ? "csv" : "text"
             p["text"] = String(decoding: data, as: UTF8.self)

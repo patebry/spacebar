@@ -264,11 +264,66 @@ let kinds: [(String, FileKind)] = [("a.md", .markdown), ("A.MARKDOWN", .markdown
     ("s.rb", .code), ("s.go", .code), ("s.rs", .code), ("s.swift", .code), ("s.sh", .code), ("s.zsh", .code), ("s.c", .code), ("s.h", .code),
     ("s.cpp", .code), ("s.java", .code), ("s.kt", .code), ("s.css", .code), ("s.scss", .code), ("page.html", .html), ("page.htm", .html), ("page.xhtml", .code), ("s.xml", .code),
     ("s.yaml", .code), ("s.yml", .code), ("s.toml", .code), ("s.ini", .code), ("s.sql", .code), ("Dockerfile", .code), ("Makefile", .code),
-    ("Gemfile", .code), (".env.example", .text), ("env.example", .text), ("LICENSE", .text), ("x.zip", .other), ("x.bin", .app), ("noext", .other),
+    ("Gemfile", .code), (".env.example", .text), ("env.example", .text), ("LICENSE", .text), ("x.zip", .archive), ("x.bin", .app), ("noext", .other),
     ("v.mp4", .video), ("v.M4V", .video), ("v.mov", .video), ("v.webm", .other), ("a.mp3", .audio), ("a.m4a", .audio), ("a.aac", .audio),
     ("a.wav", .audio), ("a.aif", .audio), ("a.AIFF", .audio), ("a.flac", .audio), ("a.caf", .audio), ("a.ogg", .other)]
 let wrong = kinds.filter { FileTypes.kind(name: $0.0) != $0.1 }.map { "\($0.0)=\(FileTypes.kind(name: $0.0))" }
 check("types: every listed kind detected by name (\(wrong.joined(separator: " ")))", wrong.isEmpty)
+// Every extension spacebar takes Space for (scripts/quicklook-types.txt, and the system types it claims) has a kind of its own.
+let claimed: [(String, FileKind)] = [("s.rbw", .code), ("s.phtml", .code), ("s.php4", .code), ("x.tool", .code), ("s.cp", .code), ("s.c++", .code),
+    ("s.hp", .code), ("s.h++", .code), ("s.ipp", .code), ("s.jav", .code), ("s.jscript", .code), ("s.mak", .code), ("s.make", .code), ("s.gmk", .code),
+    ("s.proto", .code), ("s.applescript", .code), ("s.r", .code), ("x.command", .code), ("s.ksh", .code), ("s.mm", .code), ("s.patch", .code),
+    ("d.geojson", .json), ("d.ipynb", .json), ("d.plist", .code), ("d.vtt", .text), ("a.tar", .archive), ("a.tar.gz", .archive), ("a.tgz", .archive),
+    ("a.tar.bz2", .archive), ("a.bz2", .archive), ("a.tar.xz", .archive), ("a.7z", .archive), ("a.rar", .archive), ("a.tar.zst", .archive),
+    ("n.txt.gz", .archive), ("w.dockerfile", .code), ("Dockerfile.dev", .code)]
+let claimedWrong = claimed.filter { FileTypes.kind(name: $0.0) != $0.1 }.map { "\($0.0)=\(FileTypes.kind(name: $0.0))" }
+check("types: every claimed system extension has its kind (\(claimedWrong.joined(separator: " ")))", claimedWrong.isEmpty)
+let declared = try! String(contentsOfFile: "scripts/quicklook-types.txt", encoding: .utf8).split(separator: "\n")
+    .filter { $0.hasPrefix("declare ") }.flatMap { $0.split(separator: " ")[1].split(separator: ",").map(String.init) }
+let unmapped = declared.filter { FileTypes.kind(name: "f.\($0)") == .other }
+check("types: all \(declared.count) declared extensions have a kind (\(unmapped.joined(separator: " ")))", declared.count > 60 && unmapped.isEmpty)
+let langs: [(String, String?)] = [("a.toml", "ini"), ("a.go", "go"), ("a.rs", "rust"), ("a.kt", "kotlin"), ("a.cs", "csharp"), ("a.scss", "scss"),
+    ("a.lua", "lua"), ("a.sql", "sql"), ("a.graphql", "graphql"), ("a.vb", "vbnet"), ("a.wat", "wasm"), ("a.gradle", "java"), ("a.vue", "xml"),
+    ("a.xsd", "xml"), ("a.fish", "bash"), ("a.mak", "makefile"), ("a.phtml", "php"), ("a.hpp", "cpp"), ("a.dart", nil), ("a.zig", nil),
+    ("a.scala", nil), ("a.dockerfile", nil)]
+let langWrong = langs.filter { FileTypes.language(name: $0.0) != $0.1 }.map { "\($0.0)=\(FileTypes.language(name: $0.0) ?? "nil")" }
+check("types: highlight.js languages for the new extensions, plain text where none is bundled (\(langWrong.joined(separator: " ")))", langWrong.isEmpty)
+check("types: the writer lists exactly the extensions the viewer calls archives", ArchiveListing.extensions == FileTypes.archiveExtensions)
+do {
+    // 40 levels of [a, a] over one object: 2^40 nodes written out, from a few hundred bytes.
+    // Written by hand: the serializer would write every copy out.
+    var bomb = Data("bplist00".utf8) + Data([0x51, 0x78])
+    var offsets: [UInt8] = [8]
+    for i in 0..<40 { offsets.append(UInt8(bomb.count)); bomb += Data([0xA2, UInt8(i), UInt8(i)]) }
+    let table = bomb.count
+    let trailer: [UInt8] = [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 41, 0, 0, 0, 0, 0, 0, 0, 40, 0, 0, 0, 0, 0, 0, 0, UInt8(table)]
+    bomb += Data(offsets)
+    bomb += Data(trailer)
+    check("binary plist: the hand-made bomb is a valid plist", (try? PropertyListSerialization.propertyList(from: bomb, options: [], format: nil)) != nil)
+    let t0 = Date()
+    let converted = FileView.binaryPlistAsXML(bomb)
+    check("binary plist: a small file that names one object over and over is not converted (\(bomb.count) bytes, \(Int(Date().timeIntervalSince(t0) * 1000)) ms)",
+          converted == nil && Date().timeIntervalSince(t0) < 2)
+}
+check("types: archives use the other icon and bucket", FileKind.archive.icon == "other" && FolderScan.bucket(.archive) == "other")
+do {
+    let d = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("spacebar-plist-\(getpid())")
+    try! fm.createDirectory(at: d, withIntermediateDirectories: true)
+    let bin = d.appendingPathComponent("Info.plist"), xml = d.appendingPathComponent("x.plist"), zip = d.appendingPathComponent("a.zip")
+    try! PropertyListSerialization.data(fromPropertyList: ["Name": "spacebar", "List": [1, 2]], format: .binary, options: 0).write(to: bin)
+    try! Data("<?xml version=\"1.0\"?><plist version=\"1.0\"><string>hi</string></plist>\n".utf8).write(to: xml)
+    try! Data("PK\u{5}\u{6}".utf8 + Data(count: 18)).write(to: zip)
+    let b = FileView.payload(path: bin.path, kind: .code, root: d.path, reason: "open", canOpen: true)
+    let x = FileView.payload(path: xml.path, kind: .code, root: d.path, reason: "open", canOpen: true)
+    let z = FileView.payload(path: zip.path, kind: .archive, root: d.path, reason: "open", canOpen: true)
+    check("binary plist: shown as XML text, highlighted as XML, named for what it is",
+          b["view"] as? String == "code" && (b["text"] as? String ?? "").contains("<key>Name</key>") && b["lang"] as? String == "xml"
+          && (b["kindName"] as? String ?? "").contains("Binary"))
+    check("XML plist: shown as it is", x["view"] as? String == "code" && (x["text"] as? String ?? "").hasPrefix("<?xml") && !(x["kindName"] as? String ?? "").contains("Binary"))
+    check("archive: its own view, with no contents until the writer lists them", z["view"] as? String == "archive" && z["text"] == nil && z["entries"] == nil)
+    try? fm.removeItem(at: d)
+}
+check("claims summary names archives and Markdown", QuickLookClaims.summary.contains("archives") && QuickLookClaims.summary.hasPrefix("Markdown"))
 check("types: an executable with no extension is an app; a folder a folder; a package an item",
       FileTypes.kind(name: "tool", executable: true) == .app && FileTypes.kind(name: "src", isDirectory: true) == .folder
       && FileTypes.kind(name: "X.app", isDirectory: true, isPackage: true) == .app && FileTypes.kind(name: "d.rtfd", isDirectory: true, isPackage: true) == .other)

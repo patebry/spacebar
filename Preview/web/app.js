@@ -913,10 +913,10 @@ window.sb = {
     document.querySelectorAll('#doc .viewer-open[data-action=openFile], #edit[data-action=openFile]').forEach((b) => { b.textContent = `Open with ${o.app}`; });
   },
   /** A newer release than this one: a dot on the Aa button and a row at the top of its popover. `state` is available,
-   *  elsewhere (this copy is not the one the installer replaces), started or failed (with the reason, and whether the install
-   *  command or the Update button is offered again). */
+   *  elsewhere (this copy is not the one the installer replaces), started, inProgress (still running after a while), done, or
+   *  failed (with the reason, and whether the install command or the Update button is offered again). */
   update(u) {
-    if (!u || typeof u.version !== 'string' || !['available', 'elsewhere', 'started', 'failed'].includes(u.state)) return;
+    if (!u || typeof u.version !== 'string' || !['available', 'elsewhere', 'started', 'inProgress', 'done', 'failed'].includes(u.state)) return;
     showUpdate(u);
   },
   installCopied(r) {
@@ -1536,25 +1536,24 @@ function syncPopover() {
 
 let updateTimer = 0;
 function showUpdate(u) {
-  const v = u.version, failed = u.state === 'failed', started = u.state === 'started';
+  const v = u.version, failed = u.state === 'failed', running = u.state === 'started' || u.state === 'inProgress';
   clearTimeout(updateTimer);
-  const title = failed ? 'Update failed' : started ? `Updating to spacebar ${v}…` : `spacebar ${v} is available`;
+  const title = failed ? 'Update failed' : u.state === 'started' ? `Updating to spacebar ${v}…` : u.state === 'inProgress'
+    ? `Still updating to spacebar ${v}…` : u.state === 'done' ? `spacebar ${v} is installed` : `spacebar ${v} is available`;
   $('aa-update-title').textContent = title;
   $('aa-update-sub').textContent = failed ? String(u.reason || 'The update did not start.')
     : u.state === 'elsewhere' ? `This copy is in ${u.place}, which the installer does not update. Replace it with the download on the release page.`
+    : u.state === 'done' ? 'Close this preview and open it again to use it.'
     : 'Quick Look closes for a moment while it updates.';
-  $('aa-install').hidden = !(u.state === 'available' || started || (failed && u.retry));
-  $('aa-install').disabled = started;
-  $('aa-install').textContent = started ? 'Updating…' : 'Update';
+  $('aa-install').hidden = !(u.state === 'available' || running || (failed && u.retry));
+  $('aa-install').disabled = running;
+  $('aa-install').textContent = running ? 'Updating…' : 'Update';
   $('aa-copy').hidden = !(failed && u.copy);
   $('aa-update').hidden = false;
   $('aa').dataset.update = '';
   $('aa').title = `Appearance · ${title}`;
-  // Quick Look is quit and reopened by a successful update, so a page still here long after has seen it fail.
-  if (started) {
-    updateTimer = setTimeout(() => showUpdate({ state: 'failed', version: v, copy: true,
-      reason: 'It has not finished after 2 minutes. See ~/Library/Logs/spacebar-update.log.' }), 120000);
-  }
+  // A successful update quits this preview; one still here after a while asks whether the installer is still running.
+  if (running) updateTimer = setTimeout(() => post({ type: 'updateCheck' }), u.state === 'started' ? 120000 : 60000);
 }
 
 function showPopover(open) {

@@ -6,6 +6,7 @@ import os
 private let log = Logger(subsystem: logSubsystem, category: "writer")
 private let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "mkdn"]
 private let maxWriteBytes = 64 << 20
+private let writeGate = WriteGate()
 
 final class Writer: NSObject, SpacebarWriterProtocol {
     private weak var connection: NSXPCConnection?
@@ -22,6 +23,8 @@ final class Writer: NSObject, SpacebarWriterProtocol {
             log.error("refused write to \(path, privacy: .private)")
             return reply("refused: not an existing markdown file")
         }
+        guard writeGate.begin() else { return reply("write failed (the writer is quitting); file left as it was") }
+        defer { writeGate.end() }
         let err = compareAndWrite(data, path: path, expecting: base)
         if let err { log.error("write \(path, privacy: .private): \(err, privacy: .private)") } else { log.info("wrote \(data.count) bytes to \(path, privacy: .private)") }
         reply(err)
@@ -113,7 +116,7 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         guard SettingsFile.load().checkUpdates, updatesAllowed else { return reply(nil) }
         let answer = { (latest: String?) in
             reply(Updates.offer(current: self.currentVersion, latest: latest, started: Updates.readCache()?.started, finished: Updates.readStatus(),
-                                place: self.misplaced(), now: Date().timeIntervalSince1970).json)
+                                place: self.misplaced(), running: Updates.isRunning(log: self.updateLog)).json)
         }
         let cached = Updates.readCache()
         if let c = cached, (0..<Updates.interval).contains(Date().timeIntervalSince1970 - c.checked) { return answer(c.latest) }
@@ -156,7 +159,7 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         c.started = Updates.Started(version: version, at: Date().timeIntervalSince1970)
         Updates.writeCache(c)
         let run = Updates.runDetached(script: app.appendingPathComponent("Contents/Resources/install.sh"), arguments: Updates.installerArguments(version),
-                                      log: home.appendingPathComponent("Library/Logs/spacebar-update.log"), environment: env) { code in
+                                      log: updateLog, environment: env) { code in
             Updates.writeStatus(Updates.Finished(version: version, exitStatus: code, finishedAt: Date().timeIntervalSince1970))
             log.info("update to \(version, privacy: .public) ended with \(code)")
         }
@@ -170,6 +173,8 @@ final class Writer: NSObject, SpacebarWriterProtocol {
             reply(e.message)
         }
     }
+
+    private var updateLog: URL { URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Logs/spacebar-update.log") }
 
     private var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "" }
 
@@ -474,6 +479,7 @@ log.info("lat writer-launch \(processStartUpMs(), format: .fixed(precision: 1)) 
 
 if SettingsFile.migrateLegacySupportDir() { log.info("moved support folder \(SettingsFile.legacyFolderName, privacy: .public) to \(SettingsFile.folderName, privacy: .public)") }
 
+let termSource = writeGate.handleSIGTERM()
 let delegate = Delegate()
 let listener = NSXPCListener.service()
 listener.delegate = delegate

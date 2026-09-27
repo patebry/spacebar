@@ -34,5 +34,30 @@ check("symlink target written, link kept", compareAndWrite(old, path: sym, expec
 check("missing file refused", compareAndWrite(new, path: dir.appendingPathComponent("gone.md").path, expecting: old) != nil)
 check("no stray files", (try! FileManager.default.contentsOfDirectory(atPath: dir.path)).sorted() == ["doc.md", "link.md", "sym.md"])
 
+// The SIGTERM gate: the writer exits only between writes, or after the cap.
+var quits = 0
+let gate = WriteGate(cap: 0.3) { quits += 1 }
+gate.terminate()
+check("gate: an idle writer quits at once", quits == 1)
+quits = 0
+let busy = WriteGate(cap: 0.3) { quits += 1 }
+check("gate: a write starts", busy.begin())
+busy.terminate()
+check("gate: a write in flight holds the exit", quits == 0)
+check("gate: no write starts once quitting", !busy.begin())
+busy.end()
+check("gate: quits when the write ends", quits == 1)
+let quitCapped = DispatchSemaphore(value: 0)
+let stuck = WriteGate(cap: 0.3) { quitCapped.signal() }
+_ = stuck.begin()
+stuck.terminate()
+check("gate: a stuck write is given up on after the cap", quitCapped.wait(timeout: .now() + 0.1) == .timedOut && quitCapped.wait(timeout: .now() + 2) == .success)
+let signalled = DispatchSemaphore(value: 0)
+let real = WriteGate(cap: 0.3) { signalled.signal() }
+let source = real.handleSIGTERM()
+kill(getpid(), SIGTERM)
+check("gate: SIGTERM reaches the gate instead of killing the process", signalled.wait(timeout: .now() + 2) == .success)
+source.cancel()
+
 try? FileManager.default.removeItem(at: dir)
 exit(failures == 0 ? 0 : 1)

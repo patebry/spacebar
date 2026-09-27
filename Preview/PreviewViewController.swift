@@ -340,14 +340,40 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private var pending: Pending?
     private var pendingGen = 0
 
-    /// Ends the edit and, while its keys or saves are still landing, holds `action` until they have. True when it was held.
+    /// Ends the edit and, while its keys or saves are still landing, holds `action` until they have. Refuses it while text that
+    /// failed to save is only on screen: leaving would lose it. True when the action must not run now.
     private func holdUntilSaved(_ action: Pending) -> Bool {
         if let e = edit { stopEdit(notifyWriter: true, keepRetired: true); retired.append(e) }
-        guard writing || !retired.isEmpty else { pending = nil; return false }
+        guard writing || !retired.isEmpty else {
+            dropPending()
+            guard hasUnsavedText else { return false }
+            log.error("refused to leave the document: unsaved text")
+            refuseToLeave(action, "unsaved text")
+            return true
+        }
         log.info("switch waits for the edit's saves (writing=\(self.writing) retired=\(self.retired.count))")
         if pending == nil { armPending() }
+        if case .update = action {} else { dropPending() }
         pending = action
         return true
+    }
+
+    /// Text on screen that is not on disk: a save failed, or a write was torn.
+    private var hasUnsavedText: Bool { torn || tornHalted || (docText.map { onDisk($0) != diskText } ?? false) }
+
+    /// Clears the waiting action; an update it replaces goes back to being offered.
+    private func dropPending() {
+        if case .update = pending, installable, let v = offeredVersion { js("sb.update", ["state": "available", "version": v]) }
+        pending = nil
+    }
+
+    private func refuseToLeave(_ action: Pending, _ why: String) {
+        if case .update = action, let v = offeredVersion {
+            let reason = why == "unsaved text" ? "Not started: unsaved text. Edit again to save it first." : "Not started: \(why)."
+            js("sb.update", ["state": "failed", "version": v, "reason": reason, "retry": true])
+        } else {
+            status("not switched: \(why)")
+        }
     }
 
     private func armPending() {
@@ -382,11 +408,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         guard let p = pending else { return }
         pending = nil
         pendingGen += 1
-        if case .update = p, let v = offeredVersion {
-            js("sb.update", ["state": "failed", "version": v, "reason": "Not started: \(why).", "retry": true])
-        } else {
-            status("not switched: \(why)")
-        }
+        refuseToLeave(p, why)
     }
     /// Set after a write failed part-way and could not be undone: the exact bytes it left on disk (the torn file need not be
     /// valid UTF-8), snapshotted once per such failure and used as the base of every retry, so a save by anyone else in the
@@ -581,7 +603,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private func showOverview(_ r: FolderScan.Result, reason: String) {
         guard !torn else { return }
         if reason == "loading" {
-            pending = nil
+            dropPending()
         } else {
             if holdUntilSaved(.overview(r, reason: reason)) { return }
             folderPending = false
@@ -1209,6 +1231,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             // The installer quits Quick Look: the edit's last keys and saves land first.
             if holdUntilSaved(.update) { return }
             startUpdate()
+        case "updateCheck":
+            recheckUpdate()
         case "releaseNotes":
             guard let v = offeredVersion, let url = URL(string: "https://github.com/patebry/spacebar/releases/tag/v\(v)") else {
                 return refuse("releaseNotes", "no update shown")
@@ -1270,6 +1294,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     /// The newer release the popover is showing, if any, and whether its Update button may install it.
     private var offeredVersion: String?
     private var installable = false
+    /// The version this preview started installing.
+    private var updating: String?
 
     /// Once per preview, after it is on screen: the writer answers from its daily cache, so this rarely touches the network.
     private func checkForUpdate() {
@@ -1304,6 +1330,31 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     }
 
     /// Asks the writer to start the installer for the offered version, never one the page names; once per preview.
+    /// The page's "Updating…" has waited long: the writer says whether the installer still runs, failed, or finished.
+    private func recheckUpdate() {
+        guard let v = updating else { return }
+        helper(onError: {
+            let a = Updates.advice(for: "the helper stopped before it could say how the update went")
+            self.js("sb.update", ["state": "failed", "version": v, "reason": a.text, "copy": a.copy])
+        }) {
+            $0.updateOffer { data in
+                guard let data, let offer = Updates.Offer(json: data) else { return }
+                DispatchQueue.main.async {
+                    switch offer {
+                    case .inProgress(v): self.js("sb.update", ["state": "inProgress", "version": v])
+                    case .failed(v, let reason):
+                        let a = Updates.advice(for: reason)
+                        self.js("sb.update", ["state": "failed", "version": v, "reason": a.text, "copy": a.copy])
+                    case .none: self.js("sb.update", ["state": "done", "version": v])
+                    default:
+                        let a = Updates.advice(for: "The installer did not finish. \(Updates.logHint)")
+                        self.js("sb.update", ["state": "failed", "version": v, "reason": a.text, "copy": a.copy])
+                    }
+                }
+            }
+        }
+    }
+
     private func startUpdate() {
         guard installable, let v = offeredVersion else { return }
         installable = false
@@ -1316,6 +1367,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             $0.installUpdate(v) { err in
                 DispatchQueue.main.async {
                     if let err { return failed(err) }
+                    self.updating = v
                     self.status("Updating to \(v)…")
                     self.js("sb.update", ["state": "started", "version": v])
                 }

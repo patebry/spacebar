@@ -49,8 +49,8 @@ check("dev build checks with the test flag", Updates.checks(build: "1", testFlag
 
 // What the popover offers.
 let started = Updates.Started(version: "0.1.3", at: 1000)
-func offer(latest: String? = "0.1.3", started: Updates.Started? = nil, finished: Updates.Finished? = nil, place: String? = nil, now: Double = 1100) -> Updates.Offer {
-    Updates.offer(current: "0.1.2", latest: latest, started: started, finished: finished, place: place, now: now)
+func offer(latest: String? = "0.1.3", started: Updates.Started? = nil, finished: Updates.Finished? = nil, place: String? = nil, running: Bool = true) -> Updates.Offer {
+    Updates.offer(current: "0.1.2", latest: latest, started: started, finished: finished, place: place, running: running)
 }
 check("offer: nothing newer", offer(latest: "0.1.2") == .none && offer(latest: nil) == .none)
 check("offer: available", offer() == .available("0.1.3"))
@@ -62,7 +62,8 @@ if case .failed(_, let reason) = offer(started: started, finished: .init(version
 } else { check("offer: failed run", false) }
 check("offer: an earlier run's end does not count", offer(started: started, finished: .init(version: "0.1.3", exitStatus: 1, finishedAt: 900)) == .inProgress("0.1.3"))
 check("offer: finished fine, old copy still running", offer(started: started, finished: .init(version: "0.1.3", exitStatus: 0, finishedAt: 1050)) == .none)
-if case .failed = offer(started: started, now: 1000 + Updates.staleAfter + 1) { check("offer: a run that never ended fails", true) } else { check("offer: a run that never ended fails", false) }
+if case .failed = offer(started: started, running: false) { check("offer: a run no longer running with no end recorded fails", true) } else { check("offer: a run no longer running with no end recorded fails", false) }
+check("offer: a run holding the lock is in progress however long", offer(started: .init(version: "0.1.3", at: 0)) == .inProgress("0.1.3"))
 for o: Updates.Offer in [.none, .available("0.1.3"), .elsewhere("0.1.3", place: "~/x"), .inProgress("0.1.3"), .failed("0.1.3", reason: "r")] {
     check("offer json round trip \(o)", Updates.Offer(json: o.json) == o)
 }
@@ -122,6 +123,7 @@ check("stub stderr goes to the log", log1.contains("to stderr"))
 let fds = log1.split(separator: "\n").first { $0.hasPrefix("fds: ") }?.split(separator: " ").dropFirst().map(String.init) ?? []
 check("stub inherits no descriptor of the parent's", leaked == 57 && !fds.isEmpty && !fds.contains("57"))
 check("stub runs from a copy, so the original can go", log1.contains("started"))
+check("running while the stub holds the log", Updates.isRunning(log: logURL))
 check("stub has a session of its own", pid > 0 && getsid(pid) == pid && getsid(pid) != getsid(0) && getpgid(pid) == pid)
 check("a second run waits for the first", Updates.runDetached(script: stub, arguments: [], log: logURL, environment: env)
       == .failure(.init(message: "an update is already running")))
@@ -131,6 +133,8 @@ check("stub ran to the end", log1.contains("finished"))
 var gone = false
 for _ in 0..<100 { if kill(pid, 0) != 0 { gone = true; break }; usleep(50_000) }
 check("stub reaped", gone)
+check("not running once the stub is gone", !Updates.isRunning(log: logURL))
+check("not running without a log", !Updates.isRunning(log: dir.appendingPathComponent("none.log")))
 check("log keeps the run's header", log1.contains("=== ") && log1.contains(" --version v9.9.9 --no-prompt ==="))
 check("a missing script is an error", (try? Updates.runDetached(script: stub, arguments: [], log: logURL, environment: env).get()) == nil)
 
@@ -155,27 +159,37 @@ if case .success(let p) = Updates.runDetached(script: exiting, arguments: [], lo
 }
 check("a killed installer reports 128 + the signal", killed.wait(timeout: .now() + 10) == .success && code == 128 + Int(SIGTERM))
 
-// install.sh itself, in a dry run whose download fails at once: it records the run's end and removes its private copy.
-let own = dir.appendingPathComponent("spacebar-update-test", isDirectory: true)
-try! FileManager.default.createDirectory(at: own, withIntermediateDirectories: true)
-let script = own.appendingPathComponent("install.sh")
-try! FileManager.default.copyItem(at: URL(fileURLWithPath: "scripts/install.sh"), to: script)
+// install.sh itself, in a dry run whose download fails at once: it records the run's end and removes its private copy, but
+// only a copy the Update button made (a status path is set) directly in $TMPDIR.
+func dryRun(tmp: String, status: URL?) -> (code: Int32, said: String, copyLeft: Bool) {
+    let own = dir.appendingPathComponent("spacebar-update-test", isDirectory: true)
+    try? FileManager.default.removeItem(at: own)
+    try! FileManager.default.createDirectory(at: own, withIntermediateDirectories: true)
+    let script = own.appendingPathComponent("install.sh")
+    try! FileManager.default.copyItem(at: URL(fileURLWithPath: "scripts/install.sh"), to: script)
+    try? FileManager.default.createDirectory(atPath: tmp, withIntermediateDirectories: true)
+    let sh = Process()
+    sh.executableURL = URL(fileURLWithPath: "/bin/sh")
+    sh.arguments = [script.path, "--dry-run", "--no-prompt", "--version", "v9.9.9"]
+    var env = ["HOME": dir.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": tmp, "SPACEBAR_RELEASE_URL": "file://\(dir.path)/no-such-release"]
+    if let status { env["SPACEBAR_UPDATE_STATUS"] = status.path }
+    sh.environment = env
+    let out = Pipe()
+    sh.standardOutput = out
+    sh.standardError = out
+    try! sh.run()
+    let said = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    sh.waitUntilExit()
+    return (sh.terminationStatus, said, FileManager.default.fileExists(atPath: own.path))
+}
 let recorded = dir.appendingPathComponent("recorded.json")
-let sh = Process()
-sh.executableURL = URL(fileURLWithPath: "/bin/sh")
-sh.arguments = [script.path, "--dry-run", "--no-prompt", "--version", "v9.9.9"]
-sh.environment = ["HOME": dir.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": dir.path + "/",
-                  "SPACEBAR_RELEASE_URL": "file://\(dir.path)/no-such-release", "SPACEBAR_UPDATE_STATUS": recorded.path]
-let out = Pipe()
-sh.standardOutput = out
-sh.standardError = out
-try! sh.run()
-let said = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-sh.waitUntilExit()
+let run1 = dryRun(tmp: dir.path + "/", status: recorded)
 let rec = Updates.readStatus(at: recorded)
-check("install.sh: a failed download exits 1", sh.terminationStatus == 1 && said.contains("download failed"))
+check("install.sh: a failed download exits 1", run1.code == 1 && run1.said.contains("download failed"))
 check("install.sh: records the version and exit status", rec?.version == "9.9.9" && rec?.exitStatus == 1 && (rec?.finishedAt ?? 0) > 1_700_000_000)
-check("install.sh: removes its private copy", !FileManager.default.fileExists(atPath: own.path))
+check("install.sh: removes its private copy", !run1.copyLeft)
+check("install.sh: keeps a copy outside $TMPDIR", dryRun(tmp: dir.path + "/elsewhere/", status: recorded).copyLeft)
+check("install.sh: keeps a copy when not started by the Update button", dryRun(tmp: dir.path + "/", status: nil).copyLeft)
 close(leaked)
 
 try? FileManager.default.removeItem(at: dir)

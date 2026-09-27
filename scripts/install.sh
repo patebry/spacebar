@@ -97,6 +97,8 @@ reregister() {
 # Runs on every exit. Removes only what this run created, and puts the previous copy back if a swap was cut short.
 cleanup() {
   code=$?
+  # A failing step here must not cut the rest short.
+  set +e
   if [ "$SWAPPING" = 1 ] && [ ! -e "$DEST" ] && [ -e "$OLD" ]; then
     mv "$OLD" "$DEST" && printf 'Put the previous copy back at %s\n' "$DEST" >&2
   fi
@@ -108,10 +110,18 @@ cleanup() {
     v=${VERSION#v}
     case $v in '' | *[!0-9.]*) v="" ;; esac
     [ -n "$v" ] && printf '{"version":"%s","exitStatus":%d,"finishedAt":%s}\n' "$v" "$code" "$(date +%s)" >"$SPACEBAR_UPDATE_STATUS.tmp" &&
-      mv -f "$SPACEBAR_UPDATE_STATUS.tmp" "$SPACEBAR_UPDATE_STATUS" || true
+      mv -f "$SPACEBAR_UPDATE_STATUS.tmp" "$SPACEBAR_UPDATE_STATUS"
+    # Only a spacebar-update-* folder directly in $TMPDIR, where the writer puts the copy.
+    self_dir=${0%/install.sh}
+    case ${self_dir##*/} in
+      spacebar-update-*)
+        parent=$(cd "${self_dir%/*}" 2>/dev/null && pwd -P)
+        tmp=$(cd "${TMPDIR:-/nonexistent}" 2>/dev/null && pwd -P)
+        [ "$self_dir" != "$0" ] && [ -n "$parent" ] && [ "$parent" = "$tmp" ] && rm -rf "$self_dir"
+        ;;
+    esac
   fi
-  self_dir=${0%/install.sh}
-  case $self_dir in "$0") ;; *) case ${self_dir##*/} in spacebar-update-*) rm -rf "$self_dir" ;; esac ;; esac
+  return 0
 }
 
 # Everything runs from main, called on the last line, so a download cut short by the network runs nothing.

@@ -31,7 +31,7 @@ final class PDFPane: NSObject, PDFViewDelegate {
 
     /// Opens `url` for display. PDFKit runs no script in a PDF; a document it cannot parse, or one behind a password, is refused.
     static func open(_ url: URL) -> Result<PDFDocument, LoadError> {
-        guard let doc = PDFDocument(url: url), doc.pageCount > 0 || doc.isLocked else { return .failure(.unreadable) }
+        guard let doc = FileTypes.materializing({ PDFDocument(url: url) }), doc.pageCount > 0 || doc.isLocked else { return .failure(.unreadable) }
         return doc.isLocked ? .failure(.locked) : .success(doc)
     }
 

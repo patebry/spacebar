@@ -114,6 +114,17 @@ enum FileTypes {
         }
         return false
     }
+
+    /// Runs `body` with this thread allowed to download a file iCloud has evicted (dataless). Quick Look starts the extension
+    /// with materialization off for the whole process, so without this every read of an evicted file other than the one Finder
+    /// previewed fails with EDEADLK: a sidebar click does nothing, a CSV shows empty, a PDF shows its info card.
+    static func materializing<T>(_ body: () throws -> T) rethrows -> T {
+        let type = IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES
+        let old = getiopolicy_np(type, IOPOL_SCOPE_THREAD)
+        setiopolicy_np(type, IOPOL_SCOPE_THREAD, IOPOL_MATERIALIZE_DATALESS_FILES_ON)
+        defer { setiopolicy_np(type, IOPOL_SCOPE_THREAD, old >= 0 ? old : IOPOL_MATERIALIZE_DATALESS_FILES_DEFAULT) }
+        return try body()
+    }
 }
 
 /// What the page is sent to show a file: `view` says how (markdown, image, pdf, code, json, csv, text or info), and nothing in
@@ -123,6 +134,11 @@ enum FileView {
     static func base(path: String, root: String, reason: String) -> [String: Any] {
         ["path": path, "base": FileTypes.fileURL((path as NSString).deletingLastPathComponent + "/")!.absoluteString,
          "name": (path as NSString).lastPathComponent, "reason": reason, "root": root, "rootName": (root as NSString).lastPathComponent]
+    }
+
+    /// A Markdown document's text, downloaded first when iCloud has evicted it.
+    static func readDocument(_ url: URL) throws -> String {
+        try FileTypes.materializing { try String(contentsOf: url, encoding: .utf8) }
     }
 
     /// A file that is not Markdown. `canOpen`: whether the link policy lets the writer open it (else Reveal in Finder only).
@@ -160,7 +176,11 @@ enum FileView {
             var fst = stat()
             guard fstat(fd, &fst) == 0, fst.st_mode & S_IFMT == S_IFREG else { close(fd); break }
             let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-            let data = (try? h.read(upToCount: FileTypes.maxTextBytes)) ?? Data()
+            let read = { try? h.read(upToCount: FileTypes.maxTextBytes) ?? Data() }
+            // Only a text kind is downloaded when evicted, and within Markdown's bound: the download is the whole file, on the
+            // main thread, and anything else only turns into its info card.
+            let fetch = [.code, .json, .csv, .text].contains(kind) && size <= FolderListing.maxDocumentBytes
+            guard let data = fetch ? FileTypes.materializing(read) : read() else { break }
             guard size == 0 || FileTypes.looksLikeText(data) else { break }
             view = kind == .code ? "code" : kind == .json ? "json" : kind == .csv ? "csv" : "text"
             p["text"] = String(decoding: data, as: UTF8.self)

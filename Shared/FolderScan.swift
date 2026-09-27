@@ -377,7 +377,9 @@ final class LinkIndex {
         guard fd >= 0 else { return nil }
         var st = stat()
         guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { close(fd); return nil }
-        let data = (try? FileHandle(fileDescriptor: fd, closeOnDealloc: true).read(upToCount: maxEmbedBytes)) ?? Data()
+        let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        let read = { (try? h.read(upToCount: maxEmbedBytes)) ?? Data() }
+        let data = st.st_size <= FolderListing.maxDocumentBytes ? FileTypes.materializing(read) : read()
         guard FileTypes.looksLikeText(data) else { return nil }
         return String(decoding: data, as: UTF8.self)
     }

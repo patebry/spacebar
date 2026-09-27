@@ -3,5 +3,5 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 out=$(mktemp -d)
-xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/pdfpane/main.swift Preview/PDFPane.swift Shared/LinkPolicy.swift -o "$out/pdfpane"
+xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/pdfpane/main.swift Preview/PDFPane.swift Shared/LinkPolicy.swift Shared/FolderListing.swift -o "$out/pdfpane"
 "$out/pdfpane" "$out"

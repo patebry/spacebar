@@ -632,7 +632,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         guard fileKind == .markdown else { return show(url, reason: reason) }
         if let why = Self.unreadable(url) { log.error("read refused: \(why, privacy: .private)"); return status(why) }
         let raw: String
-        do { raw = try String(contentsOf: url, encoding: .utf8) } catch {
+        do { raw = try FileView.readDocument(url) } catch {
             log.error("read failed \(url.path, privacy: .private): \(error.localizedDescription, privacy: .private)")
             return
         }

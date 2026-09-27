@@ -79,7 +79,7 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
             return task.didFailWithError(URLError(.noPermissionsToReadFile))
         }
         do {
-            let data = try Data(contentsOf: fileURL)
+            let data = try FileTypes.materializing { try Data(contentsOf: fileURL) }
             let mime = Self.contentType(host: url.host, file: url.host == "file" ? URL(fileURLWithPath: url.path) : fileURL)
             // An image (an SVG included) runs no script as <img>; the headers keep a file inert however else it might be loaded.
             var headers = ["Content-Type": mime, "Content-Length": String(data.count), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"]

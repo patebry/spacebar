@@ -146,6 +146,13 @@
   #side-list .twisty { flex: none; width: 12px; height: 12px; display: inline-grid; place-items: center; color: var(--muted); }
   #side-list .twisty svg { width: 10px; height: 10px; fill: currentColor; transition: transform .12s ease-out; }
   #side-list a.open .twisty svg { transform: rotate(90deg); }
+  #side-list.keyed a.row.cursor:not(.active) { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent); }
+  #side-filter { padding: 0 8px 6px; }
+  #side-q { display: block; width: 100%; box-sizing: border-box; margin: 0; padding: 3px 8px; border: 0; border-radius: 6px; outline: none;
+    font: inherit; font-size: 12px; color: var(--fg); background: color-mix(in srgb, var(--fg) 6%, transparent);
+    -webkit-appearance: none; appearance: none; -webkit-user-select: text; user-select: text; }
+  #side-q::placeholder { color: var(--muted); }
+  #side-q:focus { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
   #side-list .row-note { padding: 3px 8px 3px calc(21px + var(--depth, 0) * 14px); font-size: 11.5px; color: var(--muted); white-space: nowrap; }
   #side-more { padding: 4px 16px 14px; font-size: 11.5px; color: var(--muted); }
   #side-resize::after { content: ""; position: absolute; top: 0; bottom: 0; right: 0; width: 2px; background: transparent; transition: background .12s; }

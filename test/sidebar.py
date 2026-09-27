@@ -184,6 +184,140 @@ def sandboxed(tree, check):
         shutil.rmtree(out, ignore_errors=True)
 
 
+CURSOR = """const t = (s) => (document.querySelector(s) || {}).textContent || null;
+  return { cursor: t('#side-list a.cursor'), active: t('#side-list a.active'), focus: document.activeElement.id || document.activeElement.tagName,
+    rows: [...document.querySelectorAll('#side-list a.row')].map((a) => [a.textContent, +a.getAttribute('aria-level'), a.getAttribute('aria-expanded')]),
+    notes: [...document.querySelectorAll('#side-list .row-note')].map((n) => n.textContent), q: document.getElementById('side-q').value };"""
+
+
+def keys_and_filter(page, check, T, st, types):
+    """The tree's keys and the filter, on the file browser's tree with sub/deep/deepest.txt open. Keys are dispatched as DOM
+    events inside the page: the offscreen harness has no key window, and nothing is posted to any app."""
+    def key(k, target='document.activeElement', **mods):
+        opts = dict(key=k, bubbles=True, cancelable=True, **mods)
+        r = page.cmd('@eval:(() => { const t = ' + target + ' || document.body; const e = new KeyboardEvent("keydown", '
+                     + json.dumps(opts) + '); t.dispatchEvent(e); return String(e.defaultPrevented); })()')
+        w = page.cmd('@wait:0.3')
+        return {'taken': r['result'] == 'true', 'types': types(r) + types(w), 'msgs': r['messages'] + w['messages']}
+
+    def opened(k):
+        return [m.get('path') for m in k['msgs'] if m.get('type') == 'open']
+
+    def typed(text):
+        page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.focus(); q.value = " + json.dumps(text)
+                 + "; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
+        return page.js(CURSOR)
+
+    c = page.js(CURSOR)
+    check(c['cursor'] == 'deepest.txt' and c['active'] == 'deepest.txt', 'keys: the cursor starts on the file on screen', json.dumps(c))
+    k = key('ArrowDown')
+    c = page.js(CURSOR)
+    check(k['taken'] and opened(k) == [T('sub', 'inner.md')] and c['cursor'] == 'inner.md' and c['active'] == 'inner.md',
+          'keys: ↓ moves to the next row and opens it', json.dumps([k['types'], c['cursor'], c['active']]))
+    r1 = page.cmd('@eval:(() => { const e = new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true }); document.body.dispatchEvent(e);'
+                  ' document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true, cancelable: true })); return 0; })()')
+    page.cmd('@wait:0.4')
+    c = page.js(CURSOR)
+    check([m.get('path') for m in r1['messages'] if m.get('type') == 'open'] == [T('sub', 'deep', 'deepest.txt')] and c['cursor'] == 'deep'
+          and c['active'] == 'deepest.txt', 'keys: ↑↑ opens the file passed and stops on the folder, which the late render does not undo', json.dumps(c))
+    k = key('ArrowLeft')
+    c = page.js(CURSOR)
+    check(k['taken'] and 'unlist' in k['types'] and ['deep', 2, 'false'] in c['rows'] and c['cursor'] == 'deep' and not opened(k),
+          'keys: ← collapses an open folder', json.dumps(k['types']))
+    k = key('ArrowRight')
+    c = page.js(CURSOR)
+    check(k['taken'] and ['deep', 2, 'true'] in c['rows'] and ['deepest.txt', 3, None] in c['rows'], 'keys: → expands a folder', json.dumps(c['rows'][:6]))
+    k = key('ArrowRight')
+    c = page.js(CURSOR)
+    check(k['taken'] and c['cursor'] == 'deepest.txt' and c['active'] == 'deepest.txt', 'keys: → on an open folder moves into it', json.dumps(c))
+    k = key('ArrowLeft')
+    c = page.js(CURSOR)
+    check(c['cursor'] == 'deep' and not opened(k), 'keys: ← on a file moves to its folder', json.dumps(c))
+    k = key('Enter')
+    c1 = page.js(CURSOR)
+    key('Enter')
+    c2 = page.js(CURSOR)
+    check(k['taken'] and ['deep', 2, 'false'] in c1['rows'] and ['deep', 2, 'true'] in c2['rows'], 'keys: Return on a folder toggles it')
+    k = key('End')
+    c = page.js(CURSOR)
+    last = c['rows'][-1][0]
+    check(k['taken'] and c['cursor'] == last and opened(k) == [T(last)], 'keys: End jumps to the last row and opens it', json.dumps([last, opened(k)]))
+    k = key('Home')
+    c = page.js(CURSOR)
+    check(k['taken'] and c['cursor'] == c['rows'][0][0] == 'hostile' and not opened(k), 'keys: Home jumps to the first row (a folder: nothing opens)', json.dumps(c['cursor']))
+    top = page.js("return document.getElementById('side-list').scrollTop")
+    key('End')
+    bottom = page.js("""const l = document.getElementById('side-list'), r = l.querySelector('a.cursor').getBoundingClientRect(), b = l.getBoundingClientRect();
+      return [l.scrollTop, r.top >= b.top - 1 && r.bottom <= b.bottom + 1]""")
+    check(top == 0 and bottom[1] and (bottom[0] > 0 or page.js("const l = document.getElementById('side-list'); return l.scrollHeight <= l.clientHeight")),
+          'keys: the cursor row scrolls into view in the list', json.dumps([top, bottom]))
+
+    # Not taken: Space (Quick Look closes on it), modified keys, other fields, the Aa popover, and an edit in progress.
+    before = page.js(CURSOR)
+    sp = key(' ')
+    check(not sp['taken'] and not {'open', 'list', 'unlist'} & set(sp['types']) and page.js(CURSOR)['cursor'] == before['cursor'], 'keys: Space is never taken')
+    mod = key('ArrowDown', altKey=True)
+    check(not mod['taken'] and not opened(mod), 'keys: ⌥↓ is left alone')
+    page.cmd("@eval:(() => { const i = document.createElement('input'); i.id = 'other-field'; document.body.append(i); i.focus(); return 0; })()")
+    other = key('ArrowDown', "document.getElementById('other-field')")
+    page.cmd("@eval:document.getElementById('other-field').remove(); 0")
+    check(not other['taken'] and not opened(other), 'keys: not taken in another field')
+    click(page, '#aa')
+    popk = key('ArrowUp')
+    click(page, '#aa')
+    check(not popk['taken'] and not opened(popk) and page.js("return document.getElementById('aa-pop').hidden"), 'keys: not taken while the Aa popover is open')
+    page.render(T('README.md'))
+    page.cmd('@wait:0.3')
+    click(page, '#doc > p')
+    during = [key('ArrowDown'), key('f', metaKey=True), key('End')]
+    ed = st()['editing']
+    check(ed and not any(k['taken'] or opened(k) for k in during) and page.js(CURSOR)['focus'] != 'side-q' and 'editStop' not in sum((k['types'] for k in during), []),
+          'keys: nothing is taken while a block is being edited, not even ⌘F', json.dumps([k['types'] for k in during]))
+    page.cmd('@eval:sb.editEnd({}); 0')
+
+    # ---- the filter ----
+    k = key('f', metaKey=True)
+    check(k['taken'] and page.js(CURSOR)['focus'] == 'side-q', '⌘F focuses the filter', json.dumps(page.js(CURSOR)['focus']))
+    c = typed('rdme')
+    check([r[0] for r in c['rows']] == ['README.md'], 'filter: fuzzy, the letters in order ("rdme" finds README.md)', json.dumps(c['rows']))
+    c = typed('INNER')
+    check([r[0] for r in c['rows']] == ['sub', 'inner.md'] and c['rows'][0][2] == 'true', 'filter: case-insensitive, and the folder holding a match stays, shown open',
+          json.dumps(c['rows']))
+    click(page, '#side-q')
+    typed('')
+    click(page, '#side-list a.row[data-path$="/sub"]')
+    s = [x[0] for x in st()['rows'] if x[1] == 2]
+    r = page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.value = 'deepest'; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
+    w = page.cmd('@wait:0.3')
+    c = page.js(CURSOR)
+    check(not s and [x[0] for x in c['rows']] == ['sub', 'deep', 'deepest.txt'] and not {'list', 'unlist'} & set(types(r) + types(w)),
+          'filter: finds files in listed folders that are collapsed, and lists nothing new', json.dumps([s, c['rows'], types(r) + types(w)]))
+    c = typed('evil.pdf')
+    check(not c['rows'] and c['notes'] == ['No matches'], 'filter: a folder never listed (hostile/) is not scanned for it', json.dumps(c))
+    c = typed('.md')
+    k = key('ArrowDown')
+    c2 = page.js(CURSOR)
+    check(k['taken'] and c2['focus'] == 'side-q' and opened(k) and c2['cursor'] == c2['active'] and c2['cursor'].endswith('.md'),
+          'filter: ↓ from the field moves through the matches and opens them; the field keeps focus', json.dumps([c2['cursor'], opened(k)]))
+    k = key('ArrowLeft')
+    check(not k['taken'], 'filter: ←/→ stay in the field for editing the text')
+    k = key(' ')
+    check(not k['taken'], 'filter: Space is not taken in the field either')
+    k = key('Escape')
+    c = page.js(CURSOR)
+    check(k['taken'] and c['q'] == '' and c['focus'] == 'side-q' and any(r[0] == 'README.md' for r in c['rows']) and not c['notes'][:1] == ['No matches'],
+          'filter: Esc clears it and the whole tree comes back', json.dumps(c['q']))
+    k = key('Escape')
+    check(k['taken'] and page.js(CURSOR)['focus'] != 'side-q', 'filter: a second Esc leaves the field')
+    typed('inner')
+    page.cmd('@root:')
+    page.render(T('README.md'))
+    page.cmd('@wait:0.3')
+    check(page.js(CURSOR)['q'] == 'inner', 'filter: kept while the same folder shows another file')
+    typed('')
+    page.cmd("@eval:document.getElementById('side-q').blur(); 0")
+
+
 def main():
     results = []
 
@@ -506,6 +640,8 @@ def main():
               "the current file's folders open and it is highlighted", json.dumps(s['rows'][:6]))
         check(s['crumbs'] == 'tree›sub›deep›deepest.txt', 'the breadcrumb shows the path from the root', repr(s['crumbs']))
         page.cmd('@wait:0.2')
+        keys_and_filter(page, check, T, st, types)
+        view(T('sub', 'deep', 'deepest.txt'))
         click(page, '#side-list a.row[data-path$="/many"]')
         page.cmd('@wait:0.4')
         s = st()

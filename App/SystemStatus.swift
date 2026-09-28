@@ -5,13 +5,18 @@ enum ExtensionState: Equatable {
     case checking, enabled, disabled, missing
 }
 
-/// Another app's Quick Look preview extension that also claims Markdown.
+/// Another app's Quick Look preview extension that also claims some of the types spacebar previews.
 struct RivalExtension: Identifiable, Equatable {
     let id: String
     let name: String
     let parentName: String?
     let parentPath: String?
     let enabled: Bool
+    /// Its types that are also spacebar's, by group.
+    var overlap: [QuickLookClaims.Group: [String]] = [:]
+
+    /// "Also previews Markdown (2 types), code (42 types)".
+    var summary: String { "Also previews \(QuickLookClaims.describe(overlap))" }
 }
 
 struct EditorApp: Identifiable, Hashable {
@@ -41,7 +46,7 @@ final class SystemStatus: ObservableObject {
         queue.async {
             let preview = Self.state(of: Self.previewID)
             let folders = Self.state(of: Self.foldersID)
-            let rivals = Self.markdownRivals()
+            let rivals = Self.rivals()
             DispatchQueue.main.async {
                 self.preview = preview
                 self.folders = folders
@@ -79,11 +84,14 @@ final class SystemStatus: ObservableObject {
         if let u = URL(string: "x-apple.systempreferences:com.apple.ExtensionsPreferences") { ws.open(u) }
     }
 
+    /// The editors offered: apps that open Markdown, plain text or source code and are text editors (LinkPolicy.isTextEditor),
+    /// so no browser, terminal or script runner is among them.
     private func loadEditors() {
         let ws = NSWorkspace.shared
         var seen = Set<String>()
-        let apps: [EditorApp] = ws.urlsForApplications(toOpen: Self.markdownType).compactMap { url in
-            guard let id = Bundle(url: url)?.bundleIdentifier, !id.hasPrefix("md.spacebar"), seen.insert(id).inserted else { return nil }
+        let candidates = [Self.markdownType, .plainText, .sourceCode].flatMap { ws.urlsForApplications(toOpen: $0) }
+        let apps: [EditorApp] = candidates.compactMap { url in
+            guard let id = Bundle(url: url)?.bundleIdentifier, !id.hasPrefix("md.spacebar"), LinkPolicy.isTextEditor(url), seen.insert(id).inserted else { return nil }
             return EditorApp(id: id, name: Self.appName(url), icon: Self.icon(url))
         }
         editors = apps.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -93,7 +101,7 @@ final class SystemStatus: ObservableObject {
     /// An entry for a bundle ID that is not among the apps offered, e.g. one written to settings.json by hand.
     func editor(for id: String) -> EditorApp {
         if let e = editors.first(where: { $0.id == id }) { return e }
-        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+        if let url = LinkPolicy.application(id) {
             return EditorApp(id: id, name: Self.appName(url), icon: Self.icon(url))
         }
         return EditorApp(id: id, name: id, icon: Self.icon(nil))
@@ -118,15 +126,33 @@ final class SystemStatus: ObservableObject {
         return line.first == "-" ? .disabled : .enabled
     }
 
-    /// Every other preview extension whose Info.plist lists a Markdown type in QLSupportedContentTypes.
-    static func markdownRivals() -> [RivalExtension] {
+    /// The types spacebar's preview extension claims, grouped: the copy of scripts/quicklook-types.txt in the app, else the
+    /// extension's own Info.plist (ungrouped).
+    static func ownClaims(bundle: Bundle = .main) -> [QuickLookClaims.Claim] {
+        if let u = bundle.url(forResource: "quicklook-types", withExtension: "txt"), let text = try? String(contentsOf: u, encoding: .utf8) {
+            let c = QuickLookClaims.parse(text)
+            if !c.isEmpty { return c }
+        }
+        let appex = bundle.bundleURL.appendingPathComponent("Contents/PlugIns/SpacebarPreview.appex")
+        return supportedTypes(appex: appex.path).filter { $0 != "md.spacebar.qlmanage" }.map { t in
+            QuickLookClaims.Claim(type: t, extensions: [], group: t.lowercased().contains("markdown") ? .markdown : .other)
+        }
+    }
+
+    /// Every other preview extension that claims a type spacebar previews (QuickLookClaims.overlap), with what it overlaps.
+    static func rivals(ours: [QuickLookClaims.Claim] = ownClaims()) -> [RivalExtension] {
         let out = run("/usr/bin/pluginkit", ["-mAvvv", "-p", "com.apple.quicklook.preview"]).output
         var seen = Set<String>()
         return parseRecords(out).compactMap { r in
-            guard !r.id.hasPrefix("md.spacebar"), let path = r.fields["Path"], claimsMarkdown(appex: path), seen.insert(r.id).inserted else { return nil }
+            // Apple's own previewers are not offered for turning off: Quick Look prefers an app's extension to them.
+            guard !r.id.hasPrefix("md.spacebar"), !r.id.hasPrefix("com.apple."), let path = r.fields["Path"], seen.insert(r.id).inserted else { return nil }
+            let overlap = QuickLookClaims.overlap(ours: ours, theirs: supportedTypes(appex: path), extensions: QuickLookClaims.systemExtensions)
+            guard !overlap.isEmpty else { return nil }
             let name = r.fields["Display Name"] ?? r.fields["Short Name"] ?? r.id
-            return RivalExtension(id: r.id, name: name, parentName: r.fields["Parent Name"], parentPath: r.fields["Parent Bundle"], enabled: r.marker != "-")
+            return RivalExtension(id: r.id, name: name, parentName: r.fields["Parent Name"], parentPath: r.fields["Parent Bundle"], enabled: r.marker != "-",
+                                  overlap: overlap)
         }
+        .sorted { ($0.enabled ? 0 : 1, $0.name.lowercased()) < ($1.enabled ? 0 : 1, $1.name.lowercased()) }
     }
 
     struct Record { var marker: Character?; var id: String; var fields: [String: String] }
@@ -149,14 +175,14 @@ final class SystemStatus: ObservableObject {
         return records
     }
 
-    static func claimsMarkdown(appex path: String) -> Bool {
+    /// The QLSupportedContentTypes of the extension at `path`.
+    static func supportedTypes(appex path: String) -> [String] {
         let plist = URL(fileURLWithPath: path).appendingPathComponent("Contents/Info.plist")
         guard let info = NSDictionary(contentsOf: plist) as? [String: Any],
               let ext = info["NSExtension"] as? [String: Any],
               let attrs = ext["NSExtensionAttributes"] as? [String: Any],
-              let types = attrs["QLSupportedContentTypes"] as? [String] else { return false }
-        // net.daringfireball.markdown, public.markdown, and the many vendor-declared *.markdown types.
-        return types.contains { $0.lowercased().contains("markdown") }
+              let types = attrs["QLSupportedContentTypes"] as? [String] else { return [] }
+        return types
     }
 
     @discardableResult

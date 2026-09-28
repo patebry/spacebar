@@ -1,13 +1,15 @@
 # spacebar
 
-Press Space on a Markdown file in Finder and read it properly: headings, tables, task lists, code highlighting, math and
-Mermaid diagrams, in six themes. Press Space on a folder and browse it. The sidebar is a file browser for the folder: its
-subfolders open in place, and a click shows any file in the panel, so you can read the Markdown, images, PDFs, HTML, video,
-code, JSON, CSV and archives beside a document without leaving Quick Look. Move through it with the arrow keys, or type in
-its filter to narrow it by name. Drag its edge to resize it; its button collapses it, and every preview remembers both. Click
-a block of Markdown to edit it in place, or tick a task box, and the file is saved. Obsidian vaults read as they do in
-Obsidian: `[[wikilinks]]`, `![[embeds]]`, callouts and tags. When a new version is out, the preview's Aa button shows a dot
-and one click on Update installs it. Free and open source, for macOS 13 and later (Apple silicon and Intel).
+Press Space. See everything. Space in Finder shows folders, documents, code and data: Markdown rendered properly (headings,
+tables, task lists, code highlighting, math and Mermaid diagrams, in six themes), highlighted source, JSON, logs, archives
+and files with no extension. Press Space on a folder and browse it. The sidebar is a file browser for the folder: its
+subfolders open in place, and a click shows any file in the panel, so you can read the Markdown, images, PDFs, rich text,
+HTML, video, code, JSON, CSV and archives beside a document without leaving Quick Look. Click a file in it and the arrow keys
+move through the tree; type in its filter to narrow it by name. Drag its edge to resize it; its button collapses it, and every
+preview remembers both. Click a block of Markdown to edit it in place, or tick a task box, and the file is saved. Obsidian
+vaults read as they do in Obsidian: `[[wikilinks]]`, `![[embeds]]`, callouts and tags. When a new version is out, the
+preview's Aa button shows a dot and one click on Update installs it. Free and open source, for macOS 13 and later (Apple
+silicon and Intel).
 
 ### What Space opens in spacebar
 
@@ -15,10 +17,11 @@ In Finder, Space opens spacebar for Markdown, folders, code and scripts, JSON, Y
 archives, and files with no extension (a `Dockerfile`, a `CHANGELOG`, a dotfile). The full list is
 [`scripts/quicklook-types.txt`](scripts/quicklook-types.txt).
 
-Plain text, HTML, CSV, PDF, images, video and audio keep Apple's own preview in Finder: Quick Look never hands a file of those
-types to another app's extension, so spacebar cannot take them. Inside spacebar's sidebar every one of them opens, as the
-table below shows. Another installed app that claims one of spacebar's types may still win it; `install.sh` lists the
-Markdown ones it finds.
+Plain text, rich text, HTML, CSV, PDF, images, video and audio keep Apple's own preview in Finder: Quick Look never hands a
+file of those types to another app's extension, so spacebar cannot take them. Inside spacebar's sidebar every one of them
+opens, as the table below shows. Another installed app that claims one of spacebar's types (a Markdown or code previewer)
+may still win it: `install.sh` lists the ones it finds and how many of spacebar's types each claims, and Settings, General
+lists them with a Turn Off button.
 
 What the panel shows for each file in the sidebar:
 
@@ -30,13 +33,19 @@ What the panel shows for each file in the sidebar:
 | HTML (`.html`, `.htm`) | rendered in its own web view: with its scripts and web content unless it was marked as downloaded, with neither when it was (see below) |
 | Video (`.mp4`, `.m4v`, `.mov`) | played by AVKit in the panel, paused on its first frame until you press play |
 | Audio (`.mp3`, `.m4a`, `.aac`, `.wav`, `.aif`, `.aiff`, `.flac`, `.caf`) | the same player, under the file's artwork or icon |
-| Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.xml`, `.yaml`, `.toml`, `.sql`, `.plist`, `Dockerfile`, `Makefile` and more) | highlighted source with line numbers; a binary property list is shown as XML |
+| Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.xml`, `.yaml`, `.toml`, `.sql`, `.plist`, `Makefile` and more) | highlighted source with line numbers; a binary property list is shown as XML. A language with no bundled grammar (`Dockerfile`, `.ps1`, `.bat`, Dart, Scala, Elixir, Haskell, Zig and others) is plain text with line numbers |
 | Archives (`.zip`, `.tar`, `.tgz`, `.tar.gz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz`, `.7z`, `.rar`, `.zst`, `.tzst`) | its files and folders as a tree, with sizes and dates, listed without extracting anything; Open with its default app |
 | JSON | pretty-printed and highlighted, with a Raw toggle |
 | CSV and TSV | a table, first row as the header, up to 1,000 rows |
-| Text (`.txt`, `.log`, `LICENSE`, `.env.example` and other text) | as is, with line numbers |
+| Text (`.txt`, `.log`, `.conf`, `.env`, `LICENSE`, `.env.example` and other text) | as is, with line numbers. Text need not be UTF-8: a byte order mark (UTF-8, UTF-16, UTF-32), UTF-16 without one, and legacy encodings (Windows-1252, Latin-1, Shift JIS, GB 18030, EUC-KR, Big5, Windows-1251 and others) are detected, and the kind line names the encoding |
+| Rich text (`.rtf`, `.rtfd`) | drawn by AppKit's own text view, fonts, colours, tables and pictures as the document has them (mapped for a dark theme, as TextEdit does); never as RTF source |
 | Office, iWork, fonts and 3D (`.docx`, `.xlsx`, `.pptx`, `.doc`, `.xls`, `.ppt`, `.pages`, `.numbers`, `.key`, `.ttf`, `.otf`, `.ttc`, `.dfont`, `.usdz`, `.reality`) | Apple's own Quick Look preview, inside the panel; the info card when Quick Look cannot show the file |
-| Anything else | an info card: Finder's large thumbnail when there is one, kind, size, date modified, and Open with its default app (Reveal in Finder for apps, scripts and executables) |
+| Anything else | an info card: Finder's large thumbnail when there is one, kind, size, date modified, and Open with its default app (Reveal in Finder for apps and executables) |
+
+The Open button in the toolbar opens Markdown in your editor (Settings, General: **Open files in**). Code, JSON, CSV and text
+open there too: "Open in <editor>". A script (`.sh`, `.py`, a `.command`) opens in the editor as text and is never run; with
+**Default App** chosen it opens in your default text editor, never in Terminal or an interpreter. Files that often hold
+secrets (`.env`, `.npmrc`) are shown but never offered to another app.
 
 Text over 2 MB shows its first 2 MB. An archive lists its first 5,000 entries. Images over 50 MB, and PDFs, video and audio over 512 MB, get the info card.
 
@@ -59,10 +68,12 @@ App bundles and other packages, the top of a volume and system folders (`/System
 `~/Library`) keep Quick Look's usual preview. Click the folder's name at the top of the sidebar to see its overview again.
 Folder previews are on by default; **Preview folders** (Settings, Sidebar) turns them off.
 
-In the sidebar, ↑ and ↓ move through the files and open each one, → and ← open and close folders, Home and End jump to the ends
-and Return opens the file or folder under the cursor. Click the filter field at the top and type to narrow the tree to names
-that match (letters in order, so `rdme` finds `README.md`); the arrow keys and Return still work while you type, and Esc
-clears the field, then leaves it.
+Quick Look keeps the keyboard for itself, so the sidebar takes keys only after a click in it. Click a file or folder in the
+sidebar, then ↑ and ↓ move through the files and open each one, → and ← open and close folders, Home and End jump to the ends
+and Return opens the file or folder under the cursor. Esc, or a click in the document, gives the keys back to Quick Look.
+Space does too, without closing the preview (the preview cannot close Quick Look): press Space again to close it. Click the
+filter field at the top and type to narrow the tree to names that match (letters in order, so `rdme` finds `README.md`); ↑,
+↓, Home, End and Return still work while you type, and Esc clears the field, then leaves it.
 
 In a vault (a folder with `.obsidian` in it), and in any other folder:
 
@@ -87,7 +98,7 @@ In a vault (a folder with `.obsidian` in it), and in any other folder:
 curl -fsSL https://spacebar.patebryant.com/install.sh | sh
 ```
 
-Then select a `.md` file in Finder and press Space.
+Then select a file or folder in Finder and press Space.
 
 spacebar is **not notarized**: there is no Apple Developer ID behind it yet. Use the install command; a browser download
 of the zip will be blocked by Gatekeeper. Files that curl downloads are not quarantined, so Gatekeeper does not stop the app,
@@ -103,8 +114,9 @@ Read [`scripts/install.sh`](scripts/install.sh) before you run it. It:
    one (it is put back if the move fails). Nothing else is deleted;
 5. registers it with `lsregister` and `pluginkit`, turns the preview on, turns folder previews on unless you turned them off,
    and resets Quick Look (`qlmanage -r`);
-6. lists other Quick Look extensions that are turned on and also claim Markdown, such as QLMarkdown, says how to turn them
-   off, and warns if another copy of spacebar is in `/Applications`. It never turns off or deletes anything itself.
+6. lists other Quick Look extensions that are turned on and claim file types spacebar previews (QLMarkdown for Markdown,
+   a syntax highlighter for code), with how many of spacebar's types each claims by kind, says how to turn them off, and warns
+   if another copy of spacebar is in `/Applications`. It never turns off or deletes anything itself.
 
 `install.sh --help` lists its options, including `--dry-run`, which downloads and verifies but changes nothing.
 
@@ -157,7 +169,7 @@ sandbox container after each rebuild. Other options are documented at the top of
 Tests that run off screen, without Quick Look (the test builds target Apple silicon):
 
 ```sh
-for t in settings scheme linkpolicy cas dataless editkeys filterkeys pdfpane htmlpane mediapane qlpane archive claims updates report; do test/$t/run.sh; done
+for t in settings scheme linkpolicy cas dataless editkeys filterkeys pdfpane htmlpane mediapane qlpane richtext encoding archive claims rivals updates report; do test/$t/run.sh; done
 python3 test/webcheck.py && python3 test/webthemes.py && python3 test/remoteimages.py && python3 test/sidebar.py
 ```
 
@@ -169,8 +181,8 @@ The other scripts in `test/` drive real Quick Look windows and synthetic input; 
 spacebar.app                         settings window (SwiftUI)
 └─ PlugIns/SpacebarPreview.appex     sandboxed Quick Look preview: WKWebView + markdown-it, KaTeX, highlight.js,
    │                                 Mermaid, DOMPurify, all bundled; no network code of its own
-   └─ XPCServices/…writer.xpc        small unsandboxed helper: saves edits, opens links, owns the key panel for inline
-                                     editing and the sidebar filter, lists archives, checks for and starts updates
+   └─ XPCServices/…writer.xpc        small unsandboxed helper: saves edits, opens links and files, owns the key panel for
+                                     inline editing and the sidebar's keys, lists archives, checks for and starts updates
 └─ PlugIns/SpacebarFolders.appex     the same preview for folders (on by default; turn off in Settings)
 ```
 
@@ -189,7 +201,9 @@ writer service; Finder stays in front. Saves are compare-and-swap: if the file c
 - A Markdown file is treated as hostile. The page runs under a strict Content Security Policy (bundled scripts only, no
   inline scripts, frames, forms or connections), and DOMPurify sanitizes everything before it reaches the page.
 - The writer only writes to the Markdown file on screen, only opens http(s) links or non-executable documents, and only
-  accepts messages from the extension's own page. Apps, scripts and executables in the sidebar can only be revealed in Finder.
+  accepts messages from the extension's own page. Apps and executables in the sidebar can only be revealed in Finder; a script
+  shown as text opens only in a text editor (an app that declares the Editor role for text, never a terminal, browser or script
+  runner), where it is not run.
 - The file browser never leaves the previewed folder: links that lead out of it are not listed, a file or folder the page asks
   for must be one the sidebar listed and must still resolve inside the folder, and hidden files are left out unless you turn
   them on. A wikilink or embed resolves only to a file found inside the folder the sidebar shows; `..`, absolute paths and links

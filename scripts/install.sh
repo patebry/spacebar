@@ -13,10 +13,10 @@
 #      .spacebar.app.old, quits its extensions still running, renames the new copy into its place, then deletes
 #      .spacebar.app.old. If the new copy cannot be moved in, the old one is put back. Nothing outside those three exact
 #      paths is removed (and, when spacebar's Update button started this run, the private copy of this script it ran).
-#   5. Registers it with Launch Services and pluginkit, turns on the Markdown preview extension, and resets
-#      Quick Look's cache.
-#   6. Lists any other Quick Look extensions that claim Markdown and are turned on, and warns about a second copy in
-#      /Applications. It never turns anything off or deletes anything else itself.
+#   5. Registers it with Launch Services and pluginkit, turns on its preview extensions, and resets Quick Look's cache.
+#   6. Lists any other Quick Look extensions that are turned on and claim file types spacebar previews (Markdown, code,
+#      data, text, archives), and warns about a second copy in /Applications. It never turns anything off or deletes
+#      anything else itself.
 # Running it again reinstalls the same or a newer version. --dry-run downloads and verifies, then changes nothing.
 set -eu
 
@@ -32,7 +32,7 @@ QL_SETTINGS='x-apple.systempreferences:com.apple.ExtensionsPreferences?extension
 
 usage() {
   cat <<'EOF'
-Install spacebar, the Quick Look previewer for Markdown, into ~/Applications.
+Install spacebar into ~/Applications. Press Space. See everything: Quick Look for folders, documents, code and data.
 
 usage: install.sh [--version vX.Y.Z] [--dry-run] [--no-register] [--no-prompt] [--help]
 
@@ -81,6 +81,59 @@ run() {
 run_quiet() {
   if [ "$DRY_RUN" = 1 ]; then say "would run: $*"; else "$@" >/dev/null 2>&1; fi
 }
+# rival_report <app>: reads `pluginkit -mAvvv -p com.apple.quicklook.preview` on stdin and prints each other extension that is
+# turned on and claims a type <app>'s preview extension claims, with how many of those types it claims by group (the section
+# of <app>'s quicklook-types.txt; a Markdown type of any vendor counts as Markdown). It only reads Info.plists.
+rival_report() {
+  own_plist="$1/Contents/PlugIns/SpacebarPreview.appex/Contents/Info.plist"
+  own_types="$1/Contents/Resources/quicklook-types.txt"
+  tab=$(printf '\t')
+  ours=$(
+    if [ -f "$own_types" ]; then
+      awk '
+        /^[[:space:]]*$/ { blank = 1; next }
+        /^#/ { if (blank) { h = $0; sub(/^#[[:space:]]*/, "", h)
+                 if (h ~ /^Markdown/) g = "Markdown"; else if (h ~ /^Source code/) g = "code"; else if (h ~ /^Data/) g = "data"
+                 else if (h ~ /^Archives/) g = "archives"; else if (h ~ /^Plain text/) g = "text"
+                 else if (h ~ /^Files with no extension/) g = "files with no extension" }
+               blank = 0; next }
+        { blank = 0 }
+        $1 == "claim" { print "G\t" $2 "\t" g }
+        $1 == "declare" { split($2, e, ","); print "G\tmd.spacebar.type." e[1] "\t" g }' "$own_types"
+    fi
+    ql_types "$own_plist" | awk 'NF { print "O\t" $0 }'
+  )
+  # pluginkit prints a header per extension, "<mark> <id>(<version>)" with mark "-" when it is off, then tab-indented fields.
+  awk '
+    /^\t/ { if ($1 == "Path" && $2 == "=") { p = $0; sub(/^\t *Path = /, "", p); print m "\t" id "\t" p }; next }
+    /\(/ { m = substr($0, 1, 1); id = $0; sub(/^[-+=! ]*/, "", id); sub(/\(.*/, "", id) }' |
+  while IFS="$tab" read -r mark id path; do
+    # Apple's own previewers are never offered for turning off: Quick Look prefers an app's extension to them.
+    case $id in md.spacebar*|com.apple.*|"") continue ;; esac
+    [ "$mark" = "-" ] && continue
+    [ -f "$path/Contents/Info.plist" ] || continue
+    counts=$( { printf '%s\n' "$ours"; ql_types "$path/Contents/Info.plist" | awk 'NF { print "R\t" $0 }'; } | awk -F '\t' '
+      $1 == "G" { group[tolower($2)] = $3; next }
+      $1 == "O" { own[tolower($2)] = 1; next }
+      $1 == "R" { t = tolower($2)
+        if (t ~ /^md\.spacebar/ || seen[t]++) next
+        if (t in own) g = (group[t] != "") ? group[t] : (t ~ /markdown/) ? "Markdown" : "other types"
+        else if (t ~ /markdown/) g = "Markdown"
+        else next
+        n[g]++ }
+      END { out = ""
+        k = split("Markdown,code,data,text,archives,files with no extension,other types", order, ",")
+        for (i = 1; i <= k; i++) if (n[order[i]]) out = out (out ? ", " : "") order[i] ": " n[order[i]] (n[order[i]] == 1 ? " type" : " types")
+        print out }')
+    [ -n "$counts" ] && printf '  %s  %s\n      also previews %s\n' "$id" "$path" "$counts"
+  done
+  return 0
+}
+# ql_types <Info.plist>: its QLSupportedContentTypes, one per line.
+ql_types() {
+  plutil -extract NSExtension.NSExtensionAttributes.QLSupportedContentTypes json -o - "$1" 2>/dev/null | tr -d '[]" \n' | tr ',' '\n'
+}
+
 # The bundle path as an anchored regex, so pkill/pgrep match processes running from this exact bundle only.
 path_regex() { printf '^%s/' "$1" | sed 's/[][\.*$+?(){}|]/\\&/g'; }
 
@@ -300,28 +353,11 @@ else
   fi
 fi
 
-# 6. Other Quick Look extensions that claim Markdown: macOS picks one per file type, and it may not pick spacebar.
-# Read-only: pluginkit -m only lists what is registered.
+# 6. Other Quick Look extensions that claim types spacebar previews: macOS picks one per file type, and it may not pick
+# spacebar. Read-only: pluginkit -m only lists what is registered, and nothing is turned off here.
 rivals=""
 if command -v pluginkit >/dev/null 2>&1; then
-  # pluginkit prints a header per extension, "<mark> <id>(<version>)" with mark "-" when it is off, then tab-indented fields.
-  records=$(pluginkit -mAvvv -p com.apple.quicklook.preview 2>/dev/null | awk '
-    /^\t/ { if ($1 == "Path" && $2 == "=") { p = $0; sub(/^\t *Path = /, "", p); print m "\t" id "\t" p }; next }
-    /\(/ { m = substr($0, 1, 1); id = $0; sub(/^[-+=! ]*/, "", id); sub(/\(.*/, "", id) }')
-  tab=$(printf '\t')
-  while IFS="$tab" read -r mark id path; do
-    case $id in md.spacebar*|"") continue ;; esac
-    [ "$mark" = "-" ] && continue
-    plist="$path/Contents/Info.plist"
-    [ -f "$plist" ] || continue
-    if plutil -extract NSExtension.NSExtensionAttributes.QLSupportedContentTypes json -o - "$plist" 2>/dev/null |
-       grep -qi markdown; then
-      rivals="$rivals
-  $id  $path"
-    fi
-  done <<EOF
-$records
-EOF
+  rivals=$(pluginkit -mAvvv -p com.apple.quicklook.preview 2>/dev/null | rival_report "$TMP/unpacked/$APP_NAME")
 fi
 
 say ""
@@ -332,14 +368,16 @@ else
 fi
 if [ -e "$SYSTEM_APPS/$APP_NAME" ]; then
   say ""
-  say "warning: there is another copy at $SYSTEM_APPS/$APP_NAME. Both copies claim Markdown files, so Quick Look"
+  say "warning: there is another copy at $SYSTEM_APPS/$APP_NAME. Both copies claim the same files, so Quick Look"
   say "may use either one. This installer manages only $DEST and has left the other copy alone;"
   say "delete it yourself if you do not need it."
 fi
 if [ -n "$rivals" ]; then
   say ""
-  say "Other Quick Look extensions that preview Markdown are turned on:$rivals"
-  say "If Markdown does not open in spacebar, turn the others off in System Settings > General >"
+  say "Other Quick Look extensions that preview some of the same files are turned on:"
+  say "$rivals"
+  say "Quick Look uses one extension per file type. If those files do not open in spacebar, turn the others off in"
+  say "spacebar's Settings (General), or in System Settings > General >"
   say "Login Items & Extensions > Quick Look (macOS 13-14: Privacy & Security > Extensions > Quick Look),"
   say "or run:  pluginkit -e ignore -i <id>"
   if [ "$PROMPT" = 1 ] && [ "$DRY_RUN" != 1 ] && [ -t 1 ] && (: </dev/tty) 2>/dev/null; then
@@ -349,7 +387,8 @@ if [ -n "$rivals" ]; then
   fi
 fi
 say ""
-say "Next: select a .md file in Finder and press Space."
+say "Next: select a file or folder in Finder and press Space. spacebar shows folders, Markdown, code, data and"
+say "archives; plain text, images, PDFs and media keep Apple's preview in Finder and open in spacebar's sidebar."
 say "Settings: open ~/Applications/spacebar.app"
 say "Uninstall: curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/uninstall.sh | sh"
 }

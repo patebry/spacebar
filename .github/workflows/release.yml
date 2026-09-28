@@ -22,7 +22,7 @@ jobs:
         # Apple's Quick Look generators may not answer on a runner: test/qlpane skips its renders.
         env:
           QLPANE_RENDER: '0'
-        run: for t in settings scheme linkpolicy cas editkeys pdfpane htmlpane mediapane qlpane archive filterkeys updates report; do test/$t/run.sh; done
+        run: for t in settings scheme linkpolicy cas editkeys pdfpane htmlpane mediapane qlpane richtext encoding archive filterkeys rivals updates report; do test/$t/run.sh; done
 
       # One stable identity for every release keeps the designated requirement the same, so an update does not make macOS
       # ask again about the extension's sandbox container (FINDINGS.md). Forks without the secrets build ad-hoc.

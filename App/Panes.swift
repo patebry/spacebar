@@ -96,7 +96,7 @@ struct GeneralPane: View {
                     }
                 } label: {
                     Text("spacebar")
-                    Text("Shows Markdown files when you press Space in Finder.")
+                    Text("\(QuickLookClaims.tagline) Space in Finder shows folders, documents, code and data.")
                 }
                 HStack {
                     Spacer()
@@ -105,13 +105,13 @@ struct GeneralPane: View {
             } header: {
                 Text("Quick Look")
             } footer: {
-                Text("If Markdown files don't preview, make sure spacebar is turned on in the Quick Look section of Extensions in System Settings.")
+                Text("Space opens spacebar for \(QuickLookClaims.summary). If they don't preview, make sure spacebar is turned on in the Quick Look section of Extensions in System Settings.")
                     .settingsFooter()
             }
 
             Section {
                 if system.rivals.isEmpty {
-                    Label(system.refreshing ? "Checking…" : "No other Quick Look extension claims Markdown.", systemImage: "checkmark.circle")
+                    Label(system.refreshing ? "Checking…" : "No other Quick Look extension claims the files spacebar previews.", systemImage: "checkmark.circle")
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(system.rivals) { rival in
@@ -128,15 +128,18 @@ struct GeneralPane: View {
                                     Text(rival.name)
                                     Text(rival.parentName.map { "Part of \($0)" } ?? rival.id)
                                         .font(.caption).foregroundStyle(.secondary)
+                                    Text(rival.summary)
+                                        .font(.caption).foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
                             }
                         }
                     }
                 }
             } header: {
-                Text("Other Markdown Previewers")
+                Text("Other Quick Look Previewers")
             } footer: {
-                Text("Quick Look uses one extension for each file type. When another app's extension also claims Markdown, macOS may choose it instead of spacebar.")
+                Text("Quick Look uses one extension for each file type. When another app's extension also claims a type spacebar previews, macOS may choose it instead of spacebar for those files.")
                     .settingsFooter()
             }
 
@@ -152,14 +155,14 @@ struct GeneralPane: View {
             } header: {
                 Text("Editor")
             } footer: {
-                Text("Used by Open in Editor, and for Markdown links when they are set to open in your editor.")
+                Text("Used by the preview's Open button for Markdown, code, data and text files, and for Markdown links when they are set to open in your editor. Scripts open here as text, never run. With Default App, a file opens in its own app, or in your default text editor when that app could run it.")
                     .settingsFooter()
             }
         }
         .alert(item: $confirming) { rival in
             Alert(
                 title: Text("Turn off \(rival.name)?"),
-                message: Text("Quick Look will stop using this extension for Markdown and every other type it previews, so spacebar can show Markdown files. You can turn it back on in System Settings."),
+                message: Text("Quick Look will stop using this extension for every type it previews, so spacebar can show those files: \(QuickLookClaims.describe(rival.overlap)). You can turn it back on in System Settings."),
                 primaryButton: .destructive(Text("Turn Off")) { system.turnOff(rival) },
                 secondaryButton: .cancel())
         }

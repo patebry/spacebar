@@ -192,6 +192,7 @@ var root = ""
 var session = 1
 var currentKind: FileKind = .markdown
 var currentCanOpen = false
+var currentText = false
 var offered: Set<String> = []
 var linkIndex: LinkIndex?
 var pendingAnchor: String?
@@ -243,6 +244,7 @@ func renderFile(_ file: String, listFirst: Bool = true) {
         pdfPane?.close()
         pdfPane = nil
         currentCanOpen = false
+        currentText = false
         payload = FileView.base(path: url.path, root: root, reason: "open")
         payload["text"] = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         payload["view"] = "markdown"
@@ -260,6 +262,9 @@ func renderFile(_ file: String, listFirst: Bool = true) {
         }
     } else {
         payload = FileView.payload(path: url.path, kind: currentKind, root: root, reason: "open", canOpen: LinkPolicy.fileRefusal(url) == nil)
+        // As the extension: text may open in a text editor even where its default app is refused.
+        currentText = ["code", "json", "csv", "text"].contains(payload["view"] as? String ?? "")
+        if currentText, LinkPolicy.editorRefusal(url) == nil { payload["canOpen"] = true }
         currentCanOpen = payload["canOpen"] as? Bool == true
         // As the extension's show(): a PDF PDFKit cannot open gets the info card with a note; any other view closes the pane.
         var doc: PDFDocument?
@@ -362,9 +367,11 @@ rec.onMessage = { type, body in
     case "overview":
         DispatchQueue.main.async { renderOverview(FolderScan.scan(root, showHidden: Settings(dictionary: settingsDict).showHiddenFiles), reason: "overview") }
     case "openFile", "reveal":
-        let ok = path != nil && path == currentFile && currentKind != .markdown
-            && (type == "reveal" || (currentCanOpen && LinkPolicy.fileRefusal(URL(fileURLWithPath: path!)) == nil))
-        rec.messages.append(["type": ok ? "_\(type)" : "_openRefused", "path": path ?? ""])
+        let u = path.map { URL(fileURLWithPath: $0) }
+        let asText = type == "openFile" && currentText && u.map { LinkPolicy.editorRefusal($0) == nil } == true
+        let ok = u != nil && path == currentFile && currentKind != .markdown
+            && (type == "reveal" || (currentCanOpen && (LinkPolicy.fileRefusal(u!) == nil || asText)))
+        rec.messages.append(["type": !ok ? "_openRefused" : asText ? "_openText" : "_\(type)", "path": path ?? ""])
     default: break
     }
 }

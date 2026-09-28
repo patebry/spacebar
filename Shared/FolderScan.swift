@@ -133,7 +133,7 @@ enum FolderScan {
         case .video, .audio: return "media"
         case .code, .html: return "code"
         case .json, .csv: return "data"
-        case .text: return "text"
+        case .text, .rtf: return "text"
         default: return "other"
         }
     }

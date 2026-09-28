@@ -11,6 +11,12 @@ protocol SpacebarWriterProtocol {
     /// The viewer's Open button for the file on screen: `open`'s policy, except that an archive may be opened (links never
     /// can open one: Archive Utility would extract it beside itself).
     func openFileOnScreen(_ url: URL, reply: @escaping (Bool) -> Void)
+    /// The viewer's Open button for a file shown as text (code, JSON, CSV, text), under LinkPolicy.textOpener: in `appBundleID`
+    /// when it is the editor chosen in the settings and a text editor, else in the file's default app when `open` would use it,
+    /// else in the default plain-text editor. A script opens as text in an editor, never in its default app.
+    func openText(_ url: URL, appBundleID: String?, reply: @escaping (Bool) -> Void)
+    /// The name of the app openText would use, and whether it opens the file as an editor; nil when nothing may open it.
+    func textOpener(_ url: URL, appBundleID: String?, reply: @escaping (String?, Bool) -> Void)
     /// Shows an existing file in Finder, selected. Opens and runs nothing, so it is what an app, a script or an executable gets.
     func reveal(_ url: URL, reply: @escaping (Bool) -> Void)
     /// The display name of the app `open` would use for a file, or nil when LinkPolicy refuses the file or no app claims it.
@@ -46,6 +52,10 @@ protocol SpacebarWriterProtocol {
     /// comes back through filterChanged and the list keys through filterKey; nothing is ever written. Beginning a filter ends
     /// an edit, and beginning an edit ends a filter.
     func beginFilter(_ session: Int, text: String, clickX: Double, clickY: Double, fieldWidth: Double, fieldHeight: Double, reply: @escaping (Bool) -> Void)
+    /// The same session with no text, after a click on a row of the sidebar: the list keys (FilterKeys.listNames, ← and → too)
+    /// come back through filterKey and nothing is typed. Esc or Space ends it (FilterKeys.listEnds), and so does whatever ends a
+    /// filter. Ended by endFilter.
+    func beginListKeys(_ session: Int, clickX: Double, clickY: Double, rowWidth: Double, rowHeight: Double, reply: @escaping (Bool) -> Void)
     func endFilter(_ session: Int)
 }
 
@@ -68,17 +78,27 @@ protocol SpacebarEditHostProtocol {
     func filterEnded(_ session: Int, reason: String)
 }
 
-/// The sidebar filter's keys and text, shared by the writer that captures them and the extension that checks them.
+/// The sidebar filter's keys and text, shared by the writer that captures them and the extension that checks them. A list session
+/// (a click on a row) has no field: ← and → move through the tree too, and Esc or Space hand the keyboard back.
 enum FilterKeys {
     static let names: Set<String> = ["up", "down", "home", "end", "return"]
+    static let listNames: Set<String> = names.union(["left", "right"])
     static let maxLength = 256
     private static let byCode: [UInt16: String] = [126: "up", 125: "down", 115: "home", 119: "end", 36: "return", 76: "return"]
+    private static let listByCode: [UInt16: String] = [123: "left", 124: "right"]
     /// NSEvent.ModifierFlags shift, control, option and command: with any of them the key edits the field's text instead.
     private static let editing: UInt = 1 << 17 | 1 << 18 | 1 << 19 | 1 << 20
 
-    /// The sidebar key for a key pressed in the field, or nil when the field keeps it.
-    static func name(keyCode: UInt16, modifiers: UInt) -> String? {
-        modifiers & editing == 0 ? byCode[keyCode] : nil
+    /// The sidebar key for a key pressed in the field (or, `list`, over the list), or nil when the field keeps it.
+    static func name(keyCode: UInt16, modifiers: UInt, list: Bool = false) -> String? {
+        guard modifiers & editing == 0 else { return nil }
+        return byCode[keyCode] ?? (list ? listByCode[keyCode] : nil)
+    }
+
+    /// Whether a key ends a list session: Esc, and Space, which Quick Look closes the preview on. The extension cannot close
+    /// Quick Look, so Space only hands the keyboard back; the next Space closes the preview.
+    static func listEnds(keyCode: UInt16, modifiers: UInt) -> Bool {
+        keyCode == 53 || (keyCode == 49 && modifiers & editing == 0)
     }
 
     /// One line of at most maxLength Unicode scalars, without control characters.

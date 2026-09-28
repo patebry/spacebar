@@ -223,6 +223,10 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private var shownStamp: String?
     /// Whether the viewer offered "Open with" for the file on screen (FileView may take back what LinkPolicy allowed).
     private var shownCanOpen = false
+    /// Whether the file on screen is shown as text (code, JSON, CSV, text): its Open button goes through openText, which may use
+    /// the chosen editor.
+    private var shownText = false
+    static let textViews: Set<String> = ["code", "json", "csv", "text"]
     /// The PDF on screen, drawn natively over the page's PDF area; nil for every other view.
     private var pdfPane: PDFPane?
     /// The HTML file on screen, rendered natively over the same reserved area; nil for every other view.
@@ -233,12 +237,14 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private var qlPane: QLFallbackPane?
     /// Whether the file on screen is shown by `qlPane`, so the panel reappearing shows it again.
     private var quickLookShown = false
+    /// The RTF or RTFD document on screen, drawn natively over the same reserved area; nil for every other view.
+    private var richPane: RichTextPane?
     /// Bumped by every render, so a thumbnail made for an info card no longer on screen is dropped.
     private var renderGen = 0
     /// The file a thumbnail is being made for: a file changing on disk re-renders its card without starting another.
     private var thumbPending: String?
     /// The app the viewer's Open button names, once the writer has said.
-    private var opener: (path: String, app: String)?
+    private var opener: (path: String, app: String, editor: Bool)?
     /// Bumped by every show and close, so a PDF still opening in the background for an older one is dropped.
     private var pdfGen = 0
     /// Every read of the file on screen, off the main thread: a file iCloud has evicted downloads first, which can take long or
@@ -317,7 +323,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     /// The session a click just replaced: keys typed into it before the writer switched arrive late and are still applied.
     private var retired: [(id: Int, seq: Int, start: Int, lines: Int)] = []
     /// The sidebar filter holding the keyboard: writer session id (from editCounter) and the page's sequence number.
-    private var filter: (id: Int, seq: Int)?
+    private var filter: (id: Int, seq: Int, list: Bool)?
 
     /// Moves every retired range that starts at or below `line` by `delta` lines.
     private func shiftRetired(from line: Int, by delta: Int) {
@@ -458,6 +464,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         // Shown again without a new prepare: the native view closed when the preview disappeared, so bring it back.
         let closed = (fileKind == .pdf && pdfPane == nil) || (fileKind == .html && htmlPane == nil) || ([.video, .audio].contains(fileKind) && mediaPane == nil)
             || (fileKind == .other && quickLookShown && qlPane == nil)
+            || (fileKind == .rtf && richPane == nil)
         if closed, let url = fileURL, host.controller === self {
             shownStamp = nil
             host.whenReady { [weak self] in self?.show(url, reason: "open") }
@@ -650,6 +657,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         diskText = nil
         shownStamp = nil
         shownCanOpen = false
+        shownText = false
         showingOverview = true
         loader.cancel()
         unavailablePath = nil
@@ -773,6 +781,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         quickLookShown = false
         shownStamp = nil
         shownCanOpen = false
+        shownText = false
         docText = nil
         diskText = nil
         watcher = FileWatcher(path: url.path) { [weak self] in self?.fileChanged() }
@@ -851,6 +860,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             self.mediaPane = nil
             self.qlPane?.close()
             self.qlPane = nil
+            self.richPane?.close()
+            self.richPane = nil
             var p = FileView.base(path: url.path, root: self.rootDir, reason: "open")
             p["view"] = "loading"
             p["cloud"] = cloud
@@ -864,6 +875,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         closePDF()
         shownStamp = nil
         shownCanOpen = false
+        shownText = false
         unavailablePath = url.path
         render(FileView.unavailable(path: url.path, kind: fileKind, root: rootDir, reason: reason, cloud: cloud))
     }
@@ -972,11 +984,16 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         let gen = pdfGen, kind = fileKind, root = rootDir, canOpen = LinkPolicy.fileRefusal(url, allowArchives: kind == .archive) == nil
         let cloud = FileTypes.isDataless(url.path)
         // Only a download times out: PDFKit rebuilding a large local PDF may take longer, and is still shown when done.
-        let id = loader.load(timesOut: cloud, { () -> (payload: [String: Any], pdf: Result<PDFDocument, PDFPane.LoadError>?, stuck: Bool) in
-            let p = FileView.payload(path: url.path, kind: kind, root: root, reason: reason, canOpen: canOpen)
+        let id = loader.load(timesOut: cloud, { () -> (payload: [String: Any], pdf: Result<PDFDocument, PDFPane.LoadError>?,
+                                                       rich: Result<NSAttributedString, RichTextPane.LoadError>?, stuck: Bool) in
+            var p = FileView.payload(path: url.path, kind: kind, root: root, reason: reason, canOpen: canOpen)
+            // Text opens in a text editor even where its default app is refused (a script): the writer names the app.
+            if Self.textViews.contains(p["view"] as? String ?? ""), LinkPolicy.editorRefusal(url) == nil { p["canOpen"] = true }
             var pdf: Result<PDFDocument, PDFPane.LoadError>?
+            var rich: Result<NSAttributedString, RichTextPane.LoadError>?
             switch p["view"] as? String {
             case "pdf": pdf = PDFPane.open(url)
+            case "rtf": rich = RichTextPane.open(url)
             case "image" where cloud: _ = try? SchemeHandler.readImage(url)
             case "html" where cloud: _ = FileTypes.materializing { try? Data(contentsOf: url) }
             // One byte downloads the whole file; AVFoundation, reading it later on its own threads, could not.
@@ -984,9 +1001,9 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             default: break
             }
             // Only what FileView downloads counts: an evicted archive is its info card without a download.
-            let fetched = ["pdf", "image", "html", "video", "audio", "quicklook"].contains(p["view"] as? String)
+            let fetched = ["pdf", "image", "html", "video", "audio", "rtf", "quicklook"].contains(p["view"] as? String)
                 || ([.code, .json, .csv, .text].contains(kind) && (p["size"] as? Int64 ?? .max) <= FolderListing.maxDocumentBytes)
-            return (p, pdf, cloud && fetched && FileTypes.isDataless(url.path))
+            return (p, pdf, rich, cloud && fetched && FileTypes.isDataless(url.path))
         }) { [weak self] outcome in
             guard let self, self.host.controller === self, self.fileURL == url, self.fileKind == kind else { return }
             guard case .done(let r) = outcome else {
@@ -1002,22 +1019,31 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
                 p["note"] = e == .locked ? "This PDF is password-protected." : "This PDF can’t be shown here."
             case nil: break
             }
+            var text: NSAttributedString?
+            switch r.rich {
+            case .success(let t)?: text = t
+            case .failure(let e)?:
+                p["view"] = "info"
+                p["note"] = e == .tooLarge ? "This document is too large to show here." : "This document can’t be shown here."
+            case nil: break
+            }
             if r.stuck { return self.showUnavailable(url, reason: reason, cloud: true) }
             // The panel closed while a PDF or media opened: it is shown again when the panel reappears (viewWillAppear).
             if p["view"] as? String == "quicklook" { self.quickLookShown = true }
-            if doc != nil || ["video", "audio", "html", "quicklook"].contains(p["view"] as? String), gen != self.pdfGen { return }
+            if doc != nil || text != nil || ["video", "audio", "html", "quicklook"].contains(p["view"] as? String), gen != self.pdfGen { return }
             self.shownCanOpen = p["canOpen"] as? Bool == true
-            self.finishShow(url, p, pdf: doc, reason: reason)
+            self.shownText = Self.textViews.contains(p["view"] as? String ?? "")
+            self.finishShow(url, p, pdf: doc, rich: text, reason: reason)
             if p["view"] as? String == "info", !cloud, self.thumbPending != url.path { self.addThumbnail(url, icon: kind == .app) }
         }
         if cloud, let s = Self.stamp(url) { downloading = (url, id, s) }
         if reason != "change" { showLoading(url, load: id, cloud: cloud) }
     }
 
-    private func finishShow(_ url: URL, _ payload: [String: Any], pdf: PDFDocument?, reason: String) {
+    private func finishShow(_ url: URL, _ payload: [String: Any], pdf: PDFDocument?, rich: NSAttributedString? = nil, reason: String) {
         unavailablePath = nil
         var p = payload
-        if let o = opener, o.path == url.path { p["app"] = o.app }
+        if let o = opener, o.path == url.path { p["app"] = o.app; p["editor"] = o.editor }
         let canOpen = p["canOpen"] as? Bool == true
         var view = p["view"] as? String ?? ""
         var noPane = false
@@ -1037,6 +1063,12 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             pane.onLink = { [weak self] in self?.pdfLink($0) }
             pane.show(pdf, path: url.path, over: host.web)
             pdfPane = pane
+        }
+        if let rich {
+            let pane = richPane ?? RichTextPane()
+            pane.onLink = { [weak self] in self?.pdfLink($0) }
+            pane.show(rich, path: url.path)
+            richPane = pane
         }
         if view == "video" || view == "audio" {
             let pane = mediaPane ?? MediaPane()
@@ -1060,15 +1092,28 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         if view == "archive" { listArchive(url) }
         // The button names the app the writer would open it with; an app, a script or an executable gets Reveal in Finder only.
         if canOpen, reason == "open" {
-            let path = url.path
-            helper { $0.defaultApp(url) { name in
-                guard let name else { return }
+            let path = url.path, gen = renderGen
+            let named = { (name: String?, editor: Bool) in
                 DispatchQueue.main.async {
                     guard self.fileURL?.path == path else { return }
-                    self.opener = (path, name)
-                    self.js("sb.setOpener", ["path": path, "app": name])
+                    guard let name else {
+                        // Nothing may open it after all (no text editor at hand): Reveal in Finder instead, unless something
+                        // newer (a change on disk, another view) has been rendered since, which this payload would undo.
+                        guard Self.textViews.contains(view), self.shownCanOpen, self.renderGen == gen else { return }
+                        self.shownCanOpen = false
+                        var q = p
+                        q["canOpen"] = false
+                        return self.render(q)
+                    }
+                    self.opener = (path, name, editor)
+                    self.js("sb.setOpener", ["path": path, "app": name, "editor": editor])
                 }
-            } }
+            }
+            if Self.textViews.contains(view) {
+                helper { $0.textOpener(url, appBundleID: SettingsStore.shared.settings.editorBundleID, reply: named) }
+            } else {
+                helper { $0.defaultApp(url) { name in if let name { named(name, false) } } }
+            }
         }
     }
 
@@ -1113,6 +1158,10 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         if keep != "quicklook" {
             qlPane?.close()
             qlPane = nil
+        }
+        if keep != "rtf" {
+            richPane?.close()
+            richPane = nil
         }
     }
 
@@ -1254,10 +1303,16 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             dirWatches.removeValue(forKey: p)
         case "openFile":
             // The viewer's "Open with" button, for the file on screen only; the writer applies LinkPolicy again.
-            guard let url = fileURL, m.string("path", max: 4096) == url.path, fileKind != .markdown, shownCanOpen, LinkPolicy.fileRefusal(url, allowArchives: fileKind == .archive) == nil else {
+            guard let url = fileURL, m.string("path", max: 4096) == url.path, fileKind != .markdown, shownCanOpen,
+                  LinkPolicy.fileRefusal(url, allowArchives: fileKind == .archive) == nil || (shownText && LinkPolicy.editorRefusal(url) == nil) else {
                 return refuse("openFile", "not the file on screen or not allowed")
             }
-            helper { $0.openFileOnScreen(url) { ok in if !ok { DispatchQueue.main.async { self.status("not opened: \(url.lastPathComponent)") } } } }
+            let done = { (ok: Bool) in if !ok { DispatchQueue.main.async { self.status("not opened: \(url.lastPathComponent)") } } }
+            if shownText {
+                helper { $0.openText(url, appBundleID: SettingsStore.shared.settings.editorBundleID, reply: done) }
+            } else {
+                helper { $0.openFileOnScreen(url, reply: done) }
+            }
         case "reveal":
             guard let url = fileURL, fileKind != .markdown || unavailablePath == url.path, m.string("path", max: 4096) == url.path,
                   FolderListing.isInside(url.path, root: rootDir) else {
@@ -1319,7 +1374,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             retired.append(e)
             if let url = fileURL, let text = docText { push(text: text, path: url.path, reason: "editEnd") }
         case "filterBegin":
-            // A click in the sidebar's filter field; an edit is ended by the page (editStop) before it asks.
+            // A click in the sidebar's filter field, or (`list`) on a row of the sidebar; an edit is ended by the page (editStop)
+            // before it asks.
             guard let seq = m.int("seq"), fileURL != nil || !rootDir.isEmpty, edit == nil else {
                 refuse("filterBegin", "no sidebar or an edit is open")
                 if let seq = m.int("seq") { js("sb.filterEnd", ["seq": seq]) }
@@ -1329,7 +1385,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
                 status("Updating…")
                 return js("sb.filterEnd", ["seq": seq])
             }
-            beginFilter(seq, text: FilterKeys.clean(m.string("text", max: 4 * FilterKeys.maxLength) ?? ""), m)
+            let list = m.bool("list") == true
+            beginFilter(seq, text: list ? "" : FilterKeys.clean(m.string("text", max: 4 * FilterKeys.maxLength) ?? ""), list: list, m)
         case "filterStop":
             guard let f = filter, m.int("seq") == f.seq else { return }
             stopFilter(notifyWriter: true)
@@ -1352,6 +1409,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             if fileKind == .html { htmlPane?.place(message: body, in: host.web) }
             if [.video, .audio].contains(fileKind) { mediaPane?.place(message: body, in: host.web) }
             qlPane?.place(message: body, in: host.web)
+            if fileKind == .rtf { richPane?.place(message: body, in: host.web) }
         case "copyInstall":
             helper { $0.copyInstallCommand { ok in DispatchQueue.main.async { self.js("sb.installCopied", ["ok": ok]) } } }
         case "installUpdate":
@@ -1906,29 +1964,32 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
 
     // MARK: the sidebar filter
 
-    private func beginFilter(_ seq: Int, text: String, _ m: PageMessage) {
+    private func beginFilter(_ seq: Int, text: String, list: Bool, _ m: PageMessage) {
         // The writer ends a previous filter session itself, keeping its panel key for this one.
         if let f = filter { js("sb.filterEnd", ["seq": f.seq]) }
         editCounter += 1
         let id = editCounter
-        filter = (id, seq)
-        // The panel goes over the field: never wider than the page, nor taller than a line.
+        filter = (id, seq, list)
+        // The panel goes over the field (or the row): never wider than the page, nor taller than a line.
         let clamp = { (k: String, hi: Double) in min(max(m.double(k) ?? 0, 0), hi) }
         let w = clamp("width", Double(host.web.bounds.width)), h = clamp("height", 48)
+        let replied = { (ok: Bool) in DispatchQueue.main.async { if !ok, self.filter?.id == id { self.stopFilter(notifyWriter: false) } } }
         helper(onError: { [weak self] in if self?.filter?.id == id { self?.stopFilter(notifyWriter: false) } }) {
-            $0.beginFilter(id, text: text, clickX: clamp("clickX", w), clickY: clamp("clickY", h), fieldWidth: w, fieldHeight: h) { ok in
-                DispatchQueue.main.async { if !ok, self.filter?.id == id { self.stopFilter(notifyWriter: false) } }
+            if list {
+                $0.beginListKeys(id, clickX: clamp("clickX", w), clickY: clamp("clickY", h), rowWidth: w, rowHeight: h, reply: replied)
+            } else {
+                $0.beginFilter(id, text: text, clickX: clamp("clickX", w), clickY: clamp("clickY", h), fieldWidth: w, fieldHeight: h, reply: replied)
             }
         }
     }
 
     fileprivate func filterChanged(_ id: Int, text: String) {
-        guard let f = filter, f.id == id else { return }
+        guard let f = filter, f.id == id, !f.list else { return }
         js("sb.filterText", ["seq": f.seq, "text": FilterKeys.clean(text)])
     }
 
     fileprivate func filterKey(_ id: Int, key: String, isRepeat: Bool) {
-        guard let f = filter, f.id == id, FilterKeys.names.contains(key) else { return }
+        guard let f = filter, f.id == id, (f.list ? FilterKeys.listNames : FilterKeys.names).contains(key) else { return }
         js("sb.filterKey", ["seq": f.seq, "key": key, "repeat": isRepeat])
     }
 

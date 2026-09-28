@@ -87,10 +87,29 @@ final class PDFPane: NSObject, PDFViewDelegate {
         guard path != nil else { return }
         let zoom = (web as? WKWebView).map { $0.pageZoom * $0.magnification } ?? 1
         guard let f = Self.frame(css: r, in: web, zoom: zoom) else { view.isHidden = true; return }
+        let keep = placed && pendingPage == nil && view.frame.size != f.size ? anchor() : nil
         Self.attach(view, frame: f, over: web)
         placed = true
+        if let keep { restore(keep) }
         goToPendingPage()
         view.isHidden = hidden
+    }
+
+    /// The page at the top of the view and how far down it the view starts, in page points, which a new width does not change.
+    /// Autoscaled to a new width, PDFView keeps its scroll offset instead, so the same place on the page moves.
+    private func anchor() -> (page: Int, below: CGFloat)? {
+        let top = NSPoint(x: view.bounds.midX, y: view.isFlipped ? view.bounds.minY : view.bounds.maxY)
+        guard let doc = view.document, let page = view.page(for: top, nearest: true) else { return nil }
+        let i = doc.index(for: page)
+        guard i != NSNotFound else { return nil }
+        return (i, max(0, page.bounds(for: view.displayBox).maxY - view.convert(top, to: page).y))
+    }
+
+    private func restore(_ a: (page: Int, below: CGFloat)) {
+        guard let page = view.document?.page(at: a.page) else { return }
+        view.layoutDocumentView()
+        let b = page.bounds(for: view.displayBox)
+        view.go(to: PDFDestination(page: page, at: NSPoint(x: b.minX, y: b.maxY - a.below)))
     }
 
     /// A `pdfRect` message from the page: {path, x, y, w, h, hide, bg: [r, g, b], dark, radius}. Only for the file on screen; a message

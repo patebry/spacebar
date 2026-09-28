@@ -104,6 +104,34 @@ check("place: dark", pane.view.appearance?.name == .darkAqua && pane.view.backgr
 pane.place(message: msg.merging(["x": "240", "w": true]) { _, n in n }, in: web)
 check("place: strings and booleans are not numbers", pane.view.frame == NSRect(x: 240, y: 0, width: 760, height: 692))
 
+/// How far below the view's top edge the top of `page` sits, in page points (negative: cut off above the view).
+func topGap(_ i: Int) -> CGFloat {
+    let v = pane.view, page = v.document!.page(at: i)!
+    let y = v.convert(NSPoint(x: 0, y: page.bounds(for: v.displayBox).maxY), from: page).y
+    return ((v.isFlipped ? y - v.bounds.minY : v.bounds.maxY - y) / v.scaleFactor)
+}
+let wide = msg.merging(["x": 8, "w": 992]) { _, n in n }
+let gap0 = topGap(0)
+pane.place(message: wide, in: web)
+spin(0.1)
+check("width: at the top of the first page, the sidebar hiding keeps its top edge on screen", atTop() && topGap(0) >= 0 && abs(topGap(0) - gap0) < 2,
+      "gap \(topGap(0)) was \(gap0)")
+pane.place(message: msg, in: web)
+spin(0.1)
+check("width: and showing it again", atTop() && topGap(0) >= 0 && abs(topGap(0) - gap0) < 2, "gap \(topGap(0)) was \(gap0)")
+let into = docA.page(at: 1)!
+pane.view.go(to: PDFDestination(page: into, at: NSPoint(x: 0, y: into.bounds(for: pane.view.displayBox).maxY - 150)))
+spin(0.1)
+let mid = topGap(1)
+for (label, m) in [("hidden", wide), ("shown", msg)] {
+    pane.place(message: m, in: web)
+    spin(0.1)
+    check("width: part way down a page, the sidebar \(label) keeps the same line at the top",
+          pane.view.currentPage.map { docA.index(for: $0) } == 1 && abs(topGap(1) - mid) < 2, "gap \(topGap(1)) was \(mid)")
+}
+pane.view.go(to: docA.page(at: 0)!)
+spin(0.1)
+
 window.setFrame(NSRect(x: -20000, y: -20000, width: 1200, height: 900), display: true)
 container.frame = NSRect(x: 0, y: 0, width: 1200, height: 900)
 check("resize: between messages the view keeps its margins, as the page's layout does",

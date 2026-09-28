@@ -798,6 +798,8 @@ window.sb = {
     retired = null;
     docVer = p.ver ?? docVer;
     const y = samePath ? window.scrollY : 0;
+    // A re-render of the same file (a change on disk) keeps the app its Open button names; only a new file asks again.
+    if (samePath && p.app === undefined && typeof current.app === 'string') p = { ...p, app: current.app };
     current = p;
     // Each render may come with a new native PDF view (the extension closes it for anything else): place it afresh.
     pdfPosted = '';

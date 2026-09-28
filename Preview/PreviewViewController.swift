@@ -1004,8 +1004,10 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         if reason != "change" { showLoading(url, load: id, cloud: cloud) }
     }
 
-    private func finishShow(_ url: URL, _ p: [String: Any], pdf: PDFDocument?, reason: String) {
+    private func finishShow(_ url: URL, _ payload: [String: Any], pdf: PDFDocument?, reason: String) {
         unavailablePath = nil
+        var p = payload
+        if let o = opener, o.path == url.path { p["app"] = o.app }
         let canOpen = p["canOpen"] as? Bool == true
         let view = p["view"] as? String ?? ""
         closePDF(keeping: view)

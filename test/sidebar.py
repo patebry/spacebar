@@ -945,6 +945,11 @@ def main():
         r = page.cmd('@nativeclick:#edit')
         check('_openFile' in [m.get('type') for m in r['messages']] and page.js("return document.getElementById('edit').textContent") == 'Open',
               'PDF: the toolbar Open button posts openFile, checked like any viewer', json.dumps(r['messages'])[:200])
+        page.cmd('@eval:sb.setOpener(' + json.dumps({'path': T('doc.pdf'), 'app': 'Preview'}) + '); 0')
+        page.cmd("@eval:(() => { const q = JSON.parse(JSON.stringify(current)); delete q.app; q.reason = 'change'; sb.render(q); })(); 0")
+        page.cmd('@wait:0.3')
+        again = page.js("return [document.getElementById('edit').textContent, document.documentElement.dataset.view]")
+        check(again == ['Open with Preview', 'pdf'], 'PDF: rewritten on disk, the re-render keeps "Open with <app>"', json.dumps(again))
         light = page.cmd('@appearance:light') and page.cmd('@wait:0.4') and page.cmd('@pdf')['result']
         dark = page.cmd('@appearance:dark') and page.cmd('@wait:0.4') and page.cmd('@pdf')['result']
         check(not light['dark'] and dark['dark'] and sum(light['bg']) > 600 and sum(dark['bg']) < 200,
@@ -984,7 +989,10 @@ def main():
               'PDF -> Markdown: the native view is removed, its document freed and no descriptor left on the file; the page is back',
               f'{json.dumps(gone)} {json.dumps(md)}')
         view(T('doc.pdf'))
+        page.cmd('@eval:sb.setOpener(' + json.dumps({'path': T('doc.pdf'), 'app': 'Preview'}) + '); 0')
         view(T('photo.png'))
+        other = page.js("return document.getElementById('edit').textContent")
+        check(other == 'Open', 'another file does not inherit the last one\'s app', other)
         gone = page.cmd('@pdf')['result']
         check(not gone['open'] and not gone['docAlive'] and gone['fds'] == 0, 'PDF -> image: the same clean teardown', json.dumps(gone))
         view(T('broken.pdf'))
@@ -1121,7 +1129,8 @@ def main():
         page.cmd('@eval:sb.setArchive(' + json.dumps({'path': T('pack.zip'), 'error': 'This archive’s contents can’t be listed.'}) + '); 0')
         page.cmd('@wait:0.2')
         e = page.js("const c = document.querySelector('#doc .info-card'); return c && [document.documentElement.dataset.view, c.querySelector('.viewer-note').textContent, c.querySelector('button').textContent]")
-        check(e == ['info', 'This archive’s contents can’t be listed.', 'Open'], 'archive: one that cannot be listed becomes its info card, with why', json.dumps(e))
+        check(e == ['info', 'This archive’s contents can’t be listed.', 'Open with Archive Utility'],
+              'archive: one that cannot be listed becomes its info card, with why, keeping its Open with button', json.dumps(e))
 
         # ---- hostile files: nothing runs, nothing renders as a document ----
         H = lambda f: T('hostile', f)

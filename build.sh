@@ -115,7 +115,7 @@ PROBE_FLAGS=()
 # The preview's sources, less its Quick Look entry point: a second host can compile them with its own.
 PREVIEW_SRC=(Preview/PreviewController.swift Preview/PDFPane.swift Preview/HTMLPane.swift Preview/MediaPane.swift Preview/QLFallbackPane.swift Preview/RichTextPane.swift Preview/Thumbnail.swift Preview/SettingsStore.swift
   Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/Updates.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift)
-compile "$PREVIEW_BIN" -application-extension -module-name "$APPEX_EXE" "${PREVIEW_SRC[@]}" Preview/Probe.swift \
+compile "$PREVIEW_BIN" -application-extension -module-name "$APPEX_EXE" "${PREVIEW_SRC[@]}" Preview/PreviewViewController.swift Preview/Probe.swift \
   ${PROBE_FLAGS[@]+"${PROBE_FLAGS[@]}"} \
   -framework QuickLookUI -framework WebKit -framework PDFKit -framework AVKit -framework AVFoundation -framework QuickLookThumbnailing -Xlinker -e -Xlinker _NSExtensionMain
 compile "$APP/Contents/MacOS/$APP_EXE" -parse-as-library -module-name "$APP_EXE" App/*.swift Shared/Settings.swift Shared/Updates.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift Shared/QuickLookClaims.swift Shared/LinkPolicy.swift \

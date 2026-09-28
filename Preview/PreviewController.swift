@@ -1,5 +1,4 @@
 import Cocoa
-import QuickLookUI
 import PDFKit
 import UniformTypeIdentifiers
 import WebKit
@@ -23,8 +22,8 @@ private func uptimeMs(since t: Double) -> String { String(format: "%.1f", (Proce
 
 /// Receives the edit buffer from the writer's key-capturing panel.
 final class EditHost: NSObject, SpacebarEditHostProtocol {
-    private weak var controller: PreviewViewController?
-    init(controller: PreviewViewController) { self.controller = controller }
+    private weak var controller: PreviewController?
+    init(controller: PreviewController) { self.controller = controller }
     func editChanged(_ session: Int, text: String, selectionStart: Int, selectionLength: Int, keyTime: Double) {
         DispatchQueue.main.async { self.controller?.editChanged(session, text: text, selStart: selectionStart, selLen: selectionLength, keyTime: keyTime) }
     }
@@ -60,7 +59,7 @@ final class WebHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     let web: WKWebView
     private(set) var ready = false
     private var onReady: [() -> Void] = []
-    weak var controller: PreviewViewController?
+    weak var controller: PreviewController?
     let created = Date()
     let remoteImages: RemoteImageGate
     let scheme: SchemeHandler
@@ -208,8 +207,45 @@ final class FileWatcher {
     }
 }
 
-@objc(PreviewViewController)
-final class PreviewViewController: NSViewController, QLPreviewingController {
+/// Who holds the arrow keys for the sidebar's list session, which the page asks for (filterBegin with `list`) once
+/// `listSessionWanted` has offered one. Keys and the session's end come back through filterKey and filterEnded.
+protocol KeySource: AnyObject {
+    /// The preview is on screen over `root`.
+    func listSessionWanted(root: String)
+    /// Starts list session `id` over the sidebar row clicked; `failed` runs on the main thread when it cannot start.
+    func beginList(_ id: Int, clickX: Double, clickY: Double, rowWidth: Double, rowHeight: Double, failed: @escaping () -> Void)
+    /// Ends list session `id`, which the controller has already dropped.
+    func end(_ id: Int)
+}
+
+/// The list session in the writer's key-capturing panel: the page is asked for one whenever the preview is on screen.
+final class WriterKeySource: KeySource {
+    private weak var controller: PreviewController?
+    init(controller: PreviewController) { self.controller = controller }
+
+    func listSessionWanted(root: String) {
+        controller?.js("sb.listKeysWanted", ["root": root])
+    }
+
+    func beginList(_ id: Int, clickX: Double, clickY: Double, rowWidth: Double, rowHeight: Double, failed: @escaping () -> Void) {
+        controller?.helper(onError: failed) {
+            $0.beginListKeys(id, clickX: clickX, clickY: clickY, rowWidth: rowWidth, rowHeight: rowHeight) { ok in
+                if !ok { DispatchQueue.main.async(execute: failed) }
+            }
+        }
+    }
+
+    func end(_ id: Int) { controller?.helper { $0.endFilter(id) } }
+}
+
+/// The preview, whatever hosts it: `start` shows a file or folder, and the host reports its view appearing and going.
+class PreviewController: NSViewController {
+    /// The page has painted the first preview since `start`.
+    var onReady: (Error?) -> Void = { _ in }
+    /// `start` declined the item, for the reason given; onReady is not called for it.
+    var onDecline: (String) -> Void = { _ in }
+    lazy var keySource: KeySource = WriterKeySource(controller: self)
+
     private let host = WebHost.shared
     private var fileURL: URL?
     /// The folder of the item Quick Look asked for (the folder itself in folder mode), symlinks resolved. Markdown links open in
@@ -306,7 +342,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private var linkMemo: (targets: [String], root: String, path: String, links: [String: Any], embeds: [String: Any])?
     private var linkGen = 0
     private static var sessions = 0
-    private let session: Int = { PreviewViewController.sessions += 1; return PreviewViewController.sessions }()
+    private let session: Int = { PreviewController.sessions += 1; return PreviewController.sessions }()
     /// Latest document the preview intends to be on disk (includes queued edits).
     private var docText: String?
     /// Last content confirmed on disk, in its on-disk line endings; every write must name it as its base.
@@ -315,7 +351,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     private var lineEnding = "\n"
     private func onDisk(_ text: String) -> String { lineEnding == "\n" ? text : text.replacingOccurrences(of: "\n", with: lineEnding) }
     private var prepareStart = Date()
-    private var completion: ((Error?) -> Void)?
+    /// onReady is owed for the current start.
+    private var readyPending = false
     private var reloadPending = false
     private var changeSeen = Date()
     /// The block being edited: writer session id, the page's click sequence number, and its line range in docText.
@@ -446,21 +483,18 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     override func loadView() {
         host.web.removeFromSuperview()
         host.web.autoresizingMask = [.width, .height]
-        #if PROBE
-        let container = Probe.makeRoot(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
-        Probe.install()
-        #else
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
-        #endif
+        let container = makeRoot(frame: NSRect(x: 0, y: 0, width: 900, height: 700))
         host.web.frame = container.bounds
         container.addSubview(host.web)
         view = container
         preferredContentSize = NSSize(width: 900, height: 700)
     }
 
-    override func viewWillAppear() {
-        super.viewWillAppear()
-        disableHostDoubleClick()
+    /// The view the page is shown in.
+    func makeRoot(frame: NSRect) -> NSView { NSView(frame: frame) }
+
+    /// The host is about to show the view again.
+    func hostWillAppear() {
         // Shown again without a new prepare: the native view closed when the preview disappeared, so bring it back.
         let closed = (fileKind == .pdf && pdfPane == nil) || (fileKind == .html && htmlPane == nil) || ([.video, .audio].contains(fileKind) && mediaPane == nil)
             // Apple's preview by its type, not only by quickLookShown: a load still running when the panel went is stale, and
@@ -473,43 +507,29 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         }
     }
 
-    override func viewDidAppear() {
-        super.viewDidAppear()
-        disableHostDoubleClick()
+    /// The view is on screen.
+    func hostAppeared() {
         appeared = true
         wantListKeys()
-        #if PROBE
-        Probe.windowAttached(view)
-        #endif
     }
 
-    /// Quick Look's service view controller hangs a two-click NSClickGestureRecognizer on an ancestor of this view. On a
-    /// double-click it asks the host to open the file in its default app, and while it waits to see whether a click becomes a
-    /// double-click it withholds the primary mouse events, so every click reached the web view one double-click interval late.
-    /// Clicks in this preview mean edit, select or follow a link, so the recognizer is switched off.
-    private func disableHostDoubleClick() {
-        #if PROBE
-        if Probe.has("nofix") { return }
-        #endif
-        var v: NSView? = view
-        while let cur = v {
-            for g in cur.gestureRecognizers {
-                guard let click = g as? NSClickGestureRecognizer, click.numberOfClicksRequired >= 2, click.isEnabled else { continue }
-                click.isEnabled = false
-                log.info("disabled host double-click recognizer on \(NSStringFromClass(type(of: cur)), privacy: .public) (delayed primary clicks: \(click.delaysPrimaryMouseButtonEvents))")
-            }
-            v = cur.superview
-        }
-    }
-
-    override func viewWillDisappear() {
-        super.viewWillDisappear()
+    /// The host is taking the view away.
+    func hostDisappearing() {
         appeared = false
         stopEdit(notifyWriter: true)
         stopFilter(notifyWriter: true)
         host.remoteImages.reset()
         closePDF()
     }
+
+    /// Runs whenever the page reports a paint or a render.
+    func pageRendered() {}
+
+    /// Whether `start` launches the writer ahead of the first click when inline editing is on.
+    var prewarmsWriter: Bool { true }
+
+    /// A list session ended without asking for another: `reason` is the key source's ("escape" gave the keys back to the host).
+    func listSessionEnded(reason: String) {}
 
     deinit {
         if let id = edit?.id { (helperConnection?.remoteObjectProxy as? SpacebarWriterProtocol)?.endEdit(id) }
@@ -518,12 +538,12 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         log.info("controller deinit")
     }
 
-    func preparePreviewOfFile(at url: URL, completionHandler handler: @escaping (Error?) -> Void) {
+    /// Shows `url`, a file or a folder; `reason` names what asked, for the settings check. The host holds any access `url` needs.
+    func start(url: URL, reason: String) {
         prepareStart = Date()
-        SettingsStore.shared.checkNow(reason: "prepare")
+        SettingsStore.shared.checkNow(reason: reason)
         let warm = host.ready
         log.info("prepare \(url.path, privacy: .private) warm=\(warm) processAge=\(processAgeMs(), privacy: .public)ms wall=\(Date().timeIntervalSince1970, privacy: .public)")
-        _ = url.startAccessingSecurityScopedResource()
         // The previous preview's native views go now, not whenever Quick Look lets its controller go: a player must fall silent.
         // Its filter session too, and the writer is told: the key panel must not stay over a field no controller owns.
         if host.controller !== self {
@@ -534,7 +554,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         }
         stopFilter(notifyWriter: true)
         host.controller = self
-        completion = handler
+        readyPending = true
         // The page outlives the controller that began a filter session; the new preview starts with none. A page still
         // loading has no session, and no `sb` to call.
         if host.ready { js("sb.filterEnd", ["all": true]) }
@@ -559,8 +579,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         if isDir.boolValue {
             // Folder previews can be turned off; declining hands the folder back to Quick Look's own preview. Everything else a
             // folder preview declines (packages, volumes, system folders) is known here, before anything starts.
-            guard SettingsStore.shared.settings.folderMode else { return decline(handler, "folder previews are off") }
-            if let why = FolderRules.declineReason(resolved.path) { return decline(handler, why) }
+            guard SettingsStore.shared.settings.folderMode else { return decline("folder previews are off") }
+            if let why = FolderRules.declineReason(resolved.path) { return decline(why) }
             startFolder()
         } else {
             // The path inside the resolved folder (in a vault, the vault), as the sidebar lists it.
@@ -571,11 +591,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         // Launch the writer and build its hidden edit panel now, so the first click into a block does not wait for either.
         // Inline editing off: no writer launch until something needs it, but the support folder still gets made.
         if SettingsStore.shared.settings.inlineEditing {
-            #if PROBE
-            if !Probe.has("noprewarm") { helper { $0.prepare() } }
-            #else
-            helper { $0.prepare() }
-            #endif
+            if prewarmsWriter { helper { $0.prepare() } }
         } else if !FileManager.default.fileExists(atPath: SettingsFile.url.path) {
             helper { $0.ensureSupportDir { _ in DispatchQueue.main.async { SettingsStore.shared.checkNow(reason: "created") } } }
         }
@@ -678,10 +694,10 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         }
     }
 
-    private func decline(_ handler: (Error?) -> Void, _ why: String) {
+    private func decline(_ why: String) {
         log.info("declined: \(why, privacy: .public)")
-        completion = nil
-        handler(CocoaError(.fileReadUnsupportedScheme, userInfo: [NSLocalizedDescriptionKey: why]))
+        readyPending = false
+        onDecline(why)
     }
 
     fileprivate func settingsChanged(_ s: Settings) {
@@ -744,10 +760,10 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     }
 
     private func finishPrepare(_ error: Error?) {
-        disableHostDoubleClick()
-        guard let c = completion else { return }
-        completion = nil
-        c(error)
+        pageRendered()
+        guard readyPending else { return }
+        readyPending = false
+        onReady(error)
     }
 
     /// Why `url` cannot be previewed: a document must be a regular file (after symlinks) of bounded size, so a `.md` that is a
@@ -1267,7 +1283,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         switch type {
         case "painted":
             // Show the panel as soon as text/math/code are in; mermaid diagrams fill in afterwards.
-            if completion != nil {
+            if readyPending {
                 log.info("painted[\(m.string("reason", max: 32) ?? "", privacy: .public)] \(ms(self.prepareStart), privacy: .public)ms after prepare wall=\(Date().timeIntervalSince1970, privacy: .public)")
             }
             finishPrepare(nil)
@@ -1588,7 +1604,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         }
     }
 
-    private func helper(onError: (() -> Void)? = nil, _ body: (SpacebarWriterProtocol) -> Void) {
+    fileprivate func helper(onError: (() -> Void)? = nil, _ body: (SpacebarWriterProtocol) -> Void) {
         let conn = helperConnection ?? NSXPCConnection(serviceName: writerServiceName)
         if helperConnection == nil {
             conn.remoteObjectInterface = NSXPCInterface(with: SpacebarWriterProtocol.self)
@@ -1773,7 +1789,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             log.error("editBlock: \(why, privacy: .public)")
             // Keys already typed into the previous block (and flushed as the writer ends it) still land.
             if let p = previous { self.helper { $0.endEdit(p.id) } }
-            if let f = previousFilter { self.helper { $0.endFilter(f.id) } }
+            if let f = previousFilter { self.endKeys(f) }
             self.js("sb.editEnd", ["seq": seq])
         }
         guard let text = docText, let start = m.int("start"), let end = m.int("end"), let block = m.string("text"),
@@ -1971,7 +1987,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
 
     // MARK: the sidebar filter
 
-    /// On screen: Quick Look showed this preview and has not taken it away.
+    /// On screen: the host showed this preview and has not taken it away.
     private var appeared = false
 
     /// Asks the page for a list session over the sidebar (it starts one only when the sidebar shows more than one row), so the
@@ -1981,7 +1997,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         let root = rootDir
         host.whenReady { [weak self] in
             guard let self, self.appeared, self.host.controller === self, self.rootDir == root else { return }
-            self.js("sb.listKeysWanted", ["root": root])
+            self.keySource.listSessionWanted(root: root)
         }
     }
 
@@ -1994,13 +2010,13 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         // The panel goes over the field (or the row): never wider than the page, nor taller than a line.
         let clamp = { (k: String, hi: Double) in min(max(m.double(k) ?? 0, 0), hi) }
         let w = clamp("width", Double(host.web.bounds.width)), h = clamp("height", 48)
-        let replied = { (ok: Bool) in DispatchQueue.main.async { if !ok, self.filter?.id == id { self.stopFilter(notifyWriter: false) } } }
-        helper(onError: { [weak self] in if self?.filter?.id == id { self?.stopFilter(notifyWriter: false) } }) {
-            if list {
-                $0.beginListKeys(id, clickX: clamp("clickX", w), clickY: clamp("clickY", h), rowWidth: w, rowHeight: h, reply: replied)
-            } else {
-                $0.beginFilter(id, text: text, clickX: clamp("clickX", w), clickY: clamp("clickY", h), fieldWidth: w, fieldHeight: h, reply: replied)
-            }
+        let failed = { [weak self] in if self?.filter?.id == id { self?.stopFilter(notifyWriter: false) } }
+        if list {
+            return keySource.beginList(id, clickX: clamp("clickX", w), clickY: clamp("clickY", h), rowWidth: w, rowHeight: h, failed: failed)
+        }
+        let replied = { (ok: Bool) in DispatchQueue.main.async { if !ok { failed() } } }
+        helper(onError: failed) {
+            $0.beginFilter(id, text: text, clickX: clamp("clickX", w), clickY: clamp("clickY", h), fieldWidth: w, fieldHeight: h, reply: replied)
         }
     }
 
@@ -2019,15 +2035,19 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         log.info("filter \(id) ended: \(reason, privacy: .public)")
         stopFilter(notifyWriter: false)
         if FilterKeys.relists(afterEnding: reason, list: f.list) { wantListKeys() }
-        // Esc or Space in a list session gave the keys back to Quick Look, which closes on the next press.
-        else if f.list, reason == "escape" { status("Press Space again to close") }
+        else if f.list { listSessionEnded(reason: reason) }
     }
 
     private func stopFilter(notifyWriter: Bool) {
         guard let f = filter else { return }
         filter = nil
-        if notifyWriter { helper { $0.endFilter(f.id) } }
+        if notifyWriter { endKeys(f) }
         js("sb.filterEnd", ["seq": f.seq])
+    }
+
+    /// Tells whoever holds the keys of filter session `f` that it ended.
+    private func endKeys(_ f: (id: Int, seq: Int, list: Bool)) {
+        if f.list { keySource.end(f.id) } else { helper { $0.endFilter(f.id) } }
     }
 
     /// `keepRetired` keeps ended sessions whose last keys may still arrive; otherwise the document is being replaced.
@@ -2039,14 +2059,14 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         js("sb.editEnd", ["seq": e.seq])
     }
 
-    private func js(_ fn: String, _ arg: [String: Any]) {
+    fileprivate func js(_ fn: String, _ arg: [String: Any]) {
         let json = String(data: try! JSONSerialization.data(withJSONObject: arg), encoding: .utf8)!
         host.web.evaluateJavaScript("\(fn)(\(json)); 0") { _, err in
             if let err { log.error("\(fn, privacy: .public) failed: \(String(describing: err), privacy: .public)") }
         }
     }
 
-    private func status(_ s: String, sticky: Bool = false) {
+    func status(_ s: String, sticky: Bool = false) {
         let arg = String(data: try! JSONSerialization.data(withJSONObject: [s]), encoding: .utf8)!
         host.web.evaluateJavaScript("sb.status(\(arg)[0], \(sticky))", completionHandler: nil)
     }

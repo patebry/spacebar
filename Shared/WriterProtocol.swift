@@ -8,6 +8,9 @@ protocol SpacebarWriterProtocol {
     /// Opens a file (under the same LinkPolicy) in `appBundleID`, which is honoured only when it is the editor chosen in the
     /// settings; otherwise, or when that app is gone, in the file's default app.
     func open(_ url: URL, appBundleID: String?, reply: @escaping (Bool) -> Void)
+    /// The viewer's Open button for the file on screen: `open`'s policy, except that an archive may be opened (links never
+    /// can open one: Archive Utility would extract it beside itself).
+    func openFileOnScreen(_ url: URL, reply: @escaping (Bool) -> Void)
     /// Shows an existing file in Finder, selected. Opens and runs nothing, so it is what an app, a script or an executable gets.
     func reveal(_ url: URL, reply: @escaping (Bool) -> Void)
     /// The display name of the app `open` would use for a file, or nil when LinkPolicy refuses the file or no app claims it.

@@ -29,7 +29,8 @@ enum LinkPolicy {
     /// one of these can run code when opened (a .jar is a zip, and opens in Jar Launcher), so conformance is not enough.
     private static let allowedExactly: [UTType] = [
         "public.zip-archive", "public.tar-archive", "org.gnu.gnu-zip-archive", "org.gnu.gnu-zip-tar-archive", "public.bzip2-archive",
-        "org.tukaani.xz-archive", "org.7-zip.7-zip-archive", "md.spacebar.type.rar", "md.spacebar.type.zst",
+        "org.tukaani.xz-archive", "org.7-zip.7-zip-archive", "public.tar-bzip2-archive", "org.tukaani.tar-xz-archive",
+        "md.spacebar.type.rar", "md.spacebar.type.zst", "md.spacebar.type.tzst",
     ].compactMap { UTType($0) }
 
     /// Checked before `allowed`: these conform to an allowed type but their default handler can run code or change the system

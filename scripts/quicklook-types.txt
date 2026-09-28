@@ -60,6 +60,8 @@ claim public.tar-archive
 claim org.gnu.gnu-zip-archive
 claim org.gnu.gnu-zip-tar-archive
 claim public.bzip2-archive
+claim public.tar-bzip2-archive
+claim org.tukaani.tar-xz-archive
 claim org.tukaani.xz-archive
 claim org.7-zip.7-zip-archive
 
@@ -109,20 +111,21 @@ declare jsonc,json5 public.plain-text JSON with comments
 declare xsd public.xml XML schema
 declare xsl public.xml XSL stylesheet
 
-# Plain text and configuration the system has no type for
+# Plain text and configuration the system has no type for. Files that often hold secrets (.env, .npmrc, a certificate signing
+# request) conform to public.data, not text: they are still shown, but the viewer never offers to open them in another app.
+# .out and .mod are left alone: other tools own those extensions for binary files.
 declare toml public.plain-text TOML document
 declare ini public.plain-text INI configuration
 declare cfg,conf public.plain-text Configuration file
 declare properties public.plain-text Properties file
-declare env public.plain-text Environment file
+declare env public.data Environment file
 declare editorconfig public.plain-text EditorConfig file
 declare gitignore,dockerignore public.plain-text Ignore file
 declare gitattributes public.plain-text Git attributes file
 declare gitmodules public.plain-text Git submodules file
-declare npmrc,nvmrc public.plain-text Node configuration
+declare npmrc,nvmrc public.data Node configuration
 declare lock public.plain-text Lock file
 declare sum public.plain-text Checksum list
-declare mod public.plain-text Module file
 declare example,sample public.plain-text Example file
 declare rst public.plain-text reStructuredText document
 declare adoc,asciidoc public.plain-text AsciiDoc document
@@ -131,9 +134,10 @@ declare tex public.plain-text TeX document
 declare bib public.plain-text BibTeX bibliography
 declare srt public.plain-text SubRip subtitles
 declare nfo,diz public.plain-text Info text
-declare out,err public.plain-text Output log
-declare csr public.plain-text Certificate signing request
+declare err public.plain-text Output log
+declare csr public.data Certificate signing request
 
 # Archives the system has no type for
 declare rar public.archive RAR archive
 declare zst public.archive Zstandard archive
+declare tzst public.archive Zstandard tar archive

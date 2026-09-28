@@ -32,10 +32,15 @@ final class Writer: NSObject, SpacebarWriterProtocol {
 
     func open(_ url: URL, reply: @escaping (Bool) -> Void) { open(url, appBundleID: nil, reply: reply) }
 
-    /// Archives are allowed here: the extension sends only the viewer's Open button on the file on screen with them, having
-    /// refused them for links itself.
-    func open(_ url: URL, appBundleID: String?, reply: @escaping (Bool) -> Void) {
-        if let why = LinkPolicy.refusal(url, allowArchives: true) {
+    func open(_ url: URL, appBundleID: String?, reply: @escaping (Bool) -> Void) { open(url, appBundleID: appBundleID, archives: false, reply: reply) }
+
+    func openFileOnScreen(_ url: URL, reply: @escaping (Bool) -> Void) {
+        guard url.isFileURL else { return reply(false) }
+        open(url, appBundleID: nil, archives: true, reply: reply)
+    }
+
+    private func open(_ url: URL, appBundleID: String?, archives: Bool, reply: @escaping (Bool) -> Void) {
+        if let why = LinkPolicy.refusal(url, allowArchives: archives) {
             log.error("refused open \(url.absoluteString, privacy: .private): \(why, privacy: .public)")
             return reply(false)
         }
@@ -44,7 +49,7 @@ final class Writer: NSObject, SpacebarWriterProtocol {
             log.info("open \(url.absoluteString, privacy: .private) -> \(ok)")
             return reply(ok)
         }
-        guard let opener = LinkPolicy.opener(for: url, allowArchives: true) else {
+        guard let opener = LinkPolicy.opener(for: url, allowArchives: archives) else {
             log.error("refused open \(url.path, privacy: .private): no default app")
             return reply(false)
         }

@@ -12,7 +12,7 @@ func file(_ name: String, _ text: String = "x\n", mode: Int = 0o644) -> URL {
     return u
 }
 
-for name in ["a.zip", "a.tar", "a.tar.gz", "a.tgz", "a.tar.bz2", "a.tar.xz", "a.7z"] {
+for name in ["a.zip", "a.tar", "a.tar.gz", "a.tgz", "a.tar.bz2", "a.tar.xz", "a.7z", "a.tbz", "a.tbz2", "a.txz"] {
     check("archive \(name): refused as a link, allowed for the viewer's Open", LinkPolicy.refusal(file(name)) != nil
           && LinkPolicy.refusal(file(name), allowArchives: true) == nil && LinkPolicy.opener(for: file(name), allowArchives: true) != nil)
 }

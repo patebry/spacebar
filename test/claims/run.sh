@@ -27,7 +27,7 @@ ROUTES = '''net.daringfireball.markdown public.markdown md.spacebar.qlmanage
   com.microsoft.typescript public.css public.make-source public.patch-file public.protobuf-source com.apple.applescript.text com.apple.rez-source
   public.json public.geojson public.yaml public.xml com.apple.property-list public.tab-separated-values-text com.apple.log org.w3.webvtt
   public.zip-archive public.tar-archive org.gnu.gnu-zip-archive org.gnu.gnu-zip-tar-archive public.bzip2-archive org.tukaani.xz-archive
-  org.7-zip.7-zip-archive public.data'''.split()
+  public.tar-bzip2-archive org.tukaani.tar-xz-archive org.7-zip.7-zip-archive public.data'''.split()
 # Apple previews these itself (or nothing routes them); a claim would be dead weight or, for a parent, meaningless.
 APPLE = '''public.plain-text public.text public.html public.xhtml public.comma-separated-values-text public.x509-certificate com.adobe.pdf
   public.image public.png public.jpeg public.movie public.mpeg-4 com.apple.quicktime-movie public.mp3 public.mpeg-4-audio com.apple.m4a-audio
@@ -35,9 +35,13 @@ APPLE = '''public.plain-text public.text public.html public.xhtml public.comma-s
   public.mpeg-2-transport-stream public.avchd-mpeg-2-transport-stream com.apple.disk-image-udif public.disk-image org.matroska.mkv com.adobe.flash.video
   org.webmproject.webm public.source-code public.script public.archive public.content public.item com.apple.logic.exs'''.split()
 UNDECLARED = '''adoc asciidoc bat bib cfg cjs clj cmake conf cs csr cts dart diz dockerignore editorconfig env erl err ex example fish gitattributes
-  gitignore gitmodules go gql gradle graphql groovy har hcl hs ini ipynb json5 jsonc jsx kt kts less lock lua mod nfo nim npmrc nvmrc org out
-  properties ps1 pyi rar rs rst sample sass scala scss sql srt sum svelte tex toml tf vb vue wat webmanifest xsd xsl zig zst dockerfile'''.split()
-CONFORMS = {'public.source-code', 'public.script', 'public.plain-text', 'public.json', 'public.xml', 'public.archive'}
+  gitignore gitmodules go gql gradle graphql groovy har hcl hs ini ipynb json5 jsonc jsx kt kts less lock lua nfo nim npmrc nvmrc org
+  properties ps1 pyi rar rs rst sample sass scala scss sql srt sum svelte tex toml tf vb vue wat webmanifest xsd xsl zig zst tzst dockerfile'''.split()
+# Other tools own these for binary files (a.out, Go's go.mod is text but .mod is also a tracker module): never declared.
+NOT_DECLARED = ['out', 'mod']
+# Files that often hold secrets: shown, but data, so the viewer never offers to open them in another app.
+SECRETS = {'md.spacebar.type.env', 'md.spacebar.type.npmrc', 'md.spacebar.type.csr'}
+CONFORMS = {'public.source-code', 'public.script', 'public.plain-text', 'public.json', 'public.xml', 'public.archive', 'public.data'}
 
 missing = [t for t in ROUTES if t not in claims]
 check(not missing, f'appex claims every routing system type ({len(ROUTES)})', missing)
@@ -54,8 +58,10 @@ exts = [e for d in ours for e in d['UTTypeTagSpecification']['public.filename-ex
 check(len(exts) == len(set(exts)), 'each extension belongs to one declaration', [e for e in exts if exts.count(e) > 1])
 check(not [e for e in UNDECLARED if e not in exts], f'every undeclared extension the spike found ({len(UNDECLARED)}) is declared', [e for e in UNDECLARED if e not in exts])
 badconf = [(d['UTTypeIdentifier'], d.get('UTTypeConformsTo')) for d in ours
-           if not d.get('UTTypeConformsTo') or any(c not in CONFORMS for c in d['UTTypeConformsTo'])]
-check(not badconf, 'each declaration conforms to source code, a script, plain text, JSON, XML or an archive', badconf)
+           if not d.get('UTTypeConformsTo') or any(c not in CONFORMS for c in d['UTTypeConformsTo'])
+           or (('public.data' in d['UTTypeConformsTo']) != (d['UTTypeIdentifier'] in SECRETS))]
+check(not badconf, 'each declaration conforms to source code, a script, plain text, JSON, XML or an archive; only the secret-bearing ones to data', badconf)
+check(not [e for e in NOT_DECLARED if e in exts], '.out and .mod are not declared', [e for e in NOT_DECLARED if e in exts])
 wellformed = all(d['UTTypeIdentifier'] == 'md.spacebar.type.' + d['UTTypeTagSpecification']['public.filename-extension'][0]
                  and d.get('UTTypeDescription') and set(d) == {'UTTypeIdentifier', 'UTTypeDescription', 'UTTypeConformsTo', 'UTTypeTagSpecification'}
                  for d in ours)

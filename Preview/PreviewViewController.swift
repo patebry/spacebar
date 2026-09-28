@@ -1212,7 +1212,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             guard let url = fileURL, m.string("path", max: 4096) == url.path, fileKind != .markdown, shownCanOpen, LinkPolicy.fileRefusal(url, allowArchives: fileKind == .archive) == nil else {
                 return refuse("openFile", "not the file on screen or not allowed")
             }
-            openExternally(url)
+            helper { $0.openFileOnScreen(url) { ok in if !ok { DispatchQueue.main.async { self.status("not opened: \(url.lastPathComponent)") } } } }
         case "reveal":
             guard let url = fileURL, fileKind != .markdown || unavailablePath == url.path, m.string("path", max: 4096) == url.path,
                   FolderListing.isInside(url.path, root: rootDir) else {

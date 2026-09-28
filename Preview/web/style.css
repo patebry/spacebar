@@ -129,8 +129,9 @@
   #sidebar { font: 13px/1.35 -apple-system, BlinkMacSystemFont, sans-serif; -webkit-user-select: none; user-select: none; }
   #side-head { padding: 44px 16px 6px; font-size: 11px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #side-list { padding: 0 8px 12px; }
-  #side-list a.row { display: flex; align-items: center; gap: 5px; padding: 3px 8px 3px calc(2px + var(--depth, 0) * 14px); border-radius: 6px;
-    color: var(--fg); text-decoration: none; white-space: nowrap; }
+  /* Every row is as tall as app.js's SIDE_ROW_H: the list draws only the rows in view and spaces out the rest by that height. */
+  #side-list a.row { display: flex; align-items: center; gap: 5px; height: 24px; box-sizing: border-box; padding: 0 8px 0 calc(2px + var(--depth, 0) * 14px);
+    border-radius: 6px; color: var(--fg); text-decoration: none; white-space: nowrap; }
   #side-list a.row { transition: background-color .12s; }
   #side-list a.row:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
   #side-list a.row.folder:hover .twisty { color: var(--fg); }
@@ -147,13 +148,25 @@
   #side-list .twisty svg { width: 10px; height: 10px; fill: currentColor; transition: transform .12s ease-out; }
   #side-list a.open .twisty svg { transform: rotate(90deg); }
   #side-list.keyed a.row.cursor:not(.active) { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent); }
-  #side-filter { padding: 0 8px 6px; }
-  #side-q { display: block; width: 100%; box-sizing: border-box; margin: 0; padding: 3px 8px; border: 0; border-radius: 6px; outline: none;
+  #side-filter { padding: 0 8px 6px; display: flex; gap: 4px; align-items: center; }
+  #side-menu { flex: none; width: 24px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; cursor: default;
+    color: var(--muted); background: transparent; }
+  #side-menu:hover, #side-menu[aria-expanded=true] { color: var(--fg); background: color-mix(in srgb, var(--fg) 7%, transparent); }
+  #sidebar > #side-pop { position: absolute; z-index: 3; top: 0; right: 8px; width: auto; min-width: 190px; padding: 5px; display: grid;
+    border-radius: 8px; background: var(--bg); box-shadow: 0 0 0 .5px var(--frame-line, var(--border)), 0 8px 24px rgba(0, 0, 0, .18); }
+  #side-pop[hidden] { display: none; }
+  #side-pop button { font: inherit; text-align: left; color: var(--fg); background: none; border: 0; border-radius: 5px; padding: 4px 8px 4px 24px;
+    position: relative; cursor: default; white-space: nowrap; }
+  #side-pop button:hover { background: var(--accent); color: #fff; }
+  #side-pop button[aria-checked=true]::before { content: "✓"; position: absolute; left: 8px; }
+  #side-pop .side-pop-sep { height: 1px; margin: 4px 6px; background: var(--border); }
+  #side-q { display: block; flex: 1 1 auto; min-width: 0; box-sizing: border-box; margin: 0; padding: 3px 8px; border: 0; border-radius: 6px; outline: none;
     font: inherit; font-size: 12px; color: var(--fg); background: color-mix(in srgb, var(--fg) 6%, transparent);
     -webkit-appearance: none; appearance: none; -webkit-user-select: text; user-select: text; }
   #side-q::placeholder { color: var(--muted); }
   #side-q:focus, #side-q.held { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
-  #side-list .row-note { padding: 3px 8px 3px calc(21px + var(--depth, 0) * 14px); font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+  #side-list .row-note { height: 24px; box-sizing: border-box; display: flex; align-items: center; padding: 0 8px 0 calc(21px + var(--depth, 0) * 14px);
+    font-size: 11.5px; color: var(--muted); white-space: nowrap; }
   #side-more { padding: 4px 16px 14px; font-size: 11.5px; color: var(--muted); }
   #side-resize::after { content: ""; position: absolute; top: 0; bottom: 0; right: 0; width: 2px; background: transparent; transition: background .12s; }
   #side-resize:hover::after, :root.sb-resizing #side-resize::after { background: color-mix(in srgb, var(--accent) 60%, transparent); }
@@ -168,7 +181,8 @@
   .ic .ic-body { fill: color-mix(in srgb, currentColor 10%, transparent); }
   .ic-folder { color: #3a8ee6; } .ic-folder .ic-body { fill: color-mix(in srgb, currentColor 28%, transparent); }
   .ic-image { color: #2e9a63; } .ic-pdf { color: #d8453a; } .ic-code { color: #8656cf; } .ic-data { color: #1d9588; } .ic-markdown { color: var(--fg); }
-  .ic-media { color: #d9761f; }
+  .ic-media, .ic-video, .ic-audio { color: #d9761f; } .ic-archive { color: #a0712c; } .ic-app { color: #5b6f8c; } .ic-font { color: var(--fg); }
+  .ic-doc { color: #2f6fd6; } .ic-sheet { color: #1f8a4c; } .ic-slides { color: #d4652b; } .ic-model { color: #7a5bd1; }
 
   /* ---------- the breadcrumb ---------- */
   #crumbs { font: 12px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--muted); white-space: nowrap; overflow: hidden;
@@ -185,14 +199,25 @@
   #doc .viewer button:active { background: color-mix(in srgb, var(--code-bg) 70%, var(--fg) 14%); transform: scale(.97); }
   #doc .viewer button { transition: background-color .12s, transform .08s; }
   #doc .viewer-note { font: 12px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--muted); margin: 0 0 10px; }
-  #doc .code-view { display: flex; align-items: flex-start; background: var(--hl-bg); border-radius: 8px; overflow: auto; font: 12.5px/1.5 var(--font-mono); }
+  #doc .code-view { display: flex; align-items: flex-start; background: var(--hl-bg); border-radius: 8px; overflow: auto; font: calc(var(--font-size, 15px) * .8333)/1.5 var(--font-mono); }
   #doc .code-view pre { margin: 0; padding: 12px 14px; background: none; border-radius: 0; overflow: visible; font: inherit; }
   #doc .code-view code { font: inherit; background: none; padding: 0; }
   #doc .code-view .gutter { position: sticky; left: 0; z-index: 1; flex: none; text-align: right; color: var(--muted); background: var(--hl-bg);
     border-right: 1px solid var(--border); padding-right: 10px; -webkit-user-select: none; user-select: none; }
   #doc .code-view pre.code { flex: 1 1 auto; }
   #doc .viewer-image { margin: 0; }
+  #doc .viewer-image .viewer-kind { display: flex; gap: 8px; }
+  #doc .viewer-image .img-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #doc .viewer-image .img-zoom { flex: none; font-variant-numeric: tabular-nums; }
+  #doc .viewer-image .img-zoom:empty { display: none; }
+  #doc .img-stage { -webkit-user-select: none; user-select: none; }
+  #doc .img-stage.zoomable { cursor: zoom-in; }
   #doc .viewer-image img { display: block; margin: 0 auto; max-width: 100%; max-height: calc(100vh - 150px); object-fit: contain; }
+  /* Zoomed: the image at its size in a box the panel's height, scrolled by a drag, a trackpad or the scroll bars. */
+  #doc .img-stage.zoomed { display: flex; height: calc(100vh - 150px); overflow: auto; cursor: zoom-out; border-radius: 6px;
+    background: color-mix(in srgb, var(--fg) 4%, transparent); }
+  #doc .img-stage.zoomed img { flex: none; margin: auto; max-width: none; max-height: none; border-radius: 0; }
+  #doc .img-stage.panning { cursor: grabbing; }
   /* A PDF fills the rest of the panel under its toolbar, edge to edge; the extension lays its native PDFView over .pdf-area. */
   :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio]) body { height: 100vh; overflow: hidden; }
   :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio]) #main { display: flex; flex-direction: column; height: 100vh; }
@@ -205,8 +230,55 @@
   /* Audio: a player of its own height, centred in the space under the toolbar. */
   :root[data-view=audio] #doc .viewer-audio .pdf-area { flex: none; box-sizing: border-box; width: min(560px, calc(100% - 40px)); height: 220px;
     max-height: 100%; margin: auto; border: 1px solid var(--border); border-radius: 8px; }
-  #doc .viewer-csv table { font-size: 13px; }
-  #doc .viewer-csv th, #doc .viewer-csv td { max-width: 32em; vertical-align: top; white-space: pre-wrap; }
+  /* CSV: a scroll box of its own, so the header row and the row numbers stay put while the rows scroll under them. */
+  #doc .csv-scroll { max-height: calc(100vh - 150px); overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+  #doc table.csv { display: table; width: max-content; min-width: 100%; max-width: none; overflow: visible; margin: 0; border-collapse: separate;
+    border-spacing: 0; font-size: calc(var(--font-size, 15px) * .8667); line-height: 1.45; }
+  #doc table.csv :is(th, td) { border: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 4px 10px;
+    max-width: 32em; vertical-align: top; white-space: pre-wrap; text-align: left; }
+  #doc table.csv :is(th, td):last-child { border-right: 0; }
+  #doc table.csv thead th { position: sticky; top: 0; z-index: 2; background: linear-gradient(var(--code-bg), var(--code-bg)), var(--bg); }
+  #doc table.csv th.rn { position: sticky; left: 0; z-index: 1; width: 1%; min-width: 2ch; text-align: right; color: var(--muted); font-weight: 400;
+    font-variant-numeric: tabular-nums; background: linear-gradient(var(--code-bg), var(--code-bg)), var(--bg); -webkit-user-select: none; user-select: none; }
+  #doc table.csv thead th.rn { z-index: 3; }
+  #doc table.csv .num { text-align: right; font-variant-numeric: tabular-nums; }
+  #doc table.csv tbody tr:not(.pad):hover > td { background: color-mix(in srgb, var(--fg) 4%, transparent); }
+  #doc table.csv.virtual :is(th, td) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #doc table.csv tr.pad > td { padding: 0; border: 0; }
+  #doc .viewer-csv button.csv-sort, #doc .viewer-csv button.csv-sort:hover, #doc .viewer-csv button.csv-sort:active {
+    all: unset; display: flex; align-items: baseline; gap: 6px; width: 100%; cursor: default; font-weight: 600; transform: none; }
+  #doc .viewer-csv th.num button.csv-sort { justify-content: flex-end; }
+  #doc .viewer-csv button.csv-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+  #doc .viewer-csv .csv-ind { font-size: .7em; color: var(--muted); }
+  #doc .viewer-seg { display: inline-flex; flex: none; }
+  #doc .viewer-seg > button { border-radius: 0; margin-left: -1px; }
+  #doc .viewer-seg > button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+  #doc .viewer-seg > button:last-child { border-radius: 0 6px 6px 0; }
+  #doc .viewer-seg > button[aria-pressed=true] { background: color-mix(in srgb, var(--accent) 16%, var(--code-bg)); }
+  /* JSON: one row per key or item, indented by depth; values in the code theme's colours. */
+  #doc .json-tree { background: var(--hl-bg); color: var(--hl-fg); border-radius: 8px; padding: 10px 12px; overflow: auto;
+    font: calc(var(--font-size, 15px) * .8333)/1.6 var(--font-mono); }
+  #doc .jt-row { display: flex; align-items: baseline; padding-left: calc(var(--d, 0) * 1.4em); white-space: pre; min-width: max-content; }
+  #doc .viewer .jt-tw, #doc .viewer .jt-tw:hover, #doc .viewer .jt-tw:active { all: unset; flex: none; width: 1.3em; text-align: center; color: var(--muted);
+    cursor: default; font-size: .85em; transform: none; }
+  #doc .viewer button.jt-tw:focus-visible { outline: 2px solid var(--accent); border-radius: 3px; }
+  #doc .jt-index { color: var(--muted); }
+  #doc .jt-sum { color: var(--muted); }
+  #doc .jt-val.hljs-string { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+  #doc .viewer button.jt-more-b { height: 20px; font-size: 11px; margin: 2px 0; }
+  #doc .viewer button.json-all { flex: none; }
+  /* A notebook: cells one under another, code in the code theme, outputs under their cell. */
+  #doc .notebook { display: grid; gap: 14px; }
+  #doc .nb-cell { min-width: 0; }
+  #doc .nb-md > :first-child { margin-top: 0; }
+  #doc .nb-md > :last-child { margin-bottom: 0; }
+  #doc .nb-code { display: grid; gap: 6px; }
+  #doc .nb-prompt { font: 11px/1 var(--font-mono); color: var(--muted); }
+  #doc .nb-out { margin: 0; padding: 6px 12px; background: none; color: var(--fg); border-left: 2px solid var(--border); border-radius: 0;
+    font: calc(var(--font-size, 15px) * .8)/1.45 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  #doc .nb-out.nb-err { color: #cf222e; border-left-color: #cf222e; background: color-mix(in srgb, #cf222e 6%, transparent); }
+  @media (prefers-color-scheme: dark) { #doc .nb-out.nb-err { color: #f47067; border-left-color: #f47067; } }
+  #doc .nb-img { display: block; max-width: 100%; background: #fff; border-radius: 4px; }
   #doc .viewer-archive table.archive { display: table; width: 100%; font-size: 13px; }
   #doc .viewer-archive th, #doc .viewer-archive td { padding-top: 3px; padding-bottom: 3px; vertical-align: middle; }
   #doc .viewer-archive th:nth-child(2), #doc .viewer-archive td.arc-size { text-align: right; white-space: nowrap; }
@@ -306,6 +378,13 @@
   #aa-pop #aa-settings { text-align: left; height: 26px; padding: 0 8px; margin: -4px; border-radius: 6px; }
   #aa-pop #aa-settings:hover { background: var(--ui-accent); color: #fff; }
   #toolbar > #aa { position: relative; }
+  /* Text views: size and theme only. The update's own button opens the update row alone. */
+  #aa-pop[data-mode=text] :is(#aa-width, #aa-font) { display: none; }
+  #aa-pop[data-mode=update] > :not(#aa-update) { display: none; }
+  #aa-pop[data-mode=update] #aa-update { padding-bottom: 0; box-shadow: none; }
+  #toolbar > #upd { display: inline-flex; align-items: center; gap: 6px; }
+  #toolbar > #upd[hidden] { display: none; }
+  #upd .upd-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ui-accent); }
   #toolbar > #aa[data-update]::after { content: ""; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%;
     background: var(--ui-accent); }
   #aa-update { display: grid; gap: 2px; padding-bottom: 8px; margin: 0 -12px; padding-inline: 12px; box-shadow: 0 .5px 0 var(--ui-edge); }

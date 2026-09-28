@@ -73,7 +73,12 @@ check("panel allow-list takes theme", afterPanel.theme == "solarized")
 check("panel allow-list drops userTheme/editor/customCSS/editing/rawHTML/remoteImages",
       afterPanel.userTheme == nil && afterPanel.editorBundleID == nil && afterPanel.customCSS && afterPanel.inlineEditing
       && afterPanel.rawHTML == "sanitized" && !afterPanel.remoteImages)
-check("panel keys are cosmetic only", Settings.panelKeys.isSubset(of: ["theme", "appearance", "fontSize", "width", "bodyFont", "lineHeight", "sidebarCollapsed", "sidebarWidth"]))
+check("panel keys are cosmetic only", Settings.panelKeys.isSubset(of: ["theme", "appearance", "fontSize", "width", "bodyFont", "lineHeight", "sidebarCollapsed", "sidebarWidth", "folderSort"]))
+check("folderSort: a panel key, name or modified only", Settings.panelPatch("folderSort", "modified").map { obj(String(data: $0, encoding: .utf8)!)["folderSort"] as? String } == "modified"
+      && [NSNumber(value: 1), "size", NSNull(), ["name"]].allSatisfy { Settings.panelPatch("folderSort", $0) == nil })
+check("welcomeShown: off by default, a bool only, not a panel key, kept by the file", !Settings().welcomeShown && Settings(dictionary: ["welcomeShown": true]).welcomeShown
+      && [1, "true", NSNull()].allSatisfy { !Settings(dictionary: ["welcomeShown": $0]).welcomeShown } && decode(#"{"welcomeShown":true}"#)?.welcomeShown == true
+      && Settings.allKeys.contains("welcomeShown") && Settings.panelPatch("welcomeShown", true) == nil)
 check("minimal chrome: off by default, a bool only, not a panel key", !Settings().minimalChrome && Settings(dictionary: ["minimalChrome": true]).minimalChrome
       && !Settings(dictionary: ["minimalChrome": 1]).minimalChrome && decode(#"{"minimalChrome":true}"#)?.minimalChrome == true
       && !Settings.panelKeys.contains("minimalChrome") && Settings.panelPatch("minimalChrome", true) == nil && Settings.allKeys.contains("minimalChrome"))
@@ -232,7 +237,8 @@ let payload = byName.payload(root: ld.path)
 let pe = payload["entries"] as? [[String: Any]] ?? []
 check("tree: payload names the root, the folder and each entry's icon", payload["rootName"] as? String == "listing" && payload["dir"] as? String == ld.path
       && payload["more"] as? Int == 0 && pe.first?["dir"] as? Bool == true && pe.first?["icon"] as? String == "folder"
-      && pe.first { $0["name"] as? String == "data.csv" }?["icon"] as? String == "data" && pe.first { $0["name"] as? String == "Tool.app" }?["icon"] as? String == "other")
+      && pe.first { $0["name"] as? String == "data.csv" }?["icon"] as? String == "data" && pe.first { $0["name"] as? String == "Tool.app" }?["icon"] as? String == "app"
+      && pe.first { $0["name"] as? String == "data.csv" }?["size"] is Int64 && pe.first?["size"] == nil && (pe.first?["modified"] as? Double ?? 0) > 1e12)
 check("tree: a missing folder lists nothing", FolderListing.list(ld.path + "/nope", sort: "name", readmeFirst: true).entries.isEmpty)
 check("tree: a folder preview opens its README, else its first Markdown file, else nothing (the scan takes over)",
       FolderListing.firstDocument(byName)?.name == "README.md"
@@ -249,12 +255,12 @@ check("paths: only plain spellings under the root", FolderListing.isPlainPath(ld
       && !FolderListing.isPlainPath("/etc/hosts", under: ld.path) && !FolderListing.isPlainPath(ld.path + "/alpha/..", under: ld.path))
 let big = dir.appendingPathComponent("big", isDirectory: true)
 try! fm.createDirectory(at: big, withIntermediateDirectories: true)
-for i in 0..<600 { fm.createFile(atPath: big.appendingPathComponent(String(format: "note-%04d.txt", i)).path, contents: Data()) }
+for i in 0..<5100 { fm.createFile(atPath: big.appendingPathComponent(String(format: "note-%04d.txt", i)).path, contents: Data()) }
 for i in 0..<20 { try! fm.createDirectory(at: big.appendingPathComponent("dir-\(i)"), withIntermediateDirectories: true) }
 let t0 = Date()
 let bigList = FolderListing.list(big.path, sort: "modified", readmeFirst: true)
-check("tree: 620 entries cap at 500 with 120 more, folders kept first (\(Int(Date().timeIntervalSince(t0) * 1000)) ms)",
-      bigList.entries.count == FolderListing.cap && bigList.more == 120 && bigList.folders.count == 20 && bigList.entries[20].name.hasPrefix("note-"))
+check("tree: 5,120 entries cap at 5,000 with 120 more, folders kept first (\(Int(Date().timeIntervalSince(t0) * 1000)) ms)",
+      FolderListing.cap == 5_000 && bigList.entries.count == FolderListing.cap && bigList.more == 120 && bigList.folders.count == 20 && bigList.entries[20].name.hasPrefix("note-"))
 try! fm.removeItem(at: big); try! fm.removeItem(at: ld); try! fm.removeItem(at: outside)
 
 // Type detection and the content-type map (Shared/FolderListing.swift, FileTypes)
@@ -352,13 +358,17 @@ do {
     let h = FileView.payload(path: huge.path, kind: .video, root: media.path, reason: "open", canOpen: true)
     let d = FileView.payload(path: media.path, kind: .video, root: media.path, reason: "open", canOpen: true)
     check("payload: a video or audio file is played natively, with its kind and size; one past 512 MB or not a file is its info card",
-          v["view"] as? String == "video" && v["size"] as? Int64 == 4096 && (v["kindName"] as? String)?.isEmpty == false && v["icon"] as? String == "media"
+          v["view"] as? String == "video" && v["size"] as? Int64 == 4096 && (v["kindName"] as? String)?.isEmpty == false && v["icon"] as? String == "video" && a["icon"] as? String == "audio"
           && a["view"] as? String == "audio" && a["size"] as? Int64 == 2048 && h["view"] as? String == "info" && d["view"] as? String == "info")
 }
 check("types: highlight.js languages", FileTypes.language(name: "a.ts") == "typescript" && FileTypes.language(name: "a.tsx") == "typescript"
       && FileTypes.language(name: "page.html") == "xml" && FileTypes.language(name: "Makefile") == "makefile" && FileTypes.language(name: "Dockerfile") == nil
       && FileTypes.language(name: "a.sh") == "bash" && FileTypes.language(name: "a.toml") == "ini")
 check("types: icons", [FileKind.json, .csv].allSatisfy { $0.icon == "data" } && FileKind.app.icon == "other" && FileKind.code.icon == "code")
+let glyphs: [(String, FileKind, String)] = [("a.ttf", .other, "font"), ("a.docx", .other, "doc"), ("a.XLSX", .other, "sheet"), ("a.key", .other, "slides"),
+    ("a.usdz", .other, "model"), ("a.webm", .other, "video"), ("a.ogg", .other, "audio"), ("a.zip", .archive, "archive"), ("Tool.app", .app, "app"),
+    ("a.mp4", .video, "video"), ("a.wav", .audio, "audio"), ("a.json", .json, "data"), ("a.html", .html, "code"), ("a.dat", .other, "other"), ("sub", .folder, "folder")]
+check("types: the sidebar's finer icons, by kind and then extension", glyphs.allSatisfy { FileTypes.glyph(name: $0.0, kind: $0.1) == $0.2 })
 check("content types: images and PDF by the map, SVG as an image",
       FileTypes.contentType(forPath: "/a/b.PNG") == "image/png" && FileTypes.contentType(forPath: "/a/b.jpg") == "image/jpeg"
       && FileTypes.contentType(forPath: "/a/b.svg") == "image/svg+xml" && FileTypes.contentType(forPath: "/a/b.pdf") == "application/pdf")

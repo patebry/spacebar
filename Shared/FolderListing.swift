@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 enum FileKind: String {
     case folder, markdown, image, pdf, html, video, audio, code, json, csv, text, archive, app, other
 
-    /// One of the sidebar's nine icons.
+    /// One of the nine icons the folder overview counts by.
     var icon: String {
         switch self {
         case .json, .csv: return "data"
@@ -58,6 +58,28 @@ enum FileTypes {
                                          "notice", "readme", "todo", "version", "codeowners", ".env.example", "env.example"]
     static let appExtensions: Set<String> = ["app", "pkg", "mpkg", "dmg", "exe", "msi", "dylib", "so", "o", "a", "bin", "workflow",
                                              "shortcut", "prefpane", "appex", "kext", "framework", "bundle", "plugin", "qlgenerator", "saver"]
+    /// Kinds shown as `.other` that still get an icon of their own in the sidebar and on the info card.
+    static let glyphExtensions: [String: Set<String>] = [
+        "font": ["ttf", "otf", "woff", "woff2", "ttc", "dfont", "fon", "pfb"],
+        "doc": ["doc", "docx", "pages", "rtf", "rtfd", "odt", "wpd", "epub"],
+        "sheet": ["xls", "xlsx", "xlsm", "numbers", "ods"],
+        "slides": ["ppt", "pptx", "key", "odp"],
+        "model": ["obj", "stl", "usdz", "usd", "usda", "usdc", "fbx", "glb", "gltf", "3ds", "dae", "blend", "ply", "reality", "3mf"],
+        "video": ["webm", "mkv", "avi", "ogv", "wmv", "flv", "mpg", "mpeg", "3gp", "m2v"],
+        "audio": ["ogg", "oga", "opus", "wma", "mid", "midi", "ape", "alac"],
+    ]
+
+    /// The sidebar's and info card's icon: finer than `FileKind.icon`, from the kind and then the extension.
+    static func glyph(name: String, kind: FileKind) -> String {
+        switch kind {
+        case .folder, .markdown, .image, .pdf, .code, .text, .archive, .app, .video, .audio: return kind.rawValue
+        case .html: return "code"
+        case .json, .csv: return "data"
+        default:
+            let ext = (name as NSString).pathExtension.lowercased()
+            return glyphExtensions.first { $0.value.contains(ext) }?.key ?? "other"
+        }
+    }
 
     /// The explicit map behind every `file` URL; anything missing is application/octet-stream, which the `file` host never serves.
     static let contentTypes: [String: String] = [
@@ -218,7 +240,7 @@ enum FileView {
             p["modified"] = Double(st.st_mtimespec.tv_sec) * 1000 + Double(st.st_mtimespec.tv_nsec / 1_000_000)
         }
         p["kindName"] = UTType(filenameExtension: (path as NSString).pathExtension).flatMap(\.localizedDescription) ?? "Document"
-        p["icon"] = kind.icon
+        p["icon"] = FileTypes.glyph(name: (path as NSString).lastPathComponent, kind: kind)
         p["canOpen"] = false
         p["view"] = "info"
         p["note"] = cloud ? "This file is in iCloud and couldn’t be downloaded." : "This file couldn’t be read."
@@ -265,7 +287,7 @@ enum FileView {
         p["modified"] = Double(st.st_mtimespec.tv_sec) * 1000 + Double(st.st_mtimespec.tv_nsec / 1_000_000)
         let type = UTType(filenameExtension: ext)
         p["kindName"] = type.flatMap(\.localizedDescription) ?? (regular ? "Document" : "Folder")
-        p["icon"] = kind.icon
+        p["icon"] = FileTypes.glyph(name: (path as NSString).lastPathComponent, kind: kind)
         p["canOpen"] = canOpen
         // A text file whose extension the system takes for something else (.ts is also an MPEG transport stream) is named by
         // what it holds, and is never handed to that other type's app.
@@ -327,9 +349,10 @@ enum FileView {
 /// counts the rest.
 enum FolderListing {
     static let markdownExtensions = FileTypes.markdownExtensions
-    static let cap = 500
+    /// The page draws only the rows in view, so a listing this long costs its transfer, not its drawing.
+    static let cap = 5_000
     /// Past this many names a folder is listed from its first names only (see `list`).
-    static let statCap = 5_000
+    static let statCap = 10_000
     static let maxDocumentBytes = 64 << 20
 
     struct Entry: Equatable {
@@ -355,7 +378,12 @@ enum FolderListing {
         /// What the page is sent for this folder of the tree rooted at `root`.
         func payload(root: String) -> [String: Any] {
             ["root": root, "rootName": (root as NSString).lastPathComponent, "dir": dir,
-             "entries": entries.map { ["name": $0.name, "path": $0.path, "dir": $0.isDirectory, "icon": $0.kind.icon] as [String: Any] },
+             "entries": entries.map { e -> [String: Any] in
+                 var d: [String: Any] = ["name": e.name, "path": e.path, "dir": e.isDirectory, "icon": FileTypes.glyph(name: e.name, kind: e.kind),
+                                         "modified": (e.modified * 1000).rounded()]
+                 if !e.isDirectory { d["size"] = e.size }
+                 return d
+             },
              "more": more]
         }
     }

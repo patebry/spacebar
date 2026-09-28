@@ -83,8 +83,8 @@ def make_tree(out):
         open(os.path.join(tree, name), 'wb').write(b'\0' + bytes(rnd.randrange(256) for _ in range(n - 1)))
     for name in ('tool', 'run.sh'):
         os.chmod(os.path.join(tree, name), 0o755)
-    for i in range(520):
-        open(os.path.join(tree, 'many', f'm-{i:03d}.txt'), 'w').write(f'{i}\n')
+    for i in range(5050):
+        open(os.path.join(tree, 'many', f'm-{i:04d}.txt'), 'w').write(f'{i}\n')
     shutil.copy(os.path.join(ROOT, 'test', 'fixtures', 'img.png'), os.path.join(tree, 'photo.png'))
     open(os.path.join(tree, 'doc.pdf'), 'wb').write(make_pdf('Hello PDF'))
     open(os.path.join(tree, 'broken.pdf'), 'wb').write(b'%PDF-1.4\nnot really a pdf\n')
@@ -197,6 +197,319 @@ CURSOR = """const t = (s) => (document.querySelector(s) || {}).textContent || nu
   return { cursor: t('#side-list a.cursor'), active: t('#side-list a.active'), focus: document.activeElement.id || document.activeElement.tagName,
     rows: [...document.querySelectorAll('#side-list a.row')].map((a) => [a.textContent, +a.getAttribute('aria-level'), a.getAttribute('aria-expanded')]),
     notes: [...document.querySelectorAll('#side-list .row-note')].map((n) => n.textContent), q: document.getElementById('side-q').value };"""
+
+
+SHOTS = os.environ.get('SPACEBAR_SHOTS', '')
+
+
+def shoot(page, name):
+    """A screenshot of the page into $SPACEBAR_SHOTS, in light and dark, when it is set."""
+    if not SHOTS:
+        return
+    os.makedirs(SHOTS, exist_ok=True)
+    for mode in ('light', 'dark'):
+        page.cmd('@appearance:' + mode)
+        page.cmd('@wait:0.3')
+        page.cmd(f'@shot:{os.path.join(SHOTS, name)}-{mode}.png')
+    page.cmd('@appearance:light')
+
+
+def dispatch_key(page, key, **mods):
+    opts = dict(key=key, bubbles=True, cancelable=True, **mods)
+    r = page.cmd('@eval:(() => { const e = new KeyboardEvent("keydown", ' + json.dumps(opts) + '); document.body.dispatchEvent(e); return String(e.defaultPrevented); })()')
+    page.cmd('@wait:0.3')
+    return r
+
+
+def big_folder(page, check, T):
+    """The tree's `many` folder, open: 5,050 files, 5,000 listed, drawn a window at a time, and reached by the keys and the filter."""
+    ROWS = """const l = document.getElementById('side-list'), rows = [...l.querySelectorAll('a.row')];
+      const m = rows.filter((a) => a.textContent.startsWith('m-'));
+      return { dom: rows.length, height: l.scrollHeight, first: m.length ? m[0].textContent : null, last: m.length ? m[m.length - 1].textContent : null,
+        set: m.length ? m[0].getAttribute('aria-setsize') : null, pos: m.length ? m[0].getAttribute('aria-posinset') : null,
+        notes: [...l.querySelectorAll('.row-note')].map((n) => n.textContent), cursor: (l.querySelector('a.cursor') || {}).textContent || null,
+        pads: l.querySelectorAll('.side-pad').length, top: l.scrollTop };"""
+    b = page.js(ROWS)
+    check(b['dom'] < 300 and b['height'] >= 5000 * 24 and b['set'] == '5000' and b['first'] == 'm-0000.txt' and b['pos'] == '1' and b['pads'] >= 1,
+          'a folder of 5,050 files: 5,000 listed, only the rows in view drawn, each row numbered in its set', json.dumps(b))
+    page.cmd("@eval:(() => { const l = document.getElementById('side-list'); l.scrollTop = l.scrollHeight; l.dispatchEvent(new Event('scroll')); return 0; })()")
+    page.cmd('@wait:0.3')
+    b = page.js(ROWS)
+    check(b['last'] == 'm-4999.txt' and b['notes'] == ['50 more not listed'] and b['dom'] < 300,
+          'scrolled to its end: the last listed file and the "50 more not listed" note are drawn', json.dumps(b))
+    click(page, '#side-list a.row[data-path$="/m-4990.txt"]')
+    page.cmd('@wait:0.4')
+    dispatch_key(page, 'End')
+    b = page.js(ROWS)
+    check(b['cursor'] == 'wide.csv' and b['dom'] < 300, 'End reaches the last row, far below the rows drawn, and draws it', json.dumps(b))
+    dispatch_key(page, 'Home')
+    b = page.js(ROWS)
+    check(b['cursor'] == 'hostile' and b['top'] == 0, 'Home goes back to the first row', json.dumps(b))
+    page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.value = 'm-4999'; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
+    f = page.js("return [...document.querySelectorAll('#side-list a.row')].map((a) => a.textContent)")
+    check(f == ['many', 'm-4999.txt'], 'the filter finds a file past the old cap of 500', json.dumps(f))
+    page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.value = ''; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
+
+
+def make_viewers(out):
+    """Files for the viewers: a large and a small image, CSVs with other delimiters and past the row cap, nested and large JSON, a
+    notebook, and one file of each kind with an icon of its own."""
+    d = os.path.join(out, 'viewers')
+    os.makedirs(d)
+    put = lambda n, data: open(os.path.join(d, n), 'wb' if isinstance(data, bytes) else 'w').write(data)
+    put('big.png', make_png(2400, 1600, (40, 120, 200)))
+    shutil.copy(os.path.join(ROOT, 'test', 'fixtures', 'img.png'), os.path.join(d, 'small.png'))
+    put('prices.csv', 'name;price;qty\nApfel;1,50;3\nBirne;0,99;10\nFeige;12,25;1\n')
+    put('pipes.csv', 'a|b|c\n1|2|3\n4|5|6\n')
+    put('sort.csv', 'item,n,when\nb,10,x\na,9,y\nc,,z\nd,100,w\ne,9,v\n')
+    put('rows.csv', 'i,square,label\n' + ''.join(f'{i},{i * i},row {i}\n' for i in range(60000)))
+    put('nested.json', json.dumps({'items': list(range(1200)), 'deep': {'a': {'b': {'c': {'d': [1, {'e': 'end'}]}}}},
+                                   'text': '<img src=x onerror="window.__pwned=1">', 'flags': [True, False, None]}))
+    put('large.json', '[' + ','.join(['{"k": "' + 'v' * 90 + '"}'] * 22000) + ']')
+    png = base64.b64encode(make_png(40, 30, (20, 160, 90))).decode()
+    put('analysis.ipynb', json.dumps({'nbformat': 4, 'nbformat_minor': 5,
+        'metadata': {'kernelspec': {'language': 'python', 'name': 'python3'}},
+        'cells': [
+            {'cell_type': 'markdown', 'metadata': {}, 'source': ['# Notebook title\n', '\n', 'Some *text* and $x^2$.\n', '\n', '- [ ] a task\n', '\n',
+                                                                  '<img src=x onerror="window.__pwned=1"> <script>window.__pwned=1</script>\n']},
+            {'cell_type': 'code', 'execution_count': 1, 'metadata': {}, 'source': ['def f(x):\n', '    return x * 2\n', 'print(f(21))'],
+             'outputs': [{'output_type': 'stream', 'name': 'stdout', 'text': ['42\n']}]},
+            {'cell_type': 'code', 'execution_count': 2, 'metadata': {}, 'source': ['f(1)'],
+             'outputs': [{'output_type': 'execute_result', 'execution_count': 2, 'metadata': {}, 'data': {'text/plain': ['2'], 'text/html': ['<b onclick="x">2</b>']}}]},
+            {'cell_type': 'code', 'execution_count': 3, 'metadata': {}, 'source': ['plot()'],
+             'outputs': [{'output_type': 'display_data', 'metadata': {}, 'data': {'image/png': png, 'text/plain': ['<Figure>']}},
+                         {'output_type': 'display_data', 'metadata': {}, 'data': {'image/png': 'not base64 "><script>'}}]},
+            {'cell_type': 'code', 'execution_count': 4, 'metadata': {}, 'source': ['1/0'],
+             'outputs': [{'output_type': 'error', 'ename': 'ZeroDivisionError', 'evalue': 'division by zero',
+                          'traceback': ['\u001b[0;31mZeroDivisionError\u001b[0m: division by zero']}]},
+            {'cell_type': 'code', 'execution_count': None, 'metadata': {}, 'source': ['display(HTML("x"))'],
+             'outputs': [{'output_type': 'display_data', 'metadata': {}, 'data': {'text/html': ['<iframe src="https://example.com"></iframe>']}}]},
+        ]}))
+    for n in ('font.ttf', 'report.docx', 'budget.xlsx', 'deck.pptx', 'model.usdz', 'bundle.zip', 'clip.mkv', 'tune.ogg'):
+        put(n, b'\0\1\2\3' * 64)
+    return d
+
+
+def viewers(page, check, out, st):
+    """The upgraded viewers: image zoom and pan, the CSV table, the JSON tree, notebooks, the Aa popover per view, and the
+    sidebar's tooltips, icons and menu."""
+    d = make_viewers(out)
+    V = lambda n: os.path.join(d, n)
+
+    def view(name):
+        page.cmd('@root:' + d)
+        r = page.render(V(name))
+        page.cmd('@wait:0.3')
+        return r
+    page.cmd('@size:1200x800')
+    page.apply(sidebarCollapsed=False, width='medium')
+
+    # ---- the sidebar: an icon for each kind, a tooltip with size and date, and the sort menu ----
+    view('big.png')
+    rows = {r[0]: r[3] for r in st()['rows']}
+    want = {'font.ttf': 'ic-font', 'report.docx': 'ic-doc', 'budget.xlsx': 'ic-sheet', 'deck.pptx': 'ic-slides', 'model.usdz': 'ic-model',
+            'bundle.zip': 'ic-archive', 'clip.mkv': 'ic-video', 'tune.ogg': 'ic-audio', 'big.png': 'ic-image', 'analysis.ipynb': 'ic-data'}
+    check(all(rows.get(k) == v for k, v in want.items()), 'sidebar: archives, fonts, documents, spreadsheets, slides, 3D, video and audio have icons of their own',
+          json.dumps({k: rows.get(k) for k in want}))
+    tip = page.js("return document.querySelector('#side-list a.row[data-path$=\"/font.ttf\"]').title")
+    check(tip.startswith('font.ttf\n256 bytes · Modified '), 'sidebar: a row\'s tooltip gives its size and when it was modified', json.dumps(tip))
+    click(page, '#side-menu')
+    menu = page.js("""const p = document.getElementById('side-pop'); return { open: !p.hidden, items: [...p.querySelectorAll('button')].map((b) => [b.textContent, b.getAttribute('aria-checked')]),
+      expanded: document.getElementById('side-menu').getAttribute('aria-expanded'), inside: p.getBoundingClientRect().right <= document.getElementById('sidebar').getBoundingClientRect().right + 1 }""")
+    check(menu == {'open': True, 'items': [['Sort by Name', 'true'], ['Sort by Date Modified', 'false'], ['Show Hidden Files…', 'false']], 'expanded': 'true', 'inside': True},
+          'sidebar menu: sort order checked, hidden files shown as off', json.dumps(menu))
+    shoot(page, 'sidebar-menu')
+    keys = dispatch_key(page, 'ArrowDown')
+    check(keys['result'] == 'false', 'sidebar menu: the tree keys wait while it is open')
+    r = click(page, '#side-pop [data-sort=modified]')
+    written = [m.get('patch') for m in r['messages'] if m.get('type') == '_written']
+    check(written == ['{"folderSort":"modified"}'] and page.js("return document.getElementById('side-pop').hidden")
+          and page.js("return document.querySelector('#side-pop [data-sort=modified]').getAttribute('aria-checked')") == 'true',
+          'sidebar menu: Sort by Date Modified saves folderSort through the panel gate', json.dumps(written))
+    r = click(page, '#side-pop [data-sort=name]')
+    click(page, '#side-menu')
+    r = click(page, '#side-hidden')
+    o = [m for m in r['messages'] if m.get('type') == 'openSettings']
+    check(len(o) == 1 and o[0].get('tab') == 'folders' and not [m for m in r['messages'] if m.get('type') == 'setting'],
+          'sidebar menu: Show Hidden Files opens Settings › Sidebar; the page never changes it', json.dumps(o))
+    r = page.cmd("@eval:window.webkit.messageHandlers.sb.postMessage({type: 'setting', key: 'showHiddenFiles', value: true}); 0")
+    page.cmd('@wait:0.2')
+    check('_settingRefused' in [m.get('type') for m in r['messages'] + page.cmd('@eval:0')['messages']], 'showHiddenFiles from the page is refused by the gate')
+
+    # ---- the image viewer ----
+    ZOOM = """const s = document.querySelector('#doc .img-stage'), i = s.querySelector('img'), r = i.getBoundingClientRect();
+      return { zoomed: s.classList.contains('zoomed'), label: document.querySelector('#doc .img-zoom').textContent, w: Math.round(r.width),
+        left: Math.round(s.scrollLeft), top: Math.round(s.scrollTop), cap: document.querySelector('#doc figcaption').textContent, aa: document.getElementById('aa').hidden,
+        fits: r.width <= document.getElementById('doc').clientWidth + 1 && r.height <= innerHeight };"""
+    AT = """(dx, dy, detail) => { const s = document.querySelector('#doc .img-stage'), r = s.querySelector('img').getBoundingClientRect();
+      const x = r.left + r.width * dx, y = r.top + r.height * dy;
+      for (const type of ['mousedown', 'mouseup', 'click']) s.querySelector('img').dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, detail }));
+      return 0; }"""
+    at = lambda dx, dy, detail=1: page.cmd(f'@eval:({AT})({dx}, {dy}, {detail})')
+    view('big.png')
+    page.cmd('@wait:0.3')
+    z = page.js(ZOOM)
+    check(not z['zoomed'] and z['fits'] and z['label'].endswith('%') and int(z['label'][:-1]) < 100 and '2400 × 1600' in z['cap'] and z['aa'],
+          'image: fitted to the panel, its zoom in the caption; no Aa popover for an image', json.dumps(z))
+    shoot(page, 'image-fit')
+    at(0.75, 0.5)
+    z = page.js(ZOOM)
+    check(z['zoomed'] and z['label'] == '100%' and z['w'] == 2400 and z['left'] > 0, 'image: a click zooms to actual size about the point clicked', json.dumps(z))
+    shoot(page, 'image-100')
+    before = z['left']
+    page.cmd('@nativedrag:#doc .img-stage,-150')
+    z = page.js(ZOOM)
+    check(z['zoomed'] and z['left'] >= before + 100, 'image: a drag moves the zoomed image and does not zoom back out', json.dumps([before, z]))
+    at(0.5, 0.5)
+    z = page.js(ZOOM)
+    check(not z['zoomed'] and z['fits'], 'image: another click fits it again', json.dumps(z))
+    at(0.5, 0.5, 1)
+    at(0.5, 0.5, 2)
+    z = page.js(ZOOM)
+    check(z['zoomed'] and z['label'] == '100%', 'image: a double-click toggles once', json.dumps(z))
+    at(0.5, 0.5)
+    page.cmd("""@eval:(() => { const s = document.querySelector('#doc .img-stage'), r = s.getBoundingClientRect();
+      s.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -40, clientX: r.left + 50, clientY: r.top + 50 })); return 0; })()""")
+    z = page.js(ZOOM)
+    fitted = page.js("return Math.round(document.querySelector('#doc .img-stage img').naturalWidth)")
+    check(z['zoomed'] and 100 > int(z['label'][:-1]) > 0 and z['w'] < fitted, 'image: a pinch (a wheel with ctrl) zooms by steps', json.dumps(z))
+    dispatch_key(page, '=', metaKey=True)
+    z2 = page.js(ZOOM)
+    dispatch_key(page, '0', metaKey=True)
+    z3 = page.js(ZOOM)
+    check(z2['w'] > z['w'] and not z3['zoomed'], 'image: ⌘+ zooms in and ⌘0 fits', json.dumps([z['w'], z2['w'], z3['zoomed']]))
+    view('small.png')
+    page.cmd('@wait:0.3')
+    at(0.5, 0.5)
+    z = page.js(ZOOM)
+    check(z['zoomed'] and z['label'] == '200%' and z['w'] == 320, 'image: a small image, already at 100%, zooms to 200%', json.dumps(z))
+    rm = page.js("""const out = []; for (const sh of document.styleSheets) { let rules; try { rules = sh.cssRules; } catch (e) { continue; }
+        const walk = (list) => { for (const r of list) { if (r.cssRules) walk(r.cssRules); if (/img-stage/.test(r.selectorText || '') && /transition|animation/.test(r.cssText)) out.push(r.cssText); } };
+        walk(rules); } return out""")
+    check(rm == [], 'image: zooming never animates (nothing for reduced motion to turn off)', json.dumps(rm))
+
+    # ---- the Aa popover per view, and the update's own button ----
+    AA = """const p = document.getElementById('aa-pop'), vis = (id) => { const e = document.getElementById(id); return !!e && !e.hidden && getComputedStyle(e).display !== 'none'; };
+      return { aa: vis('aa'), upd: vis('upd'), open: !p.hidden, mode: p.dataset.mode || null,
+        parts: ['aa-update', 'aa-themes', 'aa-width', 'aa-font', 'aa-settings'].filter((id) => !p.hidden && vis(id) && document.getElementById(id).getBoundingClientRect().height > 0) };"""
+    got = {}
+    for name, v in (('sort.csv', 'csv'), ('nested.json', 'json'), ('font.ttf', 'info'), ('big.png', 'image')):
+        view(name)
+        a = page.js(AA)
+        if a['aa']:
+            click(page, '#aa')
+            a = page.js(AA)
+            click(page, '#aa')
+        got[v] = a
+    page.cmd('@root:')
+    page.render(os.path.join(ROOT, 'test', 'fixtures', 'demo.md'))
+    click(page, '#aa')
+    got['markdown'] = page.js(AA)
+    click(page, '#aa')
+    check(got['markdown']['parts'] == ['aa-themes', 'aa-width', 'aa-font', 'aa-settings'] and got['csv']['parts'] == ['aa-themes', 'aa-settings']
+          and got['json']['parts'] == ['aa-themes', 'aa-settings'] and not got['info']['aa'] and not got['image']['aa'],
+          'Aa: every option for Markdown; text size and theme for CSV, JSON and code; none for an image or an info card', json.dumps(got))
+    page.cmd("@eval:sb.update({ state: 'available', version: '9.9.9' }); 0")
+    md = page.js(AA)
+    view('big.png')
+    a = page.js(AA)
+    click(page, '#upd')
+    b = page.js(AA)
+    shoot(page, 'update-button')
+    click(page, '#upd')
+    view('sort.csv')
+    c = page.js(AA)
+    check(md['aa'] and not md['upd'] and a['upd'] and not a['aa'] and b['open'] and b['mode'] == 'update' and b['parts'] == ['aa-update'] and c['aa'] and not c['upd'],
+          'an update: its dot on Aa where Aa shows; elsewhere a button of its own that opens the update row alone', json.dumps([md, a, b, c]))
+    page.cmd('@eval:sb.updateReset(); 0')
+    check(not page.js(AA)['upd'], 'no update: no update button')
+
+    # ---- CSV ----
+    CSV = """const t = document.querySelector('#doc table.csv'); return { head: [...t.querySelectorAll('thead th')].map((x) => x.textContent),
+      rows: [...t.querySelectorAll('tbody tr:not(.pad)')].slice(0, 6).map((r) => [...r.cells].map((c) => c.textContent)),
+      align: [...t.querySelectorAll('tbody tr:not(.pad):first-child > *')].map((c) => getComputedStyle(c).textAlign),
+      sort: [...t.querySelectorAll('thead th')].map((x) => x.getAttribute('aria-sort')), kind: document.querySelector('#doc .viewer-kind').textContent,
+      notes: [...document.querySelectorAll('#doc .viewer-note')].map((n) => n.textContent) };"""
+    view('prices.csv')
+    c = page.js(CSV)
+    check(c['head'] == ['', 'name', 'price', 'qty'] and c['rows'][0] == ['1', 'Apfel', '1,50', '3'] and c['align'] == ['right', 'left', 'right', 'right']
+          and 'semicolon-separated' in c['kind'] and '3 rows × 3 columns' in c['kind'],
+          'CSV: semicolons found, numbers (decimal commas too) right-aligned, row numbers', json.dumps(c))
+    shoot(page, 'csv-semicolon')
+    view('pipes.csv')
+    c = page.js(CSV)
+    check(c['head'] == ['', 'a', 'b', 'c'] and c['rows'] == [['1', '1', '2', '3'], ['2', '4', '5', '6']] and 'pipe-separated' in c['kind'], 'CSV: pipes found', json.dumps(c))
+    view('sort.csv')
+    click(page, '#doc .csv-sort[data-col="1"]')
+    asc = page.js(CSV)
+    click(page, '#doc .csv-sort[data-col="1"]')
+    desc = page.js(CSV)
+    click(page, '#doc .csv-sort[data-col="1"]')
+    orig = page.js(CSV)
+    click(page, '#doc .csv-sort[data-col="0"]')
+    by_name = page.js(CSV)
+    shoot(page, 'csv-sorted')
+    col = lambda c, i: [r[i] for r in c['rows']]
+    check(col(asc, 1) == ['a', 'e', 'b', 'd', 'c'] and col(asc, 0) == ['2', '5', '1', '4', '3'] and asc['sort'][2] == 'ascending'
+          and col(desc, 1) == ['d', 'b', 'a', 'e', 'c'] and desc['sort'][2] == 'descending'
+          and col(orig, 1) == ['b', 'a', 'c', 'd', 'e'] and orig['sort'][2] == 'none' and col(by_name, 1) == ['a', 'b', 'c', 'd', 'e'],
+          'CSV: a header click sorts ascending, then descending, then back; numbers as numbers, stable, blanks last', json.dumps([col(asc, 1), col(desc, 1), col(orig, 1), col(by_name, 1)]))
+    view('rows.csv')
+    page.cmd('@wait:0.3')
+    v = page.js("""const s = document.querySelector('#doc .csv-scroll'), t = s.querySelector('table'); s.scrollTop = 30000 * 26; s.dispatchEvent(new Event('scroll'));
+      return 0;""")
+    page.cmd('@wait:0.3')
+    v = page.js("""const s = document.querySelector('#doc .csv-scroll'), t = s.querySelector('table'), th = t.querySelector('thead th:nth-child(2)'), sr = s.getBoundingClientRect();
+      const rows = [...t.querySelectorAll('tbody tr:not(.pad)')];
+      return { drawn: rows.length, sticky: Math.abs(th.getBoundingClientRect().top - sr.top) <= 2, first: rows.length ? +rows[0].cells[0].textContent : 0,
+        notes: [...document.querySelectorAll('#doc .viewer-note')].map((n) => n.textContent), count: t.getAttribute('aria-rowcount'), full: t.getBoundingClientRect().width >= s.clientWidth - 1,
+        seen: rows.some((r) => { const b = r.getBoundingClientRect(); return b.top >= sr.top && b.bottom <= sr.bottom; }) };""")
+    check(v['drawn'] < 200 and v['sticky'] and 25000 < v['first'] < 32000 and v['seen'] and v['notes'] == ['Showing the first 50,000 of 60,000 rows.'] and v['count'] == '50001' and v['full'],
+          'CSV: 50,000 rows kept, drawn a window at a time; the header stays at the top while they scroll; the table is full width', json.dumps(v))
+    shoot(page, 'csv-large')
+
+    # ---- JSON ----
+    TREE = """return { rows: [...document.querySelectorAll('#doc .json-tree .jt-row')].map((r) => r.textContent), more: [...document.querySelectorAll('#doc .jt-more-b')].map((b) => b.textContent),
+      imgs: document.querySelectorAll('#doc img, #doc script').length, role: (document.querySelector('#doc .json-tree') || {}).getAttribute && document.querySelector('#doc .json-tree').getAttribute('role'),
+      expanded: [...document.querySelectorAll('#doc .jt-row[aria-expanded]')].map((r) => r.getAttribute('aria-expanded')) };"""
+    view('nested.json')
+    t = page.js(TREE)
+    check(t['rows'][:2] == ['▾{ 4 keys }', '▸"items": [ 1,200 items ]'] and '▸"deep": { 1 key }' in t['rows'] and '"text": "<img src=x onerror=\\"window.__pwned=1\\">"' in t['rows']
+          and t['imgs'] == 0 and t['role'] == 'tree', 'JSON tree: key counts, a large array left closed, strings as text', json.dumps(t)[:400])
+    click(page, '#doc .jt-tw[data-ptr="/items"]')
+    t = page.js(TREE)
+    check(len([r for r in t['rows'] if r[:1].isdigit()]) == 500 and t['more'] == ['Show 500 more (700 not shown)'], 'JSON tree: a large array opens 500 items at a time', json.dumps(t['more']))
+    click(page, '#doc .jt-more-b')
+    t = page.js(TREE)
+    check(len([r for r in t['rows'] if r[:1].isdigit()]) == 1000 and t['more'] == ['Show 200 more (200 not shown)'], 'JSON tree: Show more adds the next 500', json.dumps(t['more']))
+    click(page, '#doc .json-all[data-open="0"]')
+    t = page.js(TREE)
+    check(t['rows'] == ['▸{ 4 keys }'], 'JSON tree: Collapse All', json.dumps(t['rows']))
+    click(page, '#doc .json-all[data-open="1"]')
+    t = page.js(TREE)
+    check('"e": "end"' in t['rows'] and 'false' not in t['expanded'][:1], 'JSON tree: Expand All opens every level', json.dumps(t['rows'][-8:]))
+    shoot(page, 'json-tree')
+    view('large.json')
+    lj = page.js("return [!!document.querySelector('#doc .json-tree'), !!document.querySelector('#doc pre.code'), [...document.querySelectorAll('#doc .viewer-note')].map((n) => n.textContent)]")
+    check(lj[0] is False and lj[1] and lj[2][0].startswith('Showing the first 2 MB of 2.') and lj[2][1] == 'A file this large is shown as its text, not as a tree.',
+          'JSON over 2 MB: its text, with a note, never parsed', json.dumps(lj))
+    view('analysis.ipynb')
+    nb = page.js("""const d = document.getElementById('doc'); return { h1: (d.querySelector('.nb-md h1') || {}).textContent, katex: d.querySelectorAll('.nb-md .katex').length,
+      task: (() => { const i = d.querySelector('.nb-md input[type=checkbox]'); return i ? [i.disabled, i.hasAttribute('data-line')] : null; })(),
+      prompts: [...d.querySelectorAll('.nb-prompt')].map((p) => p.textContent), kw: d.querySelectorAll('.nb-code .hljs-keyword').length,
+      outs: [...d.querySelectorAll('.nb-out')].map((o) => o.textContent), imgs: [...d.querySelectorAll('.nb-img')].map((i) => [i.src.slice(0, 22), i.naturalWidth]),
+      bad: d.querySelectorAll('script, iframe, [onclick], [onerror], b').length, notes: [...d.querySelectorAll('.nb-note')].map((n) => n.textContent),
+      modes: [...d.querySelectorAll('.viewer-toggle')].map((b) => [b.textContent, b.getAttribute('aria-pressed')]), src: d.querySelectorAll('.nb-md [data-src]').length };""")
+    check(nb['h1'] == 'Notebook title' and nb['katex'] >= 1 and nb['task'] == [True, False] and nb['prompts'] == ['[1]:', '[2]:', '[3]:', '[4]:', '[ ]:'] and nb['kw'] > 0
+          and nb['outs'] == ['42\n', '2', 'ZeroDivisionError: division by zero'] and nb['imgs'] == [['data:image/png;base64,', 40]]
+          and nb['bad'] == 0 and nb['notes'] == ['HTML output is not shown.'] and nb['src'] == 0
+          and nb['modes'] == [['Notebook', 'true'], ['Tree', 'false'], ['Raw', 'false']] and not page.js('return window.__pwned || null'),
+          'notebook: Markdown cells rendered and sanitized, code highlighted, text and image outputs, errors without ANSI codes, no HTML output',
+          json.dumps(nb)[:600])
+    shoot(page, 'notebook')
+    r = click(page, '#doc .nb-md h1')
+    check('editBlock' not in [m.get('type') for m in r['messages']], 'notebook: a click in a Markdown cell edits nothing')
+    page.cmd('@root:')
 
 
 def keys_and_filter(page, check, T, st, types):
@@ -748,8 +1061,8 @@ def main():
               'tree: the root, folders first, then README, then files', json.dumps(names))
         icons = {r[0]: r[3] for r in top}
         want_icons = {'hostile': 'ic-folder', 'README.md': 'ic-markdown', 'photo.png': 'ic-image', 'doc.pdf': 'ic-pdf', 'code.ts': 'ic-code',
-                      'data.json': 'ic-data', 'table.csv': 'ic-data', 'notes.txt': 'ic-text', 'blob.dat': 'ic-other', 'tool': 'ic-other',
-                      'movie.mp4': 'ic-media', 'song.wav': 'ic-media', 'movie.webm': 'ic-other'}
+                      'data.json': 'ic-data', 'table.csv': 'ic-data', 'notes.txt': 'ic-text', 'blob.dat': 'ic-other', 'tool': 'ic-app',
+                      'movie.mp4': 'ic-video', 'song.wav': 'ic-audio', 'movie.webm': 'ic-video'}
         check(all(icons.get(k) == v for k, v in want_icons.items()), 'tree: every row has its type icon',
               json.dumps({k: icons.get(k) for k in want_icons}))
         check(not {'etc', 'up', 'hosts.txt', '.secret.md', 'dangling.md', '...', '..txt'} & set(names) and 'notes..v2.txt' in names,
@@ -793,10 +1106,7 @@ def main():
         view(T('sub', 'deep', 'deepest.txt'))
         click(page, '#side-list a.row[data-path$="/many"]')
         page.cmd('@wait:0.4')
-        s = st()
-        many = [x for x in s['rows'] if x[0].startswith('m-')]
-        check(len(many) == 500 and s['notes'] == ['20 more not listed'], 'a folder of 520 files lists 500 with an "N more" note',
-              f'{len(many)} rows, notes {s["notes"]}')
+        big_folder(page, check, T)
         click(page, '#side-list a.row[data-path$="/many"]')
         page.apply(showHiddenFiles=True)
         page.cmd('@relist')
@@ -848,24 +1158,29 @@ def main():
         check('editBlock' not in [m.get('type') for m in r['messages']] and not page.js("return document.querySelector('#doc .md-editing')"),
               'code: a click edits nothing (editing is for Markdown only)')
         view(T('data.json'))
+        tree_rows = page.js("return [...document.querySelectorAll('#doc .json-tree .jt-row')].map((r) => r.textContent)")
+        mode = lambda m: click(page, f'#doc .viewer-toggle[data-mode={m}]')
+        mode('formatted')
         pretty = page.js("return document.querySelector('#doc pre.code').textContent")
-        click(page, '#doc .viewer-toggle')
-        raw = page.js("return [document.querySelector('#doc pre.code').textContent, document.querySelector('#doc .viewer-toggle').textContent]")
-        click(page, '#doc .viewer-toggle')
-        again = page.js("return document.querySelector('#doc pre.code').textContent")
-        check(pretty == json.dumps(json.load(open(T('data.json'))), indent=2) and raw[0] == open(T('data.json')).read() and raw[1] == 'Formatted' and again == pretty
-              and page.js("return document.querySelectorAll('#doc .hljs-attr').length") > 0, 'JSON: pretty-printed and highlighted, with a raw toggle',
-              json.dumps([pretty, raw, again])[:300])
+        mode('raw')
+        raw = page.js("return [document.querySelector('#doc pre.code').textContent, document.querySelector('#doc .viewer-toggle[aria-pressed=true]').textContent]")
+        mode('tree')
+        again = page.js("return [...document.querySelectorAll('#doc .json-tree .jt-row')].map((r) => r.textContent)")
+        check(tree_rows[:3] == ['▾{ 3 keys }', '"name": "spacebar"', '▾"list": [ 2 items ]'] and pretty == json.dumps(json.load(open(T('data.json'))), indent=2)
+              and raw == [open(T('data.json')).read(), 'Raw'] and again == tree_rows and page.js("return document.querySelectorAll('#doc .hljs-attr').length") > 0,
+              'JSON: a tree first, then formatted and raw text, highlighted', json.dumps([tree_rows, raw[1]])[:300])
         view(T('table.csv'))
         t = page.js("return [[...document.querySelectorAll('#doc table.csv thead th')].map((x) => x.textContent), [...document.querySelectorAll('#doc table.csv tbody tr')].map((r) => [...r.cells].map((c) => c.textContent))]")
-        check(t == [['name', 'qty', 'note'], [['apple', '3', 'red, crisp'], ['pear', '5', 'says "hi"'], ['fig', '', 'line one\nline two']]],
-              'CSV: a table, first row as header, quotes, commas and newlines in cells', json.dumps(t))
+        check(t == [['', 'name', 'qty', 'note'], [['1', 'apple', '3', 'red, crisp'], ['2', 'pear', '5', 'says "hi"'], ['3', 'fig', '', 'line one\nline two']]],
+              'CSV: a table, first row as header, row numbers, quotes, commas and newlines in cells', json.dumps(t))
         view(T('big.csv'))
-        b = page.js("return [document.querySelectorAll('#doc table.csv tbody tr').length, [...document.querySelectorAll('#doc .viewer-note')].map((n) => n.textContent)]")
-        check(b == [1000, ['Showing the first 1,000 of 1,500 rows.']], 'CSV: capped at 1,000 rows with a note', json.dumps(b))
+        b = page.js("""const s = document.querySelector('#doc .csv-scroll'); return [document.querySelectorAll('#doc table.csv tbody tr:not(.pad)').length,
+          [...document.querySelectorAll('#doc .viewer-note')].map((n) => n.textContent), document.querySelector('#doc table.csv').getAttribute('aria-rowcount'),
+          s.scrollHeight > 1500 * 20]""")
+        check(b[0] < 200 and b[1] == [] and b[2] == '1501' and b[3], 'CSV: 1,500 rows, all there, only those in view drawn', json.dumps(b))
         view(T('wide.csv'))
         wc = page.js("return [document.querySelectorAll('#doc table.csv thead th').length, document.querySelectorAll('#doc table.csv tbody td').length, [...document.querySelectorAll('#doc .viewer-note')].map((n) => n.textContent)]")
-        check(wc == [200, 200, ['Showing the first 200 columns.']], 'CSV: capped at 200 columns with a note', json.dumps(wc))
+        check(wc == [201, 200, ['Showing the first 200 columns.']], 'CSV: capped at 200 columns with a note', json.dumps(wc))
         view(T('forged.md'))
         r = page.cmd('@nativeclick:#doc .viewer button')
         r2 = page.cmd('@nativeclick:#doc .viewer button + button')
@@ -1343,6 +1658,7 @@ def main():
         page.cmd('@wait:0.4')
         check('overview' in types(r) and st()['view'] == 'overview', "the sidebar's folder name brings the overview back", json.dumps(types(r)))
         page.cmd('@root:')
+        viewers(page, check, page.out, st)
 
         csp = [l for l in page.logs if 'csp blocked' in l]
         errs = [l for l in page.logs if l.startswith(('rejection', 'mermaid')) or ' @' in l]

@@ -5,8 +5,11 @@ import QuickLookUI
 @objc(PreviewViewController)
 final class PreviewViewController: PreviewController, QLPreviewingController {
     func preparePreviewOfFile(at url: URL, completionHandler handler: @escaping (Error?) -> Void) {
-        onReady = handler
-        onDecline = { why in handler(CocoaError(.fileReadUnsupportedScheme, userInfo: [NSLocalizedDescriptionKey: why])) }
+        // Quick Look's handler is let go once called, as it was before the split: it may hold what holds this controller.
+        var pending: ((Error?) -> Void)? = handler
+        let complete = { (error: Error?) in let h = pending; pending = nil; h?(error) }
+        onReady = complete
+        onDecline = { why in complete(CocoaError(.fileReadUnsupportedScheme, userInfo: [NSLocalizedDescriptionKey: why])) }
         _ = url.startAccessingSecurityScopedResource()
         start(url: url, reason: "prepare")
     }

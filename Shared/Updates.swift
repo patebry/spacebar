@@ -159,6 +159,13 @@ enum Updates {
 
     struct SpawnError: Error, Equatable { let message: String }
 
+    /// What runDetached runs, for its messages.
+    enum Job {
+        case update, uninstall
+        var busy: String { self == .update ? "an update is already running" : "an uninstall is already running" }
+        var script: String { self == .update ? "installer" : "uninstaller" }
+    }
+
     /// Starts `/bin/sh` on a private copy of `script`, so replacing the app that holds the script does not cut it off mid-read.
     /// The shell runs in a session of its own and outlives the writer and Quick Look, which the installer quits. Its stdin is
     /// /dev/null, stdout and stderr are appended to `log`, and it inherits no other descriptor and only `environment`. The log
@@ -167,13 +174,13 @@ enum Updates {
     /// `onExit` gets the exit status (128 + the signal for a killed shell) when it is reaped. A log past `logLimit` is cut to its
     /// last `logKeep` bytes first. The copy is made in `temporary`, and removed once the shell is reaped.
     static func runDetached(script: URL, arguments: [String], log: URL, environment: [String: String],
-                            temporary: URL = FileManager.default.temporaryDirectory,
+                            temporary: URL = FileManager.default.temporaryDirectory, job: Job = .update,
                             onExit: @escaping (Int) -> Void = { _ in }) -> Result<pid_t, SpawnError> {
         let fm = FileManager.default
         let fail = { (what: String) in Result<pid_t, SpawnError>.failure(SpawnError(message: what)) }
         guard (try? fm.createDirectory(at: log.deletingLastPathComponent(), withIntermediateDirectories: true)) != nil else { return fail("cannot create the log folder") }
         let fd = open(log.path, O_RDWR | O_CREAT | O_APPEND | O_CLOEXEC | O_EXLOCK | O_NONBLOCK, 0o644)
-        guard fd >= 0 else { return fail(errno == EWOULDBLOCK ? "an update is already running" : "cannot open the log") }
+        guard fd >= 0 else { return fail(errno == EWOULDBLOCK ? job.busy : "cannot open the log") }
         defer { close(fd) }
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK)
         trimLog(fd)
@@ -181,7 +188,7 @@ enum Updates {
         let copy = dir.appendingPathComponent("install.sh")
         guard (try? fm.createDirectory(at: dir, withIntermediateDirectories: true)) != nil, (try? fm.copyItem(at: script, to: copy)) != nil else {
             try? fm.removeItem(at: dir)
-            return fail("cannot copy the installer")
+            return fail("cannot copy the \(job.script)")
         }
         let head = "\n=== \(ISO8601DateFormatter().string(from: Date())) \(arguments.joined(separator: " ")) ===\n"
         _ = head.withCString { write(fd, $0, strlen($0)) }
@@ -209,7 +216,7 @@ enum Updates {
         let err = posix_spawn(&pid, "/bin/sh", &actions, &attr, argv, envp)
         guard err == 0 else {
             try? fm.removeItem(at: dir)
-            return fail("could not start the installer: \(String(cString: strerror(err)))")
+            return fail("could not start the \(job.script): \(String(cString: strerror(err)))")
         }
         // Reaped here while the writer lives; the copy goes with it.
         DispatchQueue.global(qos: .utility).async {

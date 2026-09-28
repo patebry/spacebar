@@ -33,6 +33,35 @@ run_quiet() {
 }
 path_regex() { printf '^%s/' "$1" | sed 's/[][\.*$+?(){}|]/\\&/g'; }
 
+# quit_extensions <bundle path>: as in install.sh. The writers go first and get up to 6 seconds to finish a write, then the
+# extensions: a writer left running would put settings.json back after --purge.
+quit_extensions() {
+  writers="$(path_regex "$1")Contents/PlugIns/[^/]*/Contents/XPCServices/"
+  pkill -f "$writers" || true
+  tries=0
+  while [ "$tries" -lt 30 ] && pgrep -f "$writers" >/dev/null 2>&1; do
+    sleep 0.2
+    tries=$((tries + 1))
+  done
+  pkill -f "$(path_regex "$1")Contents/PlugIns/" || true
+}
+
+# Started from the settings window (SPACEBAR_UNINSTALL_SELF=1): removes the private copy this script runs from, but only a
+# spacebar-update-* folder directly in $TMPDIR, where the app puts it.
+remove_self() {
+  [ "${SPACEBAR_UNINSTALL_SELF:-}" = 1 ] || return 0
+  self_dir=${0%/uninstall.sh}
+  case ${self_dir##*/} in
+    spacebar-update-*)
+      parent=$(cd "${self_dir%/*}" 2>/dev/null && pwd -P)
+      tmp=$(cd "${TMPDIR:-/nonexistent}" 2>/dev/null && pwd -P)
+      [ "$self_dir" != "$0" ] && [ -n "$parent" ] && [ "$parent" = "$tmp" ] && rm -rf "$self_dir"
+      ;;
+  esac
+  return 0
+}
+trap remove_self EXIT
+
 # Everything runs from main, called on the last line, so a download cut short by the network runs nothing.
 main() {
 PURGE=0
@@ -55,6 +84,7 @@ LEGACY_SUPPORT="$HOME/Library/Application Support/spacebar.md"
 
 if [ -e "$DEST" ]; then
   if [ "$SKIP_REGISTER" != 1 ]; then
+    if [ "$DRY_RUN" = 1 ]; then say "would quit the Quick Look extensions running from $DEST, their writers first"; else quit_extensions "$DEST"; fi
     run pkill -f "$(path_regex "$DEST")Contents/MacOS/" || true
     for appex in "$DEST"/Contents/PlugIns/*.appex; do
       [ -d "$appex" ] && { run pluginkit -r "$appex" || true; }

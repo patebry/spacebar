@@ -7,6 +7,7 @@ enum Uninstall {
     static var home: URL { URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true) }
     static var installed: URL { home.appendingPathComponent("Applications/spacebar.app") }
     static var log: URL { home.appendingPathComponent("Library/Logs/spacebar-uninstall.log") }
+    static var updateLog: URL { home.appendingPathComponent("Library/Logs/spacebar-update.log") }
 
     /// Whether this app is the copy the script removes; from anywhere else (a development build) it would remove another copy.
     static var isInstalledCopy: Bool {
@@ -19,8 +20,11 @@ enum Uninstall {
     static func run(purge: Bool) -> String? {
         guard isInstalledCopy else { return "This copy of spacebar isn't the one in ~/Applications, so there is nothing to uninstall from here." }
         guard let script = Bundle.main.url(forResource: "uninstall", withExtension: "sh") else { return "The uninstaller is missing from this copy of spacebar." }
-        let env = ["HOME": home.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": NSTemporaryDirectory()]
-        switch Updates.runDetached(script: script, arguments: arguments(purge: purge), log: log, environment: env) {
+        // The installer would put back what the uninstaller removes, or find its app gone mid-swap.
+        guard !Updates.isRunning(log: updateLog) else { return "An update is running. Try again once it has finished." }
+        // SPACEBAR_UNINSTALL_SELF: the script removes the private copy it runs from; this app has quit by then.
+        let env = ["HOME": home.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": NSTemporaryDirectory(), "SPACEBAR_UNINSTALL_SELF": "1"]
+        switch Updates.runDetached(script: script, arguments: arguments(purge: purge), log: log, environment: env, job: .uninstall) {
         case .success:
             NSApp.terminate(nil)
             return nil

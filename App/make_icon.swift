@@ -34,58 +34,52 @@ func drawIcon(in ctx: CGContext) {
         return p
     }
 
-    // Body: the standard 824-point tile inside a 100-point margin, with the soft drop shadow macOS icons carry.
+    // Drawn in the SVG's y-down coordinates, so the numbers match the source art one for one.
+    ctx.translateBy(x: 0, y: 1024); ctx.scaleBy(x: 1, y: -1)
+    // Shadows are in device space, which the scale above does not reach: offset (down) and blur scale with the size by hand.
+    let px = ctx.userSpaceToDeviceSpaceTransform.a
+    func shadow(dy: CGFloat, blur: CGFloat, alpha: CGFloat) {
+        ctx.setShadow(offset: CGSize(width: 0, height: -dy * px), blur: blur * px, color: color(0x000000, alpha))
+    }
+    func fill(_ path: CGPath, _ g: CGGradient, from top: CGFloat, to bottom: CGFloat) {
+        ctx.saveGState(); ctx.addPath(path); ctx.clip()
+        ctx.drawLinearGradient(g, start: CGPoint(x: 512, y: top), end: CGPoint(x: 512, y: bottom), options: [])
+        ctx.restoreGState()
+    }
+
+    // Body: the standard 824-point tile inside a 100-point margin, dark, with the soft drop shadow macOS icons carry.
     let body = CGRect(x: 100, y: 100, width: 824, height: 824)
     let tile = squircle(body, radius: 230)
     ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -12), blur: 28, color: color(0x000000, 0.32))
-    ctx.addPath(tile); ctx.setFillColor(color(0x1F6FEB)); ctx.fillPath()
+    shadow(dy: 12, blur: 28, alpha: 0.32)
+    ctx.addPath(tile); ctx.setFillColor(color(0x1C1C1E)); ctx.fillPath()
     ctx.restoreGState()
-    ctx.saveGState()
-    ctx.addPath(tile); ctx.clip()
-    ctx.drawLinearGradient(gradient(0x5AB0FF, 0x1452D8), start: CGPoint(x: 512, y: 924), end: CGPoint(x: 512, y: 100), options: [])
-    // A faint sheen across the top half.
-    ctx.drawRadialGradient(CGGradient(colorsSpace: rgb, colors: [color(0xFFFFFF, 0.22), color(0xFFFFFF, 0)] as CFArray, locations: [0, 1])!,
-                           startCenter: CGPoint(x: 512, y: 1000), startRadius: 0, endCenter: CGPoint(x: 512, y: 1000), endRadius: 620, options: [])
-    ctx.restoreGState()
+    fill(tile, CGGradient(colorsSpace: rgb, colors: [color(0x3A3A3D), color(0x1C1C1E), color(0x0E0E10)] as CFArray, locations: [0, 0.5, 1])!,
+         from: body.minY, to: body.maxY)
+    ctx.addPath(tile); ctx.setStrokeColor(color(0xFFFFFF, 0.2)); ctx.setLineWidth(5); ctx.strokePath()
 
-    // The spacebar keycap: a wide cap whose darker skirt shows below its top face.
-    let cap = CGRect(x: 160, y: 318, width: 704, height: 340)
+    // The space bar: one wide keycap whose darker skirt shows below its top face.
+    let cap = CGRect(x: 150, y: 346, width: 724, height: 320)
     let capPath = CGPath(roundedRect: cap, cornerWidth: 84, cornerHeight: 84, transform: nil)
     ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -22), blur: 40, color: color(0x062A78, 0.55))
-    ctx.addPath(capPath); ctx.setFillColor(color(0xC9D6EA)); ctx.fillPath()
+    shadow(dy: 14, blur: 32, alpha: 0.5)
+    ctx.addPath(capPath); ctx.setFillColor(color(0xC0C4CC)); ctx.fillPath()
     ctx.restoreGState()
-    ctx.saveGState()
-    ctx.addPath(capPath); ctx.clip()
-    ctx.drawLinearGradient(gradient(0xDCE5F2, 0xAFC1DC), start: CGPoint(x: 512, y: cap.maxY), end: CGPoint(x: 512, y: cap.minY), options: [])
-    ctx.restoreGState()
+    fill(capPath, gradient(0xD7DAE0, 0xA9AEB8), from: cap.minY, to: cap.maxY)
+    let face = CGRect(x: 175.3, y: 368.4, width: 673.3, height: 233.6)
+    fill(CGPath(roundedRect: face, cornerWidth: 67.2, cornerHeight: 67.2, transform: nil), gradient(0xFFFFFF, 0xECEEF2), from: face.minY, to: face.maxY)
 
-    let face = CGRect(x: cap.minX + 30, y: cap.minY + 58, width: cap.width - 60, height: cap.height - 82)
-    let facePath = CGPath(roundedRect: face, cornerWidth: 62, cornerHeight: 62, transform: nil)
-    ctx.saveGState()
-    ctx.addPath(facePath); ctx.clip()
-    ctx.drawLinearGradient(gradient(0xFFFFFF, 0xEDF2F9), start: CGPoint(x: 512, y: face.maxY), end: CGPoint(x: 512, y: face.minY), options: [])
-    ctx.restoreGState()
-    ctx.addPath(facePath); ctx.setStrokeColor(color(0xFFFFFF, 0.9)); ctx.setLineWidth(3); ctx.strokePath()
-
-    // The Markdown mark (M and down arrow), from the 208×128 markdown-mark geometry, y flipped for CoreGraphics.
-    let m: [CGPoint] = [(30, 98), (30, 30), (50, 30), (70, 55), (90, 30), (110, 30), (110, 98), (90, 98), (90, 59), (70, 84), (50, 59), (50, 98)]
-        .map { CGPoint(x: $0.0, y: $0.1) }
-    let arrow: [CGPoint] = [(155, 98), (125, 65), (145, 65), (145, 30), (165, 30), (165, 65), (185, 65)].map { CGPoint(x: $0.0, y: $0.1) }
-    let scale: CGFloat = 2.3
-    let markW = 155 * scale, markH = 68 * scale
-    let origin = CGPoint(x: face.midX - markW / 2, y: face.midY - markH / 2)
-    func place(_ pts: [CGPoint]) -> CGPath {
-        let p = CGMutablePath()
-        p.addLines(between: pts.map { CGPoint(x: origin.x + ($0.x - 30) * scale, y: origin.y + (98 - $0.y) * scale) })
-        p.closeSubpath()
-        return p
-    }
-    ctx.saveGState()
-    ctx.addPath(place(m)); ctx.addPath(place(arrow)); ctx.clip()
-    ctx.drawLinearGradient(gradient(0x2F80F5, 0x1452D8), start: CGPoint(x: 512, y: origin.y + markH), end: CGPoint(x: 512, y: origin.y), options: [])
-    ctx.restoreGState()
+    // The open-box space symbol (U+2423). At 32 pixels and below a round 58-point stroke blurs into a blob, so there the stroke is a
+    // whole number of pixels (1 at 16, 2 at 32) laid on the pixel grid, its ends cut flat on a pixel edge.
+    let small = px * 1024 <= 32
+    let width = small ? (px * 1024 / 16).rounded() / px : 58
+    func snap(_ v: CGFloat) -> CGFloat { small ? ((v * px - width * px / 2).rounded() + width * px / 2) / px : v }
+    let (left, right, top, bottom) = (snap(380), snap(644), small ? snap(430) - width / 2 : 430, snap(530))
+    let glyph = CGMutablePath()
+    glyph.addLines(between: [CGPoint(x: left, y: top), CGPoint(x: left, y: bottom), CGPoint(x: right, y: bottom), CGPoint(x: right, y: top)])
+    ctx.addPath(glyph)
+    ctx.setStrokeColor(color(0x0A84FF)); ctx.setLineWidth(width)
+    ctx.setLineCap(small ? .butt : .round); ctx.setLineJoin(small ? .miter : .round); ctx.strokePath()
 }
 
 func png(pixels: Int) -> Data {

@@ -508,7 +508,14 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         log.info("prepare \(url.path, privacy: .private) warm=\(warm) processAge=\(processAgeMs(), privacy: .public)ms wall=\(Date().timeIntervalSince1970, privacy: .public)")
         _ = url.startAccessingSecurityScopedResource()
         // The previous preview's native views go now, not whenever Quick Look lets its controller go: a player must fall silent.
-        if host.controller !== self { host.controller?.stopNativeViews() }
+        // Its filter session too, and the writer is told: the key panel must not stay over a field no controller owns.
+        if host.controller !== self {
+            host.controller?.stopNativeViews()
+            host.controller?.handOver()
+            // The page's update state (a busy flag, a pending re-check) was the last controller's.
+            js("sb.updateReset", [:])
+        }
+        stopFilter(notifyWriter: true)
         host.controller = self
         completion = handler
         // The page outlives the controller that began a filter session; the new preview starts with none.
@@ -987,7 +994,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             }
             if r.stuck { return self.showUnavailable(url, reason: reason, cloud: true) }
             // The panel closed while a PDF or media opened: it is shown again when the panel reappears (viewWillAppear).
-            if doc != nil || ["video", "audio"].contains(p["view"] as? String), gen != self.pdfGen { return }
+            if doc != nil || ["video", "audio", "html"].contains(p["view"] as? String), gen != self.pdfGen { return }
             self.shownCanOpen = p["canOpen"] as? Bool == true
             self.finishShow(url, p, pdf: doc, reason: reason)
             if p["view"] as? String == "info", !cloud, self.thumbPending != url.path { self.addThumbnail(url, icon: kind == .app) }
@@ -1056,6 +1063,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
 
     fileprivate func stopNativeViews() { closePDF() }
 
+    fileprivate func handOver() { stopFilter(notifyWriter: true) }
+
     /// Takes down the native views of a PDF, an HTML file and media, all but the one for `keep`, the view about to be shown:
     /// that one is reused, so a PDF keeps its page and media its time when the same file is shown again.
     private func closePDF(keeping keep: String = "") {
@@ -1089,14 +1098,14 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     /// Apple's own large thumbnail (a Keynote slide, a document's first page, an app's icon when `icon`) for the info card on
     /// screen, made off the main thread; the card keeps its icon when there is none within 3 seconds.
     private func addThumbnail(_ url: URL, icon: Bool = false) {
-        let gen = renderGen
         thumbPending = url.path
         DispatchQueue.global(qos: .userInitiated).async {
             let thumb = Thumbnail.dataURL(url, icon: icon)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 if self.thumbPending == url.path { self.thumbPending = nil }
-                guard let thumb, gen == self.renderGen, self.host.controller === self, self.fileURL == url else { return }
+                // A change on disk re-renders the card (a new renderGen) while this was made: it still belongs on it.
+                guard let thumb, self.host.controller === self, self.fileURL == url else { return }
                 self.js("sb.setThumb", ["path": url.path, "thumb": thumb])
             }
         }
@@ -1105,14 +1114,29 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     /// A link in the HTML file on screen: a file beside it opens in the panel like a sidebar click, a web link in the browser.
     private func htmlLink(_ url: URL) {
         if url.isFileURL {
+            // Held to what the sidebar could list: a plain path inside the root, a regular file, hidden only when hidden files show.
             let target = url.standardizedFileURL
-            guard FolderListing.isInside(target.resolvingSymlinksInPath().path, root: rootDir), FileManager.default.fileExists(atPath: target.path) else {
-                return refuse("html link", "file outside the folder")
+            var st = stat()
+            guard FolderListing.isPlainPath(target.path, under: rootDir), FolderListing.isInside(target.path, root: rootDir),
+                  stat(target.path, &st) == 0, st.st_mode & S_IFMT == S_IFREG,
+                  SettingsStore.shared.settings.showHiddenFiles || !Self.hiddenStep(target.path, under: rootDir) else {
+                return refuse("html link", "not a file the sidebar would list")
             }
             return open(target, anchor: nil)
         }
         if let why = PDFPane.linkRefusal(url) { return refuse("html link", why) }
         openExternally(url)
+    }
+
+    /// Whether any step of `path` below `root` is hidden (a dot name or the hidden flag).
+    static func hiddenStep(_ path: String, under root: String) -> Bool {
+        var at = root
+        for part in path.dropFirst(root.count).split(separator: "/") {
+            at += "/" + part
+            var st = stat()
+            if lstat(at, &st) != 0 || FolderListing.isHidden(String(part), st) { return true }
+        }
+        return false
     }
 
     /// A link inside the PDF on screen: web links only, through the link policy and the writer, like the page's own links.
@@ -1401,7 +1425,11 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     /// Asks the writer to start the installer for the offered version, never one the page names; once per preview.
     /// The page's "Updating…" has waited long: the writer says whether the installer still runs, failed, or finished.
     private func recheckUpdate() {
-        guard let v = updating else { return }
+        // This controller started no update (the page's state is from another preview, or the click is still held for saves).
+        guard let v = updating else {
+            if case .update = pending { return }
+            return js("sb.updateReset", [:])
+        }
         helper(onError: {
             let a = Updates.advice(for: "the helper stopped before it could say how the update went")
             self.js("sb.update", ["state": "failed", "version": v, "reason": a.text, "copy": a.copy])

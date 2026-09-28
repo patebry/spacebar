@@ -935,6 +935,14 @@ window.sb = {
     if (!u || typeof u.version !== 'string' || !['available', 'elsewhere', 'started', 'inProgress', 'done', 'failed'].includes(u.state)) return;
     showUpdate(u);
   },
+  /** A new preview, or a controller with no update of its own: the page forgets the last one's state, busy included. */
+  updateReset() {
+    clearTimeout(updateTimer);
+    updateBusy = false;
+    $('aa-update').hidden = true;
+    delete $('aa').dataset.update;
+    $('aa').title = 'Appearance';
+  },
   installCopied(r) {
     const b = $('aa-copy');
     b.textContent = r && r.ok ? 'Copied' : 'Could not copy';
@@ -1742,12 +1750,18 @@ function sideKey(key, inFilter, repeat) {
     case 'End': moveCursor(rows[rows.length - 1], true, false); break;
     case 'ArrowRight':
       if (!r || !r.dataset.dir) return false;
+      // Filtered, a folder shows what matches whether or not it is open: the arrows only move, never open or close one.
+      if (sideQuery) {
+        if (rows[i + 1] && +rows[i + 1].getAttribute('aria-level') > +r.getAttribute('aria-level')) moveCursor(rows[i + 1], true, false);
+        else return false;
+        break;
+      }
       if (r.getAttribute('aria-expanded') !== 'true') toggleFolder(r.dataset.path);
       else if (rows[i + 1] && +rows[i + 1].getAttribute('aria-level') > +r.getAttribute('aria-level')) moveCursor(rows[i + 1], true, false);
       break;
     case 'ArrowLeft': {
       if (!r) return false;
-      if (r.dataset.dir && expanded().has(r.dataset.path) && r.getAttribute('aria-expanded') === 'true') { toggleFolder(r.dataset.path); break; }
+      if (!sideQuery && r.dataset.dir && expanded().has(r.dataset.path) && r.getAttribute('aria-expanded') === 'true') { toggleFolder(r.dataset.path); break; }
       const up = rows.find((x) => x.dataset.path === parentOf(r.dataset.path));
       if (!up) return false;
       moveCursor(up, false, false);

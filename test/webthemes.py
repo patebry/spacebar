@@ -495,6 +495,12 @@ def main():
         page.js("sb.update({ state: 'failed', version: '10.10.10', reason: 'Not started: unsaved text.', retry: true }); return 0")
         rb = page.cmd("@eval:(() => { const b = document.querySelector('#doc input[type=checkbox][data-line]'); b.click(); b.click(); return 0; })()")
         check(len([m for m in rb['messages'] if m.get('type') == 'toggle']) == 2, "native's answer frees task toggles again", json.dumps(rb['messages']))
+        # A new preview (or a re-check native has no update for) resets the page: busy cleared, the row and the dot gone.
+        page.js("sb.update({ state: 'started', version: '10.10.10' }); sb.updateReset(); return 0")
+        rb = page.cmd("@eval:(() => { const b = document.querySelector('#doc input[type=checkbox][data-line]'); b.click(); b.click(); return 0; })()")
+        reset = page.js("return [document.getElementById('aa-update').hidden, 'update' in document.getElementById('aa').dataset]")
+        check(len([m for m in rb['messages'] if m.get('type') == 'toggle']) == 2 and reset == [True, False],
+              'sb.updateReset clears the busy flag, the update row and the dot', json.dumps([reset, rb['messages']]))
         click(page, '#doc')
         page.apply(theme='apple', width='medium', bodyFont='system', fontSize=15)
 

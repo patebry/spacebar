@@ -301,6 +301,13 @@ def keys_and_filter(page, check, T, st, types):
     c = page.js(CURSOR)
     check(not s and [x[0] for x in c['rows']] == ['sub', 'deep', 'deepest.txt'] and not {'list', 'unlist'} & set(types(r) + types(w)),
           'filter: finds files in listed folders that are collapsed, and lists nothing new', json.dumps([s, c['rows'], types(r) + types(w)]))
+    page.cmd("@eval:document.getElementById('side-q').blur(); 0")
+    home, right, left = key('Home'), key('ArrowRight'), key('ArrowLeft')
+    after_right = [home, right]
+    c = page.js(CURSOR)
+    check(right['taken'] and left['taken'] and c['cursor'] == 'sub' and [x[0] for x in c['rows']] == ['sub', 'deep', 'deepest.txt']
+          and not {'list', 'unlist'} & set(sum((k['types'] for k in after_right + [left]), [])),
+          'filter: → and ← move through the matches without opening or closing a folder', json.dumps([c['cursor'], c['rows'], [k['types'] for k in after_right + [left]]]))
     c = typed('evil.pdf')
     check(not c['rows'] and c['notes'] == ['No matches'], 'filter: a folder never listed (hostile/) is not scanned for it', json.dumps(c))
     c = typed('.md')

@@ -463,7 +463,9 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         disableHostDoubleClick()
         // Shown again without a new prepare: the native view closed when the preview disappeared, so bring it back.
         let closed = (fileKind == .pdf && pdfPane == nil) || (fileKind == .html && htmlPane == nil) || ([.video, .audio].contains(fileKind) && mediaPane == nil)
-            || (fileKind == .other && quickLookShown && qlPane == nil)
+            // Apple's preview by its type, not only by quickLookShown: a load still running when the panel went is stale, and
+            // its completion would leave the page on "Loading…".
+            || (fileKind == .other && qlPane == nil && (quickLookShown || fileURL.flatMap { FileTypes.appleQuickLookType($0.path) } != nil))
             || (fileKind == .rtf && richPane == nil)
         if closed, let url = fileURL, host.controller === self {
             shownStamp = nil

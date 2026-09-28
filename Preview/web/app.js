@@ -2518,6 +2518,8 @@ function endFilter() {
 function filterDone() {
   filterSession = null;
   filterField.classList.remove('held');
+  // Esc in the writer's panel ends the session; the page never sees that key, so the sort menu opened meanwhile closes here.
+  if (!sidePop.hidden) showSideMenu(false);
 }
 
 const ofFilter = (m) => !!m && !!filterSession && m.seq === filterSession.seq;

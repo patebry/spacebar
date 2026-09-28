@@ -59,6 +59,9 @@
   :root.sb-anim #sidebar { transition: width .2s ease-out, visibility 0s; }
   :root.sb-anim[data-sidebar=collapsed] #sidebar { transition: width .2s ease-out, visibility 0s .2s; }
   #side-toggle { position: fixed !important; top: 8px; left: 12px; z-index: 10 !important; }
+  /* The Space helper's panel: its traffic lights sit over the page's top-left corner. */
+  :root[data-host=panel] { --titlebar-inset: 68px; }
+  :root[data-host=panel] #side-toggle { left: var(--titlebar-inset); }
   #main { flex: 1 1 auto; min-width: 0; }
   #doc { max-width: var(--measure); margin: 0 auto; padding: 44px 40px 80px; overflow-x: auto;
     contain: paint !important; position: relative !important; isolation: isolate !important; }
@@ -109,8 +112,10 @@
     :root:not([data-chrome=minimal]) #sidebar { z-index: 9; background: var(--chrome); border-right-width: 0; }
     :root:not([data-chrome=minimal]) #side-toggle { top: calc((var(--bar-h) - 26px) / 2); left: 10px; }
     :root:not([data-chrome=minimal]) #toolbar { top: calc((var(--bar-h) - 26px) / 2); right: 10px; }
+    :root[data-host=panel]:not([data-chrome=minimal]) #side-toggle { left: var(--titlebar-inset); }
     :root:not([data-chrome=minimal]) #crumbs { position: fixed; z-index: 10; top: 0; height: var(--bar-h); line-height: var(--bar-h); padding: 0;
       margin: 0; max-width: none; box-sizing: border-box; left: max(calc(var(--frame-left) + 14px), 52px); right: calc(var(--tb-w, 180px) + 24px); }
+    :root[data-host=panel]:not([data-chrome=minimal]) #crumbs { left: max(calc(var(--frame-left) + 14px), calc(var(--titlebar-inset) + 40px)); }
     :root.sb-anim:not([data-chrome=minimal]) #crumbs { transition: left .2s ease-out; }
     :root:not([data-chrome=minimal]) #doc, :root:not([data-chrome=minimal]) #crumbs:not([hidden]) + #doc { padding-top: calc(var(--bar-h) + 28px); }
     :root:not([data-chrome=minimal]) #doc { padding-bottom: calc(80px + var(--gap)); }

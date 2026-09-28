@@ -47,5 +47,6 @@
     setLink('sb-custom-css', p.customCSSURL);
   };
 
+  document.documentElement.dataset.host = window.__sbHost === 'panel' ? 'panel' : 'quicklook';
   if (window.__sbInitial) sb.apply(window.__sbInitial);
 })();

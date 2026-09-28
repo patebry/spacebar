@@ -193,10 +193,14 @@ enum PageSettings {
         String(data: try! JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]), encoding: .utf8)!
     }
 
-    /// The document-start script: the settings, then web/settings.js, which applies them to <html> before first paint.
-    static func userScript(_ payload: [String: Any], webRoot: URL) -> WKUserScript {
+    static let hosts = ["quicklook", "panel"]
+
+    /// The document-start script: the settings and who shows the page (`hosts`: Quick Look, or the Space helper's panel),
+    /// then web/settings.js, which applies them to <html> before first paint.
+    static func userScript(_ payload: [String: Any], webRoot: URL, host: String = "quicklook") -> WKUserScript {
         let apply = (try? String(contentsOf: webRoot.appendingPathComponent("settings.js"), encoding: .utf8)) ?? ""
-        return WKUserScript(source: "window.__sbInitial = \(json(payload));\n\(apply)", injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        let h = hosts.contains(host) ? host : "quicklook"
+        return WKUserScript(source: "window.__sbInitial = \(json(payload));\nwindow.__sbHost = \"\(h)\";\n\(apply)", injectionTime: .atDocumentStart, forMainFrameOnly: true)
     }
 
     /// Blocks every http(s) image; installed when remoteImages is off.

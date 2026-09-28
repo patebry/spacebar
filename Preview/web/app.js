@@ -1760,20 +1760,24 @@ function imageControls(stage, img, label) {
   stage.addEventListener('gestureend', () => { pinchFrom = null; });
 }
 
-/** ⌘+, ⌘− and ⌘0 on the image on screen, about the middle of what is shown. */
-document.addEventListener('keydown', (e) => {
-  if (!e.metaKey || e.altKey || e.ctrlKey || current.view !== 'image') return;
+/** ⌘+, ⌘− and ⌘0 (`key` '+', '-' or '0') on the image on screen, about the middle of what is shown. Whether it applied. */
+function zoomImage(key) {
+  if (current.view !== 'image') return false;
   const stage = document.querySelector('#doc .img-stage'), img = stage && stage.querySelector('img'), label = document.querySelector('#doc .img-zoom');
-  if (!stage || !img || !img.naturalWidth) return;
+  if (!stage || !img || !img.naturalWidth) return false;
   const r = stage.getBoundingClientRect(), from = imgScale === null ? fitScale(stage, img) : imgScale;
   const cx = r.left + Math.min(r.width, window.innerWidth) / 2, cy = r.top + Math.min(r.height, window.innerHeight - r.top) / 2;
   let to;
-  if (e.key === '=' || e.key === '+') to = Math.min(IMG_MAX, from * 1.25);
-  else if (e.key === '-') to = Math.max(fitScale(stage, img), from / 1.25);
-  else if (e.key === '0') to = null;
-  else return;
-  e.preventDefault();
+  if (key === '+') to = Math.min(IMG_MAX, from * 1.25);
+  else if (key === '-') to = Math.max(fitScale(stage, img), from / 1.25);
+  else if (key === '0') to = null;
+  else return false;
   applyZoom(stage, img, label, to, cx, cy);
+  return true;
+}
+document.addEventListener('keydown', (e) => {
+  if (!e.metaKey || e.altKey || e.ctrlKey) return;
+  if (zoomImage(e.key === '=' ? '+' : e.key)) e.preventDefault();
 });
 window.addEventListener('resize', () => {
   const stage = document.querySelector('#doc .img-stage'), img = stage && stage.querySelector('img');
@@ -2560,6 +2564,35 @@ Object.assign(window.sb, {
   filterEnd(m) { if (ofFilter(m) || (m && m.all === true && filterSession)) filterDone(); },
 });
 document.addEventListener('click', (e) => { if (filterSession && !e.target.closest('#sidebar')) endFilter(); }, true);
+
+// The Space helper's panel is never key either: the helper takes Finder's keys and the panel sends them here. The list keys
+// reach the sidebar through filterKey while a list session holds them (it starts on its own, as in Quick Look); these are the
+// rest. Space and Esc close the panel in one press, so it never says "Press Space again".
+const HOST = window.__sbHost === 'panel' ? 'panel' : 'quicklook';
+const HOST_ZOOM = { zoomIn: '+', zoomOut: '-', zoomReset: '0' };
+Object.assign(window.sb, {
+  /** A list session ended with none after it: in Quick Look, Esc or Space gave the keys back, and the next Space closes. */
+  listEnded(m) {
+    if (HOST === 'quicklook' && m && m.reason === 'escape') window.sb.status('Press Space again to close');
+  },
+  /** A key the panel sends outside a list session. Returns whether the page used it; the panel zooms the page itself if not. */
+  hostKey(m) {
+    const key = m && m.key;
+    if (HOST !== 'panel' || typeof key !== 'string') return false;
+    if (key === 'find') {
+      if (editing || updateBusy || !tree.root || !sidebarShown()) return false;
+      const r = filterField.getBoundingClientRect();
+      beginFilter({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 });
+      return !!filterSession && !filterSession.list;
+    }
+    if (Object.hasOwn(HOST_ZOOM, key)) return zoomImage(HOST_ZOOM[key]);
+    const page = Math.max(40, window.innerHeight * 0.9), max = document.scrollingElement.scrollHeight;
+    const by = { up: -40, down: 40, pageup: -page, pagedown: page, home: -max, end: max }[key];
+    if (by === undefined) return false;
+    window.scrollBy({ top: by, behavior: 'instant' });
+    return true;
+  },
+});
 
 // ---------- the sidebar's menu: sort order (a panel key) and hidden files (the settings window's, never the page's) ----------
 

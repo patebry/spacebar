@@ -15,7 +15,7 @@ THEMES = ['apple', 'github', 'paper', 'solarized', 'nord', 'contrast']
 class Page:
     """The harness in stdin mode: one command in, one JSON line out."""
 
-    def __init__(self):
+    def __init__(self, host='quicklook'):
         self.out = tempfile.mkdtemp(prefix='spacebar-webthemes-')
         self.support = os.path.join(self.out, 'support')
         os.makedirs(os.path.join(self.support, 'themes'))
@@ -25,7 +25,7 @@ class Page:
                         os.path.join(ROOT, 'Shared', 'WebShell.swift'),
                         os.path.join(ROOT, 'Shared', 'FolderListing.swift'), os.path.join(ROOT, 'Shared', 'FolderScan.swift'), os.path.join(ROOT, 'Shared', 'LinkPolicy.swift'), os.path.join(ROOT, 'Preview', 'PDFPane.swift'), '-o', exe], check=True)
         self.proc = subprocess.Popen([exe, WEB], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
-                                     env=dict(os.environ, SPACEBAR_SUPPORT_DIR=self.support))
+                                     env=dict(os.environ, SPACEBAR_SUPPORT_DIR=self.support, SPACEBAR_PAGE_HOST=host))
         self.logs = []
 
     def cmd(self, c):

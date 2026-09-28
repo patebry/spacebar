@@ -56,6 +56,8 @@ final class PreviewWebView: WKWebView {
 /// One WKWebView per extension process, reused across previews so only the first preview pays WebKit start-up.
 final class WebHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     static let shared = WebHost()
+    /// Who shows the page ("quicklook" or "panel"), for its document-start script; set before `shared` is first used.
+    static var pageHost = "quicklook"
     let web: WKWebView
     private(set) var ready = false
     private var onReady: [() -> Void] = []
@@ -89,7 +91,7 @@ final class WebHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     private func applyNative(_ s: Settings) {
         let ucc = web.configuration.userContentController
         ucc.removeAllUserScripts()
-        ucc.addUserScript(PageSettings.userScript(SettingsStore.shared.payload, webRoot: webRoot))
+        ucc.addUserScript(PageSettings.userScript(SettingsStore.shared.payload, webRoot: webRoot, host: Self.pageHost))
         web.appearance = s.appearance == "light" ? NSAppearance(named: .aqua) : s.appearance == "dark" ? NSAppearance(named: .darkAqua) : nil
         remoteImages.update(remoteImages: s.remoteImages)
     }
@@ -210,6 +212,9 @@ final class FileWatcher {
 /// Who holds the arrow keys for the sidebar's list session, which the page asks for (filterBegin with `list`) once
 /// `listSessionWanted` has offered one. Keys and the session's end come back through filterKey and filterEnded.
 protocol KeySource: AnyObject {
+    /// Holds its sessions itself rather than in the writer's panel, so the writer's own ends (it went away, an edit began) are
+    /// not its ends: the controller tells it.
+    var local: Bool { get }
     /// The preview is on screen over `root`.
     func listSessionWanted(root: String)
     /// Starts list session `id` over the sidebar row clicked; `failed` runs on the main thread when it cannot start.
@@ -222,6 +227,7 @@ protocol KeySource: AnyObject {
 final class WriterKeySource: KeySource {
     private weak var controller: PreviewController?
     init(controller: PreviewController) { self.controller = controller }
+    var local: Bool { false }
 
     func listSessionWanted(root: String) {
         controller?.js("sb.listKeysWanted", ["root": root])
@@ -307,6 +313,8 @@ class PreviewController: NSViewController {
         guard let d = downloading, d.url == url, loader.isActive(d.load), FileTypes.isDataless(url.path) else { return false }
         return Self.stamp(url) == d.stamp
     }
+    /// A multiple selection's names in the root: the root's listing shows only these.
+    private var selectionNames: Set<String>?
     /// The sidebar's folders as last sent, by path; `open` from the page is limited to their files.
     private var listings: [String: FolderListing.Listing] = [:]
     /// Folders the page may ask to list: the root and every folder a listing named. Nothing above the root is ever in it.
@@ -529,17 +537,45 @@ class PreviewController: NSViewController {
     var prewarmsWriter: Bool { true }
 
     /// A list session ended without asking for another: `reason` is the key source's ("escape" gave the keys back to the host).
-    func listSessionEnded(reason: String) {}
+    /// The page says what the next key does, by its host.
+    func listSessionEnded(reason: String) { js("sb.listEnded", ["reason": reason]) }
+
+    /// The htmlScripts setting that applies to `url`, an HTML file about to be shown.
+    func htmlScripts(for url: URL) -> String { SettingsStore.shared.settings.htmlScripts }
+
+    /// The web view the page is in.
+    var webView: WKWebView { host.web }
+
+    /// The Open button's action for the file on screen, for a host with a key for it (⌘O).
+    func openOnScreen() {
+        guard let url = fileURL else { return }
+        if fileKind == .markdown { return openExternally(url) }
+        handle("openFile", ["path": url.path])
+    }
 
     deinit {
         if let id = edit?.id { (helperConnection?.remoteObjectProxy as? SpacebarWriterProtocol)?.endEdit(id) }
-        if let id = filter?.id { (helperConnection?.remoteObjectProxy as? SpacebarWriterProtocol)?.endFilter(id) }
+        if let f = filter {
+            if heldLocally(f) { keySource.end(f.id) } else { (helperConnection?.remoteObjectProxy as? SpacebarWriterProtocol)?.endFilter(f.id) }
+        }
         helperConnection?.invalidate()
         log.info("controller deinit")
     }
 
     /// Shows `url`, a file or a folder; `reason` names what asked, for the settings check. The host holds any access `url` needs.
-    func start(url: URL, reason: String) {
+    func start(url: URL, reason: String) { start(url: url, reason: reason, only: nil) }
+
+    /// Shows the first file of `urls` (Finder's selection) with a sidebar of just the selection: the items in that file's folder.
+    func start(selection urls: [URL], reason: String) {
+        let parent = { (u: URL) in u.deletingLastPathComponent().resolvingSymlinksInPath().path }
+        guard urls.count > 1, let first = urls.first(where: { !$0.hasDirectoryPath && !FolderListing.isDirectory($0.path) }) else {
+            return urls.first.map { start(url: $0, reason: reason) } ?? ()
+        }
+        let names = Set(urls.filter { parent($0) == parent(first) }.map(\.lastPathComponent))
+        start(url: first, reason: reason, only: names.count > 1 ? names : nil)
+    }
+
+    private func start(url: URL, reason: String, only: Set<String>?) {
         prepareStart = Date()
         SettingsStore.shared.checkNow(reason: reason)
         let warm = host.ready
@@ -561,9 +597,11 @@ class PreviewController: NSViewController {
 
         var isDir: ObjCBool = false
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
-        let resolved = url.resolvingSymlinksInPath()
+        let resolved = only == nil ? url.resolvingSymlinksInPath()
+            : URL(fileURLWithPath: url.deletingLastPathComponent().resolvingSymlinksInPath().path).appendingPathComponent(url.lastPathComponent)
         rootDir = isDir.boolValue ? resolved.path : resolved.deletingLastPathComponent().path
-        if !isDir.boolValue, !FolderRules.isQuarantined(resolved.path) { rootDir = FolderRules.vaultRoot(containing: rootDir) ?? rootDir }
+        selectionNames = only
+        if !isDir.boolValue, only == nil, !FolderRules.isQuarantined(resolved.path) { rootDir = FolderRules.vaultRoot(containing: rootDir) ?? rootDir }
         host.scheme.fileRoot = rootDir
         knownDirs = [rootDir]
         wantListKeys()
@@ -735,10 +773,11 @@ class PreviewController: NSViewController {
         let gen = (listGens[dir] ?? 0) + 1
         listGens[dir] = gen
         if let then { onListed = then }
-        let root = rootDir, s = SettingsStore.shared.settings, pinned = fileURL?.path
+        let root = rootDir, s = SettingsStore.shared.settings, pinned = fileURL?.path, only = dir == rootDir ? selectionNames : nil
         listedWith = (s.folderSort, s.folderReadmeFirst, s.showHiddenFiles)
         DispatchQueue.global(qos: .userInitiated).async {
-            let l = FolderListing.list(dir, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles, pinned: pinned)
+            var l = FolderListing.list(dir, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles, pinned: pinned)
+            if let only { l = FolderListing.only(l, names: only) }
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.listGens[dir], root == self.rootDir else { return }
                 let changed = l != self.listings[dir]
@@ -1099,7 +1138,7 @@ class PreviewController: NSViewController {
             mediaPane = pane
         }
         if view == "html" {
-            let scripts = HTMLPane.runsScripts(url, setting: SettingsStore.shared.settings.htmlScripts)
+            let scripts = HTMLPane.runsScripts(url, setting: htmlScripts(for: url))
             if htmlPane?.scripts != scripts { htmlPane?.close(); htmlPane = HTMLPane(scripts: scripts) }
             htmlPane?.onLink = { [weak self] in self?.htmlLink($0) }
             htmlPane?.show(url, over: host.web)
@@ -1789,7 +1828,7 @@ class PreviewController: NSViewController {
             log.error("editBlock: \(why, privacy: .public)")
             // Keys already typed into the previous block (and flushed as the writer ends it) still land.
             if let p = previous { self.helper { $0.endEdit(p.id) } }
-            if let f = previousFilter { self.endKeys(f) }
+            if let f = previousFilter, !self.heldLocally(f) { self.endKeys(f) }
             self.js("sb.editEnd", ["seq": seq])
         }
         guard let text = docText, let start = m.int("start"), let end = m.int("end"), let block = m.string("text"),
@@ -2002,8 +2041,12 @@ class PreviewController: NSViewController {
     }
 
     private func beginFilter(_ seq: Int, text: String, list: Bool, _ m: PageMessage) {
-        // The writer ends a previous filter session itself, keeping its panel key for this one.
-        if let f = filter { js("sb.filterEnd", ["seq": f.seq]) }
+        // The writer ends a previous filter session itself, keeping its panel key for this one; a session held elsewhere, or
+        // one the writer loses to a session held elsewhere, is ended here.
+        if let f = filter {
+            js("sb.filterEnd", ["seq": f.seq])
+            if heldLocally(f) || (list && keySource.local) { endKeys(f) }
+        }
         editCounter += 1
         let id = editCounter
         filter = (id, seq, list)
@@ -2025,12 +2068,12 @@ class PreviewController: NSViewController {
         js("sb.filterText", ["seq": f.seq, "text": FilterKeys.clean(text)])
     }
 
-    fileprivate func filterKey(_ id: Int, key: String, isRepeat: Bool) {
+    func filterKey(_ id: Int, key: String, isRepeat: Bool) {
         guard let f = filter, f.id == id, (f.list ? FilterKeys.listNames : FilterKeys.names).contains(key) else { return }
         js("sb.filterKey", ["seq": f.seq, "key": key, "repeat": isRepeat])
     }
 
-    fileprivate func filterEnded(_ id: Int, reason: String) {
+    func filterEnded(_ id: Int, reason: String) {
         guard let f = filter, f.id == id else { return }
         log.info("filter \(id) ended: \(reason, privacy: .public)")
         stopFilter(notifyWriter: false)
@@ -2038,12 +2081,16 @@ class PreviewController: NSViewController {
         else if f.list { listSessionEnded(reason: reason) }
     }
 
+    /// `notifyWriter` false: the writer already ended its session (or went away). A session held by a local key source is
+    /// told regardless.
     private func stopFilter(notifyWriter: Bool) {
         guard let f = filter else { return }
         filter = nil
-        if notifyWriter { endKeys(f) }
+        if notifyWriter || heldLocally(f) { endKeys(f) }
         js("sb.filterEnd", ["seq": f.seq])
     }
+
+    private func heldLocally(_ f: (id: Int, seq: Int, list: Bool)) -> Bool { f.list && keySource.local }
 
     /// Tells whoever holds the keys of filter session `f` that it ended.
     private func endKeys(_ f: (id: Int, seq: Int, list: Bool)) {
@@ -2059,7 +2106,7 @@ class PreviewController: NSViewController {
         js("sb.editEnd", ["seq": e.seq])
     }
 
-    fileprivate func js(_ fn: String, _ arg: [String: Any]) {
+    func js(_ fn: String, _ arg: [String: Any]) {
         let json = String(data: try! JSONSerialization.data(withJSONObject: arg), encoding: .utf8)!
         host.web.evaluateJavaScript("\(fn)(\(json)); 0") { _, err in
             if let err { log.error("\(fn, privacy: .public) failed: \(String(describing: err), privacy: .public)") }

@@ -997,7 +997,70 @@ def auto_session(page, check, T, types, opened):
     r = page.render(os.path.join(lone, 'only.md'))
     page.cmd('@wait:0.3')
     check(not want(lone), 'auto keys: none with a single row to move through')
+    status = lambda: page.js("return document.getElementById('status').textContent")
+    page.cmd("@eval:sb.status(''); sb.listEnded({ reason: 'click' }); 0")
+    check('Press Space' not in status(), 'Quick Look: a list session ended by a click says nothing', status())
+    page.cmd("@eval:sb.listEnded({ reason: 'escape' }); 0")
+    check(status() == 'Press Space again to close', 'Quick Look: one ended by Esc or Space says the next Space closes', status())
+    check(page.js("return [sb.hostKey({ key: 'pagedown' }), sb.hostKey({ key: 'find' }), document.documentElement.dataset.host]") == [False, False, 'quicklook'],
+          "Quick Look: the page is Quick Look's, and takes no host keys", page.js("return document.documentElement.dataset.host"))
     page.cmd('@root:')
+
+
+def panel_host(check):
+    """The page as the Space helper's panel shows it (host "panel" in the document-start script): the traffic lights' inset,
+    the list session starting on its own and driven by keys the panel sends (no writer: the helper routes Finder's keys), no
+    "Press Space again" since Space and Esc close the panel in one press, and the keys the panel sends outside a list session."""
+    page = Page(host='panel')
+    try:
+        root = os.path.join(page.out, 'panel')
+        os.makedirs(os.path.join(root, 'sub'))
+        long_doc = '# Long\n\n' + ''.join(f'Paragraph {i}.\n\n' for i in range(300))
+        for n, t in {'README.md': long_doc, 'b.md': '# Bee\n', 'c.txt': 'see\n', 'sub/inner.md': '# Inner\n'}.items():
+            open(os.path.join(root, n), 'w').write(t)
+        T = lambda *p: os.path.join(root, *p)
+        msgs = lambda r, t: [m for m in r['messages'] if m.get('type') == t]
+        status = lambda: page.js("return document.getElementById('status').textContent")
+        page.cmd('@size:1100x760')
+        page.cmd('@root:' + root)
+        page.render(T('README.md'))
+        page.cmd('@wait:0.3')
+        g = page.js("""const r = document.documentElement, t = document.getElementById('side-toggle').getBoundingClientRect();
+          return [r.dataset.host, getComputedStyle(r).getPropertyValue('--titlebar-inset').trim(), Math.round(t.left)];""")
+        check(g[0] == 'panel' and g[1] == '68px' and g[2] >= 68, "panel: the host is set at document start, and the sidebar button clears the traffic lights", json.dumps(g))
+        page.cmd('@eval:sb.listKeysWanted(' + json.dumps({'root': root}) + '); 0')
+        w = page.cmd('@wait:0.3')
+        fb = msgs(w, 'filterBegin')
+        check(len(fb) == 1 and str(fb[0].get('list')).lower() == 'true' and str(fb[0].get('auto')).lower() == 'true',
+              'panel: the list session starts on its own, as in Quick Look', json.dumps(fb))
+        seq = int(fb[0]['seq']) if fb else -1
+        r = page.cmd('@eval:sb.filterKey(' + json.dumps({'seq': seq, 'key': 'down'}) + '); 0')
+        w = page.cmd('@wait:0.4')
+        opened = [m.get('path') for m in msgs(r, 'open') + msgs(w, 'open')]
+        check(opened == [T('b.md')], 'panel: a routed ↓ opens the next file in the sidebar', json.dumps(opened))
+        page.cmd('@eval:sb.status(\'\'); sb.filterEnd({ seq: ' + str(seq) + ' }); sb.listEnded({ reason: "escape" }); 0')
+        check('Press Space' not in status(), 'panel: never "Press Space again to close"', status())
+        page.render(T('README.md'))
+        page.cmd('@wait:0.3')
+        y0 = page.js('return window.scrollY')
+        used = page.js("return sb.hostKey({ key: 'pagedown' })")
+        page.cmd('@wait:0.1')
+        y1 = page.js('return window.scrollY')
+        page.js("return sb.hostKey({ key: 'end' })")
+        y2 = page.js('return window.scrollY')
+        page.js("return sb.hostKey({ key: 'home' })")
+        y3 = page.js('return window.scrollY')
+        check(used is True and y1 > y0 and y2 > y1 and y3 == 0, 'panel: PgDn, End and Home scroll the page outside a list session', json.dumps([used, y0, y1, y2, y3]))
+        check(page.js("return [sb.hostKey({ key: 'zoomIn' }), sb.hostKey({ key: 'left' }), sb.hostKey({ key: 'bogus' }), sb.hostKey(null)]") == [False] * 4,
+              'panel: zoom on a document, ← and unknown keys are left to the panel')
+        r = page.cmd("@eval:sb.hostKey({ key: 'find' })")
+        fb = msgs(r, 'filterBegin')
+        check(r['result'] in (True, 'true', 1) and len(fb) == 1 and 'list' not in fb[0] and page.js("return document.getElementById('side-q').classList.contains('held')"),
+              "panel: ⌘F asks for the writer's key panel over the filter field", json.dumps([r['result'], fb]))
+        page.cmd('@eval:sb.filterEnd({ all: true }); 0')
+    finally:
+        page.close()
+        shutil.rmtree(page.out, ignore_errors=True)
 
 
 def main():
@@ -1949,6 +2012,7 @@ def main():
         check(not csp and not errs, 'no CSP violations or page errors logged', json.dumps(csp + errs)[:300])
         page.close()
         sandboxed(tree, check)
+        panel_host(check)
     finally:
         if page.proc.poll() is None:
             page.close()

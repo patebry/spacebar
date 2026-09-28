@@ -36,11 +36,6 @@ final class PreviewViewController: PreviewController, QLPreviewingController {
 
     override func pageRendered() { disableHostDoubleClick() }
 
-    /// Esc or Space in a list session gave the keys back to Quick Look, which closes on the next press.
-    override func listSessionEnded(reason: String) {
-        if reason == "escape" { status("Press Space again to close") }
-    }
-
     #if PROBE
     override func makeRoot(frame: NSRect) -> NSView {
         let root = Probe.makeRoot(frame: frame)

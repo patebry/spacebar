@@ -1,6 +1,7 @@
 // Loads Preview/web in an offscreen WKWebView set up like the extension: the real SchemeHandler (spacebar://bundle, file and
 // user) and the real document-start settings script (PageSettings.userScript). Built with Shared/Settings.swift and
 // Shared/WebShell.swift, Shared/FolderListing.swift, Shared/LinkPolicy.swift and Preview/PDFPane.swift; run with SPACEBAR_SUPPORT_DIR set to a scratch folder.
+// SPACEBAR_PAGE_HOST=panel loads the page as the Space helper's panel shows it (the default is Quick Look's).
 //   webcheck <web dir> <cmd>...   runs each command, prints one JSON line per command
 //   webcheck <web dir>            reads commands from stdin, one JSON-encoded string per line, and answers each with a line
 // Commands:
@@ -140,7 +141,8 @@ func load(_ patch: [String: Any]) -> Bool {
     gate.update(remoteImages: Settings(dictionary: settingsDict).remoteImages)
     let ucc = config.userContentController
     ucc.removeAllUserScripts()
-    ucc.addUserScript(PageSettings.userScript(PageSettings.payload(Settings(dictionary: settingsDict)), webRoot: webRoot))
+    ucc.addUserScript(PageSettings.userScript(PageSettings.payload(Settings(dictionary: settingsDict)), webRoot: webRoot,
+                                              host: ProcessInfo.processInfo.environment["SPACEBAR_PAGE_HOST"] ?? "quicklook"))
     ucc.addUserScript(probe)
     rec.ready = false
     var inPlace = false

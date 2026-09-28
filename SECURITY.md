@@ -18,8 +18,11 @@ Three features reach further than a rendered page, and are in scope:
   browser, Mail or AirDrop marked as downloaded are held back. Files from `git clone`, `curl`, `unzip` or a USB drive are
   not marked, so their pages run too; "Scripts in HTML files: Never" (Settings, Advanced) turns scripts and web loads off
   for every HTML file. A flag that cannot be read counts as downloaded. A downloaded file is served to its view through a
-  scheme handler: only files inside its folder, `<link>` resource hints (preconnect, dns-prefetch, prefetch, preload)
-  removed, a CSP with no scripts and nothing from outside the folder, and every http(s), ws(s) and ftp load blocked. A link
+  scheme handler: the file is the only document, decoded and sent as UTF-8 with every `<link>` element (any prefix or case)
+  made inert and the stylesheets beside it inlined; other files in its folder load only as stylesheets, images and fonts; no
+  frame of any kind loads; a CSP with no scripts, frames or anything from outside the folder; and every http(s), ws(s) and
+  ftp load blocked. Resource hints such as preconnect are not governed by CSP or content rules, which is why no `<link>` is
+  kept at all. A link
   leaves the view only within a second of the user's click in it, one per click, and through the link policy.
 - **Archives** are listed by the unsandboxed helper with `/usr/bin/bsdtar` run under `sandbox-exec`: a deny-by-default
   profile that allows only system reads and executing bsdtar, and denies every write and metadata reads under `/Users` and

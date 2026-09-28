@@ -43,12 +43,18 @@ do {
     check("gate: a clock that went back lets nothing through", !g.allow(at: t.addingTimeInterval(-1)))
 }
 
-// ---- macOS 13's fallback: resource hints are taken out of the markup ----
+// ---- the downloaded document as served: no element named link survives, whatever its prefix, case or attributes ----
 do {
-    let html = #"<LINK REL="preconnect" href="https://a"><link rel='dns-prefetch' href=//b><link href=x rel=prefetch><link rel="stylesheet preload" href=s.css><link rel=stylesheet href=k.css><p>x</p>"#
-    let out = HTMLPane.strippingHints(html)
-    check("hints: preconnect, dns-prefetch, prefetch and preload links go; a stylesheet stays",
-          out == #"<link rel=stylesheet href=k.css><p>x</p>"#, out)
+    let out = OfflineFiles.inertLinks("<LINK rel=preconnect><h:link rel=x/><link\nrel=a><link/><linked><p>link</p><a:b:link>")
+    check("inert: link start tags of any case, prefix or ending are renamed; <linked> and text are not",
+          out == "<spacebar-inert rel=preconnect><spacebar-inert rel=x/><spacebar-inert\nrel=a><spacebar-inert/><linked><p>link</p><spacebar-inert>", out)
+    let latin = Data("<meta charset=windows-1252><p>caf".utf8) + Data([0xE9]) + Data("</p>".utf8)
+    check("decode: a declared legacy charset", OfflineFiles.decode(latin).hasSuffix("café</p>"))
+    check("decode: invalid UTF-8 with no charset is Windows-1252", OfflineFiles.decode(Data([0x63, 0x61, 0x66, 0xE9])) == "café")
+    check("decode: a UTF-16 byte order mark wins", OfflineFiles.decode("<p>ü</p>".data(using: .utf16)!) == "<p>ü</p>")
+    let served = String(decoding: OfflineFiles.document(latin, folder: dir), as: UTF8.self)
+    check("document: sent as UTF-8 with its charset meta replaced and DNS prefetch off",
+          served.contains("café") && served.contains(#"<meta charset="utf-8">"#) && !served.contains("windows-1252") && served.hasPrefix(#"<meta http-equiv="x-dns-prefetch-control" content="off">"#), served)
 }
 
 // ---- the two kinds of pane: a local file runs scripts and loads from the web; a downloaded one does neither ----
@@ -153,6 +159,88 @@ do {
           (widths["beside.png"] ?? 0) > 0 && widths["link.png"] == 0 && widths["../\(outside.lastPathComponent)"] == 0, "\(widths)")
     pane.close()
     try? FileManager.default.removeItem(at: outside)
+}
+
+// Every way found to reach a server from a downloaded file, each against its own counting server: zero connections each.
+let leakCases: [(String, String)] = [
+    ("baseline preconnect", #"<link rel=preconnect href="U/a">"#),
+    ("> inside a quoted attribute", #"<link title="a>b" rel=preconnect href="U/a">"#),
+    ("data-rel decoy", #"<link data-rel=x rel=preconnect href="U/a">"#),
+    ("an entity in rel", #"<link rel="pre&#99;onnect" href="U/a">"#),
+    ("a newline after the tag name", "<link\nrel=preconnect href=\"U/a\">"),
+    ("upper case, dns-prefetch, prefetch, preload", #"<LINK REL=dns-prefetch HREF="U/d"><link rel=prefetch href="U/p"><link rel=preload as=image href="U/l">"#),
+    ("a data: iframe", #"<iframe src="data:text/html,%3Clink%20rel%3Dpreconnect%20href%3D%22U%2Fa%22%3E"></iframe>"#),
+    ("srcdoc", #"<iframe srcdoc="&lt;link rel=preconnect href=&quot;U/a&quot;&gt;"></iframe>"#),
+    ("a stylesheet on the web", #"<link rel=stylesheet href="U/a.css">"#),
+    ("@import, a web font, a background", #"<style>@import url(U/i.css); @font-face{font-family:x;src:url(U/f.woff)} p{font-family:x;background:url(U/bg.png)}</style><p>x</p>"#),
+    ("srcset and picture", #"<img srcset="U/s.png 1x"><picture><source srcset="U/p.png"><img src=x.png></picture>"#),
+    ("object, embed, video", #"<object data="U/o"></object><embed src="U/e"><video poster="U/v.png" src="U/v.mp4" preload=auto></video>"#),
+    ("meta refresh", #"<meta http-equiv=refresh content="0;url=U/r">"#),
+    ("svg image and use", #"<svg><image href="U/si.png" width=10 height=10/><use href="U/u.svg#x"/></svg>"#),
+    ("an http iframe", #"<iframe src="U/if"></iframe>"#),
+    ("a meta CSP loosening it", #"<meta http-equiv=Content-Security-Policy content="default-src *"><img src="U/m.png">"#),
+    ("icon and manifest", #"<link rel=icon href="U/i.ico"><link rel=manifest href="U/m.json">"#),
+    ("base href", #"<base href="U/"><img src="b.png">"#),
+    ("an svg link in the document", #"<svg><foreignObject width=10 height=10><link xmlns="http://www.w3.org/1999/xhtml" rel="preconnect" href="U/a"/></foreignObject></svg>"#),
+]
+let svgSibling = #"<svg xmlns="http://www.w3.org/2000/svg"><foreignObject width="10" height="10"><link xmlns="http://www.w3.org/1999/xhtml" rel="preconnect" href="U/a"/></foreignObject></svg>"#
+let xhtSibling = #"<html xmlns="http://www.w3.org/1999/xhtml"><head><h:link xmlns:h="http://www.w3.org/1999/xhtml" rel="preconnect" href="U/a"/></head><body/></html>"#
+let siblingCases: [(String, String, String, String)] = [
+    ("an svg beside it in an iframe", "svg", svgSibling, #"<iframe src="S"></iframe>"#),
+    ("an svg beside it as an embed", "svg", svgSibling, #"<embed src="S">"#),
+    ("an svg beside it as an object", "svg", svgSibling, #"<object data="S"></object>"#),
+    ("an .xht beside it", "xht", xhtSibling, #"<iframe src="S"></iframe>"#),
+    ("an .xhtml beside it", "xhtml", xhtSibling, #"<iframe src="S"></iframe>"#),
+    ("an .xml beside it", "xml", xhtSibling, #"<iframe src="S"></iframe>"#),
+    ("an .html beside it", "html", #"<link rel=preconnect href="U/a">"#, #"<iframe src="S"></iframe>"#),
+]
+func zeroHits(_ name: String, _ html: (String) -> String, sibling: ((String) -> (String, String))? = nil) {
+    let server = Server()
+    let u = "http://127.0.0.1:\(server.port)"
+    let n = abs(name.hashValue) % 1_000_000
+    if let sibling { let (file, body) = sibling(u); try! Data(body.utf8).write(to: dir.appendingPathComponent(file)) }
+    let f = dir.appendingPathComponent("leak-\(n).html")
+    try! Data(("<p id=p>static</p>" + html(u)).utf8).write(to: f)
+    setxattr(f.path, "com.apple.quarantine", flag, flag.utf8.count, 0, 0)
+    let pane = HTMLPane(scripts: false)
+    pane.show(f, over: web)
+    spin(2)
+    check("downloaded, no connection: \(name)", server.hits == 0, "hits \(server.hits)")
+    pane.close()
+}
+for (name, tpl) in leakCases { zeroHits(name, { tpl.replacingOccurrences(of: "U/", with: $0 + "/") }) }
+for (name, ext, body, host) in siblingCases {
+    let file = "sibling-\(abs(name.hashValue) % 1_000_000).\(ext)"
+    zeroHits(name, { _ in host.replacingOccurrences(of: "S", with: file) }, sibling: { (file, body.replacingOccurrences(of: "U/", with: $0 + "/")) })
+}
+do {
+    let server = Server()
+    let f = dir.appendingPathComponent("utf16.html")
+    try! "<p>x</p><link rel=preconnect href=\"http://127.0.0.1:\(server.port)/a\">".data(using: .utf16)!.write(to: f)
+    setxattr(f.path, "com.apple.quarantine", flag, flag.utf8.count, 0, 0)
+    let pane = HTMLPane(scripts: false)
+    pane.show(f, over: web)
+    spin(2)
+    check("downloaded, no connection: a UTF-16 document", server.hits == 0, "hits \(server.hits)")
+    pane.close()
+}
+
+// A downloaded page keeps its look: a stylesheet beside it is inlined (a <link> is never kept), and its remote @import dropped.
+do {
+    let server = Server()
+    try! Data("@import url(http://127.0.0.1:\(server.port)/x.css);\np { color: rgb(1, 2, 3) }".utf8).write(to: dir.appendingPathComponent("look.css"))
+    let f = dir.appendingPathComponent("styled.html")
+    try! Data(#"<link rel="stylesheet" href="look.css"><p id=p>styled</p>"#.utf8).write(to: f)
+    setxattr(f.path, "com.apple.quarantine", flag, flag.utf8.count, 0, 0)
+    let pane = HTMLPane(scripts: false)
+    pane.show(f, over: web)
+    for _ in 0..<150 where pane.view.url == nil { spin(0.02) }
+    spin(1)
+    var color: String?, done = false
+    pane.view.evaluateJavaScript("getComputedStyle(document.getElementById('p')).color") { r, _ in color = r as? String; done = true }
+    for _ in 0..<100 where !done { spin(0.02) }
+    check("downloaded: its stylesheet beside it applies, and nothing is fetched", color == "rgb(1, 2, 3)" && server.hits == 0, "\(color ?? "nil") hits \(server.hits)")
+    pane.close()
 }
 
 // ---- a script's own click on a link is not followed ----

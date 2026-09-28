@@ -170,9 +170,14 @@ The threat is a downloaded Markdown file, and whatever sits beside it, driving t
    `com.apple.quarantine` attribute (ENOATTR; any other error counts as downloaded). Such a file may also load from the web:
    the default, kept by the user's decision, with the Settings footer saying which files are not flagged. Otherwise
    JavaScript is off and the file is served through `OfflineFiles`, a `spacebar-html:` scheme handler: only regular files
-   inside its folder (symlinks resolved), `<link>` resource hints stripped (content rules block loads but not the
-   connections preconnect opens; a data store proxy did not stop them either on macOS 15), a CSP of `default-src 'self'`
-   with no scripts, and the content rule list blocking http(s), ws(s) and ftp. Every navigation away from the file is
+   inside its folder (symlinks resolved). Content rules and CSP block loads but not the connections `<link rel=preconnect>`
+   opens, and a data store proxy did not stop them either on macOS 15; matching rel values was defeated by entities, decoys
+   and quoting, and frames (data:, srcdoc, an SVG, XHTML or XML file beside it with a namespaced link) carried the same hint
+   past any rewrite. So: the document is the only markup served (decoded from its BOM, declared charset or Windows-1252,
+   sent as UTF-8), every start tag named `link` or `<prefix>:link` becomes an inert element after the stylesheets beside it
+   (at most 8, 1 MB each) are inlined, other files are served only as CSS, images (SVG as an image) and fonts, every
+   subframe navigation is cancelled, and the CSP adds `frame-src`, `child-src` and `object-src 'none'`. DNS prefetching of
+   hyperlinks is turned off. `test/htmlpane` has a counting server for each of 27 ways in, each at zero connections. Every navigation away from the file is
    cancelled; a link goes on only within a second of a left mouse-up in the pane (a script's `a.click()` is
    `linkActivated` too), and a file link only to a plain, regular, non-hidden (unless shown) file inside the root.
 11. **Archives:** `listArchive` takes only a path whose name is an archive extension and whose type LinkPolicy allows the viewer

@@ -6,8 +6,8 @@ import WebKit
 /// like PDFPane. It shares nothing with the preview's web view: no message handler, no `spacebar` scheme, no stored data.
 ///
 /// Scripts run only in a file made on this Mac (no quarantine flag) while the htmlScripts setting allows it; a downloaded file
-/// renders with scripts off and nothing loaded from the web: it is served through OfflineFiles, with its resource hints taken
-/// out and a CSP that allows nothing but its own folder. Every navigation away from the file goes to `onLink`, so the pane
+/// renders with scripts off and nothing loaded from the web: it is served through OfflineFiles, with every `<link>` made inert
+/// (its sibling stylesheets inlined), no frames at all, and a CSP that allows nothing but its own folder. Every navigation away from the file goes to `onLink`, so the pane
 /// only ever shows the file it was given.
 final class HTMLPane: NSObject, WKNavigationDelegate, WKUIDelegate {
     let view: WKWebView
@@ -69,22 +69,6 @@ final class HTMLPane: NSObject, WKNavigationDelegate, WKUIDelegate {
         return errno != ENOATTR
     }
 
-    static let hintRels = ["preconnect", "dns-prefetch", "prefetch", "prerender", "preload", "modulepreload"]
-    /// Markup without its `<link>` resource hints, which open connections that content rules do not see.
-    static func strippingHints(_ html: String) -> String {
-        guard let re = try? NSRegularExpression(pattern: "<link\\b[^>]*>", options: [.caseInsensitive]) else { return html }
-        let ns = html as NSString
-        var out = "", at = 0
-        for m in re.matches(in: html, range: NSRange(location: 0, length: ns.length)) {
-            let tag = ns.substring(with: m.range).lowercased()
-            guard let rel = tag.range(of: #"rel\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)"#, options: .regularExpression) else { continue }
-            let value = tag[rel].split(separator: "=", maxSplits: 1).last.map(String.init) ?? ""
-            guard hintRels.contains(where: { value.contains($0) }) else { continue }
-            out += ns.substring(with: NSRange(location: at, length: m.range.location - at))
-            at = m.range.location + m.range.length
-        }
-        return out + ns.substring(from: at)
-    }
 
     /// Whether a pane for `url` runs scripts under `setting` (Settings.htmlScripts).
     static func runsScripts(_ url: URL, setting: String) -> Bool { setting == "local" && !isDownloaded(url) }
@@ -98,7 +82,7 @@ final class HTMLPane: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
         path = url.path
         file = url
-        offline?.root = url.deletingLastPathComponent()
+        offline?.document = url
         let load = { [weak self] in
             guard let self, self.file == url else { return }
             if self.offline != nil { self.view.load(URLRequest(url: OfflineFiles.url(for: url))); return }
@@ -160,6 +144,9 @@ final class HTMLPane: NSObject, WKNavigationDelegate, WKUIDelegate {
         // A served page's URLs stand for the files they name.
         let url = OfflineFiles.fileURL(raw) ?? raw
         let isMain = action.targetFrame?.isMainFrame ?? false
+        // Without web access no frame loads at all: a frame's document (data:, srcdoc, an SVG or XHTML file beside it) would be
+        // one this pane never rewrote, and <link rel=preconnect> connects whatever CSP and content rules say.
+        if !isMain, offline != nil { return decisionHandler(.cancel) }
         if !isMain {
             // Frames inside the page: web content, or files beside it (a pane without web access has its loads blocked).
             let ok = ["http", "https", "about", "data", "blob", OfflineFiles.scheme].contains(raw.scheme?.lowercased() ?? "")
@@ -208,17 +195,26 @@ struct LinkClickGate {
 }
 
 /// A downloaded HTML file and what sits beside it, served to its pane under `spacebar-html:`: only regular files inside the
-/// file's folder (symbolic links resolved, then checked again), HTML without its resource hints, every response under a CSP
-/// that allows no script and nothing from anywhere but that folder. The content rules block web loads as well.
+/// file's folder (symbolic links resolved, then checked again); the file itself as the only document, rewritten (`document`);
+/// anything else only as a stylesheet, an image or a font; every response under a CSP that allows no script, no frame and
+/// nothing from anywhere but that folder. The pane cancels every frame, and the content rules block web loads as well.
 final class OfflineFiles: NSObject, WKURLSchemeHandler {
     static let scheme = "spacebar-html"
     static let csp = "default-src 'self' data: blob:; script-src 'none'; style-src 'self' 'unsafe-inline' data:; connect-src 'none'; "
-        + "form-action 'none'; base-uri 'self'; object-src 'none'"
+        + "frame-src 'none'; child-src 'none'; object-src 'none'; form-action 'none'; base-uri 'self'"
     static let maxBytes = 64 << 20
-    /// The folder of the file on screen; set by the pane before each load.
-    var root: URL?
+    /// The file on screen; its folder is all that is served, and only it is served as a document.
+    var document: URL?
     private var stopped = Set<ObjectIdentifier>()
     private let queue = DispatchQueue(label: "md.spacebar.html-offline", qos: .userInitiated)
+
+    /// What a file beside the document may be served as: never a document (HTML, XML, XHTML), so nothing else is ever parsed as
+    /// markup. SVG only as an image, which loads nothing.
+    static let subresourceTypes: [String: String] = [
+        "css": "text/css", "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp",
+        "avif": "image/avif", "bmp": "image/bmp", "ico": "image/x-icon", "tif": "image/tiff", "tiff": "image/tiff", "heic": "image/heic",
+        "svg": "image/svg+xml", "woff": "font/woff", "woff2": "font/woff2", "ttf": "font/ttf", "otf": "font/otf",
+    ]
 
     static func url(for file: URL) -> URL {
         var c = URLComponents()
@@ -236,27 +232,28 @@ final class OfflineFiles: NSObject, WKURLSchemeHandler {
         return c.url
     }
 
-    /// The file to serve for `url`: a regular file inside `root`, both resolved; nil otherwise.
-    static func servable(_ url: URL, root: URL?) -> URL? {
-        guard let root, let f = fileURL(url) else { return nil }
+    /// `file` resolved, when it is inside `root` (resolved too); nil otherwise.
+    static func inside(_ file: URL, root: URL) -> URL? {
         let base = root.resolvingSymlinksInPath().standardizedFileURL.path + "/"
-        let resolved = URL(fileURLWithPath: f.path).resolvingSymlinksInPath().standardizedFileURL
-        guard resolved.path.hasPrefix(base) else { return nil }
-        return resolved
+        let resolved = URL(fileURLWithPath: file.path).resolvingSymlinksInPath().standardizedFileURL
+        return resolved.path.hasPrefix(base) ? resolved : nil
     }
 
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
         let id = ObjectIdentifier(task)
         stopped.remove(id)
-        guard let url = task.request.url, let file = Self.servable(url, root: root) else {
+        guard let url = task.request.url, let doc = document, let f = Self.fileURL(url),
+              let file = Self.inside(f, root: doc.deletingLastPathComponent()) else {
             return task.didFailWithError(URLError(.fileDoesNotExist))
         }
+        let isDocument = file.path == doc.resolvingSymlinksInPath().standardizedFileURL.path
+        let mime = isDocument ? "text/html; charset=utf-8" : Self.subresourceTypes[file.pathExtension.lowercased()]
+        guard let mime else { return task.didFailWithError(URLError(.noPermissionsToReadFile)) }
         queue.async {
-            let body = Self.read(file)
+            let body = Self.read(file).map { isDocument ? Self.document($0, folder: doc.deletingLastPathComponent()) : $0 }
             DispatchQueue.main.async {
                 guard !self.stopped.contains(id) else { return }
                 guard let body else { return task.didFailWithError(URLError(.noPermissionsToReadFile)) }
-                let mime = UTType(filenameExtension: file.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
                 let headers = ["Content-Type": mime, "Content-Security-Policy": Self.csp, "X-Content-Type-Options": "nosniff"]
                 task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!)
                 task.didReceive(body)
@@ -267,15 +264,92 @@ final class OfflineFiles: NSObject, WKURLSchemeHandler {
 
     func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) { stopped.insert(ObjectIdentifier(task)) }
 
-    /// A regular file's bytes, at most maxBytes; HTML without its resource hints.
-    private static func read(_ file: URL) -> Data? {
+    /// A regular file's bytes, at most `limit`.
+    static func read(_ file: URL, limit: Int = maxBytes) -> Data? {
         let fd = open(file.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
         guard fd >= 0 else { return nil }
         let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         var st = stat()
-        guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG, st.st_size <= maxBytes, let data = try? h.readToEnd() ?? Data() else { return nil }
-        guard ["html", "htm", "xhtml"].contains(file.pathExtension.lowercased()) else { return data }
-        guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else { return nil }
-        return Data(HTMLPane.strippingHints(text).utf8)
+        guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG, st.st_size <= limit else { return nil }
+        return try? h.readToEnd() ?? Data()
+    }
+
+    // MARK: the document, rewritten
+
+    static let maxSheets = 8
+    static let maxSheetBytes = 1 << 20
+
+    /// The document as served: decoded from its own encoding and sent as UTF-8, sibling stylesheets inlined, and every `<link>`
+    /// start tag, of any namespace prefix, made an inert element. Resource hints are never looked for by their rel (entities,
+    /// decoys and odd quoting defeat that): no element named link survives.
+    static func document(_ data: Data, folder: URL) -> Data {
+        var html = decode(data)
+        html = inlineStylesheets(html, folder: folder)
+        html = inertLinks(html)
+        html = replace(html, #"<meta\b[^>]*charset[^>]*>"#, with: #"<meta charset="utf-8">"#)
+        // Hyperlinks' host names are not looked up ahead of a click.
+        return Data((#"<meta http-equiv="x-dns-prefetch-control" content="off">"# + html).utf8)
+    }
+
+    /// Every start tag named `link` or `<prefix>:link`, in any case, renamed; what follows the name is left as is.
+    static func inertLinks(_ html: String) -> String {
+        replace(html, #"<(?:[^\s/<>:]*:)*link(?=[\s/>]|$)"#, with: "<spacebar-inert", options: [.caseInsensitive])
+    }
+
+    static func replace(_ s: String, _ pattern: String, with template: String, options: NSRegularExpression.Options = [.caseInsensitive]) -> String {
+        guard let re = try? NSRegularExpression(pattern: pattern, options: options) else { return s }
+        return re.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: NSRegularExpression.escapedTemplate(for: template))
+    }
+
+    /// `<link rel=stylesheet href=…>` naming a regular file in the folder (at most maxSheets, each maxSheetBytes) becomes a
+    /// `<style>` with its text. Anything this misreads is still made inert afterwards; a sheet's own `</style>` or `<link` gains
+    /// nothing, since the inert pass runs over the result.
+    static func inlineStylesheets(_ html: String, folder: URL) -> String {
+        guard let re = try? NSRegularExpression(pattern: #"<link\b[^>]*>"#, options: [.caseInsensitive]) else { return html }
+        let ns = html as NSString
+        var out = "", at = 0, used = 0
+        for m in re.matches(in: html, range: NSRange(location: 0, length: ns.length)) {
+            guard used < maxSheets else { break }
+            let tag = ns.substring(with: m.range)
+            guard tag.range(of: #"\brel\s*=\s*["']?[^"'>]*\bstylesheet\b"#, options: [.regularExpression, .caseInsensitive]) != nil,
+                  let href = attribute("href", in: tag), !href.contains(":"), !href.hasPrefix("/"), !href.hasPrefix("\\"),
+                  let rel = href.removingPercentEncoding,
+                  let file = inside(folder.appendingPathComponent(rel.components(separatedBy: CharacterSet(charactersIn: "?#")).first ?? rel), root: folder),
+                  file.pathExtension.lowercased() == "css",
+                  let data = read(file, limit: maxSheetBytes) else { continue }
+            used += 1
+            let css = replace(decode(data), #"@import\s+(?:url\()?\s*["']?\s*(?:[a-z][a-z0-9+.-]*:|//)[^;]*;?"#, with: "")
+            out += ns.substring(with: NSRange(location: at, length: m.range.location - at)) + "<style>" + css + "</style>"
+            at = m.range.location + m.range.length
+        }
+        return out + ns.substring(from: at)
+    }
+
+    static func attribute(_ name: String, in tag: String) -> String? {
+        guard let r = tag.range(of: "\\b\(name)\\s*=\\s*(\"[^\"]*\"|'[^']*'|[^\\s>]+)", options: [.regularExpression, .caseInsensitive]) else { return nil }
+        var v = String(tag[r].split(separator: "=", maxSplits: 1).last ?? "").trimmingCharacters(in: .whitespaces)
+        if v.hasPrefix("\"") || v.hasPrefix("'") { v = String(v.dropFirst().dropLast()) }
+        return v
+    }
+
+    /// The text of an HTML file: a byte order mark wins, then a charset named in its first 1024 bytes, then UTF-8 when the bytes
+    /// are valid UTF-8, else Windows-1252 (what browsers assume).
+    static func decode(_ d: Data) -> String {
+        if d.starts(with: [0xEF, 0xBB, 0xBF]) { return String(decoding: d.dropFirst(3), as: UTF8.self) }
+        if d.starts(with: [0xFF, 0xFE]) { return String(data: d.dropFirst(2), encoding: .utf16LittleEndian) ?? "" }
+        if d.starts(with: [0xFE, 0xFF]) { return String(data: d.dropFirst(2), encoding: .utf16BigEndian) ?? "" }
+        let head = String(decoding: d.prefix(1024).map { $0 < 0x80 ? $0 : 0x3F }, as: UTF8.self)
+        if let r = head.range(of: #"charset\s*=\s*["']?\s*[A-Za-z0-9_.:-]+"#, options: [.regularExpression, .caseInsensitive]) {
+            let label = head[r].split(separator: "=", maxSplits: 1).last.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\"' ")).lowercased() } ?? ""
+            // A document that says UTF-16 without a byte order mark is read as UTF-8, as browsers do.
+            if !label.hasPrefix("utf-16"), label != "utf-8", label != "utf8" {
+                let cf = CFStringConvertIANACharSetNameToEncoding(label as CFString)
+                let enc = cf == kCFStringEncodingInvalidId ? nil : String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cf))
+                // Browsers read ISO-8859-1 and ASCII as Windows-1252.
+                let chosen = ["iso-8859-1", "latin1", "us-ascii", "ascii"].contains(label) ? .windowsCP1252 : enc
+                if let chosen, let s = String(data: d, encoding: chosen) { return s }
+            }
+        }
+        return String(data: d, encoding: .utf8) ?? String(data: d, encoding: .windowsCP1252) ?? String(decoding: d, as: UTF8.self)
     }
 }

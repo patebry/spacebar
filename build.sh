@@ -28,6 +28,10 @@ APP_EXE=Spacebar
 APPEX_EXE=SpacebarPreview
 FOLDERS_EXE=SpacebarFolders
 WRITER_EXE=SpacebarWriter           # each appex embeds its own writer as <appex ID>.writer
+HELPER_ID=md.spacebar.helper        # the Space helper: a launchd agent holding the event tap (Helper/)
+VIEWER_ID=md.spacebar.viewer        # the panel the helper opens, sandboxed like the preview extension (Viewer/)
+HELPER_EXE=SpacebarHelper
+VIEWER_EXE=SpacebarViewer
 # Claimed only by this extension: `qlmanage -c $ROUTE_TYPE -p file` reaches it even where another extension claims markdown.
 ROUTE_TYPE=md.spacebar.qlmanage
 PREFERRED_SIGN_ID=$(head -n1 .sign-id 2>/dev/null || true)
@@ -118,7 +122,13 @@ PREVIEW_SRC=(Preview/PreviewController.swift Preview/PDFPane.swift Preview/HTMLP
 compile "$PREVIEW_BIN" -application-extension -module-name "$APPEX_EXE" "${PREVIEW_SRC[@]}" Preview/PreviewViewController.swift Preview/Probe.swift \
   ${PROBE_FLAGS[@]+"${PROBE_FLAGS[@]}"} \
   -framework QuickLookUI -framework WebKit -framework PDFKit -framework AVKit -framework AVFoundation -framework QuickLookThumbnailing -Xlinker -e -Xlinker _NSExtensionMain
-compile "$APP/Contents/MacOS/$APP_EXE" -parse-as-library -module-name "$APP_EXE" App/*.swift Shared/Settings.swift Shared/Updates.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift Shared/QuickLookClaims.swift Shared/LinkPolicy.swift \
+# The helper sees every key: it is built from its own few files and the settings reader, never the file-parsing code.
+HELPER_BIN=$OBJ/$HELPER_EXE
+compile "$HELPER_BIN" -module-name "$HELPER_EXE" Helper/*.swift Shared/HelperProtocol.swift Shared/Settings.swift
+VIEWER_BIN=$OBJ/$VIEWER_EXE
+compile "$VIEWER_BIN" -module-name "$VIEWER_EXE" "${PREVIEW_SRC[@]}" Shared/HelperProtocol.swift Viewer/*.swift \
+  -framework QuickLookUI -framework WebKit -framework PDFKit -framework AVKit -framework AVFoundation -framework QuickLookThumbnailing
+compile "$APP/Contents/MacOS/$APP_EXE" -parse-as-library -module-name "$APP_EXE" App/*.swift Shared/HelperProtocol.swift Shared/Settings.swift Shared/Updates.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift Shared/QuickLookClaims.swift Shared/LinkPolicy.swift \
   -framework WebKit -framework SwiftUI
 plist App/Info.plist "$APP/Contents/Info.plist"
 cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
@@ -166,6 +176,31 @@ appex() {
 types() { printf '<string>%s</string>' "$@"; }
 appex "$APPEX_ID" "$APPEX_EXE" "$APP_NAME" "$(types "${CLAIMS[@]}" "$ROUTE_TYPE")"
 appex "$FOLDERS_ID" "$FOLDERS_EXE" "$APP_NAME Folders" "$(types public.folder public.directory)"
+
+# The viewer: the preview extension's entitlements, plus the one Mach name that reaches the helper.
+VIEWER_ENT=$OUT/Viewer.entitlements
+sed 's#<string>com.apple.quicklook.ThumbnailsAgent</string></array>#<string>com.apple.quicklook.ThumbnailsAgent</string><string>'"$HELPER_ID"'</string></array>#' "$ENT" > "$VIEWER_ENT"
+grep -q "<string>$HELPER_ID</string>" "$VIEWER_ENT" || { echo "viewer entitlements: helper Mach name not added" >&2; exit 1; }
+VIEWER_DIR="$APP/Contents/Helpers/$APP_NAME Viewer.app"
+VIEWER_XPC=$VIEWER_DIR/Contents/XPCServices/$VIEWER_ID.writer.xpc
+mkdir -p "$VIEWER_DIR/Contents/MacOS" "$VIEWER_DIR/Contents/Resources" "$VIEWER_XPC/Contents/MacOS"
+cp "$VIEWER_BIN" "$VIEWER_DIR/Contents/MacOS/$VIEWER_EXE"
+cp "$WRITER_BIN" "$VIEWER_XPC/Contents/MacOS/$WRITER_EXE"
+cp -R Preview/web "$VIEWER_DIR/Contents/Resources/web"
+cp LICENSE THIRD_PARTY_NOTICES.md "$VIEWER_DIR/Contents/Resources/"
+plist Viewer/Info.plist "$VIEWER_DIR/Contents/Info.plist" "$VIEWER_ID" "$VIEWER_EXE" "$APP_NAME"
+plist Writer/Info.plist "$VIEWER_XPC/Contents/Info.plist" "$VIEWER_ID"
+codesign "${SIGN_ARGS[@]}" "$VIEWER_XPC"
+codesign "${SIGN_ARGS[@]}" --entitlements "$VIEWER_ENT" "$VIEWER_DIR"
+
+# The helper: unsandboxed and without entitlements, under the hardened runtime. launchd starts it from the app's agent plist.
+HELPER_DIR="$APP/Contents/Helpers/$APP_NAME Helper.app"
+mkdir -p "$HELPER_DIR/Contents/MacOS" "$APP/Contents/Library/LaunchAgents"
+cp "$HELPER_BIN" "$HELPER_DIR/Contents/MacOS/$HELPER_EXE"
+plist Helper/Info.plist "$HELPER_DIR/Contents/Info.plist" "$HELPER_ID" "$HELPER_EXE" "$APP_NAME"
+sed -e "s#__HELPER_ID__#$HELPER_ID#g" -e "s#__HELPER_PROGRAM__#Contents/Helpers/$APP_NAME Helper.app/Contents/MacOS/$HELPER_EXE#g" -e "s#__APP_ID__#$APP_ID#g" \
+  Helper/agent.plist > "$APP/Contents/Library/LaunchAgents/$HELPER_ID.plist"
+codesign "${SIGN_ARGS[@]}" --options runtime "$HELPER_DIR"
 codesign "${SIGN_ARGS[@]}" "$APP"
 rm -rf "$OBJ"
 echo "built $APP ($(lipo -archs "$APP/Contents/MacOS/$APP_EXE"), macOS $MIN_OS+)"

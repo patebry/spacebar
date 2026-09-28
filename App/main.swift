@@ -6,6 +6,7 @@ enum SpacebarApp {
     static func main() {
         // Before the settings store first touches the support folder.
         SettingsFile.migrateLegacySupportDir()
+        if let code = HelperAgent.commandLine(CommandLine.arguments) { exit(code) }
         let app = NSApplication.shared
         let delegate = AppDelegate()
         app.delegate = delegate

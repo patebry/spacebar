@@ -1,11 +1,24 @@
 # spacebar
 
 Press Space on a Markdown file in Finder and read it properly: headings, tables, task lists, code highlighting, math and
-Mermaid diagrams, in six themes. The sidebar is a file browser for the folder: its subfolders open in place, and a click shows
-any file in the panel, so you can read the Markdown, images, PDFs, code, JSON and CSV beside a document without leaving Quick
-Look. Drag its edge to resize it; its button collapses it, and every preview remembers both. Click a block of Markdown to edit
-it in place, or tick a task box, and the file is saved. Obsidian vaults read as they do in Obsidian: `[[wikilinks]]`,
-`![[embeds]]`, callouts and tags. Free and open source, for macOS 13 and later (Apple silicon and Intel).
+Mermaid diagrams, in six themes. Press Space on a folder and browse it. The sidebar is a file browser for the folder: its
+subfolders open in place, and a click shows any file in the panel, so you can read the Markdown, images, PDFs, HTML, video,
+code, JSON, CSV and archives beside a document without leaving Quick Look. Move through it with the arrow keys, or type in
+its filter to narrow it by name. Drag its edge to resize it; its button collapses it, and every preview remembers both. Click
+a block of Markdown to edit it in place, or tick a task box, and the file is saved. Obsidian vaults read as they do in
+Obsidian: `[[wikilinks]]`, `![[embeds]]`, callouts and tags. When a new version is out, the preview's Aa button shows a dot
+and one click on Update installs it. Free and open source, for macOS 13 and later (Apple silicon and Intel).
+
+### What Space opens in spacebar
+
+In Finder, Space opens spacebar for Markdown, folders, code and scripts, JSON, YAML, XML, TOML, property lists, logs,
+archives, and files with no extension (a `Dockerfile`, a `CHANGELOG`, a dotfile). The full list is
+[`scripts/quicklook-types.txt`](scripts/quicklook-types.txt).
+
+Plain text, HTML, CSV, PDF, images, video and audio keep Apple's own preview in Finder: Quick Look never hands a file of those
+types to another app's extension, so spacebar cannot take them. Inside spacebar's sidebar every one of them opens, as the
+table below shows. Another installed app that claims one of spacebar's types may still win it; `install.sh` lists the
+Markdown ones it finds.
 
 What the panel shows for each file in the sidebar:
 
@@ -17,20 +30,21 @@ What the panel shows for each file in the sidebar:
 | HTML (`.html`, `.htm`) | rendered in its own web view: with its scripts and web content when made on this Mac, with neither when downloaded |
 | Video (`.mp4`, `.m4v`, `.mov`) | played by AVKit in the panel, paused on its first frame until you press play |
 | Audio (`.mp3`, `.m4a`, `.aac`, `.wav`, `.aif`, `.aiff`, `.flac`, `.caf`) | the same player, under the file's artwork or icon |
-| Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.xml`, `.yaml`, `.toml`, `.sql`, `Dockerfile`, `Makefile` and more) | highlighted source with line numbers |
+| Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.xml`, `.yaml`, `.toml`, `.sql`, `.plist`, `Dockerfile`, `Makefile` and more) | highlighted source with line numbers; a binary property list is shown as XML |
+| Archives (`.zip`, `.tar`, `.tgz`, `.tar.gz`, `.tar.bz2`, `.tar.xz`, `.7z`, `.rar`, `.zst`) | its files and folders as a tree, with sizes and dates, listed without extracting anything; Open with its default app |
 | JSON | pretty-printed and highlighted, with a Raw toggle |
 | CSV and TSV | a table, first row as the header, up to 1,000 rows |
 | Text (`.txt`, `.log`, `LICENSE`, `.env.example` and other text) | as is, with line numbers |
 | Anything else | an info card: Finder's large thumbnail when there is one, kind, size, date modified, and Open with its default app (Reveal in Finder for apps, scripts and executables) |
 
-Text over 2 MB shows its first 2 MB. Images over 50 MB, and PDFs, video and audio over 512 MB, get the info card.
+Text over 2 MB shows its first 2 MB. An archive lists its first 5,000 entries. Images over 50 MB, and PDFs, video and audio over 512 MB, get the info card.
 
 The preview sits in a thin outlined page under a toolbar row: the sidebar button and the path on the left, Aa and Open on the
 right. **Minimal chrome** (Settings, Appearance) goes back to floating buttons over the page.
 
 ### Folders and Obsidian vaults
 
-Turn on **Preview folders** (Settings, Sidebar) and press Space on any folder. It opens on:
+Press Space on any folder. It opens on:
 
 1. its README;
 2. else its first Markdown file;
@@ -42,6 +56,12 @@ Turn on **Preview folders** (Settings, Sidebar) and press Space on any folder. I
 
 App bundles and other packages, the top of a volume and system folders (`/System`, `/Library`, `/usr` and the like, and
 `~/Library`) keep Quick Look's usual preview. Click the folder's name at the top of the sidebar to see its overview again.
+Folder previews are on by default; **Preview folders** (Settings, Sidebar) turns them off.
+
+In the sidebar, ↑ and ↓ move through the files and open each one, → and ← open and close folders, Home and End jump to the ends
+and Return opens the file or folder under the cursor. Click the filter field at the top and type to narrow the tree to names
+that match (letters in order, so `rdme` finds `README.md`); the arrow keys and Return still work while you type, and Esc
+clears the field, then leaves it.
 
 In a vault (a folder with `.obsidian` in it), and in any other folder:
 
@@ -77,13 +97,23 @@ Read [`scripts/install.sh`](scripts/install.sh) before you run it. It:
 2. downloads `spacebar.zip` and `spacebar.zip.sha256` from the latest release (or `SPACEBAR_VERSION=vX.Y.Z`) through
    `github.com/patebry/spacebar/releases/latest/download/`, with no GitHub API calls, and stops unless the SHA-256 matches;
 3. copies the new app into `~/Applications` beside the old one (no `sudo`);
-4. if `~/Applications/spacebar.app` exists, quits it and unregisters its extensions, moves it aside, moves the new copy
-   into its place and only then deletes the old one (it is put back if the move fails). Nothing else is deleted;
-5. registers it with `lsregister` and `pluginkit`, turns the Markdown preview on, and resets Quick Look (`qlmanage -r`);
+4. if `~/Applications/spacebar.app` exists, quits it and its Quick Look extensions (the helpers that save edits first, so a
+   save in flight finishes), unregisters them, moves it aside, moves the new copy into its place and only then deletes the old
+   one (it is put back if the move fails). Nothing else is deleted;
+5. registers it with `lsregister` and `pluginkit`, turns the preview on, turns folder previews on unless you turned them off,
+   and resets Quick Look (`qlmanage -r`);
 6. lists other Quick Look extensions that are turned on and also claim Markdown, such as QLMarkdown, says how to turn them
    off, and warns if another copy of spacebar is in `/Applications`. It never turns off or deletes anything itself.
 
 `install.sh --help` lists its options, including `--dry-run`, which downloads and verifies but changes nothing.
+
+### Updates
+
+Once a day spacebar asks GitHub for the latest release's version number, and nothing else (turn this off in Settings,
+Advanced). A newer version shows as a dot on the preview's Aa button; its **Update** button runs the app's own sealed copy of
+`install.sh` for that version, which downloads and checks the release exactly as above. Quick Look shows an error for a moment
+while the installer replaces the extension; press Space again after. An edit in progress is saved first, and no edit, task
+toggle or sidebar filter starts while the update runs. The installer's output goes to `~/Library/Logs/spacebar-update.log`.
 
 The release zip is built by [GitHub Actions](.github/workflows/release.yml) from the tagged commit. Releases after v0.1.0
 are signed with a self-signed "spacebar Release" certificate, so every release has the same signer and an update does not
@@ -101,8 +131,8 @@ gh attestation verify spacebar.zip -R patebry/spacebar
 curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh
 ```
 
-This unregisters and deletes `~/Applications/spacebar.app`. To also delete your settings and themes in
-`~/Library/Application Support/spacebar`:
+This unregisters and deletes `~/Applications/spacebar.app`. **Uninstall spacebar…** in Settings, Advanced, runs the same
+script from inside the app. To also delete your settings and themes in `~/Library/Application Support/spacebar`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh -s -- --purge
@@ -126,7 +156,7 @@ sandbox container after each rebuild. Other options are documented at the top of
 Tests that run off screen, without Quick Look (the test builds target Apple silicon):
 
 ```sh
-for t in settings scheme linkpolicy cas editkeys pdfpane; do test/$t/run.sh; done
+for t in settings scheme linkpolicy cas dataless editkeys filterkeys pdfpane htmlpane mediapane archive claims updates report; do test/$t/run.sh; done
 python3 test/webcheck.py && python3 test/webthemes.py && python3 test/remoteimages.py && python3 test/sidebar.py
 ```
 
@@ -138,7 +168,8 @@ The other scripts in `test/` drive real Quick Look windows and synthetic input; 
 spacebar.app                         settings window (SwiftUI)
 └─ PlugIns/SpacebarPreview.appex     sandboxed Quick Look preview: WKWebView + markdown-it, KaTeX, highlight.js,
    │                                 Mermaid, DOMPurify, all bundled; no network code of its own
-   └─ XPCServices/…writer.xpc        small unsandboxed helper: saves edits, opens links, owns the inline-edit panel
+   └─ XPCServices/…writer.xpc        small unsandboxed helper: saves edits, opens links, owns the key panel for inline
+                                     editing and the sidebar filter, lists archives, checks for and starts updates
 └─ PlugIns/SpacebarFolders.appex     the same preview for folders (on by default; turn off in Settings)
 ```
 
@@ -148,7 +179,10 @@ writer service; Finder stays in front. Saves are compare-and-swap: if the file c
 
 ## Privacy and security
 
-- No analytics, telemetry, accounts or update checks. Settings are a JSON file in `~/Library/Application Support/spacebar`.
+- No analytics, telemetry or accounts. The one request spacebar makes on its own is the daily update check: GitHub's latest
+  release, of which only the version number is read (off in Settings, Advanced). **Report a Problem** (Settings, Advanced)
+  opens a new GitHub issue in your browser with your versions, Mac model and the end of the update log filled in; nothing is
+  sent unless you submit it there. Settings are a JSON file in `~/Library/Application Support/spacebar`.
 - Remote images are off by default (fetching one tells its server when you opened the document). A blocked image offers a
   one-time load for that document.
 - A Markdown file is treated as hostile. The page runs under a strict Content Security Policy (bundled scripts only, no
@@ -158,9 +192,14 @@ writer service; Finder stays in front. Saves are compare-and-swap: if the file c
 - The file browser never leaves the previewed folder: links that lead out of it are not listed, a file or folder the page asks
   for must be one the sidebar listed and must still resolve inside the folder, and hidden files are left out unless you turn
   them on. A wikilink or embed resolves only to a file found inside the folder the sidebar shows; `..`, absolute paths and links
-  that lead out of it resolve to nothing. Nothing in a file is ever run: HTML and scripts are shown as source, SVG only as an
-  image, a PDF by PDFKit (which runs no PDF scripts; the PDF is parsed in the sandboxed preview extension itself), and the page
-  loads files only as images.
+  that lead out of it resolve to nothing. Nothing in a Markdown file is ever run, and scripts are shown as source, SVG only
+  as an image, a PDF by PDFKit (which runs no PDF scripts; the PDF is parsed in the sandboxed preview extension itself), and
+  the page loads files only as images.
+- An HTML file is shown in a web view of its own that shares nothing with the preview's page. Its scripts run only when the
+  file was made on this Mac (no quarantine flag) and Settings allows it; a downloaded HTML file always opens with scripts off
+  and every web request blocked. Links in it open through the same policy as everywhere else.
+- An archive is listed, never extracted, by `/usr/bin/bsdtar` under a `sandbox-exec` profile that lets it read only the
+  archive (through a descriptor the helper opened) and system files, with no writes and no network, for at most 5 seconds.
 - The preview extension has a read-only sandbox exception for the whole disk, so relative images beside a document load and
   the sidebar can show the folder's files.
 - The preview extension has the `com.apple.security.network.client` entitlement. WKWebView's helper processes crash-loop

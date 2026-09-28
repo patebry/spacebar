@@ -10,3 +10,18 @@ within a week. Fixes ship in the next release, and the advisory is published onc
 
 Only the latest release is supported. [FINDINGS.md](FINDINGS.md#security-model) describes the threat model: a Markdown file,
 and whatever sits beside it, is treated as hostile.
+
+Three features reach further than a rendered page, and are in scope:
+
+- **HTML files** open in a separate web view with no message handler, no `spacebar:` scheme and no stored data. Scripts run
+  only for a file without the quarantine flag (made on this Mac) while "Scripts in HTML files" allows it; a downloaded file
+  opens with scripts off and every http(s), ws(s) and ftp request blocked. Every navigation away from the file goes through
+  the link policy.
+- **Archives** are listed by the unsandboxed helper with `/usr/bin/bsdtar` run under `sandbox-exec`: a deny-by-default
+  profile that allows only system reads and executing bsdtar, so no writes, no network and no reads of the user's files. The
+  archive is passed as a descriptor the helper opened after checking its name and type; output is capped at 2 MB and 5,000
+  entries, and the run at 5 seconds. Nothing is extracted.
+- **The one-click update** runs the app's own copy of `scripts/install.sh`, sealed by the app's signature, detached from Quick
+  Look with only `HOME`, `PATH`, `TMPDIR` and a status path in its environment. It installs only a version newer than the
+  running one, only into `~/Applications/spacebar.app`, and only after the downloaded zip's SHA-256 matches the release's.
+  The version check reads just the version number of GitHub's latest release, at most once a day.

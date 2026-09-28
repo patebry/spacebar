@@ -1101,6 +1101,14 @@ def main():
         check(len(a5['rows']) == 51 and a5['rows'][0][5] == 'true' and a5['rows'][1][5] == 'false' and 'Showing the first 5,000 entries.' in a5['notes']
               and a5['summary'].startswith('5,000 files, 51 folders'),
               'archive: a large listing opens only its lone top folder, and says it was cut', json.dumps([len(a5['rows']), a5['notes'], a5['summary']]))
+        # A crafted listing 20,000 folders deep (were the writer's cap ever bypassed): drawn, 64 levels at most, no stack overflow.
+        page.cmd('@eval:sb.render(' + json.dumps(arc) + '); 0')
+        page.cmd('@wait:0.2')
+        deep = '/'.join(f'd{i}' for i in range(20000))
+        page.cmd('@eval:sb.setArchive(' + json.dumps({'path': T('pack.zip'), 'entries': [{'name': deep, 'size': 1, 'modified': None, 'isDir': False}]}) + '); 0')
+        a6 = page.js(ARC)
+        check(a6 and len(a6['rows']) == 64 and a6['summary'].startswith('1 file, 63 folders'),
+              'archive: a path thousands of folders deep is drawn 64 levels deep, the rest as one name', json.dumps([len((a6 or {}).get('rows') or []), (a6 or {}).get('summary')]))
         page.cmd('@eval:sb.render(' + json.dumps(arc) + '); 0')
         page.cmd('@wait:0.2')
         page.cmd('@eval:sb.setArchive(' + json.dumps({'path': T('pack.zip'), 'error': 'This archive’s contents can’t be listed.'}) + '); 0')

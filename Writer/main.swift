@@ -93,7 +93,11 @@ final class Writer: NSObject, SpacebarWriterProtocol {
             lock.lock(); defer { lock.unlock() }
             if !replied { replied = true; reply(d) }
         }
-        Self.listQueue.async { once(ArchiveListing.list(url.path)) }
+        // Listings wait their turn; one whose reply already timed out is not started.
+        Self.listQueue.async {
+            lock.lock(); let late = replied; lock.unlock()
+            if !late { once(ArchiveListing.list(url.path)) }
+        }
         DispatchQueue.global().asyncAfter(deadline: .now() + ArchiveListing.timeout + 4) { once(nil) }
     }
     private static let listQueue = DispatchQueue(label: "md.spacebar.list-archive", qos: .userInitiated)

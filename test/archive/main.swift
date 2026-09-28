@@ -63,6 +63,21 @@ check("parse: owner and group names with spaces still find the size, date and na
       spaced?.name == "odd owner.txt" && spaced?.size == 42 && spaced?.modified == at(2020, 1, 1).timeIntervalSince1970 * 1000, "\(String(describing: spaced))")
 let arrow = ArchiveListing.parseLine("lrwxr-xr-x  0 u g 0 Jan  1  2020 a -> b -> target", now: janNow, timeZone: utc)
 check("parse: a link's target is cut at the last arrow", arrow?.name == "a -> b", "\(String(describing: arrow))")
+let deepName = (0..<20_000).map { "d\($0)" }.joined(separator: "/")
+let deep = ArchiveListing.parseLine(Substring("-rw-r--r--  0 u g 1 Jan  1  2020 " + deepName), now: janNow, timeZone: utc)
+check("parse: a path thousands of folders deep keeps \(ArchiveListing.maxDepth) levels and a name of at most \(ArchiveListing.maxNameBytes) bytes",
+      deep.map { $0.name.split(separator: "/").count == ArchiveListing.maxDepth && $0.name.utf8.count <= ArchiveListing.maxNameBytes && $0.name.hasPrefix("d0/d1/") } == true,
+      "\(deep?.name.split(separator: "/").count ?? -1) \(deep?.name.utf8.count ?? -1)")
+let long = ArchiveListing.parseLine(Substring("-rw-r--r--  0 u g 1 Jan  1  2020 " + String(repeating: "é", count: 5000)), now: janNow, timeZone: utc)
+check("parse: a long name is cut at a character, with an ellipsis", long.map { $0.name.utf8.count <= ArchiveListing.maxNameBytes && $0.name.hasSuffix("é…") } == true)
+let bytesLine = Data("-rw-r--r--  0 u g 1 Jan  1  2020 caf\\303\\251 \\377.txt\n".utf8)
+let fromBytes = ArchiveListing.parse(data: bytesLine, now: janNow, timeZone: utc).first?.name
+check("parse: escapes are undone on the bytes, then read as UTF-8 (an invalid byte is one replacement character)",
+      fromBytes == "café \u{FFFD}.txt", fromBytes ?? "nil")
+let rawLatin = Data("-rw-r--r--  0 u g 1 Jan  1  2020 caf".utf8) + Data([0xC3, 0xA9]) + Data(".txt\n".utf8)
+check("parse: raw UTF-8 bytes in the output survive", ArchiveListing.parse(data: rawLatin, now: janNow, timeZone: utc).first?.name == "café.txt")
+let notLink = ArchiveListing.parseLine("-rw-r--r--  0 u g 1 Jan  1  2020 a -> b.txt", now: janNow, timeZone: utc)
+check("parse: a file (not a link) whose name holds an arrow keeps it", notLink?.name == "a -> b.txt")
 check("parse: at most \(ArchiveListing.maxEntries) entries", ArchiveListing.parse(many, now: janNow).count == ArchiveListing.maxEntries)
 let wrapped = try! JSONSerialization.jsonObject(with: ArchiveListing.json([.init(name: "d/", size: nil, modified: nil, isDir: true),
                                                                           .init(name: "d/f", size: 7, modified: 1000, isDir: false)], truncated: true)) as! [String: Any]

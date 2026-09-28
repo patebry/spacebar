@@ -23,6 +23,8 @@ enum ArchiveListing {
         (import "bsd.sb")
         (allow process-exec (literal "/usr/bin/bsdtar"))
         (allow file-read* (literal "/usr/bin/bsdtar"))
+        (deny file-write*)
+        (deny file-read-metadata (subpath "/Users") (subpath "/Volumes"))
         """
     static let maxEntries = 5_000
     static let maxOutputBytes = 2 << 20
@@ -32,7 +34,11 @@ enum ArchiveListing {
     /// A single compressed file: what bsdtar cannot list unless it holds a tar.
     static let compressedExtensions: Set<String> = ["gz", "gzip", "bz2", "bz", "xz", "zst"]
 
-    struct Run { var output: String; var status: Int32; var truncated: Bool }
+    struct Run { var output: Data; var status: Int32; var truncated: Bool }
+    /// A name is cut at this many bytes, and a path deeper than `maxDepth` folders keeps the rest as one name (joined with
+    /// "∕", not "/"), so a crafted archive cannot hand the page a tree it cannot walk.
+    static let maxNameBytes = 4096
+    static let maxDepth = 64
 
     /// The listing of the archive at `path` as JSON, or nil when it cannot be listed: not an archive by name, not a regular
     /// file, evicted by iCloud, unreadable, or in a format bsdtar does not read. Blocks for up to `timeout` and a second;
@@ -48,7 +54,7 @@ enum ArchiveListing {
         guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG, st.st_flags & 0x4000_0000 == 0 else { return nil }
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK)
         guard let run = runTool(handle) else { return nil }
-        var entries = parse(run.output, now: Date())
+        var entries = parse(data: run.output, now: Date())
         var truncated = run.truncated
         if run.status != 0 && !run.truncated {
             // bsdtar reads a lone compressed file as a one-line mtree spec and fails: it is the one file inside.
@@ -130,7 +136,7 @@ enum ArchiveListing {
         lock.lock(); defer { lock.unlock() }
         let timedOut = p.terminationReason == .uncaughtSignal && !truncated
         // A line cut by the limit is dropped by `parse`, which only takes complete lines.
-        return Run(output: String(decoding: data.prefix(maxOutputBytes), as: UTF8.self),
+        return Run(output: Data(data.prefix(maxOutputBytes)),
                    status: p.terminationReason == .uncaughtSignal ? -1 : p.terminationStatus, truncated: truncated || timedOut)
     }
 
@@ -138,11 +144,18 @@ enum ArchiveListing {
     /// a year of `now` (bsdtar's rule), and its year is the one that puts it there. Symbolic and hard link targets are dropped.
     /// Only complete lines (ending in a newline) count, at most `maxEntries`.
     static func parse(_ text: String, now: Date, timeZone: TimeZone = .current) -> [Entry] {
+        parse(data: Data(text.utf8), now: now, timeZone: timeZone)
+    }
+
+    /// bsdtar's output as bytes: each line is read as ISO Latin 1, which keeps every byte, so a name's escapes are undone on
+    /// its bytes before they are read as UTF-8.
+    static func parse(data: Data, now: Date, timeZone: TimeZone = .current) -> [Entry] {
         var entries: [Entry] = []
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        var lines = data.split(separator: 10, omittingEmptySubsequences: false)
         lines.removeLast()
         for line in lines {
-            guard entries.count < maxEntries, let e = parseLine(line, now: now, timeZone: timeZone) else { continue }
+            guard entries.count < maxEntries, let text = String(data: Data(line), encoding: .isoLatin1),
+                  let e = parseLine(Substring(text), now: now, timeZone: timeZone, latin1: true) else { continue }
             entries.append(e)
         }
         return entries
@@ -150,7 +163,8 @@ enum ArchiveListing {
 
     private static let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
-    static func parseLine(_ line: Substring, now: Date, timeZone: TimeZone) -> Entry? {
+    /// `latin1`: the line was read as ISO Latin 1 (parse(data:)), one scalar per byte of the output.
+    static func parseLine(_ line: Substring, now: Date, timeZone: TimeZone, latin1: Bool = false) -> Entry? {
         // `mode links owner group size month day time-or-year`, one space, then the name, which may hold spaces. An owner or
         // group name from the archive may hold spaces too, so the date is found first: the first month, day and time or year
         // after the fourth field, with the size just before it.
@@ -170,10 +184,12 @@ enum ArchiveListing {
         }) else { return nil }
         let end = fields[k + 2].1
         guard end < line.endIndex else { return nil }
-        var name = String(line[line.index(after: end)...])
-        if type == "l", let r = name.range(of: " -> ", options: .backwards) { name = String(name[..<r.lowerBound]) }
-        if type == "h", let r = name.range(of: " link to ", options: .backwards) { name = String(name[..<r.lowerBound]) }
-        name = unescape(name)
+        var raw = String(line[line.index(after: end)...])
+        // Only a link has a target after its name; the name itself may hold the same words.
+        if type == "l", let r = raw.range(of: " -> ", options: .backwards) { raw = String(raw[..<r.lowerBound]) }
+        if type == "h", let r = raw.range(of: " link to ", options: .backwards) { raw = String(raw[..<r.lowerBound]) }
+        let bytes = latin1 ? raw.unicodeScalars.map { UInt8(truncatingIfNeeded: $0.value) } : Array(raw.utf8)
+        let name = bounded(String(decoding: unescape(bytes: bytes), as: UTF8.self))
         guard !name.isEmpty, let month = months.firstIndex(of: String(fields[k].0)), let day = Int(fields[k + 1].0) else { return nil }
         let isDir = type == "d" || name.hasSuffix("/")
         return Entry(name: name, size: isDir ? nil : Int64(fields[k - 1].0),
@@ -201,11 +217,27 @@ enum ArchiveListing {
         return cal.date(from: c).map { $0.timeIntervalSince1970 * 1000 }
     }
 
+    /// At most maxNameBytes (cut at a character) and maxDepth folders deep, the rest of a deeper path kept as its last name.
+    static func bounded(_ name: String) -> String {
+        var n = name
+        let parts = n.split(separator: "/", omittingEmptySubsequences: false)
+        if parts.count > maxDepth {
+            n = (parts.prefix(maxDepth - 1) + [parts.dropFirst(maxDepth - 1).joined(separator: "∕")[...]]).joined(separator: "/")
+        }
+        guard n.utf8.count > maxNameBytes else { return n }
+        var cut = ""
+        for c in n { if cut.utf8.count + String(c).utf8.count > maxNameBytes - 3 { break }; cut.append(c) }
+        return cut + "…"
+    }
+
     /// Undoes bsdtar's escapes: `\\`, the C letter escapes, and `\ooo` for any other byte (then read as UTF-8).
     static func unescape(_ s: String) -> String {
         guard s.contains("\\") else { return s }
+        return String(decoding: unescape(bytes: Array(s.utf8)), as: UTF8.self)
+    }
+
+    static func unescape(bytes u: [UInt8]) -> [UInt8] {
         var bytes: [UInt8] = []
-        let u = Array(s.utf8)
         var i = 0
         let letters: [UInt8: UInt8] = [UInt8(ascii: "a"): 7, UInt8(ascii: "b"): 8, UInt8(ascii: "f"): 12, UInt8(ascii: "n"): 10,
                                        UInt8(ascii: "r"): 13, UInt8(ascii: "t"): 9, UInt8(ascii: "v"): 11, UInt8(ascii: "\\"): 92]
@@ -221,7 +253,7 @@ enum ArchiveListing {
             bytes.append(u[i])
             i += 1
         }
-        return String(decoding: bytes, as: UTF8.self)
+        return bytes
     }
 
     static func json(_ entries: [Entry], truncated: Bool = false) -> Data {

@@ -1161,6 +1161,9 @@ function imageView(p) {
 
 // An archive's listing (sent by the extension from the writer's bsdtar) as a tree of folders and files, built from text nodes.
 const ARCHIVE_ALL_OPEN = 300;
+// A crafted archive can name a path thousands of folders deep: past this depth the rest of a path is one name. Every walk of
+// the tree below is a loop, not a recursion, for the same reason.
+const ARCHIVE_MAX_DEPTH = 64;
 /** The folders open in the archive on screen (archiveOpenPath), by path; null until its listing is first drawn. */
 let archiveOpen = null;
 let archiveOpenPath = null;
@@ -1171,6 +1174,7 @@ function archiveTree(entries) {
   for (const e of entries) {
     if (!e || typeof e.name !== 'string') continue;
     const parts = e.name.split('/').filter((x) => x && x !== '.');
+    if (parts.length > ARCHIVE_MAX_DEPTH) parts.splice(ARCHIVE_MAX_DEPTH - 1, Infinity, parts.slice(ARCHIVE_MAX_DEPTH - 1).join('∕'));
     let node = top;
     parts.forEach((part, i) => {
       const last = i === parts.length - 1;
@@ -1188,9 +1192,15 @@ function archiveTree(entries) {
     });
   }
   let files = 0, folders = 0, total = 0;
-  const walk = (n) => n.kids.forEach((k) => { if (k.dir) { folders++; walk(k); } else { files++; total += k.size || 0; } });
-  walk(top);
+  for (const k of archiveNodes(top)) if (k.dir) folders++; else { files++; total += k.size || 0; }
   return { top, files, folders, total };
+}
+
+/** Every node under `top`, in no particular order. */
+function archiveNodes(top) {
+  const out = [], stack = [top];
+  while (stack.length) for (const k of stack.pop().kids.values()) { out.push(k); stack.push(k); }
+  return out;
 }
 
 const archiveKids = (n) => [...n.kids.values()].sort((a, b) => (a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name, undefined, { numeric: true })));
@@ -1198,8 +1208,7 @@ const archiveKids = (n) => [...n.kids.values()].sort((a, b) => (a.dir !== b.dir 
 /** Which folders start open: all of them in a small archive; in a large one, only a chain of lone folders from the top. */
 function archiveInitialOpen(tree, count) {
   const open = new Set();
-  const all = (n) => n.kids.forEach((k) => { if (k.dir) { open.add(k.path); all(k); } });
-  if (count <= ARCHIVE_ALL_OPEN) { all(tree.top); return open; }
+  if (count <= ARCHIVE_ALL_OPEN) { for (const k of archiveNodes(tree.top)) if (k.dir) open.add(k.path); return open; }
   let n = tree.top;
   while (n.kids.size === 1) {
     const k = n.kids.values().next().value;
@@ -1224,9 +1233,7 @@ function archiveView(p) {
   }
   const tree = archiveTree(p.entries);
   // Folders kept open from an earlier listing of this archive count only while one of them is still in it.
-  const dirs = new Set();
-  const collect = (n) => n.kids.forEach((k) => { if (k.dir) { dirs.add(k.path); collect(k); } });
-  collect(tree.top);
+  const dirs = new Set(archiveNodes(tree.top).filter((k) => k.dir).map((k) => k.path));
   if (archiveOpen && archiveOpen.size && ![...archiveOpen].some((d) => dirs.has(d))) archiveOpen = null;
   if (!archiveOpen) { archiveOpen = archiveInitialOpen(tree, p.entries.length); archiveOpenPath = p.path; }
   const plural = (n, one, many) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
@@ -1238,29 +1245,30 @@ function archiveView(p) {
   const hr = table.appendChild(el('thead')).appendChild(el('tr'));
   ['Name', 'Size', 'Modified'].forEach((h) => hr.appendChild(el('th', '', h)));
   const tb = table.appendChild(el('tbody'));
-  const rows = (n, depth) => {
-    for (const k of archiveKids(n)) {
-      const tr = tb.appendChild(el('tr', k.dir ? 'arc-folder' : 'arc-file'));
-      const td = tr.appendChild(el('td', 'arc-name'));
-      td.style.paddingLeft = `${8 + depth * 16}px`;
-      const open = k.dir && archiveOpen.has(k.path);
-      if (k.dir) {
-        const b = el('button', 'arc-dir');
-        b.type = 'button';
-        b.dataset.action = 'archiveDir';
-        b.dataset.path = k.path;
-        b.setAttribute('aria-expanded', String(open));
-        b.append(el('span', 'arc-chevron', open ? '▾' : '▸'), icon('folder'), el('span', 'arc-label', plainName(k.name)));
-        td.append(b);
-      } else {
-        td.append(el('span', 'arc-chevron', ''), icon('other'), el('span', 'arc-label', plainName(k.name)));
-      }
-      tr.appendChild(el('td', 'arc-size', k.dir ? '' : fmtSize(k.size)));
-      tr.appendChild(el('td', 'arc-date', fmtDate(k.modified)));
-      if (open) rows(k, depth + 1);
+  const stack = [];
+  const push = (n, depth) => { const kids = archiveKids(n); for (let i = kids.length - 1; i >= 0; i--) stack.push([kids[i], depth]); };
+  push(tree.top, 0);
+  while (stack.length) {
+    const [k, depth] = stack.pop();
+    const tr = tb.appendChild(el('tr', k.dir ? 'arc-folder' : 'arc-file'));
+    const td = tr.appendChild(el('td', 'arc-name'));
+    td.style.paddingLeft = `${8 + depth * 16}px`;
+    const open = k.dir && archiveOpen.has(k.path);
+    if (k.dir) {
+      const b = el('button', 'arc-dir');
+      b.type = 'button';
+      b.dataset.action = 'archiveDir';
+      b.dataset.path = k.path;
+      b.setAttribute('aria-expanded', String(open));
+      b.append(el('span', 'arc-chevron', open ? '▾' : '▸'), icon('folder'), el('span', 'arc-label', plainName(k.name)));
+      td.append(b);
+    } else {
+      td.append(el('span', 'arc-chevron', ''), icon('other'), el('span', 'arc-label', plainName(k.name)));
     }
-  };
-  rows(tree.top, 0);
+    tr.appendChild(el('td', 'arc-size', k.dir ? '' : fmtSize(k.size)));
+    tr.appendChild(el('td', 'arc-date', fmtDate(k.modified)));
+    if (open) push(k, depth + 1);
+  }
   box.append(table);
   return box;
 }

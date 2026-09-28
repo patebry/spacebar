@@ -114,6 +114,37 @@ spin()
 check("Cmd+Shift+Z redoes it", letter("z", [.command, .shift]) && tv.string == " line\nsecond linefirst")
 check("panel is still hidden", !panel.isVisible)
 
+// A list session (a click on a sidebar row): only the list keys go anywhere; nothing is typed, no shortcut runs, and Esc or Space
+// ends it. Keys go straight to keyDown, in-process; nothing is posted to the system.
+func key(_ chars: String, _ keyCode: UInt16, _ flags: NSEvent.ModifierFlags = []) {
+    let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: panel.windowNumber, context: nil,
+                             characters: chars, charactersIgnoringModifiers: chars, isARepeat: false, keyCode: keyCode)!
+    tv.keyDown(with: e)
+}
+var listed: [String] = [], ends = 0
+set("", caret: 0)
+tv.listKeys = true
+tv.onFilterKey = { k, _ in listed.append(k) }
+tv.onEscape = { ends += 1 }
+let arrow = { (s: Int) in String(Character(UnicodeScalar(s)!)) }
+key(arrow(down), 125, arrowFlags); key(arrow(up), 126, arrowFlags); key(arrow(left), 123, arrowFlags); key(arrow(right), 124, arrowFlags)
+key("\r", 36); key(arrow(NSHomeFunctionKey), 115, [.function]); key(arrow(NSEndFunctionKey), 119, [.function])
+check("list: ↓ ↑ ← → Return Home End are forwarded", listed == ["down", "up", "left", "right", "return", "home", "end"])
+listed = []
+key("a", 0); key("Z", 6, [.shift]); key("\t", 48); key(arrow(down), 125, arrowFlags.union(.shift))
+check("list: letters, Tab and Shift+↓ type nothing and go nowhere", listed.isEmpty && tv.string.isEmpty && ends == 0)
+NSPasteboard.general.clearContents()
+NSPasteboard.general.setString("pasted", forType: .string)
+check("list: Command shortcuts are swallowed (no paste)", letter("v") && letter("a") && tv.string.isEmpty)
+key(" ", 49)
+check("list: Space ends it", ends == 1 && tv.string.isEmpty)
+key("\u{1b}", 53)
+check("list: Esc ends it", ends == 2)
+tv.listKeys = false
+tv.onFilterKey = nil
+tv.onEscape = {}
+check("after a list session, Command shortcuts work again", letter("v") && tv.string == "pasted")
+
 privateBoard.releaseGlobally()
 print("\n\(failures == 0 ? "all" : "\(failures) FAILED of") edit key checks")
 exit(failures == 0 ? 0 : 1)

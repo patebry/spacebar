@@ -4,12 +4,13 @@ import UniformTypeIdentifiers
 /// What a file is, from its name alone: the sidebar's icon, how the panel previews it, and the content type the `file` host
 /// serves it as. Nothing here reads the file; a file of an unknown kind is sniffed as text or not when it is opened.
 enum FileKind: String {
-    case folder, markdown, image, pdf, html, video, audio, code, json, csv, text, archive, app, other
+    case folder, markdown, image, pdf, html, video, audio, code, json, csv, text, rtf, archive, app, other
 
     /// One of the sidebar's nine icons.
     var icon: String {
         switch self {
         case .json, .csv: return "data"
+        case .rtf: return "text"
         case .html: return "code"
         case .video, .audio: return "media"
         case .app, .archive: return "other"
@@ -28,6 +29,8 @@ enum FileTypes {
     static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "avif", "bmp", "tif", "tiff", "ico", "svg"]
     static let jsonExtensions: Set<String> = ["json", "geojson", "jsonc", "json5", "webmanifest", "har", "ipynb"]
     static let csvExtensions: Set<String> = ["csv", "tsv"]
+    /// Drawn natively from AppKit's RTF reader. `.rtfd` is a package (a folder) or, flattened, a single file.
+    static let richTextExtensions: Set<String> = ["rtf", "rtfd"]
     /// Listed by the writer with bsdtar. A lone compressed file (notes.txt.gz) is shown as the one file it holds.
     static let archiveExtensions: Set<String> = ["zip", "tar", "gz", "gzip", "tgz", "bz2", "bz", "tbz", "tbz2", "xz", "txz", "7z", "rar", "zst", "tzst"]
     static let textExtensions: Set<String> = ["txt", "text", "log", "out", "err", "rst", "adoc", "asciidoc", "org", "tex", "bib", "srt", "vtt", "nfo",
@@ -90,11 +93,13 @@ enum FileTypes {
     static func kind(name: String, isDirectory: Bool = false, isPackage: Bool = false, executable: Bool = false) -> FileKind {
         let ext = (name as NSString).pathExtension.lowercased()
         if isDirectory && !isPackage { return .folder }
+        if isDirectory && ext == "rtfd" { return .rtf }
         if isDirectory { return ext == "app" || appExtensions.contains(ext) ? .app : .other }
         let lower = name.lowercased()
         if markdownExtensions.contains(ext) { return .markdown }
         if imageExtensions.contains(ext) { return .image }
         if ext == "pdf" { return .pdf }
+        if richTextExtensions.contains(ext) { return .rtf }
         if htmlExtensions.contains(ext) { return .html }
         if videoExtensions.contains(ext) { return .video }
         if audioExtensions.contains(ext) { return .audio }
@@ -144,6 +149,100 @@ enum FileTypes {
     static func isDataless(_ path: String) -> Bool {
         var st = stat()
         return stat(path, &st) == 0 && st.st_flags & 0x4000_0000 != 0
+    }
+}
+
+/// Reads text that may not be UTF-8: a byte order mark first (UTF-8, UTF-16 or UTF-32, either byte order), then UTF-16 without
+/// one when every other byte is zero, then UTF-8, then the legacy encoding Foundation's detector names from a short list
+/// (Windows-1252, Mac Roman, Shift JIS, EUC-JP, GB 18030, EUC-KR, Big5, Windows-1251, KOI8-R), else Windows-1252 or Latin-1.
+/// Binary is never text: a NUL in anything but UTF-16 or UTF-32, or control characters in more than 2 in 100 of the characters
+/// of a non-UTF-8 decoding, and it is refused. `data` may be cut anywhere (the first 2 MB of a file): a code unit or character
+/// cut at the end is dropped.
+enum TextDecoding {
+    struct Decoded: Equatable {
+        let text: String
+        /// Shown beside the file's kind when it is not UTF-8.
+        let name: String
+        var isUTF8: Bool { name == "UTF-8" }
+    }
+
+    private static func cf(_ e: CFStringEncodings) -> String.Encoding {
+        String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(e.rawValue)))
+    }
+    static let legacy: [String.Encoding] = [.windowsCP1252, .macOSRoman, .shiftJIS, .japaneseEUC, cf(.GB_18030_2000), cf(.EUC_KR), cf(.big5),
+                                            .windowsCP1251, cf(.KOI8_R)]
+    private static let names: [String.Encoding: String] = [
+        .windowsCP1252: "Windows-1252", .macOSRoman: "Mac Roman", .shiftJIS: "Shift JIS", .japaneseEUC: "EUC-JP", cf(.GB_18030_2000): "GB 18030",
+        cf(.EUC_KR): "EUC-KR", cf(.big5): "Big5", .windowsCP1251: "Windows-1251", cf(.KOI8_R): "KOI8-R", .isoLatin1: "ISO Latin 1",
+    ]
+
+    static func decode(_ data: Data) -> Decoded? {
+        let d = Data(data)
+        if d.starts(with: [0xEF, 0xBB, 0xBF]) { return utf8(d.dropFirst(3)).map { Decoded(text: $0, name: "UTF-8") } }
+        if d.starts(with: [0xFF, 0xFE, 0, 0]) { return wide(d.dropFirst(4), unit: 4, .utf32LittleEndian, "UTF-32 LE") }
+        if d.starts(with: [0, 0, 0xFE, 0xFF]) { return wide(d.dropFirst(4), unit: 4, .utf32BigEndian, "UTF-32 BE") }
+        if d.starts(with: [0xFF, 0xFE]) { return wide(d.dropFirst(2), unit: 2, .utf16LittleEndian, "UTF-16 LE") }
+        if d.starts(with: [0xFE, 0xFF]) { return wide(d.dropFirst(2), unit: 2, .utf16BigEndian, "UTF-16 BE") }
+        if let e = bomlessUTF16(d) { return wide(d, unit: 2, e, e == .utf16LittleEndian ? "UTF-16 LE" : "UTF-16 BE") }
+        if d.contains(0) { return nil }
+        if let s = utf8(d) { return Decoded(text: s, name: "UTF-8") }
+        return eightBit(d)
+    }
+
+    /// UTF-8, allowing a character cut at the end.
+    private static func utf8(_ d: Data) -> String? {
+        for cut in 0...3 where d.count >= cut {
+            if let s = String(data: d.dropLast(cut), encoding: .utf8) { return s }
+        }
+        return nil
+    }
+
+    /// UTF-16 or UTF-32: whole code units only, a surrogate pair cut at the end dropped, and no NUL or run of controls.
+    private static func wide(_ body: Data, unit: Int, _ e: String.Encoding, _ name: String) -> Decoded? {
+        var d = Data(body.prefix(body.count - body.count % unit))
+        if unit == 2, d.count >= 2 {
+            let last = e == .utf16LittleEndian ? UInt16(d[d.count - 2]) | UInt16(d[d.count - 1]) << 8 : UInt16(d[d.count - 2]) << 8 | UInt16(d[d.count - 1])
+            if (0xD800...0xDBFF).contains(last) { d.removeLast(2) }
+        }
+        guard let s = String(data: d, encoding: e), !s.unicodeScalars.contains("\u{0}"), plausible(s) else { return nil }
+        return Decoded(text: s, name: name)
+    }
+
+    /// UTF-16 with no byte order mark, as Windows tools write it: in the first 4 KB, zero in at least 40 in 100 of one lane of
+    /// bytes and in almost none of the other.
+    private static func bomlessUTF16(_ d: Data) -> String.Encoding? {
+        let head = d.prefix(4096)
+        guard head.count >= 16 else { return nil }
+        var even = 0, odd = 0
+        for (i, b) in head.enumerated() where b == 0 { if i % 2 == 0 { even += 1 } else { odd += 1 } }
+        let half = head.count / 2
+        if odd * 10 >= half * 4 && even * 50 <= half { return .utf16LittleEndian }
+        if even * 10 >= half * 4 && odd * 50 <= half { return .utf16BigEndian }
+        return nil
+    }
+
+    private static func eightBit(_ d: Data) -> Decoded? {
+        var converted: NSString?
+        var lossy: ObjCBool = false
+        let raw = NSString.stringEncoding(for: d, encodingOptions: [.suggestedEncodingsKey: legacy.map { NSNumber(value: $0.rawValue) },
+                                                                    .useOnlySuggestedEncodingsKey: true, .allowLossyKey: false],
+                                          convertedString: &converted, usedLossyConversion: &lossy)
+        var found: (String, String.Encoding)?
+        if raw != 0, let s = converted as String?, !lossy.boolValue { found = (s, String.Encoding(rawValue: raw)) }
+        if found == nil, let s = String(data: d, encoding: .windowsCP1252) { found = (s, .windowsCP1252) }
+        if found == nil, let s = String(data: d, encoding: .isoLatin1) { found = (s, .isoLatin1) }
+        guard let (s, e) = found, plausible(s) else { return nil }
+        return Decoded(text: s, name: names[e] ?? "\(e)")
+    }
+
+    /// Text has few control characters: tab, line breaks, form feed and escape (a log's colours) aside, at most 2 in 100.
+    static func plausible(_ s: String) -> Bool {
+        var n = 0, bad = 0
+        for u in s.unicodeScalars.prefix(65536) {
+            n += 1
+            if (u.value < 0x20 && ![0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x1B].contains(u.value)) || u.value == 0x7F || (0x80..<0xA0).contains(u.value) { bad += 1 }
+        }
+        return bad * 50 <= n
     }
 }
 
@@ -283,6 +382,9 @@ enum FileView {
             view = "pdf"
         case .html where regular && size <= FolderListing.maxDocumentBytes:
             view = "html"
+        // Drawn natively (RichTextPane): an .rtf file, or an .rtfd package or flattened file.
+        case .rtf where regular ? size <= FolderListing.maxDocumentBytes : st.st_mode & S_IFMT == S_IFDIR && ext.lowercased() == "rtfd":
+            view = "rtf"
         case .video where regular && size <= FileTypes.maxFileBytes, .audio where regular && size <= FileTypes.maxFileBytes:
             view = kind.rawValue
         // Its contents come later, from the writer. An archive in iCloud is not downloaded to list it.
@@ -304,9 +406,13 @@ enum FileView {
                 data = xml
                 p["kindName"] = "Binary property list, shown as XML"
             }
-            guard size == 0 || FileTypes.looksLikeText(data) else { break }
+            guard let decoded = size == 0 ? TextDecoding.Decoded(text: "", name: "UTF-8") : TextDecoding.decode(data) else { break }
             view = kind == .code ? "code" : kind == .json ? "json" : kind == .csv ? "csv" : "text"
-            p["text"] = String(decoding: data, as: UTF8.self)
+            p["text"] = decoded.text
+            if !decoded.isUTF8 {
+                p["encoding"] = decoded.name
+                p["kindName"] = "\(p["kindName"] as? String ?? "Plain text") (\(decoded.name))"
+            }
             p["truncated"] = size > FileTypes.maxTextBytes
             p["lang"] = kind == .code ? FileTypes.language(name: (path as NSString).lastPathComponent) ?? NSNull() : NSNull()
             if ext.lowercased() == "tsv" { p["tsv"] = true }

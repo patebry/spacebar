@@ -333,6 +333,7 @@ def keys_and_filter(page, check, T, st, types):
     typed('')
     page.cmd("@eval:document.getElementById('side-q').blur(); 0")
     filter_session(page, check, T, st, types, key, opened)
+    list_session(page, check, T, types, opened)
 
 
 def filter_session(page, check, T, st, types, key, opened):
@@ -462,6 +463,88 @@ def filter_session(page, check, T, st, types, key, opened):
     page.cmd("@eval:sb.update({ state: 'failed', version: '10.10.10', reason: 'x' }); 0")
     r = page.cmd('@nativeclick:#side-q')
     check(msgs(r, 'filterBegin') and held(), 'filter session: one starts again once the update is over', json.dumps(types(r)))
+    page.cmd('@eval:sb.filterEnd({ all: true }); 0')
+    page.cmd('@root:')
+
+
+def list_session(page, check, T, types, opened):
+    """A real click on a sidebar row asks for the writer's key panel with no field (a list session), so the arrows move through
+    the tree in Quick Look too; the native side's sb.filterKey and sb.filterEnd stand in for the writer here."""
+    msgs = lambda r, t: [m for m in r['messages'] if m.get('type') == t]
+    islist = lambda m: str(m.get('list')).lower() in ('1', 'true')
+    held = lambda: page.js("return document.getElementById('side-q').classList.contains('held')")
+    page.cmd('@root:' + T())
+    page.render(T('README.md'))
+    page.cmd('@wait:0.3')
+    row = lambda p: '#side-list a.row[data-path="' + p + '"]'
+
+    r = click(page, row(T('notes.txt')))
+    check(not msgs(r, 'filterBegin') and msgs(r, 'open'), 'list session: a synthetic click opens the file but asks for no keys')
+    r = page.cmd('@nativeclick:' + row(T('notes.txt')))
+    fb = msgs(r, 'filterBegin')
+    seq = int(fb[0]['seq']) if fb else -1
+    check(len(fb) == 1 and islist(fb[0]) and 'text' not in fb[0] and 100 < float(fb[0].get('width', 0)) and 0 < float(fb[0].get('height', 0)) < 40
+          and not held(), 'list session: a real click on a row asks for the key panel over the row, with no text, the field untouched', json.dumps(fb))
+
+    def native(fn, arg):
+        r = page.cmd('@eval:sb.' + fn + '(' + json.dumps(arg) + '); 0')
+        w = page.cmd('@wait:0.3')
+        return {'types': types(r) + types(w), 'msgs': r['messages'] + w['messages']}
+    cur = lambda: page.js(CURSOR)
+    k = native('filterKey', {'seq': seq, 'key': 'down'})
+    check(opened(k) and cur()['cursor'] != 'notes.txt' and cur()['cursor'] == cur()['active'], 'list session: ↓ from the writer moves on and opens the next file',
+          json.dumps([opened(k), cur()['cursor']]))
+    native('filterText', {'seq': seq, 'text': 'zzz'})
+    check(cur()['q'] == '' and 'No matches' not in cur()['notes'], 'list session: text for it is ignored (it has no field)')
+    native('filterKey', {'seq': seq, 'key': 'home'})
+    first = cur()['cursor']
+    k = native('filterKey', {'seq': seq, 'key': 'right'})
+    expanded = [x for x in cur()['rows'] if x[0] == first]
+    check(expanded and expanded[0][2] == 'true' and 'list' in k['types'], 'list session: → opens the folder under the cursor', json.dumps([first, expanded, k['types']]))
+    k = native('filterKey', {'seq': seq, 'key': 'left'})
+    collapsed = [x for x in cur()['rows'] if x[0] == first]
+    check(collapsed and collapsed[0][2] == 'false', 'list session: ← closes it', json.dumps(collapsed))
+    k = native('filterKey', {'seq': seq + 1, 'key': 'down'})
+    check(cur()['cursor'] == first and not opened(k), 'list session: a key for another session is ignored')
+
+    r = page.cmd('@nativeclick:' + row(T('data.json')))
+    stops, begins = msgs(r, 'filterStop'), msgs(r, 'filterBegin')
+    t = types(r)
+    check([int(m['seq']) for m in stops] == [seq] and len(begins) == 1 and islist(begins[0]) and t.index('filterStop') < t.index('filterBegin'),
+          'list session: a real click on another row ends it and begins a new one over that row', json.dumps(t))
+    seq = int(begins[0]['seq']) if begins else -1
+    r = page.cmd('@nativeclick:#side-q')
+    t = types(r)
+    fb = msgs(r, 'filterBegin')
+    check([int(m['seq']) for m in msgs(r, 'filterStop')] == [seq] and len(fb) == 1 and not islist(fb[0]) and held(),
+          'list session: a click in the filter field ends it and starts the filter', json.dumps(t))
+    fseq = int(fb[0]['seq']) if fb else -1
+    r = page.cmd('@nativeclick:' + row(T('notes.txt')))
+    check(not msgs(r, 'filterBegin') and not msgs(r, 'filterStop') and held(), 'list session: a row clicked while the filter holds the keys keeps the filter',
+          json.dumps(types(r)))
+    k = native('filterKey', {'seq': fseq, 'key': 'left'})
+    check(not k['types'] or 'open' not in k['types'], 'filter session: ← and → from the writer are not list keys while typing')
+    native('filterEnd', {'seq': fseq})
+
+    r = page.cmd('@nativeclick:' + row(T('sub')))
+    begins = msgs(r, 'filterBegin')
+    check(begins and islist(begins[0]) and 'list' in types(r) + types(page.cmd('@wait:0.3')),
+          'list session: a real click on a folder opens it and holds the keys too', json.dumps(types(r)))
+    seq = int(begins[0]['seq']) if begins else -1
+    r = click(page, '#doc')
+    check([int(m['seq']) for m in msgs(r, 'filterStop')] == [seq], 'list session: a click in the document ends it', json.dumps(types(r)))
+    r = page.cmd('@nativeclick:' + row(T('README.md')))
+    seq = int(msgs(r, 'filterBegin')[0]['seq'])
+    native('filterEnd', {'seq': seq})
+    k = native('filterKey', {'seq': seq, 'key': 'down'})
+    check(not opened(k), 'list session: the writer ends it (Esc, Space, blur), and later keys are ignored')
+    page.cmd('@size:600x700')
+    page.cmd('@wait:0.3')
+    click(page, '#side-toggle')
+    page.cmd('@wait:0.4')
+    r = page.cmd('@nativeclick:' + row(T('notes.txt')))
+    check(not msgs(r, 'filterBegin') and msgs(r, 'open'), 'list session: none in a narrow panel, where opening a file hides the sidebar', json.dumps(types(r)))
+    page.cmd('@size:1200x800')
     page.cmd('@eval:sb.filterEnd({ all: true }); 0')
     page.cmd('@root:')
 
@@ -837,11 +920,11 @@ def main():
           text: document.querySelector('#doc pre.code').textContent, edit: (() => { const e = document.getElementById('edit');
             return [getComputedStyle(e).display !== 'none', e.textContent, e.dataset.kind, getComputedStyle(document.querySelector('#doc .viewer-head .viewer-open')).display]; })(), stats: document.getElementById('stats').textContent,
           kind: document.querySelector('#doc .viewer-kind').textContent, button: document.querySelector('#doc button.viewer-open').textContent }""")
-        check(c['kind'].startswith('Source code') and c['button'] == 'Reveal in Finder', '.ts is named as source and never opened as a video', json.dumps(c['kind']))
+        check(c['kind'].startswith('Source code') and c['button'] == 'Open', '.ts is named as source; it opens as text in an editor, never as a video', json.dumps(c))
         r = page.cmd("@eval:window.webkit.messageHandlers.sb.postMessage({type:'openFile', path: " + json.dumps(T('code.ts')) + "}); 0")
         page.cmd('@wait:0.1')
-        check('_openRefused' in [m.get('type') for m in r['messages'] + page.cmd('@eval:0')['messages']], 'openFile for a .ts file is refused')
-        check(c['kw'] > 0 and c['gutter'] == 6 and c['text'] == open(T('code.ts')).read() and c['edit'] == [True, 'Reveal in Finder', 'file', 'none']
+        check('_openText' in [m.get('type') for m in r['messages'] + page.cmd('@eval:0')['messages']], 'openFile for a .ts file goes to the text opener, not its default app')
+        check(c['kw'] > 0 and c['gutter'] == 6 and c['text'] == open(T('code.ts')).read() and c['edit'] == [True, 'Open', 'file', 'none']
               and c['stats'] == '6 lines',
               'code: highlighted, with line numbers; the toolbar offers the viewer\'s action (not "Open in editor"), the viewer\'s own button moves there', json.dumps({k: v for k, v in c.items() if k != 'text'}))
         r = click(page, '#doc pre.code')
@@ -915,13 +998,29 @@ def main():
         r = page.cmd('@nativeclick:#doc .info-card button')
         check(b == ['Open with QuickTime Player', 'openFile'] and '_openFile' in [m.get('type') for m in r['messages']],
               'a document the link policy allows: "Open with <default app>", through the writer', json.dumps(b))
-        for f in ('tool', 'run.sh'):
-            view(T(f))
-            b = page.js("return document.querySelector('#doc button.viewer-open').textContent")
-            check(b == 'Reveal in Finder', f'{f}: an executable or a script only reveals', b)
-        r = page.cmd("@eval:window.webkit.messageHandlers.sb.postMessage({type:'openFile', path: " + json.dumps(T('run.sh')) + "}); 0")
+        view(T('tool'))
+        b = page.js("return document.querySelector('#doc button.viewer-open').textContent")
+        check(b == 'Reveal in Finder', 'tool: a binary executable only reveals', b)
+        r = page.cmd("@eval:window.webkit.messageHandlers.sb.postMessage({type:'openFile', path: " + json.dumps(T('tool')) + "}); 0")
         page.cmd('@wait:0.1')
-        check('_openRefused' in [m.get('type') for m in r['messages'] + page.cmd('@eval:0')['messages']], 'openFile for a script is refused')
+        check('_openRefused' in [m.get('type') for m in r['messages'] + page.cmd('@eval:0')['messages']], 'openFile for a binary executable is refused')
+        for f in ('run.sh',):
+            view(T(f))
+            b = page.js("return [document.querySelector('#doc button.viewer-open').textContent, document.getElementById('edit').textContent, document.getElementById('edit').dataset.action]")
+            page.cmd('@eval:sb.setOpener(' + json.dumps({'path': T(f), 'app': 'TextEdit', 'editor': True}) + '); 0')
+            named = page.js("return [document.querySelector('#doc button.viewer-open').textContent, document.getElementById('edit').textContent]")
+            check(b == ['Open', 'Open', 'openFile'] and named == ['Open in TextEdit', 'Open in TextEdit'],
+                  f'{f}: an executable or a script opens as text in the editor ("Open in <editor>"), never in its default app', json.dumps([b, named]))
+            r = page.cmd('@nativeclick:#edit')
+            check('_openText' in [m.get('type') for m in r['messages']] and '_openFile' not in [m.get('type') for m in r['messages']],
+                  f'{f}: the toolbar button posts openFile, which goes to the text opener', json.dumps(r['messages'])[:200])
+        page.cmd('@eval:sb.setOpener(' + json.dumps({'path': T('run.sh'), 'app': 'Terminal'}) + '); 0')
+        check(page.js("return document.getElementById('edit').textContent") == 'Open with Terminal',
+              'an opener that is not an editor is named "Open with" (the writer never names Terminal for a script)')
+        view(T('data.json'))
+        page.cmd('@eval:sb.setOpener(' + json.dumps({'path': T('data.json'), 'app': 'Xcode', 'editor': False}) + '); 0')
+        check(page.js("return [document.getElementById('edit').textContent, document.getElementById('edit').title]") == ['Open with Xcode', 'Open this file in its default app'],
+              'JSON with no editor chosen: "Open with <default app>"')
         # ---- PDF: a native PDFView over the page's PDF area; no WebKit plugin, no frame, no unlabelled buttons ----
         PDF_AREA = "const r = document.querySelector('#doc .pdf-area').getBoundingClientRect(); return [r.left, r.top, r.width, r.height]"
         near = lambda a, b: a and b and len(a) == len(b) and all(abs(x - y) <= 1 for x, y in zip(a, b))

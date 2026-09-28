@@ -28,6 +28,19 @@ check("accents and emoji stay", FilterKeys.clean("café 🚀") == "café 🚀")
 check("cut to maxLength", FilterKeys.clean(String(repeating: "x", count: 1000)).count == FilterKeys.maxLength)
 check("cut on a scalar, never mid-character", FilterKeys.clean(String(repeating: "é", count: 300)).unicodeScalars.count == FilterKeys.maxLength)
 
+// A list session (a click on a row): ← and → move through the tree too; Esc and Space end it.
+check("list: ← and → are list keys", FilterKeys.name(keyCode: 123, modifiers: arrowFlags, list: true) == "left"
+      && FilterKeys.name(keyCode: 124, modifiers: arrowFlags, list: true) == "right")
+check("list: the filter's keys too", [126, 125, 115, 119, 36, 76].allSatisfy { FilterKeys.name(keyCode: UInt16($0), modifiers: 0, list: true) != nil })
+check("list: Shift+← or Command+→ are nothing", FilterKeys.name(keyCode: 123, modifiers: arrowFlags | 1 << 17, list: true) == nil
+      && FilterKeys.name(keyCode: 124, modifiers: arrowFlags | 1 << 20, list: true) == nil)
+check("list: Space, letters and Tab are not list keys", [49, 0, 48].allSatisfy { FilterKeys.name(keyCode: UInt16($0), modifiers: 0, list: true) == nil })
+let listNamed = Set([126, 125, 115, 119, 36, 76, 123, 124].compactMap { FilterKeys.name(keyCode: UInt16($0), modifiers: 0, list: true) })
+check("list: every forwarded name is one the extension accepts", listNamed == FilterKeys.listNames && FilterKeys.names.isSubset(of: FilterKeys.listNames))
+check("list: Esc and Space end it", FilterKeys.listEnds(keyCode: 53, modifiers: 0) && FilterKeys.listEnds(keyCode: 49, modifiers: 0))
+check("list: ⌘Space and other keys do not", !FilterKeys.listEnds(keyCode: 49, modifiers: 1 << 20) && !FilterKeys.listEnds(keyCode: 125, modifiers: arrowFlags)
+      && !FilterKeys.listEnds(keyCode: 0, modifiers: 0))
+
 check("Esc on text clears it", !FilterKeys.escapeEnds(text: "abc"))
 check("Esc on an empty field ends the session", FilterKeys.escapeEnds(text: ""))
 

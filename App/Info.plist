@@ -38,6 +38,6 @@
 	<key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
 	<key>NSHighResolutionCapable</key><true/>
-	<key>NSHumanReadableCopyright</key><string>Quick Look for Markdown.</string>
+	<key>NSHumanReadableCopyright</key><string>Press Space. See everything.</string>
 </dict>
 </plist>

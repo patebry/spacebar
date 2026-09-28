@@ -928,7 +928,8 @@ window.sb = {
   setOpener(o) {
     if (!o || o.path !== current.path || typeof o.app !== 'string') return;
     current.app = o.app;
-    document.querySelectorAll('#doc .viewer-open[data-action=openFile], #edit[data-action=openFile]').forEach((b) => { b.textContent = `Open with ${o.app}`; });
+    current.editor = o.editor === true;
+    document.querySelectorAll('#doc .viewer-open[data-action=openFile], #edit[data-action=openFile]').forEach((b) => { b.textContent = openLabel(current); });
   },
   /** A newer release than this one: a dot on the Aa button and a row at the top of its popover. `state` is available,
    *  elsewhere (this copy is not the one the installer replaces), started, inProgress (still running after a while), done, or
@@ -1016,9 +1017,12 @@ function openButton(p) {
   const b = el('button', 'viewer-open');
   b.type = 'button';
   b.dataset.action = p.canOpen === true ? 'openFile' : 'reveal';
-  b.textContent = p.canOpen === true ? (p.app ? `Open with ${p.app}` : 'Open') : 'Reveal in Finder';
+  b.textContent = p.canOpen === true ? openLabel(p) : 'Reveal in Finder';
   return b;
 }
+
+/** "Open in <editor>" for text going to a text editor, else "Open with <app>" (its default app). */
+const openLabel = (p) => (p.app ? `${p.editor === true ? 'Open in' : 'Open with'} ${p.app}` : 'Open');
 
 /** Open and Reveal only for a real click: the page's own buttons, never a script-made event. */
 function viewerAction(b, e) {
@@ -1283,8 +1287,9 @@ function archiveView(p) {
   return box;
 }
 
-/** Views the extension draws natively over `.pdf-area`: a PDF (PDFKit), an HTML file (its own web view), video and audio (AVKit). */
-const NATIVE_VIEWS = new Set(['pdf', 'html', 'video', 'audio']);
+/** Views the extension draws natively over `.pdf-area`: a PDF (PDFKit), an HTML file (its own web view), video and audio (AVKit),
+ *  and RTF (AppKit's text view). */
+const NATIVE_VIEWS = new Set(['pdf', 'html', 'video', 'audio', 'rtf']);
 
 /** The PDF itself is drawn by a native PDFView the extension lays over `.pdf-area`; the page only reserves the space and
  *  reports where it is (syncPdf), so WebKit's PDF plugin, and its unlabelled buttons, never load. */
@@ -1341,7 +1346,7 @@ function syncPdf() {
 function viewNode(p) {
   switch (p.view) {
     case 'image': if (typeof p.src === 'string') return imageView(p); break;
-    case 'pdf': case 'html': case 'video': case 'audio': return pdfView(p);
+    case 'pdf': case 'html': case 'video': case 'audio': case 'rtf': return pdfView(p);
     case 'loading': return loadingView(p);
     case 'overview': return overviewView(p);
     case 'json': if (typeof p.text === 'string') return jsonView(p); break;
@@ -1430,8 +1435,8 @@ function syncOpen(p) {
   b.dataset.kind = doc ? 'doc' : 'file';
   if (doc) { b.dataset.action = 'edit'; b.textContent = 'Open in editor'; b.title = 'Open this file in your editor'; return; }
   b.dataset.action = p.canOpen === true ? 'openFile' : 'reveal';
-  b.textContent = p.canOpen === true ? (p.app ? `Open with ${p.app}` : 'Open') : 'Reveal in Finder';
-  b.title = p.canOpen === true ? 'Open this file in its default app' : 'Show this file in Finder';
+  b.textContent = p.canOpen === true ? openLabel(p) : 'Reveal in Finder';
+  b.title = p.canOpen !== true ? 'Show this file in Finder' : p.editor === true ? 'Open this file in your editor' : 'Open this file in its default app';
 }
 
 // ---------- the sidebar: the previewed folder as a tree, for a file and a folder alike (outside #doc, text only) ----------
@@ -1797,9 +1802,10 @@ document.addEventListener('keydown', (e) => {
 // In Quick Look the page never gets keys, so a click in the filter field asks the writer's key panel (the one inline editing
 // uses) to hold them over the field: it sends back the text and the list keys, and Esc on an empty field, a click outside the
 // sidebar, an edit, or another preview ends it. Return opens a file and keeps the field, like the arrows do.
-const FILTER_KEYS = { up: 'ArrowUp', down: 'ArrowDown', home: 'Home', end: 'End', return: 'Enter' };
+const FILTER_KEYS = { up: 'ArrowUp', down: 'ArrowDown', home: 'Home', end: 'End', return: 'Enter', left: 'ArrowLeft', right: 'ArrowRight' };
 
 function beginFilter(e) {
+  if (filterSession && filterSession.list) endFilter();
   if (filterSession || editing || !tree.root) return;
   if (updateBusy) { window.sb.status('Updating…'); return; }
   const r = filterField.getBoundingClientRect();
@@ -1807,6 +1813,17 @@ function beginFilter(e) {
   filterField.classList.add('held');
   post({ type: 'filterBegin', seq: filterSession.seq, text: filterField.value, clickX: e.clientX - r.left, clickY: e.clientY - r.top,
     width: r.width, height: r.height });
+}
+
+// A real click on a row asks for the same panel with no field (a list session): ↑ ↓ ← → Home End Return then move through the
+// tree. Esc, Space (Quick Look's key: the next Space closes the preview), a click outside the sidebar or anything that ends a
+// filter ends it. A filter session already holding the keys keeps them.
+function beginListKeys(e, r) {
+  if (filterSession && !filterSession.list) return;
+  if (editing || !tree.root || updateBusy || !sidebarShown()) return;
+  endFilter();
+  filterSession = { seq: ++filterSeq, list: true };
+  post({ type: 'filterBegin', list: true, seq: filterSession.seq, clickX: e.clientX - r.left, clickY: e.clientY - r.top, width: r.width, height: r.height });
 }
 
 function endFilter() {
@@ -1823,12 +1840,15 @@ function filterDone() {
 const ofFilter = (m) => !!m && !!filterSession && m.seq === filterSession.seq;
 Object.assign(window.sb, {
   filterText(m) {
-    if (!ofFilter(m) || typeof m.text !== 'string') return;
+    if (!ofFilter(m) || filterSession.list || typeof m.text !== 'string') return;
     filterField.value = m.text;
     sideQuery = m.text.trim().toLowerCase();
     renderSidebar();
   },
-  filterKey(m) { if (ofFilter(m) && Object.hasOwn(FILTER_KEYS, m.key)) sideKey(FILTER_KEYS[m.key], true, m.repeat === true); },
+  filterKey(m) {
+    if (!ofFilter(m) || !Object.hasOwn(FILTER_KEYS, m.key) || (!filterSession.list && (m.key === 'left' || m.key === 'right'))) return;
+    sideKey(FILTER_KEYS[m.key], !filterSession.list, m.repeat === true);
+  },
   /** One session's end, or with `all` any session: a new preview's controller never began the one the page may hold. */
   filterEnd(m) { if (ofFilter(m) || (m && m.all === true && filterSession)) filterDone(); },
 });
@@ -1962,9 +1982,13 @@ document.addEventListener('click', (e) => {
     markCursor();
     // The cursor's ring is for the keys; a click shows only the highlight.
     $('side-list').classList.remove('keyed');
-    if (row.dataset.dir) { toggleFolder(row.dataset.path); return; }
-    peek(false);
-    if (row.dataset.path !== current.path) post({ type: 'open', path: row.dataset.path });
+    const at = row.getBoundingClientRect();
+    if (row.dataset.dir) toggleFolder(row.dataset.path);
+    else {
+      peek(false);
+      if (row.dataset.path !== current.path) post({ type: 'open', path: row.dataset.path });
+    }
+    if (e.isTrusted) beginListKeys(e, at);
     return;
   }
   if (e.target.closest('#sidebar, #crumbs')) return;

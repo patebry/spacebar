@@ -332,9 +332,34 @@ do {
     try? fm.removeItem(at: d)
 }
 check("claims summary names archives and Markdown", QuickLookClaims.summary.contains("archives") && QuickLookClaims.summary.hasPrefix("Markdown"))
+do {
+    // The claims by group, from scripts/quicklook-types.txt as the app carries it, and how another extension's claims overlap them.
+    let text = try! String(contentsOf: URL(fileURLWithPath: "scripts/quicklook-types.txt"), encoding: .utf8)
+    let claims = QuickLookClaims.parse(text)
+    let lines = text.split(separator: "\n").filter { $0.hasPrefix("claim ") || $0.hasPrefix("declare ") }
+    let group = { (t: String) in claims.first { $0.type == t }?.group }
+    check("claims: every claim and declaration parsed, once", claims.count == lines.count && Set(claims.map(\.type)).count == claims.count)
+    check("claims: grouped by the section they are listed in",
+          group("net.daringfireball.markdown") == .markdown && group("public.markdown") == .markdown && group("public.swift-source") == .code
+          && group("md.spacebar.type.go") == .code && group("public.json") == .data && group("com.apple.log") == .data
+          && group("md.spacebar.type.ipynb") == .data && group("public.zip-archive") == .archives && group("public.data") == .other
+          && group("md.spacebar.type.toml") == .text && group("md.spacebar.type.env") == .text)
+    check("claims: only public.data is in the no-extension group", claims.filter { $0.group == .other }.map(\.type) == ["public.data"])
+    check("claims: a declaration keeps its extensions", claims.first { $0.type == "md.spacebar.type.kt" }?.extensions == ["kt", "kts"])
+    let exts: [String: [String]] = ["public.swift-source": ["swift"], "com.vendor.swift": ["swift"], "dyn.go": ["go"], "public.json": ["json"],
+                                    "public.plain-text": ["txt", "text"], "public.png": ["png"]]
+    let o = QuickLookClaims.overlap(ours: claims, theirs: ["public.swift-source", "com.vendor.swift", "dyn.go", "public.json", "public.json",
+                                                            "public.plain-text", "public.source-code", "public.png", "com.acme.markdown",
+                                                            "md.spacebar.type.rs"], extensions: { exts[$0] ?? [] })
+    check("overlap: the same type, a vendor or dyn type for the same extension, any Markdown type; not a parent, Apple's own or spacebar's IDs",
+          o == [.code: ["com.vendor.swift", "dyn.go", "public.swift-source"], .data: ["public.json"], .markdown: ["com.acme.markdown"]])
+    check("overlap: none for an image previewer", QuickLookClaims.overlap(ours: claims, theirs: ["public.png", "public.jpeg"], extensions: { exts[$0] ?? [] }).isEmpty)
+    check("overlap: described Markdown first, then the largest group", QuickLookClaims.describe(o) == "Markdown (1 type), code (3 types), data (1 type)")
+}
 check("types: an executable with no extension is an app; a folder a folder; a package an item",
       FileTypes.kind(name: "tool", executable: true) == .app && FileTypes.kind(name: "src", isDirectory: true) == .folder
-      && FileTypes.kind(name: "X.app", isDirectory: true, isPackage: true) == .app && FileTypes.kind(name: "d.rtfd", isDirectory: true, isPackage: true) == .other)
+      && FileTypes.kind(name: "X.app", isDirectory: true, isPackage: true) == .app && FileTypes.kind(name: "d.pages", isDirectory: true, isPackage: true) == .other
+      && FileTypes.kind(name: "d.rtfd", isDirectory: true, isPackage: true) == .rtf)
 check("types: video and audio share the media icon and overview bucket; HTML is listed as code",
       FileKind.video.icon == "media" && FileKind.audio.icon == "media" && FolderScan.bucket(.video) == "media" && FolderScan.bucket(.audio) == "media"
       && FileKind.html.icon == "code" && FolderScan.bucket(.html) == "code")

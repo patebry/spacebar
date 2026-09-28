@@ -194,9 +194,9 @@
   #doc .viewer-image { margin: 0; }
   #doc .viewer-image img { display: block; margin: 0 auto; max-width: 100%; max-height: calc(100vh - 150px); object-fit: contain; }
   /* A PDF fills the rest of the panel under its toolbar, edge to edge; the extension lays its native PDFView over .pdf-area. */
-  :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio]) body { height: 100vh; overflow: hidden; }
-  :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio]) #main { display: flex; flex-direction: column; height: 100vh; }
-  :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio]) #doc { flex: 1 1 auto; min-height: 0; width: 100%; box-sizing: border-box; display: flex; flex-direction: column;
+  :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=rtf]) body { height: 100vh; overflow: hidden; }
+  :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=rtf]) #main { display: flex; flex-direction: column; height: 100vh; }
+  :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=rtf]) #doc { flex: 1 1 auto; min-height: 0; width: 100%; box-sizing: border-box; display: flex; flex-direction: column;
     padding-left: 0; padding-right: 0; padding-bottom: 0; }
   #doc .viewer-pdf { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
   #doc .viewer-pdf .viewer-head { padding: 0 40px; }
@@ -339,8 +339,8 @@
     :root:not([data-chrome=minimal]) #crumbs { color: var(--muted); font-size: 12.5px; line-height: var(--bar-h); }
     :root:not([data-chrome=minimal]) #side-head { padding-top: calc(var(--bar-h) + 8px); }
     /* A PDF stays inside the page's outline; the extension rounds the native view's corners to match. */
-    :root:not([data-chrome=minimal]):is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio]) #main { height: calc(100vh - var(--gap) - 1px); }
-    :root:not([data-chrome=minimal]):is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio]) #doc { padding-top: calc(var(--bar-h) + 12px); }
+    :root:not([data-chrome=minimal]):is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=rtf]) #main { height: calc(100vh - var(--gap) - 1px); }
+    :root:not([data-chrome=minimal]):is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=rtf]) #doc { padding-top: calc(var(--bar-h) + 12px); }
     :root:not([data-chrome=minimal]) #doc .pdf-area { margin: 0 calc(var(--gap) + 1px) 0 calc(var(--frame-inset) + 1px); border-top-color: var(--frame-line); }
     /* The viewer's Open button moves up into the toolbar row. */
     :root:not([data-chrome=minimal]) #doc .viewer-head .viewer-open { display: none; }

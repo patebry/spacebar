@@ -65,6 +65,28 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         }
     }
 
+    /// The chosen editor's bundle ID, when the caller names it: only the one in settings.json is honoured.
+    private func chosenEditor(_ id: String?) -> String? {
+        guard let id, id == SettingsFile.load().editorBundleID else { return nil }
+        return id
+    }
+
+    func openText(_ url: URL, appBundleID: String?, reply: @escaping (Bool) -> Void) {
+        guard url.isFileURL, let o = LinkPolicy.textOpener(for: url, editor: chosenEditor(appBundleID)) else {
+            log.error("refused openText \(url.path, privacy: .private)")
+            return reply(false)
+        }
+        NSWorkspace.shared.open([o.file], withApplicationAt: o.app, configuration: NSWorkspace.OpenConfiguration()) { _, err in
+            log.info("openText \(o.file.path, privacy: .private) with \(o.app.lastPathComponent, privacy: .public) editor=\(o.editor) -> \(err == nil)")
+            reply(err == nil)
+        }
+    }
+
+    func textOpener(_ url: URL, appBundleID: String?, reply: @escaping (String?, Bool) -> Void) {
+        guard url.isFileURL, let o = LinkPolicy.textOpener(for: url, editor: chosenEditor(appBundleID)) else { return reply(nil, false) }
+        reply(FileManager.default.displayName(atPath: o.app.path).replacingOccurrences(of: ".app", with: ""), o.editor)
+    }
+
     /// Selects the file in Finder and nothing else: it must never open or launch what it is given.
     func reveal(_ url: URL, reply: @escaping (Bool) -> Void) {
         var st = stat()
@@ -284,6 +306,15 @@ final class Writer: NSObject, SpacebarWriterProtocol {
     }
 
     func beginFilter(_ session: Int, text: String, clickX: Double, clickY: Double, fieldWidth: Double, fieldHeight: Double, reply: @escaping (Bool) -> Void) {
+        beginKeys(session, text: text, list: false, clickX: clickX, clickY: clickY, width: fieldWidth, height: fieldHeight, reply: reply)
+    }
+
+    func beginListKeys(_ session: Int, clickX: Double, clickY: Double, rowWidth: Double, rowHeight: Double, reply: @escaping (Bool) -> Void) {
+        beginKeys(session, text: "", list: true, clickX: clickX, clickY: clickY, width: rowWidth, height: rowHeight, reply: reply)
+    }
+
+    private func beginKeys(_ session: Int, text: String, list: Bool, clickX: Double, clickY: Double, width fieldWidth: Double, height fieldHeight: Double,
+                           reply: @escaping (Bool) -> Void) {
         let host = connection?.remoteObjectProxyWithErrorHandler { err in
             log.error("filter host gone: \(err.localizedDescription, privacy: .public)")
             DispatchQueue.main.async { FilterSession.end(owner: self, "host-gone") }
@@ -299,7 +330,7 @@ final class Writer: NSObject, SpacebarWriterProtocol {
             FilterSession.current?.end("replaced", notify: true, hide: false)
             let mouse = NSEvent.mouseLocation
             let frame = NSRect(x: mouse.x - clickX, y: mouse.y + clickY - fieldHeight, width: max(fieldWidth, 40), height: max(fieldHeight, 16))
-            let s = FilterSession(owner: self, id: session, text: FilterKeys.clean(text), frame: frame, host: host)
+            let s = FilterSession(owner: self, id: session, text: list ? "" : FilterKeys.clean(text), list: list, frame: frame, host: host)
             FilterSession.current = s
             reply(true)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
@@ -405,6 +436,7 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         textView.onEscape = { [weak self] in self?.end("escape", notify: true) }
         textView.onHoldTimeout = { [weak self] in self?.end("hold-timeout", notify: true) }
         textView.onFilterKey = nil
+        textView.listKeys = false
         textView.onMergeBackward = { [weak self] in
             guard let self, !self.ended else { return }
             self.flush(force: true)
@@ -503,10 +535,12 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
 }
 
 /// The sidebar's filter field while it holds the keyboard: the edit panel and text view, with the text streamed to the host and
-/// the list keys forwarded. It has no path to any file.
+/// the list keys forwarded. A list session (a click on a row) has no text: it forwards the list keys only, and Esc or Space
+/// ends it. It has no path to any file.
 final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
     static var current: FilterSession?
     let id: Int
+    let list: Bool
     weak var owner: Writer?
     private let surface = EditSurface.shared
     private var textView: EditTextView { surface.textView }
@@ -519,9 +553,10 @@ final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         s.end(reason, notify: true)
     }
 
-    init(owner: Writer, id: Int, text: String, frame: NSRect, host: SpacebarEditHostProtocol) {
+    init(owner: Writer, id: Int, text: String, list: Bool = false, frame: NSRect, host: SpacebarEditHostProtocol) {
         self.owner = owner
         self.id = id
+        self.list = list
         self.host = host
         super.init()
         let panel = surface.panel
@@ -539,9 +574,10 @@ final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         textView.delegate = self
         textView.onEscape = { [weak self] in self?.escape() }
         textView.onHoldTimeout = {}
+        textView.listKeys = list
         textView.onFilterKey = { [weak self] key, isRepeat in
             guard let self, !self.ended else { return }
-            self.flush()
+            if !self.list { self.flush() }
             self.host.filterKey(self.id, key: key, isRepeat: isRepeat)
         }
         panel.delegate = self
@@ -553,14 +589,14 @@ final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
     @objc private func appActivated(_ n: Notification) { end("app-activated", notify: true) }
 
     private func escape() {
-        if FilterKeys.escapeEnds(text: textView.string) { return end("escape", notify: true) }
+        if list || FilterKeys.escapeEnds(text: textView.string) { return end("escape", notify: true) }
         textView.string = ""
         textView.undoManager?.removeAllActions()
         flush()
     }
 
     func textDidChange(_ notification: Notification) {
-        guard !ended, !sendQueued else { return }
+        guard !ended, !list, !sendQueued else { return }
         sendQueued = true
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.ended else { return }
@@ -590,6 +626,7 @@ final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
             textView.delegate = nil
             textView.onEscape = {}
             textView.onFilterKey = nil
+            textView.listKeys = false
         }
         if hide { surface.panel.orderOut(nil) }
         if notify { host.filterEnded(id, reason: reason) }

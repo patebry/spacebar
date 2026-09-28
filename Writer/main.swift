@@ -640,7 +640,7 @@ private func processStartUpMs() -> Double {
 }
 log.info("lat writer-launch \(processStartUpMs(), format: .fixed(precision: 1)) writer-main \(upMs(), format: .fixed(precision: 1))")
 
-SettingsFile.migrate()
+if let f = SettingsFile.migrate() { log.error("settings.json not migrated: \(String(describing: f), privacy: .public)") }
 if SettingsFile.migrateLegacySupportDir() { log.info("moved support folder \(SettingsFile.legacyFolderName, privacy: .public) to \(SettingsFile.folderName, privacy: .public)") }
 
 let termSource = writeGate.handleSIGTERM()

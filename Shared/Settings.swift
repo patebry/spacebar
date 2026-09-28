@@ -275,10 +275,14 @@ enum SettingsFile {
     }
 
     /// Brings an existing settings.json up to Settings.currentVersion. Run by the app and the writer, never the sandboxed extension.
-    static func migrate(at url: URL = url) {
+    /// A symbolic link (a dotfiles setup) is never written, so it is not migrated: until its target gains "version": 2 it reads
+    /// as folder previews on whatever its folderMode says. The failure is returned for the caller's log.
+    @discardableResult
+    static func migrate(at url: URL = url) -> Failure? {
         var st = stat()
-        guard lstat(url.path, &st) == 0 else { return }
-        _ = update([:], at: url)
+        guard lstat(url.path, &st) == 0 else { return nil }
+        if case .failure(let f) = update([:], at: url) { return f }
+        return nil
     }
 
     /// The writer's `updateSettings`: a small JSON object from the preview panel, merged with only Settings.panelKeys allowed.

@@ -27,11 +27,11 @@ What the panel shows for each file in the sidebar:
 | Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`, `.mkdn`) | rendered, with inline editing and task toggles |
 | Images (`.png`, `.jpg`, `.gif`, `.webp`, `.heic`, `.avif`, `.bmp`, `.tiff`, `.ico`, `.svg`) | fitted to the panel, with its dimensions and size; SVG as an image only |
 | PDF | drawn natively by PDFKit in the panel, fitted to its width, pages in one scroll |
-| HTML (`.html`, `.htm`) | rendered in its own web view: with its scripts and web content when made on this Mac, with neither when downloaded |
+| HTML (`.html`, `.htm`) | rendered in its own web view: with its scripts and web content unless it was marked as downloaded, with neither when it was (see below) |
 | Video (`.mp4`, `.m4v`, `.mov`) | played by AVKit in the panel, paused on its first frame until you press play |
 | Audio (`.mp3`, `.m4a`, `.aac`, `.wav`, `.aif`, `.aiff`, `.flac`, `.caf`) | the same player, under the file's artwork or icon |
 | Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.xml`, `.yaml`, `.toml`, `.sql`, `.plist`, `Dockerfile`, `Makefile` and more) | highlighted source with line numbers; a binary property list is shown as XML |
-| Archives (`.zip`, `.tar`, `.tgz`, `.tar.gz`, `.tar.bz2`, `.tar.xz`, `.7z`, `.rar`, `.zst`) | its files and folders as a tree, with sizes and dates, listed without extracting anything; Open with its default app |
+| Archives (`.zip`, `.tar`, `.tgz`, `.tar.gz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz`, `.7z`, `.rar`, `.zst`, `.tzst`) | its files and folders as a tree, with sizes and dates, listed without extracting anything; Open with its default app |
 | JSON | pretty-printed and highlighted, with a Raw toggle |
 | CSV and TSV | a table, first row as the header, up to 1,000 rows |
 | Text (`.txt`, `.log`, `LICENSE`, `.env.example` and other text) | as is, with line numbers |
@@ -132,7 +132,7 @@ curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/unins
 ```
 
 This unregisters and deletes `~/Applications/spacebar.app`. **Uninstall spacebar…** in Settings, Advanced, runs the same
-script from inside the app. To also delete your settings and themes in `~/Library/Application Support/spacebar`:
+script from inside the app (not while an update runs). Both quit spacebar's Quick Look extensions first. To also delete your settings and themes in `~/Library/Application Support/spacebar`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh -s -- --purge
@@ -195,11 +195,15 @@ writer service; Finder stays in front. Saves are compare-and-swap: if the file c
   that lead out of it resolve to nothing. Nothing in a Markdown file is ever run, and scripts are shown as source, SVG only
   as an image, a PDF by PDFKit (which runs no PDF scripts; the PDF is parsed in the sandboxed preview extension itself), and
   the page loads files only as images.
-- An HTML file is shown in a web view of its own that shares nothing with the preview's page. Its scripts run only when the
-  file was made on this Mac (no quarantine flag) and Settings allows it; a downloaded HTML file always opens with scripts off
-  and every web request blocked. Links in it open through the same policy as everywhere else.
+- An HTML file is shown in a web view of its own that shares nothing with the preview's page. By default its scripts run and
+  it may load from the web, unless your browser, Mail or AirDrop marked it as downloaded (the quarantine flag). Files from
+  `git clone`, `curl`, `unzip` or a USB drive are not marked, so their pages run their scripts and may load from the web too;
+  **Settings, Advanced, Scripts in HTML files: Never** turns that off for every HTML file. A marked file always opens with
+  scripts off and no network at all, resource hints included, and only files beside it load. A link in an HTML file is
+  followed only when you click it, through the same policy as everywhere else.
 - An archive is listed, never extracted, by `/usr/bin/bsdtar` under a `sandbox-exec` profile that lets it read only the
   archive (through a descriptor the helper opened) and system files, with no writes and no network, for at most 5 seconds.
+  Only the viewer's Open button hands an archive to its default app; a link never does.
 - The preview extension has a read-only sandbox exception for the whole disk, so relative images beside a document load and
   the sidebar can show the folder's files.
 - The preview extension has the `com.apple.security.network.client` entitlement. WKWebView's helper processes crash-loop

@@ -41,6 +41,10 @@ check("tail of a short log is all of it", ProblemReport.tail("one\ntwo", home: "
 let long = ProblemReport.tail(String(repeating: "x", count: 500), home: "/x")
 check("a long line is cut to 200 characters", long.count == 201 && long.hasSuffix("…"), "\(long.count)")
 check("the home folder shows as ~", ProblemReport.tail("rm /Users/someone/Applications/spacebar.app", home: "/Users/someone") == "rm ~/Applications/spacebar.app")
+check("a longer name that starts with the home folder's is left alone",
+      ProblemReport.tail("/Users/someone2/x and /Users/someone.old and '/Users/someone'", home: "/Users/someone") == "/Users/someone2/x and /Users/someone.old and '~'")
+let esc = ProblemReport.tail(#"would run: pkill -f ^/Users/a\.b/Applications/spacebar\.app/ and /Users/a.b/x"#, home: "/Users/a.b")
+check("the home folder is redacted as the installer escapes it too", esc == #"would run: pkill -f ^~/Applications/spacebar\.app/ and ~/x"#, esc)
 
 let noisy = (1...40).map { "\($0) " + String(repeating: "é&", count: 90) }.joined(separator: "\n")
 let big = ProblemReport.url(sys, log: ProblemReport.tail(noisy, home: "/x"))

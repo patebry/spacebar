@@ -575,7 +575,7 @@ struct AdvancedPane: View {
             } header: {
                 Text("Content")
             } footer: {
-                Text("Sanitized HTML keeps formatting tags but never runs scripts. Remote images are off by default: fetching one lets its server see when the document was opened. A blocked image offers to load that document's images once, without changing this setting. An HTML file you downloaded always opens with scripts off and nothing loaded from the web.")
+                Text("Sanitized HTML keeps formatting tags but never runs scripts. Remote images are off by default: fetching one lets its server see when the document was opened. A blocked image offers to load that document's images once, without changing this setting. An HTML file your browser, Mail or AirDrop marked as downloaded always opens with scripts off and nothing loaded from the web. Files from git clone, curl, unzip or a USB drive are not marked, so with Files made on this Mac their pages run their scripts and may load from the web; with Never, no HTML file does either.")
                     .settingsFooter()
             }
 
@@ -629,7 +629,7 @@ struct AdvancedPane: View {
             } header: {
                 Text("Help")
             } footer: {
-                Text("Report a Problem opens a new GitHub issue in your browser with your spacebar and macOS versions, your Mac's model and the end of the update log filled in. Nothing is sent until you submit it there.")
+                Text("Report a Problem opens a new public GitHub issue in your browser with your spacebar and macOS versions, your Mac's model and the end of the update log filled in. Nothing is sent until you submit it there.")
                     .settingsFooter()
             }
         }

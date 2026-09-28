@@ -66,7 +66,9 @@ final class MediaPane: NSObject {
         old?.pause()
         path = url.path
         self.audio = audio
-        let item = AVPlayerItem(url: url)
+        // A movie file can reference other files or URLs for its media (a QuickTime reference movie): none is followed.
+        let asset = AVURLAsset(url: url, options: [AVURLAssetReferenceRestrictionsKey: AVAssetReferenceRestrictions.forbidAll.rawValue])
+        let item = AVPlayerItem(asset: asset)
         let player = old ?? AVPlayer()
         player.actionAtItemEnd = .pause
         player.replaceCurrentItem(with: item)

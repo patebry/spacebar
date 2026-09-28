@@ -37,10 +37,21 @@ enum ProblemReport {
     static func tail(_ text: String, lines: Int = logLines, home: String = NSHomeDirectory()) -> String {
         var all = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         if all.last == "" { all.removeLast() }
+        let redact = redactor(home: home)
         return all.suffix(lines).map { line in
-            let l = home.count > 1 ? line.replacingOccurrences(of: home, with: "~") : line
+            let l = redact(line)
             return l.count > lineLimit ? String(l.prefix(lineLimit)) + "…" : l
         }.joined(separator: "\n")
+    }
+
+    /// Replaces the home folder with ~ where it is a whole path, not the start of a longer name (/Users/ann in /Users/anne
+    /// stays), both as written and as the installer's pkill patterns escape it (/Users/a\.b).
+    static func redactor(home: String) -> (String) -> String {
+        guard home.count > 1 else { return { $0 } }
+        let escaped = home.replacingOccurrences(of: #"[\]\[\\.*$+?(){}|]"#, with: #"\\$0"#, options: .regularExpression)
+        let forms = Set([home, escaped]).sorted { $0.count > $1.count }.map(NSRegularExpression.escapedPattern(for:))
+        guard let re = try? NSRegularExpression(pattern: #"(?<![A-Za-z0-9._/-])(?:"# + forms.joined(separator: "|") + #")(?![A-Za-z0-9._-])"#) else { return { $0 } }
+        return { line in re.stringByReplacingMatches(in: line, range: NSRange(line.startIndex..., in: line), withTemplate: "~") }
     }
 
     /// The end of the update log, read from at most its last 64 KB, or nil when there is none.

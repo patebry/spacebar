@@ -53,8 +53,8 @@ do {
     check("decode: invalid UTF-8 with no charset is Windows-1252", OfflineFiles.decode(Data([0x63, 0x61, 0x66, 0xE9])) == "café")
     check("decode: a UTF-16 byte order mark wins", OfflineFiles.decode("<p>ü</p>".data(using: .utf16)!) == "<p>ü</p>")
     let served = String(decoding: OfflineFiles.document(latin, folder: dir), as: UTF8.self)
-    check("document: sent as UTF-8 with its charset meta replaced and DNS prefetch off",
-          served.contains("café") && served.contains(#"<meta charset="utf-8">"#) && !served.contains("windows-1252") && served.hasPrefix(#"<meta http-equiv="x-dns-prefetch-control" content="off">"#), served)
+    check("document: sent as UTF-8 with its charset meta replaced, nothing put before it",
+          served.contains("café") && served.contains(#"<meta charset="utf-8">"#) && !served.contains("windows-1252") && served.hasPrefix("<meta charset"), served)
 }
 
 // ---- the two kinds of pane: a local file runs scripts and loads from the web; a downloaded one does neither ----
@@ -230,16 +230,17 @@ do {
     let server = Server()
     try! Data("@import url(http://127.0.0.1:\(server.port)/x.css);\np { color: rgb(1, 2, 3) }".utf8).write(to: dir.appendingPathComponent("look.css"))
     let f = dir.appendingPathComponent("styled.html")
-    try! Data(#"<link rel="stylesheet" href="look.css"><p id=p>styled</p>"#.utf8).write(to: f)
+    try! Data(#"<!DOCTYPE html><link rel="stylesheet" href="look.css"><p id=p>styled</p>"#.utf8).write(to: f)
     setxattr(f.path, "com.apple.quarantine", flag, flag.utf8.count, 0, 0)
     let pane = HTMLPane(scripts: false)
     pane.show(f, over: web)
     for _ in 0..<150 where pane.view.url == nil { spin(0.02) }
     spin(1)
     var color: String?, done = false
-    pane.view.evaluateJavaScript("getComputedStyle(document.getElementById('p')).color") { r, _ in color = r as? String; done = true }
+    pane.view.evaluateJavaScript("getComputedStyle(document.getElementById('p')).color + ' ' + document.compatMode") { r, _ in color = r as? String; done = true }
     for _ in 0..<100 where !done { spin(0.02) }
-    check("downloaded: its stylesheet beside it applies, and nothing is fetched", color == "rgb(1, 2, 3)" && server.hits == 0, "\(color ?? "nil") hits \(server.hits)")
+    check("downloaded: its stylesheet beside it applies, nothing is fetched, and a page with a doctype is in standards mode",
+          color == "rgb(1, 2, 3) CSS1Compat" && server.hits == 0, "\(color ?? "nil") hits \(server.hits)")
     pane.close()
 }
 

@@ -54,12 +54,9 @@ final class MediaPane: NSObject {
     }
 
     /// Shows `url` above `web`, paused on its first frame. The same file again (a change on disk) keeps its time and whether it played.
+    /// The view joins the container only when the page places it: an AVPlayerView added at a zero size made the container
+    /// grow to its minimum size (a video left within ~100 ms, before the page placed it, left the panel 50×43 points too big).
     func show(_ url: URL, audio: Bool, over web: NSView) {
-        guard let container = web.superview else { return }
-        if view.superview !== container {
-            view.removeFromSuperview()
-            container.addSubview(view, positioned: .above, relativeTo: web)
-        }
         let old = view.player
         // A reload before the last one was ready keeps the time and state that one was waiting to restore.
         resume = url.path == path ? (resume ?? old.map { ($0.currentTime(), $0.rate != 0) }) : nil
@@ -140,7 +137,7 @@ final class MediaPane: NSObject {
         view.layer?.cornerRadius = radius * zoom
         view.layer?.masksToBounds = radius > 0
         guard let f = PDFPane.frame(css: CGRect(x: x, y: y, width: w, height: h), in: web, zoom: zoom) else { view.isHidden = true; return }
-        view.frame = f
+        PDFPane.attach(view, frame: f, over: web)
         view.layoutSubtreeIfNeeded()
         backdrop.frame = backdrop.superview?.bounds ?? view.bounds
         let i = Self.artInsets, host = backdrop.bounds

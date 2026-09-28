@@ -111,16 +111,32 @@ func item() -> AVPlayerItem? { pane.view.player?.currentItem }
 func ready() { spin { item()?.status == .readyToPlay || item()?.status == .failed } }
 func seconds() -> Double { pane.view.player?.currentTime().seconds ?? -1 }
 
+// A video shown and left before the page places it (a quick switch in the sidebar): the container keeps its size.
+do {
+    let quick = MediaPane()
+    let before = (container.frame, web.frame, window.frame)
+    quick.show(mp4, audio: false, over: web)
+    spin(until: 0.3) { false }
+    let joined = quick.view.superview != nil
+    quick.close()
+    spin(until: 0.2) { false }
+    // The growth itself needs Quick Look's constraint-laid-out window; off screen the check is that the view never joins.
+    check("a video left before it is placed never joins the container, and the container, web view and window keep their size",
+          !joined && container.frame == before.0 && web.frame == before.1 && window.frame == before.2,
+          "\(container.frame) \(web.frame) \(window.frame)")
+}
+
 pane.show(wav, audio: true, over: web)
-check("show: above the web view in its container, hidden until the page places it",
-      pane.view.superview === container && container.subviews.last === pane.view && pane.view.isHidden && !pane.placed)
+check("show: not in the container until the page places it, hidden",
+      pane.view.superview == nil && pane.view.isHidden && !pane.placed)
 check("audio: inline controls, no full screen button, the file's icon above the controls",
       pane.view.controlsStyle == .inline && !pane.view.showsFullScreenToggleButton && pane.audio && !pane.backdrop.isHidden && pane.art.image != nil)
 let msg: [String: Any] = ["path": wav.path, "x": 340, "y": 300, "w": 560, "h": 220, "hide": false, "bg": [240, 240, 242], "dark": false, "radius": 8]
 pane.place(message: ["path": mp4.path, "x": 0, "y": 0, "w": 10, "h": 10], in: web)
 check("place: a message for another file is ignored", pane.view.isHidden && !pane.placed)
 pane.place(message: msg, in: web)
-check("place: at the page's area, corners rounded", !pane.view.isHidden && pane.placed && pane.view.frame == NSRect(x: 340, y: 280, width: 560, height: 220)
+check("place: at the page's area, above the web view, corners rounded", !pane.view.isHidden && pane.placed && pane.view.frame == NSRect(x: 340, y: 280, width: 560, height: 220)
+      && pane.view.superview === container && container.subviews.last === pane.view
       && pane.view.layer?.cornerRadius == 8, "\(pane.view.frame)")
 let artFrame = pane.art.convert(pane.art.bounds, to: pane.view)
 let backdrop = pane.backdrop.layer?.backgroundColor.flatMap { NSColor(cgColor: $0)?.usingColorSpace(.sRGB) }

@@ -77,16 +77,25 @@ let pane = PDFPane()
 var links: [URL] = []
 pane.onLink = { links.append($0) }
 pane.show(docA, path: a.path, over: web)
-check("show: above the web view in its container, hidden until the page places it",
-      pane.view.superview === container && container.subviews.last === pane.view && pane.view.isHidden && !pane.placed)
+check("show: not in the container until the page places it, hidden",
+      pane.view.superview == nil && pane.view.isHidden && !pane.placed)
 check("show: fitted, continuous, vertical, with page breaks", pane.view.autoScales && pane.view.displayMode == .singlePageContinuous
       && pane.view.displayDirection == .vertical && pane.view.displaysPageBreaks)
 let msg: [String: Any] = ["path": a.path, "x": 240, "y": 108, "w": 760, "h": 692, "hide": false, "bg": [240, 240, 242], "dark": false]
 pane.place(message: ["path": b.path, "x": 0, "y": 0, "w": 10, "h": 10], in: web)
 check("place: a message for another file is ignored", pane.view.isHidden && !pane.placed)
 pane.place(message: msg, in: web)
-check("place: at the page's area", !pane.view.isHidden && pane.placed && pane.view.frame == NSRect(x: 240, y: 0, width: 760, height: 692),
-      "\(pane.view.frame)")
+check("place: at the page's area, above the web view", !pane.view.isHidden && pane.placed && pane.view.frame == NSRect(x: 240, y: 0, width: 760, height: 692)
+      && pane.view.superview === container && container.subviews.last === pane.view, "\(pane.view.frame)")
+spin(0.2)
+/// Whether the top of the first page is on screen.
+func atTop() -> Bool {
+    guard let dv = pane.view.documentView, pane.view.currentPage.flatMap({ pane.view.document?.index(for: $0) }) == 0 else { return false }
+    let vis = dv.visibleRect
+    return dv.isFlipped ? vis.minY <= dv.bounds.minY + 30 : vis.maxY >= dv.bounds.maxY - 30
+}
+check("place: a new document opens at the top of its first page, not scrolled to its end", atTop(),
+      "\(pane.view.documentView?.visibleRect ?? .zero) in \(pane.view.documentView?.bounds ?? .zero) page \(pane.view.currentPage.flatMap { pane.view.document?.index(for: $0) } ?? -1)")
 let bg = pane.view.backgroundColor.usingColorSpace(.sRGB)!
 check("place: the backdrop and appearance the page asks for", abs(bg.redComponent * 255 - 240) < 1 && abs(bg.blueComponent * 255 - 242) < 1
       && pane.view.appearance?.name == .aqua)

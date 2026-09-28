@@ -14,6 +14,8 @@ final class PDFPane: NSObject, PDFViewDelegate {
     private(set) var path: String?
     /// Whether the page has placed the view yet; it stays hidden until then, so it never shows at a stale position.
     private(set) var placed = false
+    /// The page to go to once the view has a frame: the first for a new document, the one on screen for a reload.
+    private var pendingPage: Int?
     /// A link in the PDF. PDFView's own NSWorkspace open does nothing inside the sandbox, so the owner routes it.
     var onLink: (URL) -> Void = { _ in }
 
@@ -35,17 +37,38 @@ final class PDFPane: NSObject, PDFViewDelegate {
         return doc.isLocked ? .failure(.locked) : .success(doc)
     }
 
-    /// Shows `doc` above `web`, in `web`'s superview. The same file again (a change on disk) keeps the page that was on screen.
+    /// Shows `doc` above `web`, in `web`'s superview, from the top of its first page. The same file again (a change on disk)
+    /// keeps the page that was on screen. The view joins the container only when the page first places it (see attach).
     func show(_ doc: PDFDocument, path: String, over web: NSView) {
-        guard let container = web.superview else { return }
-        if view.superview !== container {
-            view.removeFromSuperview()
-            container.addSubview(view, positioned: .above, relativeTo: web)
-        }
         let keep = path == self.path ? view.currentPage.flatMap { view.document?.index(for: $0) } : nil
         self.path = path
         view.document = doc
-        if let keep, keep < doc.pageCount, let page = doc.page(at: keep) { view.go(to: page) }
+        pendingPage = keep ?? 0
+        // Laid out at a zero size, PDFView keeps the scroll position that size gives, the end of the document: the page is
+        // chosen again once the view has its frame.
+        if placed { goToPendingPage() }
+    }
+
+    private func goToPendingPage() {
+        guard let i = pendingPage, let doc = view.document else { return }
+        pendingPage = nil
+        view.layoutDocumentView()
+        guard let page = doc.page(at: min(i, max(0, doc.pageCount - 1))) else { return }
+        let top = page.bounds(for: view.displayBox)
+        view.go(to: PDFDestination(page: page, at: NSPoint(x: top.minX, y: top.maxY)))
+    }
+
+    /// Puts a native view over `web` at `frame`, adding it to `web`'s superview only now, with its frame already set. A view
+    /// added before it has one (AVPlayerView above all) can make the container grow to fit its minimum size.
+    static func attach(_ v: NSView, frame f: NSRect, over web: NSView) {
+        guard let container = web.superview else { return }
+        if v.superview !== container {
+            v.removeFromSuperview()
+            v.frame = f
+            container.addSubview(v, positioned: .above, relativeTo: web)
+        } else {
+            v.frame = f
+        }
     }
 
     /// The view's frame in `web`'s superview for a rect in CSS pixels of the web view's viewport, clipped to the web view.
@@ -64,8 +87,9 @@ final class PDFPane: NSObject, PDFViewDelegate {
         guard path != nil else { return }
         let zoom = (web as? WKWebView).map { $0.pageZoom * $0.magnification } ?? 1
         guard let f = Self.frame(css: r, in: web, zoom: zoom) else { view.isHidden = true; return }
-        view.frame = f
+        Self.attach(view, frame: f, over: web)
         placed = true
+        goToPendingPage()
         view.isHidden = hidden
     }
 
@@ -102,6 +126,7 @@ final class PDFPane: NSObject, PDFViewDelegate {
     /// Takes the view down and lets the document go, which closes the file.
     func close() {
         view.document = nil
+        pendingPage = nil
         view.removeFromSuperview()
         view.isHidden = true
         path = nil

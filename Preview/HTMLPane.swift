@@ -75,11 +75,8 @@ final class HTMLPane: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     /// Shows `url` above `web`. The same file again (a change on disk) reloads it.
     func show(_ url: URL, over web: NSView) {
-        guard let container = web.superview else { return }
-        if view.superview !== container {
-            view.removeFromSuperview()
-            container.addSubview(view, positioned: .above, relativeTo: web)
-        }
+        guard web.superview != nil else { return }
+        // Added to the container only when the page places it (PDFPane.attach), like the other native views.
         path = url.path
         file = url
         offline?.document = url
@@ -116,7 +113,7 @@ final class HTMLPane: NSObject, WKNavigationDelegate, WKUIDelegate {
         view.layer?.cornerRadius = radius * zoom
         view.layer?.masksToBounds = radius > 0
         guard let f = PDFPane.frame(css: CGRect(x: x, y: y, width: w, height: h), in: web, zoom: zoom) else { view.isHidden = true; return }
-        view.frame = f
+        PDFPane.attach(view, frame: f, over: web)
         placed = true
         view.isHidden = hide
     }
@@ -254,7 +251,8 @@ final class OfflineFiles: NSObject, WKURLSchemeHandler {
             DispatchQueue.main.async {
                 guard !self.stopped.contains(id) else { return }
                 guard let body else { return task.didFailWithError(URLError(.noPermissionsToReadFile)) }
-                let headers = ["Content-Type": mime, "Content-Security-Policy": Self.csp, "X-Content-Type-Options": "nosniff"]
+                // X-DNS-Prefetch-Control: hyperlinks' host names are not looked up ahead of a click.
+                let headers = ["Content-Type": mime, "Content-Security-Policy": Self.csp, "X-Content-Type-Options": "nosniff", "X-DNS-Prefetch-Control": "off"]
                 task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!)
                 task.didReceive(body)
                 task.didFinish()
@@ -287,8 +285,9 @@ final class OfflineFiles: NSObject, WKURLSchemeHandler {
         html = inlineStylesheets(html, folder: folder)
         html = inertLinks(html)
         html = replace(html, #"<meta\b[^>]*charset[^>]*>"#, with: #"<meta charset="utf-8">"#)
-        // Hyperlinks' host names are not looked up ahead of a click.
-        return Data((#"<meta http-equiv="x-dns-prefetch-control" content="off">"# + html).utf8)
+        // Nothing goes before the document's own text: markup ahead of <!DOCTYPE> puts the page in quirks mode. DNS prefetching
+        // is turned off by a response header instead.
+        return Data(html.utf8)
     }
 
     /// Every start tag named `link` or `<prefix>:link`, in any case, renamed; what follows the name is left as is.

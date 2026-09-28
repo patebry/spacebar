@@ -512,14 +512,15 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         if host.controller !== self {
             host.controller?.stopNativeViews()
             host.controller?.handOver()
-            // The page's update state (a busy flag, a pending re-check) was the last controller's.
-            js("sb.updateReset", [:])
+            // The page's update state (a busy flag, a pending re-check) was the last controller's. A page still loading has none.
+            if host.ready { js("sb.updateReset", [:]) }
         }
         stopFilter(notifyWriter: true)
         host.controller = self
         completion = handler
-        // The page outlives the controller that began a filter session; the new preview starts with none.
-        js("sb.filterEnd", ["all": true])
+        // The page outlives the controller that began a filter session; the new preview starts with none. A page still
+        // loading has no session, and no `sb` to call.
+        if host.ready { js("sb.filterEnd", ["all": true]) }
 
         var isDir: ObjCBool = false
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)

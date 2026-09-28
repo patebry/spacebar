@@ -136,6 +136,8 @@ check("list: letters, Tab and Shift+↓ type nothing and go nowhere", listed.isE
 NSPasteboard.general.clearContents()
 NSPasteboard.general.setString("pasted", forType: .string)
 check("list: Command shortcuts are swallowed (no paste)", letter("v") && letter("a") && tv.string.isEmpty)
+check("list: a plain key offered as a key equivalent is left for keyDown (↓, Esc, Space, a letter)",
+      !press(down, 125, []) && !press(0x1b, 53, [], function: false) && !press(0x20, 49, [], function: false) && !letter("q", []))
 key(" ", 49)
 check("list: Space ends it", ends == 1 && tv.string.isEmpty)
 key("\u{1b}", 53)

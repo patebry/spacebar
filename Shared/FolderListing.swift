@@ -448,7 +448,7 @@ enum FileView {
         let ext = (path as NSString).pathExtension
         p["size"] = regular ? size : NSNull()
         p["modified"] = Double(st.st_mtimespec.tv_sec) * 1000 + Double(st.st_mtimespec.tv_nsec / 1_000_000)
-        let type = UTType(filenameExtension: ext)
+        let type = (regular ? nil : UTType(filenameExtension: ext, conformingTo: .package)) ?? UTType(filenameExtension: ext)
         p["kindName"] = type.flatMap(\.localizedDescription) ?? (regular ? "Document" : "Folder")
         p["icon"] = FileTypes.glyph(name: (path as NSString).lastPathComponent, kind: kind)
         p["canOpen"] = canOpen

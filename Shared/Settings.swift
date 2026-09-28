@@ -40,6 +40,8 @@ struct Settings: Codable, Equatable {
     var htmlScripts = "local"
     var checkUpdates = true
     var welcomeShown = false
+    /// Space in Finder opens spacebar's own panel through the helper (P2: set by hand in settings.json).
+    var spaceHelper = false
 
     /// 2: folder previews became on by default. A file written before that stores the old default, false, so it reads as on
     /// until SettingsFile.update rewrites it; a user who turns them off afterwards stays off.
@@ -67,7 +69,7 @@ struct Settings: Codable, Equatable {
     static let doubleRanges: [String: ClosedRange<Double>] = ["lineHeight": 1.2...2.0]
     static let boolKeys: Set<String> = ["customCSS", "inlineEditing", "taskToggles", "folderMode", "folderReadmeFirst", "stats", "math",
                                         "mermaid", "remoteImages", "sidebarCollapsed", "sidebarKeys", "showHiddenFiles", "minimalChrome", "checkUpdates",
-                                        "welcomeShown"]
+                                        "welcomeShown", "spaceHelper"]
     /// Keys whose value is a string or null, each checked by its own pattern.
     static let optionalKeys: Set<String> = ["userTheme", "editorBundleID"]
     static var allKeys: Set<String> { Set(choices.keys).union(intRanges.keys).union(doubleRanges.keys).union(boolKeys).union(optionalKeys) }
@@ -157,7 +159,7 @@ struct Settings: Codable, Equatable {
         if let n = try? c.decodeIfPresent(Double.self, forKey: .sidebarWidth), let v = Self.sanitize("sidebarWidth", n) as? Int { s.sidebarWidth = v }
         take(.toc, \.toc); take(.stats, \.stats); take(.mdLinks, \.mdLinks); take(.webLinks, \.webLinks)
         take(.math, \.math); take(.mermaid, \.mermaid); take(.rawHTML, \.rawHTML); take(.remoteImages, \.remoteImages); take(.checkUpdates, \.checkUpdates); take(.htmlScripts, \.htmlScripts)
-        take(.welcomeShown, \.welcomeShown)
+        take(.welcomeShown, \.welcomeShown); take(.spaceHelper, \.spaceHelper)
         self = s
     }
 

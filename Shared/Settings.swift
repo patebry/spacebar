@@ -25,6 +25,7 @@ struct Settings: Codable, Equatable {
     var folderSort = "name"
     var sidebarCollapsed = false
     var sidebarWidth = 240
+    var sidebarKeys = true
     var showHiddenFiles = false
     var minimalChrome = false
     var frontMatter = "table"
@@ -65,7 +66,7 @@ struct Settings: Codable, Equatable {
     static let intRanges: [String: ClosedRange<Int>] = ["fontSize": 12...24, "sidebarWidth": 160...480]
     static let doubleRanges: [String: ClosedRange<Double>] = ["lineHeight": 1.2...2.0]
     static let boolKeys: Set<String> = ["customCSS", "inlineEditing", "taskToggles", "folderMode", "folderReadmeFirst", "stats", "math",
-                                        "mermaid", "remoteImages", "sidebarCollapsed", "showHiddenFiles", "minimalChrome", "checkUpdates",
+                                        "mermaid", "remoteImages", "sidebarCollapsed", "sidebarKeys", "showHiddenFiles", "minimalChrome", "checkUpdates",
                                         "welcomeShown"]
     /// Keys whose value is a string or null, each checked by its own pattern.
     static let optionalKeys: Set<String> = ["userTheme", "editorBundleID"]
@@ -152,7 +153,7 @@ struct Settings: Codable, Equatable {
         take(.width, \.width); takeOptional(.editorBundleID, \.editorBundleID)
         take(.inlineEditing, \.inlineEditing); take(.taskToggles, \.taskToggles); take(.folderMode, \.folderMode)
         take(.folderReadmeFirst, \.folderReadmeFirst); take(.folderSort, \.folderSort); take(.frontMatter, \.frontMatter)
-        take(.sidebarCollapsed, \.sidebarCollapsed); take(.showHiddenFiles, \.showHiddenFiles); take(.minimalChrome, \.minimalChrome)
+        take(.sidebarCollapsed, \.sidebarCollapsed); take(.sidebarKeys, \.sidebarKeys); take(.showHiddenFiles, \.showHiddenFiles); take(.minimalChrome, \.minimalChrome)
         if let n = try? c.decodeIfPresent(Double.self, forKey: .sidebarWidth), let v = Self.sanitize("sidebarWidth", n) as? Int { s.sidebarWidth = v }
         take(.toc, \.toc); take(.stats, \.stats); take(.mdLinks, \.mdLinks); take(.webLinks, \.webLinks)
         take(.math, \.math); take(.mermaid, \.mermaid); take(.rawHTML, \.rawHTML); take(.remoteImages, \.remoteImages); take(.checkUpdates, \.checkUpdates); take(.htmlScripts, \.htmlScripts)

@@ -429,6 +429,10 @@ struct FoldersPane: View {
                     Text("Show sidebar")
                     Text("Browse the folder beside every preview: its files and subfolders, each previewed in the panel. The sidebar button in the preview changes this too.")
                 }
+                Toggle(isOn: store.binding(\.sidebarKeys, "sidebarKeys")) {
+                    Text("Arrow keys move through the sidebar")
+                    Text("While the sidebar shows, ↑ and ↓ open the files in it instead of moving Finder's selection. Space or Esc then gives the keys back to Finder, and a second press closes the preview.")
+                }
                 Toggle("Show hidden files", isOn: store.binding(\.showHiddenFiles, "showHiddenFiles"))
                 Toggle("Show README first", isOn: store.binding(\.folderReadmeFirst, "folderReadmeFirst"))
                 Picker("Sort files by", selection: store.binding(\.folderSort, "folderSort")) {

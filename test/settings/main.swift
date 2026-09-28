@@ -82,6 +82,9 @@ check("welcomeShown: off by default, a bool only, not a panel key, kept by the f
 check("minimal chrome: off by default, a bool only, not a panel key", !Settings().minimalChrome && Settings(dictionary: ["minimalChrome": true]).minimalChrome
       && !Settings(dictionary: ["minimalChrome": 1]).minimalChrome && decode(#"{"minimalChrome":true}"#)?.minimalChrome == true
       && !Settings.panelKeys.contains("minimalChrome") && Settings.panelPatch("minimalChrome", true) == nil && Settings.allKeys.contains("minimalChrome"))
+check("sidebar keys on by default, a bool only, not a panel key", Settings().sidebarKeys && !Settings(dictionary: ["sidebarKeys": false]).sidebarKeys
+      && [0, "false", NSNull()].allSatisfy { Settings(dictionary: ["sidebarKeys": $0]).sidebarKeys } && decode(#"{"sidebarKeys":false}"#)?.sidebarKeys == false
+      && Settings.allKeys.contains("sidebarKeys") && Settings.panelPatch("sidebarKeys", false) == nil)
 check("hidden files off by default, a bool only, not a panel key", !Settings().showHiddenFiles && Settings(dictionary: ["showHiddenFiles": true]).showHiddenFiles
       && [1, "true", NSNull()].allSatisfy { !Settings(dictionary: ["showHiddenFiles": $0]).showHiddenFiles } && decode(#"{"showHiddenFiles":true}"#)?.showHiddenFiles == true
       && Settings.allKeys.contains("showHiddenFiles") && Settings.panelPatch("showHiddenFiles", true) == nil)

@@ -694,6 +694,7 @@ def keys_and_filter(page, check, T, st, types):
     page.cmd("@eval:document.getElementById('side-q').blur(); 0")
     filter_session(page, check, T, st, types, key, opened)
     list_session(page, check, T, types, opened)
+    auto_session(page, check, T, types, opened)
 
 
 def filter_session(page, check, T, st, types, key, opened):
@@ -914,6 +915,88 @@ def list_session(page, check, T, types, opened):
     check(not msgs(r, 'filterBegin') and msgs(r, 'open'), 'list session: none in a narrow panel, where opening a file hides the sidebar', json.dumps(types(r)))
     page.cmd('@size:1200x800')
     page.cmd('@eval:sb.filterEnd({ all: true }); 0')
+    page.cmd('@root:')
+
+
+def auto_session(page, check, T, types, opened):
+    """Quick Look showing the preview (and Esc leaving an edit or the filter) makes the extension ask for a list session no
+    click began (sb.listKeysWanted with the root): the arrows then move through the sidebar and open each file in spacebar's
+    view. None starts with the sidebar collapsed, hidden by a narrow panel, turned off in the settings, or with one row."""
+    msgs = lambda r, t: [m for m in r['msgs'] if m.get('type') == t]
+    flag = lambda m, k: str(m.get(k)).lower() in ('1', 'true')
+    held = lambda: page.js("return document.getElementById('side-q').classList.contains('held')")
+    cur = lambda: page.js(CURSOR)
+
+    def native(fn, arg, wait=0.3):
+        r = page.cmd('@eval:sb.' + fn + '(' + json.dumps(arg) + '); 0')
+        w = page.cmd('@wait:' + str(wait))
+        return {'types': types(r) + types(w), 'msgs': r['messages'] + w['messages']}
+
+    def want(root):
+        return msgs(native('listKeysWanted', {'root': root}), 'filterBegin')
+
+    page.cmd('@root:' + T())
+    page.render(T('README.md'))
+    page.cmd('@wait:0.3')
+    fb = want(T())
+    seq = int(fb[0]['seq']) if fb else -1
+    check(len(fb) == 1 and flag(fb[0], 'list') and flag(fb[0], 'auto') and 'text' not in fb[0] and 0 < float(fb[0].get('height', 0)) <= 24
+          and not held(), 'auto keys: the preview appearing with the sidebar open starts a list session', json.dumps(fb))
+    check(not want(T()), 'auto keys: asked again while a session holds the keys, nothing new starts')
+    k = native('filterKey', {'seq': seq, 'key': 'down'})
+    c = cur()
+    check(opened(k) and c['cursor'] == c['active'] and c['active'] not in (None, 'README.md'),
+          "auto keys: ↓ moves to the next file and opens it in spacebar's view", json.dumps([opened(k), c['cursor'], c['active']]))
+    k = native('filterKey', {'seq': seq, 'key': 'up'})
+    c = cur()
+    check(opened(k) == [T('README.md')] and c['active'] == 'README.md' and c['cursor'] == 'README.md', 'auto keys: ↑ goes back and opens that file',
+          json.dumps([opened(k), c['cursor'], c['active']]))
+    native('filterEnd', {'seq': seq})
+    k = native('filterKey', {'seq': seq, 'key': 'down'})
+    check(not opened(k) and not held(), 'auto keys: once Esc or Space ended it, later keys are ignored and nothing starts again on its own')
+
+    fb = want(T('sub'))
+    check(not fb, 'auto keys: a root the page does not show yet waits', json.dumps(fb))
+    page.cmd('@root:' + T('sub'))
+    r = page.render(T('sub', 'inner.md'))
+    w = page.cmd('@wait:0.4')
+    fb = [m for m in r['messages'] + w['messages'] if m.get('type') == 'filterBegin']
+    check(len(fb) == 1 and flag(fb[0], 'auto'), "auto keys: it starts once that root's tree is listed", json.dumps(types(r) + types(w)))
+    page.cmd('@eval:sb.filterEnd({ all: true }); 0')
+    page.cmd('@root:' + T())
+    page.render(T('README.md'))
+    page.cmd('@wait:0.3')
+
+    page.apply(sidebarCollapsed=True)
+    page.cmd('@wait:0.3')
+    check(not want(T()), 'auto keys: none with the sidebar collapsed, so the arrows stay with Finder')
+    page.apply(sidebarCollapsed=False)
+    page.cmd('@wait:0.3')
+    page.apply(sidebarKeys=False)
+    check(not want(T()), 'auto keys: none with "Arrow keys move through the sidebar" off')
+    page.apply(sidebarKeys=True)
+    page.cmd('@size:600x700')
+    page.cmd('@wait:0.3')
+    check(not want(T()), 'auto keys: none in a narrow panel, where the sidebar is hidden')
+    page.cmd('@size:1200x800')
+    page.cmd('@wait:0.3')
+    page.render(T('README.md'))
+    page.cmd('@wait:0.3')
+    b = page.cmd("@eval:(() => { const b = document.querySelector('#doc > [data-src]'), r = b.getBoundingClientRect();"
+                 " b.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: r.left + 20, clientY: r.top + 8 })); return 0; })()")
+    page.cmd('@wait:0.3')
+    check(not want(T()), 'auto keys: none while an edit holds the keys', json.dumps(types(b)))
+    page.cmd('@eval:sb.editEnd({}); 0')
+    check(bool(want(T())), 'auto keys: once the edit ends with Esc (the extension asks again), one starts')
+    page.cmd('@eval:sb.filterEnd({ all: true }); 0')
+
+    lone = os.path.join(os.path.dirname(T()), 'lone-auto')
+    os.makedirs(lone, exist_ok=True)
+    open(os.path.join(lone, 'only.md'), 'w').write('# Only\n')
+    page.cmd('@root:' + lone)
+    r = page.render(os.path.join(lone, 'only.md'))
+    page.cmd('@wait:0.3')
+    check(not want(lone), 'auto keys: none with a single row to move through')
     page.cmd('@root:')
 
 

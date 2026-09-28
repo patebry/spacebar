@@ -41,6 +41,11 @@ check("list: Esc and Space end it", FilterKeys.listEnds(keyCode: 53, modifiers: 
 check("list: ⌘Space and other keys do not", !FilterKeys.listEnds(keyCode: 49, modifiers: 1 << 20) && !FilterKeys.listEnds(keyCode: 125, modifiers: arrowFlags)
       && !FilterKeys.listEnds(keyCode: 0, modifiers: 0))
 
+check("the list takes the keys again after Esc leaves an edit or the filter", FilterKeys.relists(afterEnding: "escape", list: false))
+check("not after Esc or Space in a list session: those hand the keys to Quick Look", !FilterKeys.relists(afterEnding: "escape", list: true))
+check("not after the keyboard went elsewhere", ["blur", "app-activated", "not-key", "host", "replaced", "disconnected", "host-gone", "hold-timeout"]
+      .allSatisfy { !FilterKeys.relists(afterEnding: $0, list: false) && !FilterKeys.relists(afterEnding: $0, list: true) })
+
 check("Esc on text clears it", !FilterKeys.escapeEnds(text: "abc"))
 check("Esc on an empty field ends the session", FilterKeys.escapeEnds(text: ""))
 

@@ -2112,6 +2112,7 @@ function setFolder(f) {
   treeVersion++;
   requestFolders();
   renderSidebar();
+  autoListKeys();
 }
 
 /** Asks for every expanded folder whose parent is listed and names it, so each request is for a folder Swift has seen. */
@@ -2145,6 +2146,7 @@ function showFolder(p) {
     requestFolders();
   }
   renderSidebar();
+  autoListKeys();
 }
 
 /** A row's tooltip: its name, then its size and when it was modified. */
@@ -2509,6 +2511,22 @@ function beginListKeys(e, r) {
   post({ type: 'filterBegin', list: true, seq: filterSession.seq, clickX: e.clientX - r.left, clickY: e.clientY - r.top, width: r.width, height: r.height });
 }
 
+// Quick Look showing the preview (again), or an edit or filter let go with Esc, asks for a list session no click began, so the
+// arrows move through the sidebar at once instead of Finder's selection. It waits for the tree of that root to be listed, then
+// starts only with the sidebar on screen and more than one row to move through.
+let autoKeysRoot = '';
+function autoListKeys() {
+  if (!autoKeysRoot || autoKeysRoot !== tree.root) return;
+  const d = tree.dirs.get(tree.root);
+  if (!d || d.stale) return;
+  autoKeysRoot = '';
+  if (settings.sidebarKeys === false || filterSession || editing || updateBusy || !sidebarShown()) return;
+  if (sideRows.filter((x) => x.e).length < 2) return;
+  const r = ($('side-list').querySelector('a.cursor') || $('side-list')).getBoundingClientRect();
+  filterSession = { seq: ++filterSeq, list: true, auto: true };
+  post({ type: 'filterBegin', list: true, auto: true, seq: filterSession.seq, clickX: 0, clickY: 0, width: r.width, height: Math.min(r.height, SIDE_ROW_H) });
+}
+
 function endFilter() {
   if (!filterSession) return;
   post({ type: 'filterStop', seq: filterSession.seq });
@@ -2533,6 +2551,10 @@ Object.assign(window.sb, {
   filterKey(m) {
     if (!ofFilter(m) || !Object.hasOwn(FILTER_KEYS, m.key) || (!filterSession.list && (m.key === 'left' || m.key === 'right'))) return;
     sideKey(FILTER_KEYS[m.key], !filterSession.list, m.repeat === true);
+  },
+  listKeysWanted(m) {
+    autoKeysRoot = m && typeof m.root === 'string' ? m.root : '';
+    autoListKeys();
   },
   /** One session's end, or with `all` any session: a new preview's controller never began the one the page may hold. */
   filterEnd(m) { if (ofFilter(m) || (m && m.all === true && filterSession)) filterDone(); },

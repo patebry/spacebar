@@ -101,6 +101,11 @@ enum FilterKeys {
         keyCode == 53 || (keyCode == 49 && modifiers & editing == 0)
     }
 
+    /// Whether the sidebar takes the keys again after a session ends: only after Esc leaves an edit or the filter field. Esc or
+    /// Space in a list session hands them to Quick Look; any other end (a click elsewhere, another app, the preview closing)
+    /// means the keyboard went somewhere else.
+    static func relists(afterEnding reason: String, list: Bool) -> Bool { reason == "escape" && !list }
+
     /// One line of at most maxLength Unicode scalars, without control characters.
     static func clean(_ s: String) -> String {
         String(String.UnicodeScalarView(s.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }.prefix(maxLength)))

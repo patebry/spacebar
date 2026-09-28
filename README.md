@@ -4,8 +4,8 @@ Press Space. See everything. Space in Finder shows folders, documents, code and 
 tables, task lists, code highlighting, math and Mermaid diagrams, in six themes), highlighted source, JSON, logs, archives
 and files with no extension. Press Space on a folder and browse it. The sidebar is a file browser for the folder: its
 subfolders open in place, and a click shows any file in the panel, so you can read the Markdown, images, PDFs, rich text,
-HTML, video, code, JSON, CSV and archives beside a document without leaving Quick Look. Click a file in it and the arrow keys
-move through the tree; type in its filter to narrow it by name. Drag its edge to resize it; its button collapses it, and every
+HTML, video, code, JSON, CSV and archives beside a document without leaving Quick Look. While it shows, the arrow keys
+move through the tree and open each file in spacebar; type in its filter to narrow it by name. Drag its edge to resize it; its button collapses it, and every
 preview remembers both. Click a block of Markdown to edit it in place, or tick a task box, and the file is saved. Obsidian
 vaults read as they do in Obsidian: `[[wikilinks]]`, `![[embeds]]`, callouts and tags. When a new version is out, the
 preview's Aa button shows a dot and one click on Update installs it. Free and open source, for macOS 13 and later (Apple
@@ -68,12 +68,15 @@ App bundles and other packages, the top of a volume and system folders (`/System
 `~/Library`) keep Quick Look's usual preview. Click the folder's name at the top of the sidebar to see its overview again.
 Folder previews are on by default; **Preview folders** (Settings, Sidebar) turns them off.
 
-Quick Look keeps the keyboard for itself, so the sidebar takes keys only after a click in it. Click a file or folder in the
-sidebar, then ↑ and ↓ move through the files and open each one, → and ← open and close folders, Home and End jump to the ends
-and Return opens the file or folder under the cursor. Esc, or a click in the document, gives the keys back to Quick Look.
-Space does too, without closing the preview (the preview cannot close Quick Look): press Space again to close it. Click the
-filter field at the top and type to narrow the tree to names that match (letters in order, so `rdme` finds `README.md`); ↑,
-↓, Home, End and Return still work while you type, and Esc clears the field, then leaves it.
+While the sidebar shows, it takes the arrow keys as soon as the preview opens, so they move through spacebar's list rather
+than Finder's selection: ↑ and ↓ move through the files and open each one in spacebar (a CSV or an image too, which Quick
+Look would otherwise show in its own previewer), → and ← open and close folders, Home and End jump to the ends and Return
+opens the file or folder under the cursor. Esc or Space gives the keys back to Quick Look without closing the preview (the
+preview cannot close Quick Look), and the preview says so: press Space or Esc again to close it. A click in the document
+gives them back too, and a click on a row takes them again. With the sidebar collapsed, or **Arrow keys move through the
+sidebar** (Settings, Sidebar) off, the arrows stay with Finder and Space closes the preview at once. Click the filter field
+at the top and type to narrow the tree to names that match (letters in order, so `rdme` finds `README.md`); ↑, ↓, Home, End
+and Return still work while you type, and Esc clears the field, then goes back to the list.
 
 In a vault (a folder with `.obsidian` in it), and in any other folder:
 

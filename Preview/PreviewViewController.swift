@@ -476,6 +476,8 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
     override func viewDidAppear() {
         super.viewDidAppear()
         disableHostDoubleClick()
+        appeared = true
+        wantListKeys()
         #if PROBE
         Probe.windowAttached(view)
         #endif
@@ -502,6 +504,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
 
     override func viewWillDisappear() {
         super.viewWillDisappear()
+        appeared = false
         stopEdit(notifyWriter: true)
         stopFilter(notifyWriter: true)
         host.remoteImages.reset()
@@ -543,6 +546,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         if !isDir.boolValue, !FolderRules.isQuarantined(resolved.path) { rootDir = FolderRules.vaultRoot(containing: rootDir) ?? rootDir }
         host.scheme.fileRoot = rootDir
         knownDirs = [rootDir]
+        wantListKeys()
         listings = [:]
         offered = []
         showingOverview = false
@@ -1845,6 +1849,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         if reason == "not-key" { status("inline editing unavailable") }
         // Re-sync the page with docText, the authority, in case the two drifted while it owned the view.
         if let url = fileURL, let text = docText { push(text: text, path: url.path, reason: "editEnd") }
+        if FilterKeys.relists(afterEnding: reason, list: false) { wantListKeys() }
     }
 
     /// Backspace at the start of the block: the page names the block above (it owns the block structure), then mergeBackward joins them.
@@ -1966,6 +1971,20 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
 
     // MARK: the sidebar filter
 
+    /// On screen: Quick Look showed this preview and has not taken it away.
+    private var appeared = false
+
+    /// Asks the page for a list session over the sidebar (it starts one only when the sidebar shows more than one row), so the
+    /// arrow keys move through spacebar's list rather than Finder's selection.
+    private func wantListKeys() {
+        guard appeared, host.controller === self, !rootDir.isEmpty else { return }
+        let root = rootDir
+        host.whenReady { [weak self] in
+            guard let self, self.appeared, self.host.controller === self, self.rootDir == root else { return }
+            self.js("sb.listKeysWanted", ["root": root])
+        }
+    }
+
     private func beginFilter(_ seq: Int, text: String, list: Bool, _ m: PageMessage) {
         // The writer ends a previous filter session itself, keeping its panel key for this one.
         if let f = filter { js("sb.filterEnd", ["seq": f.seq]) }
@@ -1999,6 +2018,9 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         guard let f = filter, f.id == id else { return }
         log.info("filter \(id) ended: \(reason, privacy: .public)")
         stopFilter(notifyWriter: false)
+        if FilterKeys.relists(afterEnding: reason, list: f.list) { wantListKeys() }
+        // Esc or Space in a list session gave the keys back to Quick Look, which closes on the next press.
+        else if f.list, reason == "escape" { status("Press Space again to close") }
     }
 
     private func stopFilter(notifyWriter: Bool) {

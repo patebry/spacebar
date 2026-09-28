@@ -40,6 +40,40 @@ check("UTF-16 cut inside a surrogate pair drops the half", TextDecoding.decode(e
 check("UTF-32 cut mid character", TextDecoding.decode(w32.prefix(w32.count - 3))?.text == String(wide.dropLast()))
 check("UTF-8 cut inside a character", TextDecoding.decode(c8.prefix(4)) == TextDecoding.Decoded(text: "Caf", name: "UTF-8"))
 
+// A UTF-8 file with a stray byte stays UTF-8, the byte read as U+FFFD, never as a legacy encoding's mojibake.
+let stray = Data("naïve café 日本語 ".utf8) + Data([0xFF]) + Data(" end\n".utf8)
+check("UTF-8 with one stray byte is UTF-8 with one replacement character", TextDecoding.decode(stray) == TextDecoding.Decoded(text: "naïve café 日本語 \u{FFFD} end\n", name: "UTF-8"),
+      "\(String(describing: TextDecoding.decode(stray)))")
+let log = Data(String(repeating: "2026-09-28 12:00:01 INFO request ok → 200\n", count: 400).utf8)
+let strayLog = log.prefix(9000) + Data([0xC0]) + log.dropFirst(9000)
+check("a long UTF-8 log with one invalid byte is UTF-8", TextDecoding.decode(strayLog)?.name == "UTF-8")
+check("Windows-1252 text is not taken for damaged UTF-8", decode("latin1-cp1252.txt")?.name == "Windows-1252")
+check("control bytes in valid UTF-8 are not text", TextDecoding.decode(Data(repeating: 0x01, count: 4096)) == nil
+      && TextDecoding.decode(Data(String(repeating: "\u{1}\u{2}x", count: 500).utf8)) == nil)
+
+// A multibyte legacy file cut mid-character at 2 MB.
+let sjisLine = "日本語のテキストです。これはテストです。\n".data(using: .shiftJIS)!
+var sjis = Data()
+while sjis.count < FileTypes.maxTextBytes { sjis += sjisLine }
+let sjisCut = sjis.prefix(FileTypes.maxTextBytes)
+var t0 = Date()
+let sj = TextDecoding.decode(sjisCut, truncated: true)
+let sjTime = Date().timeIntervalSince(t0)
+check("Shift JIS cut mid-character at 2 MB is Shift JIS (\(Int(sjTime * 1000)) ms)", sj?.name == "Shift JIS" && sj?.text.hasPrefix("日本語のテキスト") == true
+      && sj?.text.hasSuffix("\u{FFFD}") == false, "\(sj?.name ?? "nil")")
+check("2 MB of Shift JIS decodes in under 0.4 s", sjTime < 0.4, "\(sjTime)")
+let gbText = "中文文本测试，这是一个测试。\n"
+let gbAll = gbText.data(using: String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))))!
+let gbCut = gbAll.prefix(gbAll.count - 2)
+check("GB 18030 cut at an odd byte is GB 18030", TextDecoding.decode(gbCut, truncated: true)?.name == "GB 18030",
+      "\(String(describing: TextDecoding.decode(gbCut, truncated: true)))")
+var rng = SystemRandomNumberGenerator()
+let noise = Data((0..<FileTypes.maxTextBytes).map { _ in UInt8.random(in: 1...255, using: &rng) })
+t0 = Date()
+let binary = TextDecoding.decode(noise, truncated: true)
+let binTime = Date().timeIntervalSince(t0)
+check("2 MB of NUL-free binary is refused in under 0.4 s (\(Int(binTime * 1000)) ms)", binary == nil && binTime < 0.4, "\(binTime)")
+
 // The file view: what used to be an info card is text, named with its encoding; binary is still the info card.
 let dir = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("spacebar-encoding-\(getpid())")
 try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

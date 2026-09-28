@@ -153,11 +153,12 @@ enum FileTypes {
 }
 
 /// Reads text that may not be UTF-8: a byte order mark first (UTF-8, UTF-16 or UTF-32, either byte order), then UTF-16 without
-/// one when every other byte is zero, then UTF-8, then the legacy encoding Foundation's detector names from a short list
-/// (Windows-1252, Mac Roman, Shift JIS, EUC-JP, GB 18030, EUC-KR, Big5, Windows-1251, KOI8-R), else Windows-1252 or Latin-1.
-/// Binary is never text: a NUL in anything but UTF-16 or UTF-32, or control characters in more than 2 in 100 of the characters
-/// of a non-UTF-8 decoding, and it is refused. `data` may be cut anywhere (the first 2 MB of a file): a code unit or character
-/// cut at the end is dropped.
+/// one when every other byte is zero, then UTF-8 (a few stray invalid bytes among real multibyte text allowed, each shown as
+/// U+FFFD), then the legacy encoding Foundation's detector names from a short list (Windows-1252, Mac Roman, Shift JIS, EUC-JP,
+/// GB 18030, EUC-KR, Big5, Windows-1251, KOI8-R), else Windows-1252 or Latin-1. The legacy encoding is chosen, and the
+/// plausibility check made, on the first 64 KB; the whole is then decoded once. Binary is never text: a NUL in anything but
+/// UTF-16 or UTF-32, or control characters in more than 2 in 100 of the first characters, and it is refused. `truncated`: the
+/// data is the start of a longer file (its first 2 MB), so a code unit or character cut at the end is dropped.
 enum TextDecoding {
     struct Decoded: Equatable {
         let text: String
@@ -171,22 +172,25 @@ enum TextDecoding {
     }
     static let legacy: [String.Encoding] = [.windowsCP1252, .macOSRoman, .shiftJIS, .japaneseEUC, cf(.GB_18030_2000), cf(.EUC_KR), cf(.big5),
                                             .windowsCP1251, cf(.KOI8_R)]
+    private static let singleByte: Set<String.Encoding> = [.windowsCP1252, .macOSRoman, .windowsCP1251, cf(.KOI8_R), .isoLatin1]
     private static let names: [String.Encoding: String] = [
         .windowsCP1252: "Windows-1252", .macOSRoman: "Mac Roman", .shiftJIS: "Shift JIS", .japaneseEUC: "EUC-JP", cf(.GB_18030_2000): "GB 18030",
         cf(.EUC_KR): "EUC-KR", cf(.big5): "Big5", .windowsCP1251: "Windows-1251", cf(.KOI8_R): "KOI8-R", .isoLatin1: "ISO Latin 1",
     ]
+    /// How much of the text the legacy detector and the plausibility check look at.
+    static let sampleBytes = 64 << 10
 
-    static func decode(_ data: Data) -> Decoded? {
+    static func decode(_ data: Data, truncated: Bool = false) -> Decoded? {
         let d = Data(data)
-        if d.starts(with: [0xEF, 0xBB, 0xBF]) { return utf8(d.dropFirst(3)).map { Decoded(text: $0, name: "UTF-8") } }
+        if d.starts(with: [0xEF, 0xBB, 0xBF]) { return utf8(d.dropFirst(3)).flatMap { plausible($0) ? Decoded(text: $0, name: "UTF-8") : nil } }
         if d.starts(with: [0xFF, 0xFE, 0, 0]) { return wide(d.dropFirst(4), unit: 4, .utf32LittleEndian, "UTF-32 LE") }
         if d.starts(with: [0, 0, 0xFE, 0xFF]) { return wide(d.dropFirst(4), unit: 4, .utf32BigEndian, "UTF-32 BE") }
         if d.starts(with: [0xFF, 0xFE]) { return wide(d.dropFirst(2), unit: 2, .utf16LittleEndian, "UTF-16 LE") }
         if d.starts(with: [0xFE, 0xFF]) { return wide(d.dropFirst(2), unit: 2, .utf16BigEndian, "UTF-16 BE") }
         if let e = bomlessUTF16(d) { return wide(d, unit: 2, e, e == .utf16LittleEndian ? "UTF-16 LE" : "UTF-16 BE") }
         if d.contains(0) { return nil }
-        if let s = utf8(d) { return Decoded(text: s, name: "UTF-8") }
-        return eightBit(d)
+        if let s = utf8(d) ?? mostlyUTF8(d) { return plausible(s) ? Decoded(text: s, name: "UTF-8") : nil }
+        return eightBit(d, truncated: truncated)
     }
 
     /// UTF-8, allowing a character cut at the end.
@@ -195,6 +199,19 @@ enum TextDecoding {
             if let s = String(data: d.dropLast(cut), encoding: .utf8) { return s }
         }
         return nil
+    }
+
+    /// UTF-8 with a few invalid bytes (a log with one stray byte), each read as U+FFFD, when the rest has real multibyte
+    /// characters: at most 1 in 1,000 characters replaced, or at least 4 valid multibyte characters for every replacement. Legacy
+    /// text has almost no valid multibyte sequences and many invalid bytes, so it never passes.
+    private static func mostlyUTF8(_ d: Data) -> String? {
+        let s = String(decoding: d, as: UTF8.self)
+        var n = 0, bad = 0, multi = 0
+        for u in s.unicodeScalars {
+            n += 1
+            if u == "\u{FFFD}" { bad += 1 } else if u.value > 0x7F { multi += 1 }
+        }
+        return multi > 0 && (bad * 1000 <= n || bad * 4 <= multi) ? s : nil
     }
 
     /// UTF-16 or UTF-32: whole code units only, a surrogate pair cut at the end dropped, and no NUL or run of controls.
@@ -221,24 +238,50 @@ enum TextDecoding {
         return nil
     }
 
-    private static func eightBit(_ d: Data) -> Decoded? {
-        var converted: NSString?
-        var lossy: ObjCBool = false
-        let raw = NSString.stringEncoding(for: d, encodingOptions: [.suggestedEncodingsKey: legacy.map { NSNumber(value: $0.rawValue) },
-                                                                    .useOnlySuggestedEncodingsKey: true, .allowLossyKey: false],
-                                          convertedString: &converted, usedLossyConversion: &lossy)
-        var found: (String, String.Encoding)?
-        if raw != 0, let s = converted as String?, !lossy.boolValue { found = (s, String.Encoding(rawValue: raw)) }
-        if found == nil, let s = String(data: d, encoding: .windowsCP1252) { found = (s, .windowsCP1252) }
-        if found == nil, let s = String(data: d, encoding: .isoLatin1) { found = (s, .isoLatin1) }
-        guard let (s, e) = found, plausible(s) else { return nil }
-        return Decoded(text: s, name: names[e] ?? "\(e)")
+    /// A legacy encoding: chosen on the first 64 KB, cut after its last line break (a line feed is never part of a multibyte
+    /// character in these encodings), then the whole decoded once.
+    private static func eightBit(_ d: Data, truncated: Bool) -> Decoded? {
+        var head = d.prefix(sampleBytes)
+        if head.count < d.count, let nl = head.lastIndex(of: 0x0A), nl - head.startIndex >= sampleBytes / 2 { head = head[...nl] }
+        // Only a sample that ends where the file was cut may end inside a character.
+        let cut = truncated && head.count == d.count
+        guard let e = detect(Data(head), cut: cut) else { return nil }
+        var text: String?
+        for drop in 0...(truncated ? 3 : 0) where d.count > drop {
+            if let s = String(data: d.dropLast(drop), encoding: e) { text = s; break }
+        }
+        if let text { return Decoded(text: text, name: names[e] ?? "\(e)") }
+        // Past the sample the bytes do not fit the encoding after all: Latin-1 reads any byte.
+        guard let s = String(data: d, encoding: .isoLatin1), plausible(s) else { return nil }
+        return Decoded(text: s, name: names[.isoLatin1]!)
     }
 
-    /// Text has few control characters: tab, line breaks, form feed and escape (a log's colours) aside, at most 2 in 100.
+    /// The encoding the detector names for `head`, when that reads as text. With `cut`, up to 3 bytes at the end may belong to a
+    /// character cut in two: a multibyte encoding found with them dropped is preferred to a single-byte one found without.
+    private static func detect(_ head: Data, cut: Bool) -> String.Encoding? {
+        var single: String.Encoding?
+        for drop in 0...(cut ? 3 : 0) where head.count > drop {
+            var converted: NSString?
+            var lossy: ObjCBool = false
+            let raw = NSString.stringEncoding(for: head.dropLast(drop), encodingOptions: [.suggestedEncodingsKey: legacy.map { NSNumber(value: $0.rawValue) },
+                                                                                        .useOnlySuggestedEncodingsKey: true, .allowLossyKey: false],
+                                              convertedString: &converted, usedLossyConversion: &lossy)
+            guard raw != 0, let s = converted as String?, !lossy.boolValue, plausible(s) else { continue }
+            let e = String.Encoding(rawValue: raw)
+            if !singleByte.contains(e) { return e }
+            if single == nil { single = e }
+        }
+        if let single { return single }
+        if let s = String(data: head, encoding: .windowsCP1252) { return plausible(s) ? .windowsCP1252 : nil }
+        if let s = String(data: head, encoding: .isoLatin1) { return plausible(s) ? .isoLatin1 : nil }
+        return nil
+    }
+
+    /// Text has few control characters: tab, line breaks, form feed and escape (a log's colours) aside, at most 2 in 100 of the
+    /// first 64 K characters.
     static func plausible(_ s: String) -> Bool {
         var n = 0, bad = 0
-        for u in s.unicodeScalars.prefix(65536) {
+        for u in s.unicodeScalars.prefix(sampleBytes) {
             n += 1
             if (u.value < 0x20 && ![0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x1B].contains(u.value)) || u.value == 0x7F || (0x80..<0xA0).contains(u.value) { bad += 1 }
         }
@@ -406,7 +449,7 @@ enum FileView {
                 data = xml
                 p["kindName"] = "Binary property list, shown as XML"
             }
-            guard let decoded = size == 0 ? TextDecoding.Decoded(text: "", name: "UTF-8") : TextDecoding.decode(data) else { break }
+            guard let decoded = size == 0 ? TextDecoding.Decoded(text: "", name: "UTF-8") : TextDecoding.decode(data, truncated: size > FileTypes.maxTextBytes) else { break }
             view = kind == .code ? "code" : kind == .json ? "json" : kind == .csv ? "csv" : "text"
             p["text"] = decoded.text
             if !decoded.isUTF8 {

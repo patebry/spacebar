@@ -101,7 +101,7 @@ final class SystemStatus: ObservableObject {
     /// An entry for a bundle ID that is not among the apps offered, e.g. one written to settings.json by hand.
     func editor(for id: String) -> EditorApp {
         if let e = editors.first(where: { $0.id == id }) { return e }
-        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+        if let url = LinkPolicy.application(id) {
             return EditorApp(id: id, name: Self.appName(url), icon: Self.icon(url))
         }
         return EditorApp(id: id, name: id, icon: Self.icon(nil))

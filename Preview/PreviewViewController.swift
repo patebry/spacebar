@@ -1066,13 +1066,14 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         if view == "archive" { listArchive(url) }
         // The button names the app the writer would open it with; an app, a script or an executable gets Reveal in Finder only.
         if canOpen, reason == "open" {
-            let path = url.path
+            let path = url.path, gen = renderGen
             let named = { (name: String?, editor: Bool) in
                 DispatchQueue.main.async {
                     guard self.fileURL?.path == path else { return }
                     guard let name else {
-                        // Nothing may open it after all (no text editor at hand): Reveal in Finder instead.
-                        guard Self.textViews.contains(view), self.shownCanOpen else { return }
+                        // Nothing may open it after all (no text editor at hand): Reveal in Finder instead, unless something
+                        // newer (a change on disk, another view) has been rendered since, which this payload would undo.
+                        guard Self.textViews.contains(view), self.shownCanOpen, self.renderGen == gen else { return }
                         self.shownCanOpen = false
                         var q = p
                         q["canOpen"] = false

@@ -56,7 +56,7 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         let target = opener.file
         var app = opener.app
         // The caller names the app, but only the editor the user chose in the settings is honoured.
-        if let id = appBundleID, id == SettingsFile.load().editorBundleID, let editor = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+        if let id = appBundleID, id == SettingsFile.load().editorBundleID, let editor = LinkPolicy.application(id), LinkPolicy.isTextEditor(editor) {
             app = editor
         }
         NSWorkspace.shared.open([target], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration()) { _, err in

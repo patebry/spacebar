@@ -112,8 +112,13 @@ enum LinkPolicy {
 
     /// Whether the app at `app` is a text editor: it declares the Editor role for plain text, source code or Markdown, and is
     /// not a terminal or script runner. A browser (Viewer role) is not one: it would run a script it opens as a page.
+    /// Office suites are never editors either: they sniff a file's content whatever its type and can run its macros.
+    static let notEditorPrefixes = ["md.spacebar", "org.libreoffice", "org.openoffice", "com.microsoft.Word", "com.microsoft.Excel",
+                                    "com.microsoft.Powerpoint", "com.apple.iWork."]
+
     static func isTextEditor(_ app: URL) -> Bool {
-        guard let b = Bundle(url: app), let id = b.bundleIdentifier, !notEditors.contains(id), !id.hasPrefix("md.spacebar"),
+        guard let b = Bundle(url: app), let id = b.bundleIdentifier, !notEditors.contains(id),
+              !notEditorPrefixes.contains(where: { id.lowercased().hasPrefix($0.lowercased()) }),
               let types = b.infoDictionary?["CFBundleDocumentTypes"] as? [[String: Any]] else { return false }
         return types.contains { d in
             guard d["CFBundleTypeRole"] as? String == "Editor" else { return false }
@@ -123,13 +128,26 @@ enum LinkPolicy {
         }
     }
 
+    /// The app with bundle ID `id`, preferring a copy in /Applications, /System/Applications or ~/Applications to one elsewhere
+    /// (a copy in Downloads or on a mounted disk image may carry the same ID).
+    static func application(_ id: String) -> URL? {
+        let ws = NSWorkspace.shared
+        let homeApps = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path + "/"
+        let preferred = ["/Applications/", "/System/Applications/", homeApps]
+        if #available(macOS 12.0, *) {
+            let all = ws.urlsForApplications(withBundleIdentifier: id)
+            if let u = all.first(where: { u in preferred.contains { u.resolvingSymlinksInPath().path.hasPrefix($0) } }) { return u }
+        }
+        return ws.urlForApplication(withBundleIdentifier: id)
+    }
+
     /// What the viewer's Open button does with a file it shows as text (code, JSON, CSV, text): open it in `editor` (the bundle ID
     /// chosen in the settings) when that is a text editor; else in its default app when `opener` allows that; else in the default
     /// plain-text app when that is a text editor. `editor` true when the app is opened as an editor. Nil: nothing may open it.
     static func textOpener(for url: URL, editor id: String?) -> (file: URL, app: URL, editor: Bool)? {
         let file = url.standardizedFileURL.resolvingSymlinksInPath()
         let ws = NSWorkspace.shared
-        if let id, editorRefusal(file) == nil, let app = ws.urlForApplication(withBundleIdentifier: id), isTextEditor(app) { return (file, app, true) }
+        if let id, editorRefusal(file) == nil, let app = application(id), isTextEditor(app) { return (file, app, true) }
         if let o = opener(for: file) { return (o.file, o.app, false) }
         if editorRefusal(file) == nil, let app = ws.urlForApplication(toOpen: .plainText), isTextEditor(app) { return (file, app, true) }
         return nil

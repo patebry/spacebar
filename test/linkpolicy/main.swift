@@ -89,6 +89,17 @@ check("text editors: Terminal, Script Editor, Safari, Calculator and spacebar ar
       !LinkPolicy.isTextEditor(app("/System/Applications/Utilities/Terminal.app")) && !LinkPolicy.isTextEditor(app("/System/Applications/Utilities/Script Editor.app"))
       && !LinkPolicy.isTextEditor(app("/Applications/Safari.app")) && !LinkPolicy.isTextEditor(app("/System/Applications/Calculator.app"))
       && !LinkPolicy.isTextEditor(dir))
+// Office suites declare the Editor role for plain text but sniff content and can run macros: never editors.
+for path in ["/Applications/LibreOffice.app", "/Applications/OpenOffice.app", "/Applications/Numbers.app", "/Applications/Pages.app",
+             "/Applications/Keynote.app", "/Applications/Microsoft Word.app", "/Applications/Microsoft Excel.app", "/Applications/Microsoft PowerPoint.app"]
+    where FileManager.default.fileExists(atPath: path) {
+    check("text editors: \((path as NSString).lastPathComponent) is not one", !LinkPolicy.isTextEditor(app(path)))
+}
+check("text editors: office bundle IDs are denied by prefix", ["org.libreoffice.script", "org.openoffice.script", "com.microsoft.Word", "com.microsoft.Excel",
+      "com.microsoft.Powerpoint", "com.apple.iWork.Numbers", "com.apple.iWork.Pages", "com.apple.iWork.Keynote"].allSatisfy { id in
+    LinkPolicy.notEditorPrefixes.contains { id.lowercased().hasPrefix($0.lowercased()) } })
+check("application: TextEdit by bundle ID is the system copy", LinkPolicy.application("com.apple.TextEdit")?.path == "/System/Applications/TextEdit.app")
+check("application: an unknown bundle ID is nil", LinkPolicy.application("md.spacebar.test.none-\(UUID().uuidString)") == nil)
 let py = file("script.py")
 let viaEditor = LinkPolicy.textOpener(for: py, editor: "com.apple.TextEdit")
 check("textOpener: a script goes to the chosen text editor", viaEditor?.app.lastPathComponent == "TextEdit.app" && viaEditor?.editor == true)

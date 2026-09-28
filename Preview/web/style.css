@@ -243,7 +243,9 @@
   #doc table.csv thead th.rn { z-index: 3; }
   #doc table.csv .num { text-align: right; font-variant-numeric: tabular-nums; }
   #doc table.csv tbody tr:not(.pad):hover > td { background: color-mix(in srgb, var(--fg) 4%, transparent); }
-  #doc table.csv.virtual :is(th, td) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Windowed: the widths are fixed from a sample (app.js csvWidths), so they never follow the rows drawn. */
+  #doc table.csv.virtual { table-layout: fixed; }
+  #doc table.csv.virtual :is(th, td) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: none; }
   #doc table.csv tr.pad > td { padding: 0; border: 0; }
   #doc .viewer-csv button.csv-sort, #doc .viewer-csv button.csv-sort:hover, #doc .viewer-csv button.csv-sort:active {
     all: unset; display: flex; align-items: baseline; gap: 6px; width: 100%; cursor: default; font-weight: 600; transform: none; }

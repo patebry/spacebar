@@ -238,7 +238,8 @@ let pe = payload["entries"] as? [[String: Any]] ?? []
 check("tree: payload names the root, the folder and each entry's icon", payload["rootName"] as? String == "listing" && payload["dir"] as? String == ld.path
       && payload["more"] as? Int == 0 && pe.first?["dir"] as? Bool == true && pe.first?["icon"] as? String == "folder"
       && pe.first { $0["name"] as? String == "data.csv" }?["icon"] as? String == "data" && pe.first { $0["name"] as? String == "Tool.app" }?["icon"] as? String == "app"
-      && pe.first { $0["name"] as? String == "data.csv" }?["size"] is Int64 && pe.first?["size"] == nil && (pe.first?["modified"] as? Double ?? 0) > 1e12)
+      && pe.first { $0["name"] as? String == "data.csv" }?["size"] is Int64 && pe.first?["size"] == nil
+      && pe.first { $0["name"] as? String == "Tool.app" }.map { $0["size"] == nil } == true && (pe.first?["modified"] as? Double ?? 0) > 1e12)
 check("tree: a missing folder lists nothing", FolderListing.list(ld.path + "/nope", sort: "name", readmeFirst: true).entries.isEmpty)
 check("tree: a folder preview opens its README, else its first Markdown file, else nothing (the scan takes over)",
       FolderListing.firstDocument(byName)?.name == "README.md"

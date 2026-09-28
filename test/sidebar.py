@@ -268,6 +268,10 @@ def make_viewers(out):
     put('pipes.csv', 'a|b|c\n1|2|3\n4|5|6\n')
     put('sort.csv', 'item,n,when\nb,10,x\na,9,y\nc,,z\nd,100,w\ne,9,v\n')
     put('rows.csv', 'i,square,label\n' + ''.join(f'{i},{i * i},row {i}\n' for i in range(60000)))
+    # Short values at the top and long ones at the bottom: widths taken from the rows drawn would change on the way down.
+    put('grow.csv', 'id,name,note\n' + ''.join(f'{i},{"n" * (2 + i // 1000)},{"x" * (40 - i // 600)}\n' for i in range(20000)))
+    put('ragged.csv', 'a,b\n' + ''.join('1,2\n' for _ in range(1499)) + '1,2,late\n')
+    os.makedirs(os.path.join(d, 'Tool.app', 'Contents'))
     put('nested.json', json.dumps({'items': list(range(1200)), 'deep': {'a': {'b': {'c': {'d': [1, {'e': 'end'}]}}}},
                                    'text': '<img src=x onerror="window.__pwned=1">', 'flags': [True, False, None]}))
     put('large.json', '[' + ','.join(['{"k": "' + 'v' * 90 + '"}'] * 22000) + ']')
@@ -319,6 +323,8 @@ def viewers(page, check, out, st):
           json.dumps({k: rows.get(k) for k in want}))
     tip = page.js("return document.querySelector('#side-list a.row[data-path$=\"/font.ttf\"]').title")
     check(tip.startswith('font.ttf\n256 bytes · Modified '), 'sidebar: a row\'s tooltip gives its size and when it was modified', json.dumps(tip))
+    tip = page.js("return document.querySelector('#side-list a.row[data-path$=\"/Tool.app\"]').title")
+    check(tip.startswith('Tool.app\nModified ') and 'byte' not in tip, 'sidebar: a package\'s tooltip gives no size', json.dumps(tip))
     click(page, '#side-menu')
     menu = page.js("""const p = document.getElementById('side-pop'); return { open: !p.hidden, items: [...p.querySelectorAll('button')].map((b) => [b.textContent, b.getAttribute('aria-checked')]),
       expanded: document.getElementById('side-menu').getAttribute('aria-expanded'), inside: p.getBoundingClientRect().right <= document.getElementById('sidebar').getBoundingClientRect().right + 1 }""")
@@ -473,6 +479,38 @@ def viewers(page, check, out, st):
     check(v['drawn'] < 200 and v['sticky'] and 25000 < v['first'] < 32000 and v['seen'] and v['notes'] == ['Showing the first 50,000 of 60,000 rows.'] and v['count'] == '50001' and v['full'],
           'CSV: 50,000 rows kept, drawn a window at a time; the header stays at the top while they scroll; the table is full width', json.dumps(v))
     shoot(page, 'csv-large')
+    WIDTHS = """const t = document.querySelector('#doc table.csv'); return [...t.querySelectorAll('thead th')].map((x) => Math.round(x.getBoundingClientRect().width));"""
+    SCROLL = """const s = document.querySelector('#doc .csv-scroll'); return [Math.round(s.scrollTop), +((s.querySelector('tbody tr:not(.pad)') || { cells: [{ textContent: 0 }] }).cells[0].textContent)];"""
+    view('grow.csv')
+    top_w = page.js(WIDTHS)
+    page.js("const s = document.querySelector('#doc .csv-scroll'); s.scrollTop = s.scrollHeight; s.dispatchEvent(new Event('scroll')); return 0")
+    page.cmd('@wait:0.3')
+    bottom_w = page.js(WIDTHS)
+    check(top_w == bottom_w and len(top_w) == 4, 'CSV: a windowed table keeps its column widths from top to bottom', json.dumps([top_w, bottom_w]))
+    page.js("const s = document.querySelector('#doc .csv-scroll'); s.scrollTop = 5000; s.dispatchEvent(new Event('scroll')); return 0")
+    page.cmd('@wait:0.3')
+    at = page.js(SCROLL)
+    kept = {}
+    page.apply(fontSize=16)
+    page.cmd('@wait:0.3')
+    kept['text size'] = page.js(SCROLL)
+    page.apply(fontSize=15, theme='nord')
+    page.cmd('@wait:0.3')
+    kept['theme'] = page.js(SCROLL)
+    page.apply(theme='apple')
+    page.render(V('grow.csv'))
+    page.cmd('@wait:0.3')
+    kept['reload'] = page.js(SCROLL)
+    click(page, '#doc .csv-sort[data-col="0"]')
+    page.cmd('@wait:0.3')
+    kept['sort'] = page.js(SCROLL)
+    click(page, '#doc .csv-sort[data-col="0"]')
+    click(page, '#doc .csv-sort[data-col="0"]')
+    check(at[0] == 5000 and all(abs(v[0] - 5000) <= 2 for v in kept.values()) and abs(kept['reload'][1] - at[1]) <= 1,
+          'CSV: where it was scrolled to survives a text size, a theme, a reload and a sort', json.dumps([at, kept]))
+    view('ragged.csv')
+    rg = page.js("return [document.querySelectorAll('#doc table.csv thead th').length, document.querySelector('#doc .viewer-kind').textContent]")
+    check(rg[0] == 4 and '3 columns' in rg[1], 'CSV: a longer row far down widens the table instead of losing its cell', json.dumps(rg))
 
     # ---- JSON ----
     TREE = """return { rows: [...document.querySelectorAll('#doc .json-tree .jt-row')].map((r) => r.textContent), more: [...document.querySelectorAll('#doc .jt-more-b')].map((b) => b.textContent),

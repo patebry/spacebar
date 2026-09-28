@@ -361,6 +361,7 @@ enum FolderListing {
         let path: String
         let isDirectory: Bool
         let kind: FileKind
+        /// -1 for anything that is a directory on disk, a package included: it has no size of its own.
         let size: Int64
         let modified: Double
 
@@ -381,7 +382,7 @@ enum FolderListing {
              "entries": entries.map { e -> [String: Any] in
                  var d: [String: Any] = ["name": e.name, "path": e.path, "dir": e.isDirectory, "icon": FileTypes.glyph(name: e.name, kind: e.kind),
                                          "modified": (e.modified * 1000).rounded()]
-                 if !e.isDirectory { d["size"] = e.size }
+                 if e.size >= 0 { d["size"] = e.size }
                  return d
              },
              "more": more]
@@ -451,7 +452,7 @@ enum FolderListing {
                 && ((try? URL(fileURLWithPath: path).resourceValues(forKeys: [.isPackageKey]))?.isPackage ?? false)
             let kind = FileTypes.kind(name: name, isDirectory: isDir, isPackage: isPackage, executable: st.st_mode & 0o111 != 0)
             let modified = Double(st.st_mtimespec.tv_sec) + Double(st.st_mtimespec.tv_nsec) / 1e9
-            found.append(Entry(name: name, path: path, isDirectory: kind == .folder, kind: kind, size: isDir ? 0 : Int64(st.st_size), modified: modified))
+            found.append(Entry(name: name, path: path, isDirectory: kind == .folder, kind: kind, size: isDir ? -1 : Int64(st.st_size), modified: modified))
         }
         found.sort { a, b in
             if a.isDirectory != b.isDirectory { return a.isDirectory }

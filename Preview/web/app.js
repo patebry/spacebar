@@ -1416,7 +1416,9 @@ function csvModel(p) {
   if (p.truncated && rows.length > 1 && total <= CSV_ROWS + 1) { rows.pop(); total--; }
   const head = rows.length ? rows[0].slice(0, CSV_COLS) : [];
   const body = rows.slice(1, CSV_ROWS + 1);
-  const cols = Math.min(CSV_COLS, Math.max(head.length, ...body.slice(0, 1000).map((r) => r.length), 0));
+  let cols = head.length;
+  for (const r of body) if (r.length > cols) cols = r.length;
+  cols = Math.min(CSV_COLS, cols);
   const numeric = [];
   for (let c = 0; c < cols; c++) {
     let filled = 0, nums = 0;
@@ -1428,8 +1430,11 @@ function csvModel(p) {
     }
     numeric.push(filled > 0 && nums / filled >= 0.9);
   }
-  const keep = csvState && csvState.p.path === p.path && csvState.sort && csvState.sort.col < cols ? csvState.sort : null;
-  csvState = { p, sep, head, body, total, cols, numeric, wide: rows.some((r) => r.length > CSV_COLS), sort: keep, order: null, rowH: 0 };
+  // The same file again (a change on disk) keeps its sort and where it was scrolled to.
+  const same = csvState && csvState.p.path === p.path ? csvState : null;
+  const keep = same && same.sort && same.sort.col < cols ? same.sort : null;
+  csvState = { p, sep, head, body, total, cols, numeric, wide: rows.some((r) => r.length > CSV_COLS), sort: keep, order: null, rowH: 0,
+    top: same ? same.top : 0, left: same ? same.left : 0, widths: null, widthsFont: '' };
   sortCsv(csvState);
   return csvState;
 }
@@ -1489,18 +1494,62 @@ function csvView(p) {
   scroll.append(table);
   box.append(scroll);
   const drawRows = () => csvRows(m, scroll, tb, virtual);
-  if (virtual) {
-    let queued = false;
-    scroll.addEventListener('scroll', () => {
-      if (queued) return;
-      queued = true;
-      requestAnimationFrame(() => { queued = false; drawRows(); });
-    }, { passive: true });
-    // The first window is drawn once the scroll box has its size.
-    requestAnimationFrame(drawRows);
-  }
+  let queued = false, restoring = true;
+  scroll.addEventListener('scroll', () => {
+    if (restoring) return;
+    m.top = scroll.scrollTop;
+    m.left = scroll.scrollLeft;
+    if (!virtual || queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; drawRows(); });
+  }, { passive: true });
   drawRows();
+  // draw() puts the view in place in the same task: once it is, the widths are fixed, the window drawn and the scroll put back.
+  queueMicrotask(() => {
+    if (scroll.isConnected) {
+      drawRows();
+      scroll.scrollTop = m.top;
+      scroll.scrollLeft = m.left;
+      drawRows();
+    }
+    restoring = false;
+  });
   return box;
+}
+
+/** A windowed table's column widths, fixed once from a sample of rows (its start, its end and evenly between), so they never
+ *  follow whichever rows happen to be drawn. */
+function csvWidths(m, table) {
+  const cell = table.querySelector('tbody td') || table;
+  const cs = getComputedStyle(cell);
+  const font = `${cs.fontSize} ${cs.fontFamily}`;
+  if (m.widths && m.widthsFont === font) return m.widths;
+  const cx = document.createElement('canvas').getContext('2d');
+  const size = parseFloat(cs.fontSize) || 13, pad = 21, max = size * 32, min = size * 3;
+  const n = m.body.length, sample = new Set();
+  for (let i = 0; i < Math.min(n, 300); i++) { sample.add(i); sample.add(n - 1 - i); }
+  for (let i = 0; i < 400; i++) sample.add(Math.floor((i * n) / 400));
+  const text = (v) => (v === undefined ? '' : String(v).slice(0, 200).replace(/\s+/g, ' '));
+  const widths = [];
+  cx.font = `${cs.fontSize} ${cs.fontFamily}`;
+  const rn = cx.measureText(String(n)).width + pad;
+  for (let c = 0; c < m.cols; c++) {
+    let w = 0;
+    for (const i of sample) if (i >= 0 && i < n) w = Math.max(w, cx.measureText(text(m.body[i][c])).width);
+    widths.push(w);
+  }
+  cx.font = `600 ${cs.fontSize} ${cs.fontFamily}`;
+  for (let c = 0; c < m.cols; c++) widths[c] = Math.max(widths[c], cx.measureText(text(m.head[c])).width + size * 1.4);
+  m.widths = [Math.ceil(Math.max(rn, size * 2 + pad)), ...widths.map((w) => Math.ceil(Math.min(max, Math.max(min, w + pad))))];
+  m.widthsFont = font;
+  return m.widths;
+}
+
+function csvColgroup(table, widths) {
+  let cg = table.querySelector('colgroup');
+  if (!cg) { cg = document.createElement('colgroup'); table.prepend(cg); }
+  cg.replaceChildren(...widths.map((w) => { const col = document.createElement('col'); col.style.width = w + 'px'; return col; }));
+  table.style.width = widths.reduce((a, b) => a + b, 0) + 'px';
 }
 
 /** The table's rows: all of them, or with `virtual` those in the scroll box's view and a margin, between two spacer rows. */
@@ -1508,6 +1557,10 @@ function csvRows(m, scroll, tb, virtual) {
   const n = m.order.length;
   let a = 0, b = n;
   const h = m.rowH || 26;
+  if (virtual && scroll.isConnected && tb.querySelector('td')) {
+    const table = tb.parentElement, w = csvWidths(m, table);
+    if (table.dataset.widths !== w.join()) { csvColgroup(table, w); table.dataset.widths = w.join(); delete tb.dataset.win; }
+  }
   if (virtual) {
     const theadH = tb.previousElementSibling ? tb.previousElementSibling.getBoundingClientRect().height : 0;
     const top = Math.max(0, scroll.scrollTop - theadH), view = scroll.clientHeight || window.innerHeight;
@@ -1555,11 +1608,7 @@ function csvSortBy(col) {
   // Ascending, then descending, then the file's own order.
   m.sort = !m.sort || m.sort.col !== col ? { col, dir: 1 } : m.sort.dir > 0 ? { col, dir: -1 } : null;
   sortCsv(m);
-  const scroll = document.querySelector('#doc .csv-scroll');
-  const x = scroll ? scroll.scrollLeft : 0;
   draw();
-  const again = document.querySelector('#doc .csv-scroll');
-  if (again) again.scrollLeft = x;
   const b = document.querySelector(`#doc .csv-sort[data-col="${col}"]`);
   if (b) b.focus({ preventScroll: true });
 }

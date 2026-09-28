@@ -1215,11 +1215,12 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             helper { $0.openSettings(tab) { ok in if !ok { DispatchQueue.main.async { self.status("could not open settings") } } } }
         case "toggle":
             guard SettingsStore.shared.settings.taskToggles else { return refuse("toggle", "task toggles are off") }
-            guard !updateBusy else { return status("Updating…") }
+            // A refused toggle is already flipped on the page: the document goes back to it as it is.
+            guard !updateBusy else { status("Updating…"); return repushDoc("toggleRefused") }
             guard isCurrent(m), let line = m.int("line"), let checked = m.bool("checked"), let text = m.string("text", max: 1 << 16) else {
                 return refuse("toggle", "bad request or not the previewed file")
             }
-            guard let mapped = mapLine(line, from: m.int("ver")) else { return status("not toggled: document changed") }
+            guard let mapped = mapLine(line, from: m.int("ver")) else { status("not toggled: document changed"); return repushDoc("toggleRefused") }
             toggleTask(line: mapped, text: text, checked: checked)
         case "editBlock":
             guard SettingsStore.shared.settings.inlineEditing, isCurrent(m) else {
@@ -1284,7 +1285,11 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         case "copyInstall":
             helper { $0.copyInstallCommand { ok in DispatchQueue.main.async { self.js("sb.installCopied", ["ok": ok]) } } }
         case "installUpdate":
-            guard installable, offeredVersion != nil else { return refuse("installUpdate", "no update offered") }
+            guard installable, offeredVersion != nil else {
+                // The page went busy on the click; it waits for an answer.
+                js("sb.update", ["state": "failed", "version": offeredVersion ?? "", "reason": "Not started: no update is offered.", "retry": false])
+                return refuse("installUpdate", "no update offered")
+            }
             // The installer quits Quick Look: the edit's last keys and saves land first, and the filter lets go of the keyboard.
             stopFilter(notifyWriter: true)
             if holdUntilSaved(.update) { return }
@@ -1403,8 +1408,12 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             self.updating = nil
         }) {
             $0.updateOffer { data in
-                guard let data, let offer = Updates.Offer(json: data) else { return }
                 DispatchQueue.main.async {
+                    // Nil when checks were turned off (or this is a development build): the page must not stay "Updating…".
+                    guard let data, let offer = Updates.Offer(json: data) else {
+                        self.updating = nil
+                        return self.js("sb.update", ["state": "failed", "version": v, "reason": "Update checks are off.", "retry": false])
+                    }
                     switch offer {
                     case .inProgress(v): return self.js("sb.update", ["state": "inProgress", "version": v])
                     case .failed(v, let reason):
@@ -1478,6 +1487,12 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             guard let self, self.torn, !self.tornHalted, !self.writing, self.fileURL == url, let t = self.docText else { return }
             self.save(t)
         }
+    }
+
+    /// Renders the document as native holds it, over a page that changed ahead of a refused request.
+    private func repushDoc(_ reason: String) {
+        guard fileKind == .markdown, edit == nil, let url = fileURL, let text = docText else { return }
+        push(text: text, path: url.path, reason: reason)
     }
 
     /// `expected` is the task line as the page saw it; if docText has moved on, the nearest identical line is toggled instead.

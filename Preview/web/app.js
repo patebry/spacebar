@@ -1831,6 +1831,8 @@ function syncPopover() {
 }
 
 let updateTimer = 0;
+// Asks after 10 s, 30 s, then every minute: an installer that fails at once (offline) frees edits quickly.
+let updatePolls = 0;
 /** An update has started: the installer quits this preview, so no edit, filter session or task toggle starts meanwhile. */
 let updateBusy = false;
 function showUpdate(u) {
@@ -1845,7 +1847,8 @@ function showUpdate(u) {
   $('aa-update-sub').textContent = failed ? String(u.reason || 'The update did not start.')
     : u.state === 'elsewhere' ? `This copy is in ${u.place}, which the installer does not update. Replace it with the download on the release page.`
     : u.state === 'done' ? 'Close this preview and open it again to use it.'
-    : 'Quick Look closes for a moment while it updates.';
+    : running ? 'Quick Look shows an error for a moment while spacebar updates. Press Space again in a few seconds.'
+    : 'Quick Look shows an error for a moment while spacebar updates. Press Space again after.';
   $('aa-install').hidden = !(u.state === 'available' || running || (failed && u.retry));
   $('aa-install').disabled = running;
   $('aa-install').textContent = running ? 'Updating…' : 'Update';
@@ -1854,7 +1857,8 @@ function showUpdate(u) {
   $('aa').dataset.update = '';
   $('aa').title = `Appearance · ${title}`;
   // A successful update quits this preview; one still here after a while asks whether the installer is still running.
-  if (running) updateTimer = setTimeout(() => post({ type: 'updateCheck' }), u.state === 'started' ? 120000 : 60000);
+  if (u.state === 'started') updatePolls = 0;
+  if (running) updateTimer = setTimeout(() => post({ type: 'updateCheck' }), [10000, 30000][updatePolls++] ?? 60000);
 }
 
 function showPopover(open) {
@@ -1880,6 +1884,8 @@ pop.addEventListener('click', (e) => {
     // The update quits Quick Look: the edit ends first, so its last keys are saved before the writer starts it.
     if (editing) stopEditing();
     endFilter();
+    // Busy from the click: native may hold the update for the edit's saves, and refuses toggles meanwhile. Its answer clears it.
+    updateBusy = true;
     b.disabled = true;
     post({ type: 'installUpdate' });
     return;

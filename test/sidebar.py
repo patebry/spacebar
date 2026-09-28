@@ -442,6 +442,20 @@ def filter_session(page, check, T, st, types, key, opened):
     page.cmd('@wait:0.3')
     check(not held() and [int(m['seq']) for m in msgs(r, 'filterStop')] == [seq] and page.js(CURSOR)['q'] == '',
           'filter session: another folder ends it and clears the field', json.dumps(types(r)))
+
+    # The installer quits Quick Look: a running update ends the session and starts no new one until it is over.
+    page.render(os.path.join(other, 'only.md'))
+    page.cmd('@wait:0.3')
+    r = page.cmd('@nativeclick:#side-q')
+    seq = int(msgs(r, 'filterBegin')[0]['seq'])
+    r = page.cmd("@eval:sb.update({ state: 'started', version: '10.10.10' }); 0")
+    check(not held() and [int(m['seq']) for m in msgs(r, 'filterStop')] == [seq], 'filter session: an update that starts ends it', json.dumps(types(r)))
+    r = page.cmd('@nativeclick:#side-q')
+    check(not msgs(r, 'filterBegin') and not held(), 'filter session: none starts while an update runs', json.dumps(types(r)))
+    page.cmd("@eval:sb.update({ state: 'failed', version: '10.10.10', reason: 'x' }); 0")
+    r = page.cmd('@nativeclick:#side-q')
+    check(msgs(r, 'filterBegin') and held(), 'filter session: one starts again once the update is over', json.dumps(types(r)))
+    page.cmd('@eval:sb.filterEnd({ all: true }); 0')
     page.cmd('@root:')
 
 

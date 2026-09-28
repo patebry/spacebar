@@ -451,19 +451,22 @@ def main():
         page.js("sb.update({ state: 'failed', version: '10.10.10', reason: 'Could not start the installer.', copy: true }); return 0")
         r = click(page, '#aa-copy')
         check([m.get('type') for m in r['messages']] == ['copyInstall'], 'a failed update offers the install command', json.dumps(r['messages']))
-        # "Updating…" asks after 2 minutes, then every minute, whether the installer still runs: the timers are run at once here.
-        hook = """(() => { const real = window.setTimeout; window.__due = []; window.setTimeout = (f, ms) => { if (ms >= 60000) { window.__due.push(ms); window.__run = f; return 0; } return real(f, ms); };
+        # "Updating…" asks after 10 s, 30 s, then every minute, whether the installer still runs: the timers are run at once here.
+        hook = """(() => { const real = window.setTimeout; window.__due = []; window.setTimeout = (f, ms) => { if (ms >= 10000) { window.__due.push(ms); window.__run = f; return 0; } return real(f, ms); };
           sb.update(STATE); window.setTimeout = real; })(); 0"""
         page.cmd('@eval:' + hook.replace('STATE', json.dumps({'state': 'started', 'version': '10.10.10'})))
         r = page.cmd('@eval:window.__run(); 0')
         t = page.js("return [window.__due, document.getElementById('aa-update-title').textContent]")
-        check([m.get('type') for m in r['messages']] == ['updateCheck'] and t == [[120000], 'Updating to spacebar 10.10.10…'],
-              '"Updating…" asks after 2 minutes whether the installer still runs, and keeps waiting', json.dumps([r['messages'], t]))
-        page.cmd('@eval:' + hook.replace('STATE', json.dumps({'state': 'inProgress', 'version': '10.10.10'})))
-        r = page.cmd('@eval:window.__run(); 0')
-        t = page.js("return [window.__due, document.getElementById('aa-update-title').textContent, document.getElementById('aa-install').disabled]")
-        check([m.get('type') for m in r['messages']] == ['updateCheck'] and t == [[60000], 'Still updating to spacebar 10.10.10…', True],
-              'a long update shows "Still updating…" and asks again a minute later', json.dumps([r['messages'], t]))
+        check([m.get('type') for m in r['messages']] == ['updateCheck'] and t == [[10000], 'Updating to spacebar 10.10.10…'],
+              '"Updating…" asks after 10 seconds whether the installer still runs, and keeps waiting', json.dumps([r['messages'], t]))
+        due = []
+        for _ in range(3):
+            page.cmd('@eval:' + hook.replace('STATE', json.dumps({'state': 'inProgress', 'version': '10.10.10'})))
+            r = page.cmd('@eval:window.__run(); 0')
+            due += page.js("return window.__due")
+        t = page.js("return [document.getElementById('aa-update-title').textContent, document.getElementById('aa-install').disabled]")
+        check([m.get('type') for m in r['messages']] == ['updateCheck'] and due == [30000, 60000, 60000] and t == ['Still updating to spacebar 10.10.10…', True],
+              'a long update shows "Still updating…" and asks again after 30 seconds, then every minute', json.dumps([r['messages'], due, t]))
         # While an update runs no edit or task toggle starts: the installer is about to quit the preview.
         page.js("sb.update({ state: 'started', version: '10.10.10' }); return 0")
         click(page, '#doc')
@@ -483,6 +486,15 @@ def main():
         t = [m.get('type') for m in click(page, '#aa-install')['messages']]
         check(editing and 'editStop' in t and 'installUpdate' in t and t.index('editStop') < t.index('installUpdate'),
               'Update ends the edit before it asks for the update', json.dumps([editing, t]))
+        # Busy from the click, before native answers: it may hold the update for the edit's saves and refuse toggles meanwhile.
+        click(page, '#doc')
+        rb = page.cmd("@eval:(() => { const b = document.querySelector('#doc input[type=checkbox][data-line]'); const was = b.checked; b.click(); return JSON.stringify([was, b.checked]); })()")
+        box = json.loads(rb['result'])
+        check(box[0] == box[1] and not [m for m in rb['messages'] if m.get('type') == 'toggle'],
+              'no task toggle starts between Update and native\'s answer', json.dumps([box, rb['messages']]))
+        page.js("sb.update({ state: 'failed', version: '10.10.10', reason: 'Not started: unsaved text.', retry: true }); return 0")
+        rb = page.cmd("@eval:(() => { const b = document.querySelector('#doc input[type=checkbox][data-line]'); b.click(); b.click(); return 0; })()")
+        check(len([m for m in rb['messages'] if m.get('type') == 'toggle']) == 2, "native's answer frees task toggles again", json.dumps(rb['messages']))
         click(page, '#doc')
         page.apply(theme='apple', width='medium', bodyFont='system', fontSize=15)
 

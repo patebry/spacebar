@@ -1504,6 +1504,39 @@ def main():
               'Word document: the page reserves the rest of the panel under its toolbar for Apple\'s preview, no frame', json.dumps(v))
         check(rect and rect['path'] == memo and near([float(rect[k]) for k in 'xywh'], v['area']) and rect['hide'] in ('0', 'false'),
               'Word document: the page posts the area for the native preview', json.dumps(rect))
+
+        # ---- the seam between the two newest native views: RTF (AppKit's text view) and Apple's preview, and back to the page's own ----
+        notes = os.path.join(ql, 'notes.rtf')
+        with open(notes, 'w') as f:
+            f.write('{\\rtf1\\ansi{\\fonttbl\\f0 Helvetica;}\\f0 Hello rich text.}')
+        with open(os.path.join(ql, 'read.md'), 'w') as f:
+            f.write('# Seam\n\nBack in the page.\n')
+        with open(os.path.join(ql, 'rows.csv'), 'w') as f:
+            f.write('a,b\n1,2\n')
+        SEAM = """const d = document.getElementById('doc'), a = d.querySelector('.pdf-area');
+          return { view: document.documentElement.dataset.view, area: !!a, aa: document.getElementById('aa').hidden, overflow: getComputedStyle(document.body).overflow,
+            source: d.textContent.includes('rtf1'), h1: (d.querySelector('h1') || {}).textContent || null, table: !!d.querySelector('table') }"""
+
+        def seam(path):
+            r = page.render(path)
+            w = page.cmd('@wait:0.4')
+            rects = [m for m in r['messages'] + w['messages'] if m.get('type') == 'pdfRect']
+            return page.js(SEAM), (rects[-1] if rects else None)
+        shown = lambda r: r is not None and str(r.get('hide')).lower() in ('0', 'false')
+        v, rect = seam(notes)
+        check(v['view'] == 'rtf' and v['area'] and v['aa'] and v['overflow'] == 'hidden' and not v['source']
+              and shown(rect) and rect['path'] == notes and 'x' in rect,
+              'RTF: view rtf, the page reserves the area for the native text view, Aa hidden, never the RTF source', json.dumps([v, rect]))
+        v, rect = seam(memo)
+        check(v['view'] == 'quicklook' and v['area'] and v['aa'] and shown(rect) and rect['path'] == memo,
+              'RTF -> Word document: view quicklook, the area reserved again for Apple\'s preview, Aa hidden', json.dumps([v, rect]))
+        v, rect = seam(os.path.join(ql, 'read.md'))
+        check(v['view'] == 'markdown' and not v['area'] and not v['aa'] and v['overflow'] == 'visible' and v['h1'] == 'Seam'
+              and (rect is None or not shown(rect)),
+              'Word document -> Markdown: the area is released and nothing placed (the extension closes its view on the render), Aa back', json.dumps([v, rect]))
+        v, rect = seam(os.path.join(ql, 'rows.csv'))
+        check(v['view'] == 'csv' and not v['area'] and not v['aa'] and v['table'] and rect is None,
+              'Markdown -> CSV: a table in the page, no native area and nothing more posted, Aa for text', json.dumps([v, rect]))
         page.cmd('@root:' + tree)
 
         # ---- the info card with Apple's thumbnail of the file, from the payload or sent once made ----

@@ -1292,6 +1292,8 @@ function notebookView(nb) {
 function nbMarkdown(src) {
   const frag = render(src, 1);
   frag.querySelectorAll('[data-src]').forEach((n) => n.removeAttribute('data-src'));
+  // A cell sits inside .viewer, where a click on any [data-action] is the viewer's own button (reveal, open with).
+  frag.querySelectorAll('[data-action]').forEach((n) => n.removeAttribute('data-action'));
   frag.querySelectorAll('input[type=checkbox]').forEach((n) => { n.removeAttribute('data-line'); n.disabled = true; });
   // Diagrams are drawn for the document on screen only; here a diagram is its source.
   frag.querySelectorAll('pre.mermaid').forEach((n) => n.classList.remove('mermaid'));
@@ -2151,7 +2153,7 @@ function drawSideWindow(force) {
   const list = $('side-list'), n = sideRows.length;
   let a = 0, b = n;
   if (n > SIDE_VIRTUAL) {
-    const top = list.scrollTop, h = list.clientHeight || window.innerHeight;
+    const h = list.clientHeight || window.innerHeight, top = Math.min(list.scrollTop, Math.max(0, n * SIDE_ROW_H - h));
     a = Math.max(0, Math.floor(top / SIDE_ROW_H) - SIDE_OVERSCAN);
     b = Math.min(n, Math.ceil((top + h) / SIDE_ROW_H) + SIDE_OVERSCAN);
   }
@@ -2180,7 +2182,7 @@ function renderSidebar() {
   syncSideMenu();
   const key = `${treeVersion}\n${current.path}\n${sideQuery}`;
   if (!on || key === sideDrawn) return;
-  const moved = sideDrawn.split('\n')[1] !== current.path;
+  const moved = sideDrawn.split('\n')[1] !== current.path, refiltered = sideDrawn.split('\n')[2] !== sideQuery;
   sideDrawn = key;
   $('side-head').textContent = tree.name;
   $('side-head').title = `${tree.root}\nClick for an overview of this folder`;
@@ -2221,6 +2223,7 @@ function renderSidebar() {
     if (!rows.length) rows.push({ note: 'No matches', depth: 0 });
     if (partial) rows.push({ note: 'Only listed files were searched', depth: 0 });
   } else walk(tree.root, 0);
+  const hadActive = sideRows.some((r) => r.e && r.e.path === current.path);
   sideRows = rows;
   const top = tree.dirs.get(tree.root);
   $('side-more').hidden = !(top && top.more) || !!sideQuery;
@@ -2229,11 +2232,15 @@ function renderSidebar() {
   const at = sideRows.findIndex((r) => r.e && !r.e.dir && r.e.path === current.path);
   for (const [p, t] of keyed) if (performance.now() - t > 2000) keyed.delete(p);
   if (moved && !keyed.delete(current.path) && !keyed.size) cursor = current.path;
-  const y = at * SIDE_ROW_H;
-  if (at >= 0 && (moved || y < list.scrollTop || y + SIDE_ROW_H > list.scrollTop + list.clientHeight)) {
-    list.scrollTop = Math.max(0, y - list.clientHeight / 3);
-  }
+  // The list is drawn at its new height first: a scrollTop set while it still holds fewer rows would be clamped. A folder
+  // opened or closed above the document leaves the list where it is.
   drawSideWindow(true);
+  const y = at * SIDE_ROW_H;
+  const off = y < list.scrollTop || y + SIDE_ROW_H > list.scrollTop + list.clientHeight;
+  if (at >= 0 && (moved || ((refiltered || !hadActive) && off))) {
+    list.scrollTop = Math.max(0, y - list.clientHeight / 3);
+    drawSideWindow(false);
+  }
   const shown = list.querySelector('a.active');
   if (shown && moved) shown.classList.add('arrive');
 }

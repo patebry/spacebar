@@ -248,7 +248,12 @@ def big_folder(page, check, T):
     page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.value = 'm-4999'; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
     f = page.js("return [...document.querySelectorAll('#side-list a.row')].map((a) => a.textContent)")
     check(f == ['many', 'm-4999.txt'], 'the filter finds a file past the old cap of 500', json.dumps(f))
+    click(page, '#side-list a.row[data-path$="/m-4999.txt"]')
+    page.cmd('@wait:0.4')
     page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.value = ''; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
+    page.cmd('@wait:0.3')
+    a = page.js("return [...document.querySelectorAll('#side-list a.active')].map((a) => a.textContent)")
+    check(a == ['m-4999.txt'], 'the filter cleared: the file opened from it, far down the list, is scrolled to and drawn', json.dumps(a))
 
 
 def make_viewers(out):
@@ -271,7 +276,8 @@ def make_viewers(out):
         'metadata': {'kernelspec': {'language': 'python', 'name': 'python3'}},
         'cells': [
             {'cell_type': 'markdown', 'metadata': {}, 'source': ['# Notebook title\n', '\n', 'Some *text* and $x^2$.\n', '\n', '- [ ] a task\n', '\n',
-                                                                  '<img src=x onerror="window.__pwned=1"> <script>window.__pwned=1</script>\n']},
+                                                                  '<img src=x onerror="window.__pwned=1"> <script>window.__pwned=1</script>\n', '\n',
+                                                                  '<span class="nb-bait" data-action="reveal">Next</span>\n']},
             {'cell_type': 'code', 'execution_count': 1, 'metadata': {}, 'source': ['def f(x):\n', '    return x * 2\n', 'print(f(21))'],
              'outputs': [{'output_type': 'stream', 'name': 'stdout', 'text': ['42\n']}]},
             {'cell_type': 'code', 'execution_count': 2, 'metadata': {}, 'source': ['f(1)'],
@@ -509,6 +515,9 @@ def viewers(page, check, out, st):
     shoot(page, 'notebook')
     r = click(page, '#doc .nb-md h1')
     check('editBlock' not in [m.get('type') for m in r['messages']], 'notebook: a click in a Markdown cell edits nothing')
+    r = page.cmd('@nativeclick:#doc .nb-bait')
+    check(page.js("return !!document.querySelector('#doc .nb-bait')") and not [m for m in r['messages'] if m.get('type') in ('reveal', 'openFile', '_reveal', '_openFile')],
+          "notebook: a Markdown cell's data-action markup reveals and opens nothing")
     page.cmd('@root:')
 
 

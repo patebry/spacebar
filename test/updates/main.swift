@@ -139,6 +139,19 @@ check("not running once the stub is gone", !Updates.isRunning(log: logURL))
 check("not running without a log", !Updates.isRunning(log: dir.appendingPathComponent("none.log")))
 check("log keeps the run's header", log1.contains("=== ") && log1.contains(" --version v9.9.9 --no-prompt ==="))
 check("a missing script is an error", (try? Updates.runDetached(script: stub, arguments: [], log: logURL, environment: env, temporary: dir).get()) == nil)
+do {
+    // The uninstaller's copy keeps its name, so the script (which removes its own folder) runs as uninstall.sh.
+    let named = dir.appendingPathComponent("named", isDirectory: true)
+    try! FileManager.default.createDirectory(at: named, withIntermediateDirectories: true)
+    let script = named.appendingPathComponent("uninstall.sh")
+    try! "echo \"ran as $0\"\n".write(to: script, atomically: true, encoding: .utf8)
+    let ranLog = dir.appendingPathComponent("Logs/named.log")
+    let done = DispatchSemaphore(value: 0)
+    _ = Updates.runDetached(script: script, arguments: [], log: ranLog, environment: env, temporary: dir, job: .uninstall) { _ in done.signal() }
+    _ = done.wait(timeout: .now() + 10)
+    let said = (try? String(contentsOf: ranLog, encoding: .utf8)) ?? ""
+    check("an uninstall runs from a private copy named uninstall.sh", said.contains("/spacebar-update-") && said.contains("/uninstall.sh"))
+}
 check("a missing uninstaller is named", Updates.runDetached(script: stub, arguments: [], log: logURL, environment: env, temporary: dir, job: .uninstall)
       == .failure(.init(message: "cannot copy the uninstaller")))
 

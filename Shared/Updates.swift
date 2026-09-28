@@ -185,7 +185,8 @@ enum Updates {
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK)
         trimLog(fd)
         let dir = temporary.appendingPathComponent("spacebar-update-\(UUID().uuidString)", isDirectory: true)
-        let copy = dir.appendingPathComponent("install.sh")
+        // Named as the script is: each script finds and removes its own copy by its folder.
+        let copy = dir.appendingPathComponent(script.lastPathComponent)
         guard (try? fm.createDirectory(at: dir, withIntermediateDirectories: true)) != nil, (try? fm.copyItem(at: script, to: copy)) != nil else {
             try? fm.removeItem(at: dir)
             return fail("cannot copy the \(job.script)")

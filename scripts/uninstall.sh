@@ -50,7 +50,7 @@ quit_extensions() {
 # spacebar-update-* folder directly in $TMPDIR, where the app puts it.
 remove_self() {
   [ "${SPACEBAR_UNINSTALL_SELF:-}" = 1 ] || return 0
-  self_dir=${0%/uninstall.sh}
+  self_dir=${0%/*}
   case ${self_dir##*/} in
     spacebar-update-*)
       parent=$(cd "${self_dir%/*}" 2>/dev/null && pwd -P)

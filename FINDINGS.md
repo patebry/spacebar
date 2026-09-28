@@ -183,7 +183,7 @@ The threat is a downloaded Markdown file, and whatever sits beside it, driving t
 11. **Archives:** `listArchive` takes only a path whose name is an archive extension and whose type LinkPolicy allows the viewer
    to open, and runs one listing at a time. The writer opens the file itself (`O_NONBLOCK`, then `fstat`: a regular file, not
    evicted by iCloud) and hands bsdtar the descriptor as stdin under a `sandbox-exec` profile that denies by default and allows
-   only `bsd.sb`'s system reads and executing bsdtar: libarchive's parsers, fed a hostile archive, reach no file of the user's,
+   only `system.sb`'s system reads and executing bsdtar (`bsd.sb` allowed writes such as `~/.CFUserTextEncoding`): libarchive's parsers, fed a hostile archive, reach no file of the user's,
    write nothing and have no network; the profile also denies every write and metadata reads under `/Users` and `/Volumes`
    explicitly. Output is capped at 2 MB, the run at 5 s, and the reply comes within 9 s whatever bsdtar does; a queued
    listing whose reply has already timed out is skipped. The output is kept as bytes and escapes are undone before it is

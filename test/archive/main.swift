@@ -173,6 +173,19 @@ writer.standardOutput = FileHandle.nullDevice; writer.standardError = FileHandle
 try! writer.run(); writer.waitUntilExit()
 check("sandbox: bsdtar can open no file by path and write none", probe.terminationStatus != 0 && writer.terminationStatus != 0
       && !fm.fileExists(atPath: work.appendingPathComponent("out.tar").path))
+// Extracting from standard input, into a folder it could otherwise write: nothing is written.
+let into = work.appendingPathComponent("extract-here")
+try! fm.createDirectory(at: into, withIntermediateDirectories: true)
+let extractor = Process()
+extractor.executableURL = URL(fileURLWithPath: ArchiveListing.sandboxExec)
+extractor.arguments = ["-p", ArchiveListing.profile, ArchiveListing.tool, "-xf", "-", "-C", into.path]
+extractor.standardInput = try! FileHandle(forReadingFrom: work.appendingPathComponent("t.zip"))
+extractor.standardOutput = FileHandle.nullDevice; extractor.standardError = FileHandle.nullDevice
+try! extractor.run(); extractor.waitUntilExit()
+check("sandbox: bsdtar extracting from its input writes nothing", extractor.terminationStatus != 0 && ((try? fm.contentsOfDirectory(atPath: into.path)) ?? ["?"]).isEmpty,
+      "\(extractor.terminationStatus) \((try? fm.contentsOfDirectory(atPath: into.path)) ?? [])")
+check("sandbox: the profile imports system.sb, not bsd.sb, and denies writes", ArchiveListing.profile.contains(#"(import "system.sb")"#)
+      && !ArchiveListing.profile.contains("bsd.sb") && ArchiveListing.profile.contains("(deny file-write*)"))
 
 try? fm.removeItem(at: work)
 print(failures == 0 ? "archive: all passed" : "archive: \(failures) failed")

@@ -125,7 +125,7 @@ cleanup() {
     [ -n "$v" ] && printf '{"version":"%s","exitStatus":%d,"finishedAt":%s}\n' "$v" "$code" "$(date +%s)" >"$SPACEBAR_UPDATE_STATUS.tmp" &&
       mv -f "$SPACEBAR_UPDATE_STATUS.tmp" "$SPACEBAR_UPDATE_STATUS"
     # Only a spacebar-update-* folder directly in $TMPDIR, where the writer puts the copy.
-    self_dir=${0%/install.sh}
+    self_dir=${0%/*}
     case ${self_dir##*/} in
       spacebar-update-*)
         parent=$(cd "${self_dir%/*}" 2>/dev/null && pwd -P)

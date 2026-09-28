@@ -45,6 +45,8 @@ check("a longer name that starts with the home folder's is left alone",
       ProblemReport.tail("/Users/someone2/x and /Users/someone.old and '/Users/someone'", home: "/Users/someone") == "/Users/someone2/x and /Users/someone.old and '~'")
 let esc = ProblemReport.tail(#"would run: pkill -f ^/Users/a\.b/Applications/spacebar\.app/ and /Users/a.b/x"#, home: "/Users/a.b")
 check("the home folder is redacted as the installer escapes it too", esc == #"would run: pkill -f ^~/Applications/spacebar\.app/ and ~/x"#, esc)
+let url = ProblemReport.tail("open file:///Users/Jo%20Doe/x.md and FILE:///Users/Jo Doe/y and file:///Users/Jo Doe2/z", home: "/Users/Jo Doe")
+check("the home folder is redacted in file URLs, percent-encoded or not", url == "open file://~/x.md and file://~/y and file:///Users/Jo Doe2/z", url)
 
 let noisy = (1...40).map { "\($0) " + String(repeating: "é&", count: 90) }.joined(separator: "\n")
 let big = ProblemReport.url(sys, log: ProblemReport.tail(noisy, home: "/x"))

@@ -49,9 +49,16 @@ enum ProblemReport {
     static func redactor(home: String) -> (String) -> String {
         guard home.count > 1 else { return { $0 } }
         let escaped = home.replacingOccurrences(of: #"[\]\[\\.*$+?(){}|]"#, with: #"\\$0"#, options: .regularExpression)
-        let forms = Set([home, escaped]).sorted { $0.count > $1.count }.map(NSRegularExpression.escapedPattern(for:))
-        guard let re = try? NSRegularExpression(pattern: #"(?<![A-Za-z0-9._/-])(?:"# + forms.joined(separator: "|") + #")(?![A-Za-z0-9._-])"#) else { return { $0 } }
-        return { line in re.stringByReplacingMatches(in: line, range: NSRange(line.startIndex..., in: line), withTemplate: "~") }
+        let encoded = home.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? home
+        let forms = Set([home, escaped, encoded]).sorted { $0.count > $1.count }.map(NSRegularExpression.escapedPattern(for:))
+        let alt = "(?:" + forms.joined(separator: "|") + ")"
+        // A file URL names the home after "file://", which the plain form's boundary (no "/" before it) would miss.
+        guard let url = try? NSRegularExpression(pattern: "(?i:file://)" + alt + #"(?![A-Za-z0-9._-])"#),
+              let re = try? NSRegularExpression(pattern: #"(?<![A-Za-z0-9._/-])"# + alt + #"(?![A-Za-z0-9._-])"#) else { return { $0 } }
+        return { line in
+            let l = url.stringByReplacingMatches(in: line, range: NSRange(line.startIndex..., in: line), withTemplate: "file://~")
+            return re.stringByReplacingMatches(in: l, range: NSRange(l.startIndex..., in: l), withTemplate: "~")
+        }
     }
 
     /// The end of the update log, read from at most its last 64 KB, or nil when there is none.

@@ -20,7 +20,7 @@ enum ArchiveListing {
     static let profile = """
         (version 1)
         (deny default)
-        (import "bsd.sb")
+        (import "system.sb")
         (allow process-exec (literal "/usr/bin/bsdtar"))
         (allow file-read* (literal "/usr/bin/bsdtar"))
         (deny file-write*)

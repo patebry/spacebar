@@ -113,7 +113,7 @@ PREVIEW_BIN=$OBJ/$APPEX_EXE
 PROBE_FLAGS=()
 [ "${PROBE:-0}" = 1 ] && PROBE_FLAGS=(-D PROBE)
 compile "$PREVIEW_BIN" -application-extension -module-name "$APPEX_EXE" \
-  Preview/PreviewViewController.swift Preview/PDFPane.swift Preview/HTMLPane.swift Preview/MediaPane.swift Preview/Thumbnail.swift Preview/SettingsStore.swift Preview/Probe.swift \
+  Preview/PreviewViewController.swift Preview/PDFPane.swift Preview/HTMLPane.swift Preview/MediaPane.swift Preview/QLFallbackPane.swift Preview/Thumbnail.swift Preview/SettingsStore.swift Preview/Probe.swift \
   Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/Updates.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift \
   ${PROBE_FLAGS[@]+"${PROBE_FLAGS[@]}"} \
   -framework QuickLookUI -framework WebKit -framework PDFKit -framework AVKit -framework AVFoundation -framework QuickLookThumbnailing -Xlinker -e -Xlinker _NSExtensionMain
@@ -139,6 +139,9 @@ ENT=$OUT/Preview.entitlements
   if [ "$READ_ACCESS" = abs-rw ]; then
     echo '<key>com.apple.security.temporary-exception.files.absolute-path.read-write</key><array><string>/</string></array>'
   fi
+  # Apple's own previews of Office, iWork, font and 3D files (Preview/QLFallbackPane.swift) are made by Quick Look's daemons; the
+  # sandbox reaches them only by these two names. Both extensions: a folder preview shows the same pane. SECURITY.md has why.
+  echo '<key>com.apple.security.temporary-exception.mach-lookup.global-name</key><array><string>com.apple.quicklook</string><string>com.apple.quicklook.ThumbnailsAgent</string></array>'
   echo '</dict></plist>'
 } > "$ENT"
 

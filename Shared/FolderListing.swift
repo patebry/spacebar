@@ -59,6 +59,25 @@ enum FileTypes {
     static let appExtensions: Set<String> = ["app", "pkg", "mpkg", "dmg", "exe", "msi", "dylib", "so", "o", "a", "bin", "workflow",
                                              "shortcut", "prefpane", "appex", "kext", "framework", "bundle", "plugin", "qlgenerator", "saver"]
 
+    /// Shown by Apple's own Quick Look in a QLPreviewView over the panel (Preview/QLFallbackPane.swift), by exact type. QLPreviewView
+    /// hands a file to whichever extension Quick Look would pick, spacebar included, so no type in scripts/quicklook-types.txt may
+    /// be here (test/qlpane checks), nor any generic zip or package type. RTF has its own view.
+    static let appleQuickLookTypes: Set<String> = [
+        "org.openxmlformats.wordprocessingml.document", "org.openxmlformats.spreadsheetml.sheet", "org.openxmlformats.presentationml.presentation",
+        "com.microsoft.word.doc", "com.microsoft.excel.xls", "com.microsoft.powerpoint.ppt",
+        "com.apple.iwork.pages.sffpages", "com.apple.iwork.pages.pages", "com.apple.iwork.numbers.sffnumbers", "com.apple.iwork.numbers.numbers",
+        "com.apple.iwork.keynote.sffkey", "com.apple.iwork.keynote.key",
+        "public.truetype-ttf-font", "public.opentype-font", "public.truetype-collection-font", "com.apple.truetype-datafork-suitcase-font",
+        "com.pixar.universal-scene-description-mobile", "com.apple.reality",
+    ]
+
+    /// The content type of `path` when it is one Apple's Quick Look shows for spacebar, else nil. Reads metadata only.
+    static func appleQuickLookType(_ path: String) -> String? {
+        guard let t = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.contentTypeKey]).contentType,
+              appleQuickLookTypes.contains(t.identifier) else { return nil }
+        return t.identifier
+    }
+
     /// The explicit map behind every `file` URL; anything missing is application/octet-stream, which the `file` host never serves.
     static let contentTypes: [String: String] = [
         "png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "gif": "image/gif", "webp": "image/webp", "heic": "image/heic",
@@ -194,8 +213,9 @@ final class FileLoader {
     }
 }
 
-/// What the page is sent to show a file: `view` says how (markdown, image, pdf, html, video, audio, code, json, csv, text or info),
-/// and nothing in it is ever rendered as HTML. A PDF, an HTML file and media are drawn natively; the page only reserves their place.
+/// What the page is sent to show a file: `view` says how (markdown, image, pdf, html, video, audio, quicklook, code, json, csv, text
+/// or info), and nothing in it is ever rendered as HTML. A PDF, an HTML file, media and Apple's previews are drawn natively; the page
+/// only reserves their place.
 enum FileView {
     /// What every render names: the file, its folder as the page's base URL, and the sidebar's root.
     static func base(path: String, root: String, reason: String) -> [String: Any] {
@@ -285,6 +305,8 @@ enum FileView {
             view = "html"
         case .video where regular && size <= FileTypes.maxFileBytes, .audio where regular && size <= FileTypes.maxFileBytes:
             view = kind.rawValue
+        case .other where (regular ? size <= FileTypes.maxFileBytes : st.st_mode & S_IFMT == S_IFDIR) && FileTypes.appleQuickLookType(path) != nil:
+            view = "quicklook"
         // Its contents come later, from the writer. An archive in iCloud is not downloaded to list it.
         case .archive where regular && !FileTypes.isDataless(path):
             view = "archive"

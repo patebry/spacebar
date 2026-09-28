@@ -1031,6 +1031,20 @@ def main():
         v, rect = media(T('movie.webm'))
         check(v['view'] == 'info' and v['area'] is None, 'WebM, which AVFoundation cannot play, keeps its info card', json.dumps(v))
 
+        # ---- a file Apple's Quick Look previews (Office, iWork, fonts, 3D): the page reserves the area its QLPreviewView is laid over ----
+        ql = os.path.join(page.out, 'ql')
+        os.makedirs(ql, exist_ok=True)
+        memo = os.path.join(ql, 'memo.docx')
+        open(memo, 'wb').close()
+        page.cmd('@root:' + ql)
+        v, rect = media(memo)
+        check(v['view'] == 'quicklook' and v['aa'] and v['frames'] == 0 and v['buttons'] == [['Open', 'openFile']]
+              and v['area'][1] > 60 and v['area'][1] + v['area'][3] == 800 - EDGE and v['fits'],
+              'Word document: the page reserves the rest of the panel under its toolbar for Apple\'s preview, no frame', json.dumps(v))
+        check(rect and rect['path'] == memo and near([float(rect[k]) for k in 'xywh'], v['area']) and rect['hide'] in ('0', 'false'),
+              'Word document: the page posts the area for the native preview', json.dumps(rect))
+        page.cmd('@root:' + tree)
+
         # ---- the info card with Apple's thumbnail of the file, from the payload or sent once made ----
         png = 'data:image/png;base64,' + base64.b64encode(make_png(64, 48)).decode()
         card = dict(stub, path=T('deck.key'), name='deck.key', view='info', icon='other', kindName='Keynote Presentation', canOpen=True, size=5000)

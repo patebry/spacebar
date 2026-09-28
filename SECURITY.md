@@ -11,7 +11,7 @@ within a week. Fixes ship in the next release, and the advisory is published onc
 Only the latest release is supported. [FINDINGS.md](FINDINGS.md#security-model) describes the threat model: a Markdown file,
 and whatever sits beside it, is treated as hostile.
 
-Three features reach further than a rendered page, and are in scope:
+Four features reach further than a rendered page, and are in scope:
 
 - **HTML files** open in a separate web view with no message handler, no `spacebar:` scheme and no stored data. By default
   a file without the quarantine flag runs its scripts and may load from the web, like a browser would; only files a
@@ -29,6 +29,13 @@ Three features reach further than a rendered page, and are in scope:
   `/Volumes`, so no writes, no network and no reads of the user's files. The archive is passed as a descriptor the helper
   opened after checking its name and type; output is capped at 2 MB and 5,000 entries, names at 4 KB and 64 folders deep,
   and the run at 5 seconds. Nothing is extracted. Only the viewer's Open button may hand an archive to its default app.
+- **Apple's previews in the panel.** Office, iWork, font and 3D files in the sidebar are shown by Apple's own Quick Look in a
+  `QLPreviewView`, and Apple's generators run in Quick Look's daemons, not in spacebar. The sandboxed extensions can reach
+  those daemons only through `com.apple.security.temporary-exception.mach-lookup.global-name` for `com.apple.quicklook` and
+  `com.apple.quicklook.ThumbnailsAgent`, the only exception added for it: it opens no file, network or other service access.
+  The view is used only for an exact list of types spacebar does not claim (`FileTypes.appleQuickLookTypes`), because
+  Quick Look hands the file to whichever extension it would pick; a test checks the list never meets
+  `scripts/quicklook-types.txt`.
 - **The one-click update** runs the app's own copy of `scripts/install.sh`, sealed by the app's signature, detached from Quick
   Look with only `HOME`, `PATH`, `TMPDIR` and a status path in its environment. It installs only a version newer than the
   running one, only into `~/Applications/spacebar.app`, and only after the downloaded zip's SHA-256 matches the release's.

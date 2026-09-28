@@ -1283,8 +1283,9 @@ function archiveView(p) {
   return box;
 }
 
-/** Views the extension draws natively over `.pdf-area`: a PDF (PDFKit), an HTML file (its own web view), video and audio (AVKit). */
-const NATIVE_VIEWS = new Set(['pdf', 'html', 'video', 'audio']);
+/** Views the extension draws natively over `.pdf-area`: a PDF (PDFKit), an HTML file (its own web view), video and audio (AVKit),
+ *  and the files Apple's Quick Look previews (Office, iWork, fonts, 3D). */
+const NATIVE_VIEWS = new Set(['pdf', 'html', 'video', 'audio', 'quicklook']);
 
 /** The PDF itself is drawn by a native PDFView the extension lays over `.pdf-area`; the page only reserves the space and
  *  reports where it is (syncPdf), so WebKit's PDF plugin, and its unlabelled buttons, never load. */
@@ -1341,7 +1342,7 @@ function syncPdf() {
 function viewNode(p) {
   switch (p.view) {
     case 'image': if (typeof p.src === 'string') return imageView(p); break;
-    case 'pdf': case 'html': case 'video': case 'audio': return pdfView(p);
+    case 'pdf': case 'html': case 'video': case 'audio': case 'quicklook': return pdfView(p);
     case 'loading': return loadingView(p);
     case 'overview': return overviewView(p);
     case 'json': if (typeof p.text === 'string') return jsonView(p); break;

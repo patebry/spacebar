@@ -35,6 +35,7 @@ What the panel shows for each file in the sidebar:
 | JSON | pretty-printed and highlighted, with a Raw toggle |
 | CSV and TSV | a table, first row as the header, up to 1,000 rows |
 | Text (`.txt`, `.log`, `LICENSE`, `.env.example` and other text) | as is, with line numbers |
+| Office, iWork, fonts and 3D (`.docx`, `.xlsx`, `.pptx`, `.doc`, `.xls`, `.ppt`, `.pages`, `.numbers`, `.key`, `.ttf`, `.otf`, `.ttc`, `.dfont`, `.usdz`, `.reality`) | Apple's own Quick Look preview, inside the panel; the info card when Quick Look cannot show the file |
 | Anything else | an info card: Finder's large thumbnail when there is one, kind, size, date modified, and Open with its default app (Reveal in Finder for apps, scripts and executables) |
 
 Text over 2 MB shows its first 2 MB. An archive lists its first 5,000 entries. Images over 50 MB, and PDFs, video and audio over 512 MB, get the info card.
@@ -156,7 +157,7 @@ sandbox container after each rebuild. Other options are documented at the top of
 Tests that run off screen, without Quick Look (the test builds target Apple silicon):
 
 ```sh
-for t in settings scheme linkpolicy cas dataless editkeys filterkeys pdfpane htmlpane mediapane archive claims updates report; do test/$t/run.sh; done
+for t in settings scheme linkpolicy cas dataless editkeys filterkeys pdfpane htmlpane mediapane qlpane archive claims updates report; do test/$t/run.sh; done
 python3 test/webcheck.py && python3 test/webthemes.py && python3 test/remoteimages.py && python3 test/sidebar.py
 ```
 

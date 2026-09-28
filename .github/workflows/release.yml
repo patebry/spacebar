@@ -19,7 +19,7 @@ jobs:
           persist-credentials: false
 
       - name: Unit tests
-        run: for t in settings scheme linkpolicy cas editkeys pdfpane htmlpane mediapane; do test/$t/run.sh; done
+        run: for t in settings scheme linkpolicy cas editkeys pdfpane htmlpane mediapane archive filterkeys updates report; do test/$t/run.sh; done
 
       # One stable identity for every release keeps the designated requirement the same, so an update does not make macOS
       # ask again about the extension's sandbox container (FINDINGS.md). Forks without the secrets build ad-hoc.
@@ -53,6 +53,10 @@ jobs:
 
       - name: Build (universal, not installed)
         run: VERSION="${GITHUB_REF_NAME#v}" BUILD_NUMBER="$GITHUB_RUN_NUMBER" ./build.sh --no-install
+
+      # The built plists claim exactly scripts/quicklook-types.txt; checked on this build, not a rebuild.
+      - name: Quick Look claims
+        run: SKIP_BUILD=1 test/claims/run.sh
 
       - name: Check and package
         working-directory: build

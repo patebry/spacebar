@@ -226,18 +226,26 @@ enum FileView {
     }
 
     /// A binary property list as XML text, or nil when `data` is not a whole binary plist (a file cut at 2 MB is not). A
-    /// binary plist can name one object many times, so a small file can stand for an exponentially large tree: past
-    /// `maxPlistNodes` objects, counted as written out, or `maxTextBytes` of XML, it is not converted.
+    /// binary plist can name one object many times, so a small file can stand for an exponentially large tree, or one large
+    /// string or blob written out thousands of times: past `maxPlistNodes` objects, or an estimate of `maxTextBytes` of XML
+    /// (text as is, data as base64, a tag's worth per object), counted as written out, it is not converted.
     static let maxPlistNodes = 100_000
     static func binaryPlistAsXML(_ data: Data) -> Data? {
         guard data.starts(with: Data("bplist".utf8)),
               let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) else { return nil }
-        var budget = maxPlistNodes
+        var nodes = maxPlistNodes
+        var bytes = FileTypes.maxTextBytes
         func fits(_ o: Any) -> Bool {
-            budget -= 1
-            if budget < 0 { return false }
+            nodes -= 1
+            bytes -= 16
+            switch o {
+            case let s as String: bytes -= s.utf8.count
+            case let d as Data: bytes -= (d.count + 2) / 3 * 4
+            default: break
+            }
+            if nodes < 0 || bytes < 0 { return false }
             if let a = o as? [Any] { return a.allSatisfy(fits) }
-            if let d = o as? [String: Any] { return d.values.allSatisfy(fits) }
+            if let d = o as? [String: Any] { return d.allSatisfy { fits($0.key) && fits($0.value) } }
             return true
         }
         guard fits(obj), let xml = try? PropertyListSerialization.data(fromPropertyList: obj, format: .xml, options: 0),

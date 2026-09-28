@@ -305,6 +305,14 @@ do {
     check("binary plist: a small file that names one object over and over is not converted (\(bomb.count) bytes, \(Int(Date().timeIntervalSince(t0) * 1000)) ms)",
           converted == nil && Date().timeIntervalSince(t0) < 2)
 }
+do {
+    // 119 KB: one 20 KB blob named 99,000 times, under the node limit; written out it would be 2.7 GB of XML.
+    let bomb = try! Data(contentsOf: URL(fileURLWithPath: "test/settings/fixtures/blob-bomb.plist"))
+    let t0 = Date()
+    let converted = FileView.binaryPlistAsXML(bomb)
+    check("binary plist: one large blob named over and over is not converted (\(Int(Date().timeIntervalSince(t0) * 1000)) ms)",
+          converted == nil && Date().timeIntervalSince(t0) < 2)
+}
 check("types: archives use the other icon and bucket", FileKind.archive.icon == "other" && FolderScan.bucket(.archive) == "other")
 do {
     let d = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("spacebar-plist-\(getpid())")

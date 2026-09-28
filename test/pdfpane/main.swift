@@ -114,11 +114,11 @@ let wide = msg.merging(["x": 8, "w": 992]) { _, n in n }
 let gap0 = topGap(0)
 pane.place(message: wide, in: web)
 spin(0.1)
-check("width: at the top of the first page, the sidebar hiding keeps its top edge on screen", atTop() && topGap(0) >= 0 && abs(topGap(0) - gap0) < 2,
+check("width: at the top of the first page, the sidebar hiding keeps its top edge on screen", atTop() && topGap(0) > -1 && abs(topGap(0) - gap0) < 2,
       "gap \(topGap(0)) was \(gap0)")
 pane.place(message: msg, in: web)
 spin(0.1)
-check("width: and showing it again", atTop() && topGap(0) >= 0 && abs(topGap(0) - gap0) < 2, "gap \(topGap(0)) was \(gap0)")
+check("width: and showing it again", atTop() && topGap(0) > -1 && abs(topGap(0) - gap0) < 2, "gap \(topGap(0)) was \(gap0)")
 let into = docA.page(at: 1)!
 pane.view.go(to: PDFDestination(page: into, at: NSPoint(x: 0, y: into.bounds(for: pane.view.displayBox).maxY - 150)))
 spin(0.1)

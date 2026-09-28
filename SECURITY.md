@@ -32,7 +32,9 @@ Four features reach further than a rendered page, and are in scope:
 - **Apple's previews in the panel.** Office, iWork, font and 3D files in the sidebar are shown by Apple's own Quick Look in a
   `QLPreviewView`, and Apple's generators run in Quick Look's daemons, not in spacebar. The sandboxed extensions can reach
   those daemons only through `com.apple.security.temporary-exception.mach-lookup.global-name` for `com.apple.quicklook` and
-  `com.apple.quicklook.ThumbnailsAgent`, the only exception added for it: it opens no file, network or other service access.
+  `com.apple.quicklook.ThumbnailsAgent`, which grants lookup of those two Quick Look services only; no file or network
+  entitlement is added. Apple's generators already parse these files for the info card's thumbnail (QuickLookThumbnailing),
+  so the parsers reached are not new.
   The view is used only for an exact list of types spacebar does not claim (`FileTypes.appleQuickLookTypes`), because
   Quick Look hands the file to whichever extension it would pick; a test checks the list never meets
   `scripts/quicklook-types.txt`.

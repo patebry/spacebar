@@ -18,9 +18,17 @@ final class QLFallbackPane: NSObject {
     /// The file shows only Quick Look's generic icon: the owner shows its info card instead.
     var onFailed: (String) -> Void = { _ in }
     private var failureCheck: DispatchWorkItem?
-    /// How long after the view is first placed a file must show more than the generic icon; Apple's generators answered within
-    /// 0.3 s in the spike.
+    /// The view classes the failure check reads; a test stands in a timeline of trees.
+    var inspect: (NSView) -> [String] = QLFallbackPane.classNames
+    /// When the view is first looked at after it is placed (Apple's generators answered within 0.3 s in the spike), how often
+    /// again while Quick Look is still loading (a damaged 2 MB document reached the generic icon only after 2.2 s), and when it
+    /// stops looking.
     static let failureDelay: TimeInterval = 1.5
+    static let failurePoll: TimeInterval = 0.5
+    static let failureGiveUp: TimeInterval = 20
+
+    /// What a QLPreviewView's subtree shows.
+    enum Shown: Equatable { case preview, genericIcon, loading }
 
     init?(frame: NSRect = .zero) {
         guard let v = QLPreviewView(frame: frame, style: .normal) else { return nil }
@@ -37,6 +45,7 @@ final class QLFallbackPane: NSObject {
     func show(_ url: URL) {
         if url.path == path, view.previewItem != nil {
             view.refreshPreviewItem()
+            if placed { scheduleFailureCheck() }
             return
         }
         path = url.path
@@ -74,20 +83,27 @@ final class QLFallbackPane: NSObject {
         view.isHidden = hide
     }
 
-    /// Quick Look loads a preview only once the view is in a window, so the check counts from the first place.
-    private func scheduleFailureCheck() {
+    /// Quick Look loads a preview only once the view is in a window, so the check counts from the first place. It looks again
+    /// while the view is still loading, until the preview or the generic icon shows, or it gives up.
+    private func scheduleFailureCheck(after delay: TimeInterval = QLFallbackPane.failureDelay, started: Date = Date()) {
         failureCheck?.cancel()
         let checked = path
         let item = DispatchWorkItem { [weak self] in
             guard let self, let checked, self.path == checked, self.view.superview != nil else { return }
             self.failureCheck = nil
-            let names = Self.classNames(self.view)
-            guard Self.showsGenericIcon(classNames: names) else { return }
-            log.error("quick look fallback showed a generic icon: \(names.joined(separator: " "), privacy: .public)")
-            self.onFailed(checked)
+            let names = self.inspect(self.view)
+            switch Self.shown(classNames: names) {
+            case .preview: return
+            case .loading:
+                guard Date().timeIntervalSince(started) < Self.failureGiveUp else { return }
+                self.scheduleFailureCheck(after: Self.failurePoll, started: started)
+            case .genericIcon:
+                log.error("quick look fallback showed a generic icon: \(names.joined(separator: " "), privacy: .public)")
+                self.onFailed(checked)
+            }
         }
         failureCheck = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.failureDelay, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
     /// The class of every view under `root`, depth first.
@@ -101,12 +117,13 @@ final class QLFallbackPane: NSObject {
         return out
     }
 
-    /// Whether a QLPreviewView's subtree is Quick Look's generic icon rather than a preview. Measured on macOS 15.4: a denied or
-    /// failed generator leaves an empty QLLayerBasedPreviewContainerView; a preview adds a web view (Office, iWork), a PDF view
-    /// (PowerPoint), a text view, or a remote view (fonts, 3D).
-    static func showsGenericIcon(classNames names: [String]) -> Bool {
+    /// What a QLPreviewView's subtree shows. Measured on macOS 15.4: a preview is a web view (Office, iWork), a PDF view
+    /// (PowerPoint), a text view, or a remote view (fonts, 3D); a denied or failed generator leaves an empty
+    /// QLLayerBasedPreviewContainerView; anything else (QLLoadingView and its spinner, no container yet) is still loading.
+    static func shown(classNames names: [String]) -> Shown {
         let content = ["QLWeb2View", "WKWebView", "WKFlippedView", "QLPDFContainerView", "PDFView", "QLTextView", "NSTextView", "NSRemoteView"]
-        return names.contains("QLLayerBasedPreviewContainerView") && !names.contains { n in content.contains { n.hasSuffix($0) } }
+        if names.contains(where: { n in content.contains { n.hasSuffix($0) } }) { return .preview }
+        return names.contains("QLLayerBasedPreviewContainerView") ? .genericIcon : .loading
     }
 
     func conceal() { view.isHidden = true }

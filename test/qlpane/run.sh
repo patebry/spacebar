@@ -4,7 +4,7 @@
 # fallback and teardown. Then a copy signed with the extension's sandbox entitlements shows a Word document rendering (macOS keeps
 # a container under ~/Library/Containers/md.spacebar.test.qlpane). That copy is an app, not an extension: it renders without the
 # mach-lookup exception too, so whether the extension needs it is seen only through Quick Look (FINDINGS.md).
-# Opens no Quick Look window.
+# Opens no Quick Look window. QLPANE_RENDER=0 (CI) skips the checks that need Apple's generators or this Mac's type declarations.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 out=$(mktemp -d)
@@ -15,6 +15,7 @@ xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/qlpane/main.
   Shared/LinkPolicy.swift Shared/FolderListing.swift -framework Quartz \
   -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$out/Info.plist" -o "$out/qlpane"
 "$out/qlpane" "$out"
+[ "${QLPANE_RENDER:-1}" = 0 ] && { echo "SKIP sandboxed with the extension's entitlements: the Word document renders"; exit 0; }
 # As build.sh signs the extensions (READ_ACCESS=abs-ro).
 cp "$out/qlpane" "$out/qlpane-sandboxed"
 { echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>'

@@ -1004,6 +1004,7 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
             }
             if r.stuck { return self.showUnavailable(url, reason: reason, cloud: true) }
             // The panel closed while a PDF or media opened: it is shown again when the panel reappears (viewWillAppear).
+            if p["view"] as? String == "quicklook" { self.quickLookShown = true }
             if doc != nil || ["video", "audio", "html", "quicklook"].contains(p["view"] as? String), gen != self.pdfGen { return }
             self.shownCanOpen = p["canOpen"] as? Bool == true
             self.finishShow(url, p, pdf: doc, reason: reason)
@@ -1020,6 +1021,11 @@ final class PreviewViewController: NSViewController, QLPreviewingController {
         let canOpen = p["canOpen"] as? Bool == true
         var view = p["view"] as? String ?? ""
         var noPane = false
+        // Its type is checked again here: the file may have been replaced since it was read. QLPreviewView would hand a type
+        // spacebar claims back to spacebar.
+        if view == "quicklook", FileTypes.appleQuickLookType(url.path) == nil {
+            view = "info"; p["view"] = view; noPane = true
+        }
         if view == "quicklook", qlPane == nil {
             qlPane = QLFallbackPane()
             if qlPane == nil { view = "info"; p["view"] = view; noPane = true }

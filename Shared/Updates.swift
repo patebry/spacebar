@@ -165,8 +165,9 @@ enum Updates {
     /// is opened under an exclusive lock that the script's processes hold until they exit, so a second update cannot start
     /// while one runs, from this writer or the other extension's.
     /// `onExit` gets the exit status (128 + the signal for a killed shell) when it is reaped. A log past `logLimit` is cut to its
-    /// last `logKeep` bytes first.
+    /// last `logKeep` bytes first. The copy is made in `temporary`, and removed once the shell is reaped.
     static func runDetached(script: URL, arguments: [String], log: URL, environment: [String: String],
+                            temporary: URL = FileManager.default.temporaryDirectory,
                             onExit: @escaping (Int) -> Void = { _ in }) -> Result<pid_t, SpawnError> {
         let fm = FileManager.default
         let fail = { (what: String) in Result<pid_t, SpawnError>.failure(SpawnError(message: what)) }
@@ -176,9 +177,10 @@ enum Updates {
         defer { close(fd) }
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK)
         trimLog(fd)
-        let dir = fm.temporaryDirectory.appendingPathComponent("spacebar-update-\(UUID().uuidString)", isDirectory: true)
+        let dir = temporary.appendingPathComponent("spacebar-update-\(UUID().uuidString)", isDirectory: true)
         let copy = dir.appendingPathComponent("install.sh")
         guard (try? fm.createDirectory(at: dir, withIntermediateDirectories: true)) != nil, (try? fm.copyItem(at: script, to: copy)) != nil else {
+            try? fm.removeItem(at: dir)
             return fail("cannot copy the installer")
         }
         let head = "\n=== \(ISO8601DateFormatter().string(from: Date())) \(arguments.joined(separator: " ")) ===\n"

@@ -111,7 +111,7 @@ echo finished
 let logURL = dir.appendingPathComponent("Logs/spacebar-update.log")
 let leaked = dup2(open("/dev/null", O_RDONLY), 57)
 let env = ["HOME": dir.path, "PATH": "/usr/bin:/bin"]
-let first = Updates.runDetached(script: stub, arguments: Updates.installerArguments("9.9.9"), log: logURL, environment: env)
+let first = Updates.runDetached(script: stub, arguments: Updates.installerArguments("9.9.9"), log: logURL, environment: env, temporary: dir)
 check("stub spawned", (try? first.get()) != nil)
 let pid = (try? first.get()) ?? -1
 try? FileManager.default.removeItem(at: stub)
@@ -125,7 +125,7 @@ check("stub inherits no descriptor of the parent's", leaked == 57 && !fds.isEmpt
 check("stub runs from a copy, so the original can go", log1.contains("started"))
 check("running while the stub holds the log", Updates.isRunning(log: logURL))
 check("stub has a session of its own", pid > 0 && getsid(pid) == pid && getsid(pid) != getsid(0) && getpgid(pid) == pid)
-check("a second run waits for the first", Updates.runDetached(script: stub, arguments: [], log: logURL, environment: env)
+check("a second run waits for the first", Updates.runDetached(script: stub, arguments: [], log: logURL, environment: env, temporary: dir)
       == .failure(.init(message: "an update is already running")))
 FileManager.default.createFile(atPath: dir.appendingPathComponent("go").path, contents: nil)
 log1 = waitFor("finished", in: logURL)
@@ -136,7 +136,7 @@ check("stub reaped", gone)
 check("not running once the stub is gone", !Updates.isRunning(log: logURL))
 check("not running without a log", !Updates.isRunning(log: dir.appendingPathComponent("none.log")))
 check("log keeps the run's header", log1.contains("=== ") && log1.contains(" --version v9.9.9 --no-prompt ==="))
-check("a missing script is an error", (try? Updates.runDetached(script: stub, arguments: [], log: logURL, environment: env).get()) == nil)
+check("a missing script is an error", (try? Updates.runDetached(script: stub, arguments: [], log: logURL, environment: env, temporary: dir).get()) == nil)
 
 // The exit status reaches onExit, and a log past its limit is cut to its tail first.
 let exiting = dir.appendingPathComponent("exit.sh")
@@ -146,14 +146,14 @@ big += "last old line\n"
 try! big.write(to: logURL, atomically: true, encoding: .utf8)
 let exited = DispatchSemaphore(value: 0)
 var code = -1
-_ = Updates.runDetached(script: exiting, arguments: [], log: logURL, environment: env) { code = $0; exited.signal() }
+_ = Updates.runDetached(script: exiting, arguments: [], log: logURL, environment: env, temporary: dir) { code = $0; exited.signal() }
 check("exit status reported", exited.wait(timeout: .now() + 10) == .success && code == 3)
 let trimmed = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
 check("long log trimmed to its tail", trimmed.utf8.count <= Updates.logKeep + 200 && trimmed.hasPrefix("old line") && trimmed.contains("last old line\n")
       && trimmed.contains("tail-marker"))
 try! "sleep 30\n".write(to: exiting, atomically: true, encoding: .utf8)
 let killed = DispatchSemaphore(value: 0)
-if case .success(let p) = Updates.runDetached(script: exiting, arguments: [], log: logURL, environment: env, onExit: { code = $0; killed.signal() }) {
+if case .success(let p) = Updates.runDetached(script: exiting, arguments: [], log: logURL, environment: env, temporary: dir, onExit: { code = $0; killed.signal() }) {
     usleep(200_000)
     kill(p, SIGTERM)
 }
@@ -226,6 +226,11 @@ if let proc = ProcessInfo.processInfo.environment["SPACEBAR_TEST_PROC"] {
     procs.values.forEach { if $0.isRunning { $0.terminate() } }
 }
 close(leaked)
+
+// Every private copy goes once its shell is reaped, and a run that never started leaves none.
+let copies = { ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).filter { $0.hasPrefix("spacebar-update-") && $0 != "spacebar-update-test" } }
+for _ in 0..<40 where !copies().isEmpty { usleep(50_000) }
+check("runDetached leaves no private copy behind", copies().isEmpty)
 
 try? FileManager.default.removeItem(at: dir)
 print(failures == 0 ? "all passed" : "\(failures) failed")

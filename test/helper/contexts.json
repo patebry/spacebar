@@ -1,0 +1,222 @@
+[
+ {
+  "label": "other app (com.googlecode.iterm2)",
+  "id": 1,
+  "front": "other",
+  "role": "AXTextArea",
+  "subrole": null,
+  "ql": false,
+  "errs": [],
+  "latencyMs": 5.0,
+  "selection": [],
+  "expect": "pass:not-finder"
+ },
+ {
+  "label": "list",
+  "id": 3,
+  "front": "finder",
+  "role": "AXOutline",
+  "subrole": null,
+  "ql": false,
+  "errs": [],
+  "latencyMs": 10.9,
+  "selection": [
+   "/Users/u/sel0"
+  ],
+  "expect": "show"
+ },
+ {
+  "label": "list",
+  "id": 4,
+  "front": "finder",
+  "role": "AXOutline",
+  "subrole": null,
+  "ql": false,
+  "errs": [],
+  "latencyMs": 8.75,
+  "selection": [
+   "/Users/u/sel0"
+  ],
+  "expect": "show"
+ },
+ {
+  "label": "list",
+  "id": 5,
+  "front": "finder",
+  "role": "AXOutline",
+  "subrole": null,
+  "ql": false,
+  "errs": [],
+  "latencyMs": 6.16,
+  "selection": [
+   "/Users/u/sel0"
+  ],
+  "expect": "show"
+ },
+ {
+  "label": "list",
+  "id": 49,
+  "front": "finder",
+  "role": "AXOutline",
+  "subrole": null,
+  "ql": false,
+  "errs": [],
+  "latencyMs": 6.97,
+  "selection": [
+   "/Users/u/sel0"
+  ],
+  "expect": "show"
+ },
+ {
+  "label": "qlopen",
+  "id": 50,
+  "front": "finder",
+  "role": "AXWebArea",
+  "subrole": null,
+  "ql": true,
+  "errs": [],
+  "latencyMs": 4.73,
+  "selection": [],
+  "expect": "pass:ql-open"
+ },
+ {
+  "label": "icon",
+  "id": 51,
+  "front": "finder",
+  "role": "AXList",
+  "subrole": "AXCollectionList",
+  "ql": false,
+  "errs": [],
+  "latencyMs": 6.22,
+  "selection": [
+   "/Users/u/sel0"
+  ],
+  "expect": "show"
+ },
+ {
+  "label": "qlopen",
+  "id": 52,
+  "front": "finder",
+  "role": "AXWebArea",
+  "subrole": null,
+  "ql": true,
+  "errs": [],
+  "latencyMs": 4.98,
+  "selection": [],
+  "expect": "pass:ql-open"
+ },
+ {
+  "label": "column",
+  "id": 53,
+  "front": "finder",
+  "role": "AXList",
+  "subrole": null,
+  "ql": false,
+  "errs": [],
+  "latencyMs": 3.91,
+  "selection": [
+   "/Users/u/sel0"
+  ],
+  "expect": "show"
+ },
+ {
+  "label": "qlopen",
+  "id": 54,
+  "front": "finder",
+  "role": "AXWebArea",
+  "subrole": null,
+  "ql": true,
+  "errs": [],
+  "latencyMs": 4.13,
+  "selection": [],
+  "expect": "pass:ql-open"
+ },
+ {
+  "label": "gallery",
+  "id": 55,
+  "front": "finder",
+  "role": "AXList",
+  "subrole": "AXCollectionList",
+  "ql": false,
+  "errs": [],
+  "latencyMs": 5.67,
+  "selection": [
+   "/Users/u/sel0"
+  ],
+  "expect": "show"
+ },
+ {
+  "label": "qlopen",
+  "id": 56,
+  "front": "finder",
+  "role": "AXWebArea",
+  "subrole": null,
+  "ql": true,
+  "errs": [],
+  "latencyMs": 7.48,
+  "selection": [],
+  "expect": "pass:ql-open"
+ },
+ {
+  "label": "rename",
+  "id": 57,
+  "front": "finder",
+  "role": "AXTextField",
+  "subrole": null,
+  "ql": false,
+  "errs": [],
+  "latencyMs": 4.65,
+  "selection": [],
+  "expect": "pass:text-focus"
+ },
+ {
+  "label": "search",
+  "id": 58,
+  "front": "finder",
+  "role": "AXTextField",
+  "subrole": "AXSearchField",
+  "ql": false,
+  "errs": [],
+  "latencyMs": 7.51,
+  "selection": [],
+  "expect": "pass:text-focus"
+ },
+ {
+  "label": "other app (com.apple.TextEdit)",
+  "id": 59,
+  "front": "other",
+  "role": "AXOutline",
+  "subrole": null,
+  "ql": false,
+  "errs": [],
+  "latencyMs": 24.47,
+  "selection": [],
+  "expect": "pass:not-finder"
+ },
+ {
+  "label": "other app (ru.keepcoder.Telegram)",
+  "id": 60,
+  "front": "other",
+  "role": "AXTextArea",
+  "subrole": null,
+  "ql": false,
+  "errs": [],
+  "latencyMs": 7.71,
+  "selection": [],
+  "expect": "pass:not-finder"
+ },
+ {
+  "label": "desktop",
+  "id": 95,
+  "front": "finder",
+  "role": "AXGroup",
+  "subrole": null,
+  "ql": false,
+  "errs": [],
+  "latencyMs": 7.13,
+  "selection": [
+   "/Users/u/sel0"
+  ],
+  "expect": "show"
+ }
+]

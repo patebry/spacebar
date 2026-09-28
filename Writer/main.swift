@@ -246,11 +246,15 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         return app.hasPrefix(home + "/") ? "~" + app.dropFirst(home.count) : app
     }
 
-    /// The app that contains this service.
+    /// The app that contains this service: the outermost spacebar.app, since the viewer's copy sits in an app of its own inside it.
     private func containingApp() -> URL? {
-        var app = Bundle.main.bundleURL
-        while app.pathExtension != "app", app.pathComponents.count > 1 { app.deleteLastPathComponent() }
-        return app.pathExtension == "app" && Bundle(url: app)?.bundleIdentifier == "md.spacebar" ? app : nil
+        var dir = Bundle.main.bundleURL
+        var found: URL?
+        while dir.pathComponents.count > 1 {
+            if dir.pathExtension == "app", Bundle(url: dir)?.bundleIdentifier == "md.spacebar" { found = dir }
+            dir.deleteLastPathComponent()
+        }
+        return found
     }
 
     func prepare() {

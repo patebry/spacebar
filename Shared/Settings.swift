@@ -38,6 +38,7 @@ struct Settings: Codable, Equatable {
     var remoteImages = false
     var htmlScripts = "local"
     var checkUpdates = true
+    var welcomeShown = false
 
     /// 2: folder previews became on by default. A file written before that stores the old default, false, so it reads as on
     /// until SettingsFile.update rewrites it; a user who turns them off afterwards stays off.
@@ -64,14 +65,16 @@ struct Settings: Codable, Equatable {
     static let intRanges: [String: ClosedRange<Int>] = ["fontSize": 12...24, "sidebarWidth": 160...480]
     static let doubleRanges: [String: ClosedRange<Double>] = ["lineHeight": 1.2...2.0]
     static let boolKeys: Set<String> = ["customCSS", "inlineEditing", "taskToggles", "folderMode", "folderReadmeFirst", "stats", "math",
-                                        "mermaid", "remoteImages", "sidebarCollapsed", "showHiddenFiles", "minimalChrome", "checkUpdates"]
+                                        "mermaid", "remoteImages", "sidebarCollapsed", "showHiddenFiles", "minimalChrome", "checkUpdates",
+                                        "welcomeShown"]
     /// Keys whose value is a string or null, each checked by its own pattern.
     static let optionalKeys: Set<String> = ["userTheme", "editorBundleID"]
     static var allKeys: Set<String> { Set(choices.keys).union(intRanges.keys).union(doubleRanges.keys).union(boolKeys).union(optionalKeys) }
-    /// The only keys the preview panel may change (its Aa popover and sidebar button). The page renders an untrusted document,
+    /// The only keys the preview panel may change (its Aa popover and sidebar controls). The page renders an untrusted document,
     /// so even a page that was somehow scripted can restyle the preview but never pick a CSS file, an editor app, or what is
-    /// rendered or opened.
-    static let panelKeys: Set<String> = ["theme", "appearance", "fontSize", "width", "bodyFont", "sidebarCollapsed", "sidebarWidth"]
+    /// rendered or opened. folderSort only reorders what is listed; showHiddenFiles would list, and so open, more, so it is
+    /// changed in the settings window only.
+    static let panelKeys: Set<String> = ["theme", "appearance", "fontSize", "width", "bodyFont", "sidebarCollapsed", "sidebarWidth", "folderSort"]
 
     /// A panel change as the JSON patch the writer takes, or nil when the key is not a panel key or the value does not
     /// sanitize (sidebarCollapsed takes a JSON boolean only, never a number or a string; sidebarWidth a number, clamped).
@@ -153,6 +156,7 @@ struct Settings: Codable, Equatable {
         if let n = try? c.decodeIfPresent(Double.self, forKey: .sidebarWidth), let v = Self.sanitize("sidebarWidth", n) as? Int { s.sidebarWidth = v }
         take(.toc, \.toc); take(.stats, \.stats); take(.mdLinks, \.mdLinks); take(.webLinks, \.webLinks)
         take(.math, \.math); take(.mermaid, \.mermaid); take(.rawHTML, \.rawHTML); take(.remoteImages, \.remoteImages); take(.checkUpdates, \.checkUpdates); take(.htmlScripts, \.htmlScripts)
+        take(.welcomeShown, \.welcomeShown)
         self = s
     }
 

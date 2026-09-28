@@ -38,7 +38,9 @@ final class SettingsStore: ObservableObject {
     }
 
     func resetToDefaults() {
-        apply(SettingsFile.update(Settings().dictionary))
+        var d = Settings().dictionary
+        d["welcomeShown"] = settings.welcomeShown
+        apply(SettingsFile.update(d))
     }
 
     private func apply(_ result: Result<Settings, SettingsFile.Failure>) {

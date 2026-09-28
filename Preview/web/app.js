@@ -757,7 +757,7 @@ function updateStats() {
   clearTimeout(statsTimer);
   if (!settings.stats) { $('stats').textContent = ''; return; }
   if (!isMarkdown(current)) {
-    const code = TEXT_VIEWS.has(current.view) && $('doc').querySelector('.code-view pre.code');
+    const code = TEXT_VIEWS.has(current.view) && $('doc').querySelector('.viewer > .code-view pre.code');
     const n = code ? lineCount(code.textContent) : 0;
     $('stats').textContent = n ? `${n.toLocaleString()} ${n === 1 ? 'line' : 'lines'}` : '';
     return;
@@ -807,9 +807,7 @@ window.sb = {
     document.title = p.name;
     root.dataset.view = isMarkdown(p) ? 'markdown' : p.view;
     syncOpen(p);
-    // The popover's text settings do nothing for a PDF, and it would open under the native view.
-    $('aa').hidden = NATIVE_VIEWS.has(p.view);
-    if (NATIVE_VIEWS.has(p.view)) showPopover(false);
+    syncAa(p);
     showFolder(p);
     showCrumbs(p);
     draw();
@@ -831,6 +829,7 @@ window.sb = {
     theme.apply(settings);
     syncPopover();
     syncToggle();
+    syncSideMenu();
     if (RENDER_KEYS.some((k) => prev[k] !== settings[k]) && current.path) {
       const y = window.scrollY;
       draw();
@@ -945,6 +944,7 @@ window.sb = {
     $('aa-update').hidden = true;
     delete $('aa').dataset.update;
     $('aa').title = 'Appearance';
+    syncUpdateButton();
   },
   installCopied(r) {
     const b = $('aa-copy');
@@ -962,7 +962,7 @@ window.sb = {
 
 const TEXT_VIEWS = new Set(['code', 'text', 'json']);
 const HIGHLIGHT_MAX = 512 * 1024;
-const CSV_ROWS = 1000;
+const CSV_ROWS = 50000;
 const CSV_COLS = 200;
 // Bidirectional controls in a file name could make it read as another type; they are dropped wherever a name is shown.
 const plainName = (s) => String(s).replace(/[\u202A-\u202E\u2066-\u2069]/g, '');
@@ -993,6 +993,15 @@ const ICONS = {
   data: [DOC, FOLD, 'M5.8 7.6h5.4v4.6H5.8zM5.8 9.9h5.4M8.5 7.6v4.6'],
   text: [DOC, FOLD, 'M6 7.5h5M6 9.5h5M6 11.5h3'],
   other: [DOC, FOLD],
+  archive: [DOC, FOLD, 'M7.2 2v1.2M8.4 3.2v1.2M7.2 4.4v1.2M8.4 5.6v1.2', 'M6.9 8h3v2.6h-3z'],
+  app: ['M2 3h12v10H2z', 'M2 5.6h12', 'M3.7 4.3h.01M5.1 4.3h.01M6.5 4.3h.01', 'M5 8.5h6M5 10.8h4'],
+  font: [DOC, FOLD, 'M6.1 12.4 8.5 6.8l2.4 5.6M7 10.4h3'],
+  doc: [DOC, FOLD, 'M6 7h5v1.8H6z', 'M6 10.3h5M6 12.3h3.6'],
+  sheet: ['M2 2.5h12v11H2z', 'M2 5.5h12M2 8.3h12M2 11h12M6 2.5v11'],
+  slides: ['M1.8 3h12.4v8H1.8z', 'M8 11v2.8M5.8 14h4.4', 'M5 8.8l2-2.2 1.6 1.4L11 5.6'],
+  model: ['M8 1.8 13.6 5v6L8 14.2 2.4 11V5z', 'M2.4 5 8 8.2 13.6 5M8 8.2v6'],
+  video: ['M1.8 3.5h12.4v9H1.8z', 'M6.8 6.1v3.8l3.2-1.9z'],
+  audio: ['M6.5 11.8V3.9l6-1.4v7.9', 'M3.6 11.8a1.45 1.25 0 1 0 2.9 0 1.45 1.25 0 1 0-2.9 0zM9.6 10.4a1.45 1.25 0 1 0 2.9 0 1.45 1.25 0 1 0-2.9 0z'],
 };
 function icon(kind, size = 16) {
   const k = ICONS[kind] ? kind : 'other';
@@ -1030,7 +1039,8 @@ function viewerAction(b, e) {
   if (!current.path || isMarkdown(current)) return;
   const a = b.dataset.action;
   if ((a === 'openFile' || a === 'reveal') && e.isTrusted) post({ type: a, path: current.path });
-  else if (a === 'raw') { jsonRaw = !jsonRaw; draw(); }
+  else if (a === 'csvSort') csvSortBy(+b.dataset.col);
+  else if (a === 'jsonMode' || a === 'jsonToggle' || a === 'jsonAll' || a === 'jsonMore') jsonAction(a, b);
   else if (a === 'archiveDir' && archiveOpen) {
     const path = b.dataset.path;
     if (!archiveOpen.delete(path)) archiveOpen.add(path);
@@ -1068,58 +1078,543 @@ function codeBlock(text, lang) {
   return wrap;
 }
 
-let jsonRaw = false;
+// ---------- JSON: a tree of text nodes (or the text, formatted or as is), and a Jupyter notebook as its cells ----------
+
+// The JSON on screen: parsed once per payload; the mode and the open nodes are kept while the same file is shown again.
+let jsonState = null;
+const JSON_CHUNK = 500;        // children of one node drawn before a "Show more" row
+const JSON_ALL_MAX = 5000;     // rows "Expand all" opens at most
+const JSON_AUTO_ROWS = 200;    // rows opened on arrival, level by level
+const JSON_STR_MAX = 10000;    // characters of one string shown
+const ptrKey = (k) => String(k).replace(/~/g, '~0').replace(/\//g, '~1');
+const isBranch = (v) => v !== null && typeof v === 'object';
+const branchSize = (v) => (Array.isArray(v) ? v.length : Object.keys(v).length);
+
+function jsonModel(p) {
+  if (jsonState && jsonState.p === p) return jsonState;
+  let value, ok = false;
+  if (!p.truncated) { try { value = JSON.parse(p.text); ok = true; } catch (e) { ok = false; } }
+  const nb = ok && /\.ipynb$/i.test(p.name || '') && isBranch(value) && Array.isArray(value.cells);
+  const modes = nb ? ['notebook', 'tree', 'raw'] : ok && isBranch(value) ? ['tree', 'formatted', 'raw'] : ok ? ['formatted', 'raw'] : ['raw'];
+  const same = jsonState && jsonState.p.path === p.path;
+  const mode = same && modes.includes(jsonState.mode) ? jsonState.mode : modes[0];
+  jsonState = { p, value, ok, nb, modes, mode, open: same ? jsonState.open : new Set(), more: same ? jsonState.more : new Map(), pretty: null };
+  if (!same && ok && isBranch(value)) jsonOpenLevels(jsonState, JSON_AUTO_ROWS);
+  return jsonState;
+}
+
+/** Opens the tree level by level, breadth first, while the rows shown stay within `budget`. */
+function jsonOpenLevels(m, budget) {
+  let level = [['', m.value]], rows = 1;
+  while (level.length) {
+    const next = [];
+    for (const [ptr, v] of level) {
+      const n = Math.min(branchSize(v), JSON_CHUNK);
+      if (rows + n > budget) return;
+      m.open.add(ptr);
+      rows += n;
+      const kids = Array.isArray(v) ? v.slice(0, n).map((x, i) => [i, x]) : Object.entries(v).slice(0, n);
+      for (const [k, x] of kids) if (isBranch(x) && branchSize(x)) next.push([`${ptr}/${ptrKey(k)}`, x]);
+    }
+    level = next;
+  }
+}
+
 function jsonView(p) {
-  let pretty = null;
-  if (!p.truncated) { try { pretty = JSON.stringify(JSON.parse(p.text), null, 2); } catch (e) { pretty = null; } }
-  const box = el('div', 'viewer viewer-code');
-  const toggle = pretty !== null ? el('button', 'viewer-toggle', jsonRaw ? 'Formatted' : 'Raw') : null;
-  if (toggle) { toggle.type = 'button'; toggle.dataset.action = 'raw'; toggle.setAttribute('aria-pressed', String(jsonRaw)); }
-  box.append(viewHead(p, ...(toggle ? [toggle] : [])));
+  const m = jsonModel(p);
+  const box = el('div', 'viewer viewer-code viewer-json');
+  const extra = [];
+  if (m.mode === 'tree') {
+    for (const [label, open] of [['Expand All', '1'], ['Collapse All', '0']]) {
+      const b = el('button', 'json-all', label);
+      b.type = 'button';
+      Object.assign(b.dataset, { action: 'jsonAll', open });
+      extra.push(b);
+    }
+  }
+  if (m.modes.length > 1) {
+    const seg = el('span', 'viewer-seg');
+    seg.setAttribute('role', 'group');
+    seg.setAttribute('aria-label', 'View as');
+    const names = { notebook: 'Notebook', tree: 'Tree', formatted: 'Formatted', raw: 'Raw' };
+    for (const mode of m.modes) {
+      const b = el('button', 'viewer-toggle', names[mode]);
+      b.type = 'button';
+      Object.assign(b.dataset, { action: 'jsonMode', mode });
+      b.setAttribute('aria-pressed', String(m.mode === mode));
+      seg.append(b);
+    }
+    extra.push(seg);
+  }
+  box.append(viewHead(p, ...extra));
   const t = truncNote(p);
-  if (t) box.append(t);
-  if (pretty === null && !p.truncated) box.append(note('Not valid JSON: shown as is.'));
-  box.append(codeBlock(pretty !== null && !jsonRaw ? pretty : p.text, 'json'));
+  if (t) box.append(t, note(/\.ipynb$/i.test(p.name || '') ? 'A notebook this large is shown as its text.' : 'A file this large is shown as its text, not as a tree.'));
+  if (!m.ok && !p.truncated) box.append(note('Not valid JSON: shown as is.'));
+  if (m.mode === 'tree') box.append(jsonTree(m));
+  else if (m.mode === 'notebook') box.append(notebookView(m.value));
+  else if (m.mode === 'formatted') {
+    if (m.pretty === null) m.pretty = JSON.stringify(m.value, null, 2);
+    box.append(codeBlock(m.pretty, 'json'));
+  } else box.append(codeBlock(p.text, 'json'));
   return box;
+}
+
+/** The tree as rows, one per key or item: an open object or array lists its children under it, JSON_CHUNK at a time. */
+function jsonTree(m) {
+  const tree = el('div', 'json-tree');
+  tree.setAttribute('role', 'tree');
+  tree.setAttribute('aria-label', 'JSON');
+  const rows = [];
+  const stack = [{ ptr: '', key: null, v: m.value, depth: 0 }];
+  while (stack.length) {
+    const it = stack.pop();
+    if (it.more) { rows.push(jsonMoreRow(it)); continue; }
+    const branch = isBranch(it.v), open = branch && m.open.has(it.ptr);
+    rows.push(jsonRow(it, branch, open));
+    if (!open) continue;
+    const all = Array.isArray(it.v) ? it.v : Object.keys(it.v);
+    const shown = Math.min(all.length, m.more.get(it.ptr) || JSON_CHUNK);
+    const kids = [];
+    for (let i = 0; i < shown; i++) {
+      const k = Array.isArray(it.v) ? i : all[i];
+      kids.push({ ptr: `${it.ptr}/${ptrKey(k)}`, key: k, index: Array.isArray(it.v), v: it.v[k], depth: it.depth + 1 });
+    }
+    if (shown < all.length) kids.push({ more: true, ptr: it.ptr, left: all.length - shown, depth: it.depth + 1 });
+    for (let i = kids.length - 1; i >= 0; i--) stack.push(kids[i]);
+  }
+  tree.append(...rows);
+  return tree;
+}
+
+function jsonRow(it, branch, open) {
+  const row = el('div', 'jt-row');
+  row.setAttribute('role', 'treeitem');
+  row.setAttribute('aria-level', String(it.depth + 1));
+  row.style.setProperty('--d', it.depth);
+  if (branch) {
+    row.setAttribute('aria-expanded', String(open));
+    const b = el('button', 'jt-tw', open ? '▾' : '▸');
+    b.type = 'button';
+    Object.assign(b.dataset, { action: 'jsonToggle', ptr: it.ptr });
+    b.setAttribute('aria-label', open ? 'Collapse' : 'Expand');
+    row.append(b);
+  } else row.append(el('span', 'jt-tw', ''));
+  if (it.key !== null) {
+    row.append(it.index ? el('span', 'jt-index', String(it.key)) : el('span', 'jt-key hljs-attr', JSON.stringify(String(it.key))), el('span', 'jt-colon', ': '));
+  }
+  const v = it.v;
+  if (branch) {
+    const n = branchSize(v), arr = Array.isArray(v);
+    row.append(el('span', 'jt-sum', `${arr ? '[' : '{'} ${n.toLocaleString()} ${arr ? (n === 1 ? 'item' : 'items') : (n === 1 ? 'key' : 'keys')} ${arr ? ']' : '}'}`));
+  } else if (typeof v === 'string') {
+    const s = v.length > JSON_STR_MAX ? v.slice(0, JSON_STR_MAX) + '…' : v;
+    row.append(el('span', 'jt-val hljs-string', JSON.stringify(s)));
+  } else {
+    row.append(el('span', `jt-val ${typeof v === 'number' ? 'hljs-number' : 'hljs-literal'}`, String(v)));
+  }
+  return row;
+}
+
+function jsonMoreRow(it) {
+  const row = el('div', 'jt-row jt-more');
+  row.style.setProperty('--d', it.depth);
+  const b = el('button', 'jt-more-b', `Show ${Math.min(JSON_CHUNK, it.left).toLocaleString()} more (${it.left.toLocaleString()} not shown)`);
+  b.type = 'button';
+  Object.assign(b.dataset, { action: 'jsonMore', ptr: it.ptr });
+  row.append(el('span', 'jt-tw', ''), b);
+  return row;
+}
+
+/** The node at `ptr` in the value, or undefined. */
+function jsonAt(v, ptr) {
+  if (!ptr) return v;
+  for (const part of ptr.slice(1).split('/')) {
+    if (!isBranch(v)) return undefined;
+    v = v[part.replace(/~1/g, '/').replace(/~0/g, '~')];
+  }
+  return v;
+}
+
+function jsonAction(a, b) {
+  const m = jsonState;
+  if (!m || m.p !== current) return;
+  const y = window.scrollY;
+  if (a === 'jsonMode' && m.modes.includes(b.dataset.mode)) m.mode = b.dataset.mode;
+  else if (a === 'jsonToggle') { const p = b.dataset.ptr; if (!m.open.delete(p)) m.open.add(p); }
+  else if (a === 'jsonMore') m.more.set(b.dataset.ptr, (m.more.get(b.dataset.ptr) || JSON_CHUNK) + JSON_CHUNK);
+  else if (a === 'jsonAll') {
+    m.open.clear();
+    m.more.clear();
+    if (b.dataset.open === '1') jsonOpenLevels(m, JSON_ALL_MAX);
+  }
+  draw();
+  window.scrollTo(0, y);
+  const again = a === 'jsonToggle' || a === 'jsonMore' ? [...document.querySelectorAll('#doc [data-action=jsonToggle]')].find((x) => x.dataset.ptr === b.dataset.ptr)
+    : [...document.querySelectorAll(`#doc [data-action=${a}]`)].find((x) => x.dataset.mode === b.dataset.mode && x.dataset.open === b.dataset.open);
+  if (again) again.focus({ preventScroll: true });
+}
+
+// ---------- a Jupyter notebook: Markdown cells through the document renderer, code highlighted, outputs as text or images ----------
+
+const NB_CELLS = 2000;
+const NB_IMAGE_MAX = 8 << 20;
+const nbText = (x) => (Array.isArray(x) ? x.join('') : typeof x === 'string' ? x : '');
+const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
+
+function notebookView(nb) {
+  const box = el('div', 'notebook');
+  const meta = isBranch(nb.metadata) ? nb.metadata : {};
+  const lang = [meta.kernelspec && meta.kernelspec.language, meta.language_info && meta.language_info.name]
+    .find((l) => typeof l === 'string' && window.hljs && hljs.getLanguage(l)) || null;
+  const cells = nb.cells.slice(0, NB_CELLS);
+  for (const c of cells) {
+    if (!isBranch(c)) continue;
+    const src = nbText(c.source);
+    if (c.cell_type === 'markdown') {
+      const md = el('div', 'nb-cell nb-md');
+      md.append(nbMarkdown(src));
+      box.append(md);
+    } else if (c.cell_type === 'code') {
+      const cell = el('div', 'nb-cell nb-code');
+      const n = Number.isInteger(c.execution_count) ? String(c.execution_count) : ' ';
+      cell.append(el('div', 'nb-prompt', `[${n}]:`), codeBlock(src, lang));
+      const outs = Array.isArray(c.outputs) ? c.outputs : [];
+      for (const o of outs.slice(0, 100)) { const node = nbOutput(o); if (node) cell.append(node); }
+      box.append(cell);
+    } else {
+      const raw = el('div', 'nb-cell nb-raw');
+      raw.append(el('pre', 'nb-out', src));
+      box.append(raw);
+    }
+  }
+  if (nb.cells.length > NB_CELLS) box.append(note(`Showing the first ${NB_CELLS.toLocaleString()} of ${nb.cells.length.toLocaleString()} cells.`));
+  if (!nb.cells.length) box.append(note('This notebook has no cells.'));
+  return box;
+}
+
+/** A Markdown cell, through the sanitizing renderer; nothing in it is editable or can tick a task in this file. */
+function nbMarkdown(src) {
+  const frag = render(src, 1);
+  frag.querySelectorAll('[data-src]').forEach((n) => n.removeAttribute('data-src'));
+  // A cell sits inside .viewer, where a click on any [data-action] is the viewer's own button (reveal, open with).
+  frag.querySelectorAll('[data-action]').forEach((n) => n.removeAttribute('data-action'));
+  frag.querySelectorAll('input[type=checkbox]').forEach((n) => { n.removeAttribute('data-line'); n.disabled = true; });
+  // Diagrams are drawn for the document on screen only; here a diagram is its source.
+  frag.querySelectorAll('pre.mermaid').forEach((n) => n.classList.remove('mermaid'));
+  return frag;
+}
+
+/** An image output as a data: URL, from base64 checked here; SVG text is encoded (an <img> runs no script). */
+function nbImage(type, data) {
+  let src;
+  if (type === 'image/svg+xml') {
+    const svg = nbText(data);
+    if (!svg || svg.length > NB_IMAGE_MAX) return null;
+    src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  } else {
+    const b64 = nbText(data).replace(/\s+/g, '');
+    if (!b64 || b64.length > NB_IMAGE_MAX || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) return null;
+    src = `data:${type};base64,${b64}`;
+  }
+  const img = document.createElement('img');
+  img.className = 'nb-img';
+  img.alt = 'Output';
+  img.src = src;
+  return img;
+}
+
+function nbOutput(o) {
+  if (!isBranch(o)) return null;
+  if (o.output_type === 'stream') return el('pre', `nb-out${o.name === 'stderr' ? ' nb-err' : ''}`, nbText(o.text).replace(ANSI, ''));
+  if (o.output_type === 'error') {
+    const tb = Array.isArray(o.traceback) ? o.traceback.map((l) => String(l).replace(ANSI, '')).join('\n') : '';
+    return el('pre', 'nb-out nb-err', tb || `${o.ename || 'Error'}: ${o.evalue || ''}`);
+  }
+  if ((o.output_type === 'execute_result' || o.output_type === 'display_data') && isBranch(o.data)) {
+    for (const type of ['image/png', 'image/jpeg', 'image/gif', 'image/svg+xml']) {
+      if (own(o.data, type)) { const img = nbImage(type, o.data[type]); if (img) return img; }
+    }
+    if (own(o.data, 'text/markdown')) { const d = el('div', 'nb-out nb-md'); d.append(nbMarkdown(nbText(o.data['text/markdown']))); return d; }
+    if (own(o.data, 'text/plain')) return el('pre', 'nb-out', nbText(o.data['text/plain']).replace(ANSI, ''));
+    if (own(o.data, 'text/html')) return el('div', 'viewer-note nb-note', 'HTML output is not shown.');
+  }
+  return null;
 }
 
 /** CSV (RFC 4180 quoting) or TSV; the first row is the header. Rows past the cap are counted, not kept. */
 function parseDelimited(text, sep, max) {
   const rows = [];
-  let row = [], field = '', q = false, total = 0;
+  let row = [], field = '', q = false, total = 0, at = 0;
   const endRow = () => { row.push(field); field = ''; if (total < max + 1) rows.push(row); total++; row = []; };
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
     if (q) {
-      if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else q = false; } else field += c;
+      // A run up to the next quote goes in at once.
+      const j = text.indexOf('"', i);
+      if (j < 0) { field += text.slice(i); i = text.length; break; }
+      field += text.slice(i, j);
+      i = j;
+      if (text[i + 1] === '"') { field += '"'; i++; } else q = false;
     } else if (c === '"' && field === '') q = true;
     else if (c === sep) { row.push(field); field = ''; }
     else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; endRow(); }
-    else field += c;
+    else {
+      // A run of plain characters goes in at once.
+      at = i;
+      while (i + 1 < text.length && !'"\n\r'.includes(text[i + 1]) && text[i + 1] !== sep) i++;
+      field += text.slice(at, i + 1);
+    }
   }
   if (field !== '' || row.length) endRow();
   return { rows, total };
 }
 
+/** The delimiter of a file without one by extension: whichever of , ; tab | splits its first lines most consistently. */
+function sniffDelimiter(text) {
+  const sample = text.slice(0, 64 * 1024);
+  let best = ',', bestScore = 0;
+  for (const d of [',', ';', '\t', '|']) {
+    const counts = [];
+    let n = 0, q = false;
+    for (let i = 0; i < sample.length && counts.length < 40; i++) {
+      const c = sample[i];
+      if (c === '"') q = !q;
+      else if (!q && c === d) n++;
+      else if (!q && c === '\n') { counts.push(n); n = 0; }
+    }
+    if (n) counts.push(n);
+    const freq = new Map();
+    for (const k of counts) if (k) freq.set(k, (freq.get(k) || 0) + 1);
+    let mode = 0, modeN = 0;
+    for (const [k, v] of freq) if (v > modeN || (v === modeN && k > mode)) { mode = k; modeN = v; }
+    const score = mode ? modeN / counts.length + Math.min(mode, 50) / 1000 : 0;
+    if (score > bestScore) { best = d; bestScore = score; }
+  }
+  return best;
+}
+
+const DELIMITER_NAMES = { ',': 'comma', ';': 'semicolon', '\t': 'tab', '|': 'pipe' };
+const CSV_VIRTUAL = 400;
+const csvCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+/** A cell as a number, or NaN: 1,234.5, -3e2, 12%, $4, and with a semicolon delimiter a decimal comma (3,5). */
+function csvNumber(s, sep) {
+  const t = s.trim();
+  if (!t || !/\d/.test(t)) return NaN;
+  if (sep === ';' && /^[-+]?\d+,\d+$/.test(t)) return parseFloat(t.replace(',', '.'));
+  if (!/^[-+]?[$€£¥]?\s?(\d{1,3}(,\d{3})+|\d+)?(\.\d+)?([eE][-+]?\d+)?\s?%?$/.test(t)) return NaN;
+  return parseFloat(t.replace(/[$€£¥,%\s]/g, ''));
+}
+
+// The table on screen: parsed once per payload, its sort kept while the same file is shown again.
+let csvState = null;
+
+function csvModel(p) {
+  if (csvState && csvState.p === p) return csvState;
+  const text = p.text.replace(/^﻿/, '');
+  const sep = p.tsv === true ? '\t' : sniffDelimiter(text);
+  const parsed = parseDelimited(text, sep, CSV_ROWS);
+  let { total } = parsed;
+  const rows = parsed.rows;
+  // A file cut at 2 MB ends in a row cut short.
+  if (p.truncated && rows.length > 1 && total <= CSV_ROWS + 1) { rows.pop(); total--; }
+  const head = rows.length ? rows[0].slice(0, CSV_COLS) : [];
+  const body = rows.slice(1, CSV_ROWS + 1);
+  let cols = head.length;
+  for (const r of body) if (r.length > cols) cols = r.length;
+  cols = Math.min(CSV_COLS, cols);
+  const numeric = [];
+  for (let c = 0; c < cols; c++) {
+    let filled = 0, nums = 0;
+    for (let i = 0; i < body.length && filled < 2000; i++) {
+      const v = body[i][c];
+      if (v === undefined || !v.trim()) continue;
+      filled++;
+      if (!isNaN(csvNumber(v, sep))) nums++;
+    }
+    numeric.push(filled > 0 && nums / filled >= 0.9);
+  }
+  // The same file again (a change on disk) keeps its sort and where it was scrolled to.
+  const same = csvState && csvState.p.path === p.path ? csvState : null;
+  const keep = same && same.sort && same.sort.col < cols ? same.sort : null;
+  csvState = { p, sep, head, body, total, cols, numeric, wide: rows.some((r) => r.length > CSV_COLS), sort: keep, order: null, rowH: 0,
+    top: same ? same.top : 0, left: same ? same.left : 0, widths: null, widthsFont: '' };
+  sortCsv(csvState);
+  return csvState;
+}
+
+/** The rows' order for the sort: stable, numbers as numbers, blanks last either way. */
+function sortCsv(m) {
+  const n = m.body.length;
+  m.order = Array.from({ length: n }, (_, i) => i);
+  if (!m.sort) return;
+  const { col, dir } = m.sort, num = m.numeric[col];
+  const key = m.body.map((r) => { const v = r[col] === undefined ? '' : r[col]; return num ? csvNumber(v, m.sep) : v; });
+  const blank = (i) => (num ? isNaN(key[i]) : !String(key[i]).trim());
+  m.order.sort((a, b) => {
+    const ba = blank(a), bb = blank(b);
+    if (ba || bb) return ba === bb ? a - b : ba ? 1 : -1;
+    const c = num ? key[a] - key[b] : csvCollator.compare(key[a], key[b]);
+    return c ? c * dir : a - b;
+  });
+}
+
 function csvView(p) {
+  const m = csvModel(p);
   const box = el('div', 'viewer viewer-csv');
-  box.append(viewHead(p));
+  const shape = m.head.length ? `${Math.max(0, m.total - 1).toLocaleString()} ${m.total === 2 ? 'row' : 'rows'} × ${m.cols} ${m.cols === 1 ? 'column' : 'columns'}` : '';
+  const head = el('div', 'viewer-head');
+  const sepName = m.sep === ',' || (m.sep === '\t' && p.tsv === true) ? '' : `${DELIMITER_NAMES[m.sep]}-separated`;
+  head.append(el('span', 'viewer-kind', [p.kindName, fmtSize(p.size), shape, sepName].filter(Boolean).join(' · ')), openButton(p));
+  box.append(head);
   const t = truncNote(p);
   if (t) box.append(t);
-  const { rows, total } = parseDelimited(p.text, p.tsv === true ? '\t' : ',', CSV_ROWS);
-  const body = rows.slice(1, CSV_ROWS + 1);
-  if (total - 1 > CSV_ROWS) box.append(note(`Showing the first ${CSV_ROWS.toLocaleString()} of ${(total - 1).toLocaleString()} rows.`));
+  if (m.total - 1 > CSV_ROWS) box.append(note(`Showing the first ${CSV_ROWS.toLocaleString()} of ${(m.total - 1).toLocaleString()} rows.`));
+  if (m.wide) box.append(note(`Showing the first ${CSV_COLS} columns.`));
+  const scroll = el('div', 'csv-scroll');
   const table = el('table', 'csv');
-  if (rows.length) {
+  const virtual = m.body.length > CSV_VIRTUAL;
+  table.classList.toggle('virtual', virtual);
+  table.setAttribute('aria-rowcount', String(m.body.length + 1));
+  if (m.head.length) {
     const tr = table.appendChild(el('thead')).appendChild(el('tr'));
-    rows[0].slice(0, CSV_COLS).forEach((h) => tr.appendChild(el('th', '', h)));
+    tr.setAttribute('aria-rowindex', '1');
+    const corner = tr.appendChild(el('th', 'rn', ''));
+    corner.setAttribute('aria-label', 'Row');
+    for (let c = 0; c < m.cols; c++) {
+      const th = tr.appendChild(el('th', m.numeric[c] ? 'num' : ''));
+      const sorted = m.sort && m.sort.col === c;
+      th.setAttribute('aria-sort', sorted ? (m.sort.dir > 0 ? 'ascending' : 'descending') : 'none');
+      const b = el('button', 'csv-sort');
+      b.type = 'button';
+      b.dataset.action = 'csvSort';
+      b.dataset.col = c;
+      b.title = sorted && m.sort.dir < 0 ? 'Click to restore the file’s order' : `Sort by this column${sorted ? ', descending' : ''}`;
+      b.append(el('span', 'csv-h', m.head[c] === undefined ? '' : m.head[c]), el('span', 'csv-ind', sorted ? (m.sort.dir > 0 ? '▲' : '▼') : ''));
+      th.append(b);
+    }
   }
   const tb = table.appendChild(el('tbody'));
-  const wide = rows.some((r) => r.length > CSV_COLS);
-  if (wide) box.append(note(`Showing the first ${CSV_COLS} columns.`));
-  for (const r of body) { const tr = tb.appendChild(el('tr')); r.slice(0, CSV_COLS).forEach((c) => tr.appendChild(el('td', '', c))); }
-  box.append(table);
+  scroll.append(table);
+  box.append(scroll);
+  const drawRows = () => csvRows(m, scroll, tb, virtual);
+  let queued = false, restoring = true;
+  scroll.addEventListener('scroll', () => {
+    if (restoring) return;
+    m.top = scroll.scrollTop;
+    m.left = scroll.scrollLeft;
+    if (!virtual || queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; drawRows(); });
+  }, { passive: true });
+  drawRows();
+  // draw() puts the view in place in the same task: once it is, the widths are fixed, the window drawn and the scroll put back.
+  queueMicrotask(() => {
+    if (scroll.isConnected) {
+      drawRows();
+      scroll.scrollTop = m.top;
+      scroll.scrollLeft = m.left;
+      drawRows();
+    }
+    restoring = false;
+  });
   return box;
+}
+
+/** A windowed table's column widths, fixed once from a sample of rows (its start, its end and evenly between), so they never
+ *  follow whichever rows happen to be drawn. */
+function csvWidths(m, table) {
+  const cell = table.querySelector('tbody td') || table;
+  const cs = getComputedStyle(cell);
+  const font = `${cs.fontSize} ${cs.fontFamily}`;
+  if (m.widths && m.widthsFont === font) return m.widths;
+  const cx = document.createElement('canvas').getContext('2d');
+  const size = parseFloat(cs.fontSize) || 13, pad = 21, max = size * 32, min = size * 3;
+  const n = m.body.length, sample = new Set();
+  for (let i = 0; i < Math.min(n, 300); i++) { sample.add(i); sample.add(n - 1 - i); }
+  for (let i = 0; i < 400; i++) sample.add(Math.floor((i * n) / 400));
+  const text = (v) => (v === undefined ? '' : String(v).slice(0, 200).replace(/\s+/g, ' '));
+  const widths = [];
+  cx.font = `${cs.fontSize} ${cs.fontFamily}`;
+  const rn = cx.measureText(String(n)).width + pad;
+  for (let c = 0; c < m.cols; c++) {
+    let w = 0;
+    for (const i of sample) if (i >= 0 && i < n) w = Math.max(w, cx.measureText(text(m.body[i][c])).width);
+    widths.push(w);
+  }
+  cx.font = `600 ${cs.fontSize} ${cs.fontFamily}`;
+  for (let c = 0; c < m.cols; c++) widths[c] = Math.max(widths[c], cx.measureText(text(m.head[c])).width + size * 1.4);
+  m.widths = [Math.ceil(Math.max(rn, size * 2 + pad)), ...widths.map((w) => Math.ceil(Math.min(max, Math.max(min, w + pad))))];
+  m.widthsFont = font;
+  return m.widths;
+}
+
+function csvColgroup(table, widths) {
+  let cg = table.querySelector('colgroup');
+  if (!cg) { cg = document.createElement('colgroup'); table.prepend(cg); }
+  cg.replaceChildren(...widths.map((w) => { const col = document.createElement('col'); col.style.width = w + 'px'; return col; }));
+  table.style.width = widths.reduce((a, b) => a + b, 0) + 'px';
+}
+
+/** The table's rows: all of them, or with `virtual` those in the scroll box's view and a margin, between two spacer rows. */
+function csvRows(m, scroll, tb, virtual) {
+  const n = m.order.length;
+  let a = 0, b = n;
+  const h = m.rowH || 26;
+  if (virtual && scroll.isConnected && tb.querySelector('td')) {
+    const table = tb.parentElement, w = csvWidths(m, table);
+    if (table.dataset.widths !== w.join()) { csvColgroup(table, w); table.dataset.widths = w.join(); delete tb.dataset.win; }
+  }
+  if (virtual) {
+    const theadH = tb.previousElementSibling ? tb.previousElementSibling.getBoundingClientRect().height : 0;
+    const top = Math.max(0, scroll.scrollTop - theadH), view = scroll.clientHeight || window.innerHeight;
+    a = Math.max(0, Math.floor(top / h) - 20);
+    b = Math.min(n, Math.ceil((top + view) / h) + 20);
+    const key = `${a},${b},${h}`;
+    if (tb.dataset.win === key) return;
+    tb.dataset.win = key;
+  }
+  const out = [];
+  const pad = (px) => {
+    const tr = el('tr', 'pad');
+    tr.setAttribute('aria-hidden', 'true');
+    const td = tr.appendChild(el('td'));
+    td.colSpan = m.cols + 1;
+    td.style.height = px + 'px';
+    return tr;
+  };
+  if (a > 0) out.push(pad(a * h));
+  for (let k = a; k < b; k++) {
+    const i = m.order[k], r = m.body[i];
+    const tr = el('tr');
+    tr.setAttribute('aria-rowindex', String(k + 2));
+    const rn = tr.appendChild(el('th', 'rn', String(i + 1)));
+    rn.scope = 'row';
+    for (let c = 0; c < m.cols; c++) {
+      const v = r[c] === undefined ? '' : r[c];
+      const td = tr.appendChild(el('td', m.numeric[c] ? 'num' : '', v));
+      if (virtual && (v.length > 60 || v.includes('\n'))) td.title = v.length > 2000 ? v.slice(0, 2000) + '…' : v;
+    }
+    out.push(tr);
+  }
+  if (b < n) out.push(pad((n - b) * h));
+  tb.replaceChildren(...out);
+  if (virtual) {
+    const first = tb.querySelector('tr:not(.pad)');
+    const got = first ? first.getBoundingClientRect().height : 0;
+    if (got > 0 && Math.abs(got - h) > 0.5) { m.rowH = got; delete tb.dataset.win; csvRows(m, scroll, tb, virtual); }
+  }
+}
+
+function csvSortBy(col) {
+  const m = csvState;
+  if (!m || col < 0 || col >= m.cols) return;
+  // Ascending, then descending, then the file's own order.
+  m.sort = !m.sort || m.sort.col !== col ? { col, dir: 1 } : m.sort.dir > 0 ? { col, dir: -1 } : null;
+  sortCsv(m);
+  draw();
+  const b = document.querySelector(`#doc .csv-sort[data-col="${col}"]`);
+  if (b) b.focus({ preventScroll: true });
 }
 
 /** Apple's thumbnail of the file (the extension makes it with QuickLookThumbnailing): a PNG data: URL only, else nothing. */
@@ -1159,19 +1654,131 @@ function loadingView(p) {
   return box;
 }
 
+// The image on screen is fitted to the panel (scale null) or drawn at `scale` × its own size; kept across redraws of that image.
+let imgScale = null, imgScalePath = '';
+const IMG_MAX = 8;
+
 function imageView(p) {
+  if (p.path !== imgScalePath) { imgScale = null; imgScalePath = p.path; }
   const box = el('figure', 'viewer viewer-image');
+  const stage = el('div', 'img-stage');
   const img = document.createElement('img');
-  const cap = el('figcaption', 'viewer-kind', [p.kindName, fmtSize(p.size)].filter(Boolean).join(' · '));
+  const cap = el('figcaption', 'viewer-kind');
+  const meta = el('span', 'img-meta', [p.kindName, fmtSize(p.size)].filter(Boolean).join(' · '));
+  const zoom = el('span', 'img-zoom');
+  cap.append(meta, zoom);
   img.alt = p.name;
-  img.addEventListener('load', () => { cap.textContent = [p.kindName, `${img.naturalWidth} × ${img.naturalHeight}`, fmtSize(p.size)].filter(Boolean).join(' · '); });
+  img.draggable = false;
+  img.addEventListener('load', () => {
+    meta.textContent = [p.kindName, `${img.naturalWidth} × ${img.naturalHeight}`, fmtSize(p.size)].filter(Boolean).join(' · ');
+    applyZoom(stage, img, zoom, imgScale);
+  });
   img.addEventListener('error', () => { if (box.isConnected) box.replaceWith(infoCard(p, 'This image can’t be shown here.')); });
   img.src = p.src;
+  stage.append(img);
   const head = el('div', 'viewer-head');
   head.append(cap, openButton(p));
-  box.append(head, img);
+  box.append(head, stage);
+  imageControls(stage, img, zoom);
   return box;
 }
+
+/** What the image is scaled to when fitted: never above its own size. */
+function fitScale(stage, img) {
+  if (!img.naturalWidth || !img.naturalHeight) return 1;
+  const w = stage.clientWidth || $('doc').clientWidth, h = Math.max(120, window.innerHeight - 150);
+  return Math.min(1, w / img.naturalWidth, h / img.naturalHeight);
+}
+
+/** Draws the image at `scale` (null: fitted), keeping the point at (ax, ay) in the viewport, if given, where it was. */
+function applyZoom(stage, img, label, scale, ax, ay) {
+  const fit = fitScale(stage, img);
+  if (scale !== null && Math.abs(scale - fit) < 0.01) scale = null;
+  const before = img.getBoundingClientRect();
+  imgScale = scale;
+  stage.classList.toggle('zoomed', scale !== null);
+  stage.classList.toggle('zoomable', scale === null && img.naturalWidth > 0);
+  if (scale === null) {
+    img.style.removeProperty('width');
+    img.style.removeProperty('height');
+  } else {
+    img.style.width = Math.round(img.naturalWidth * scale) + 'px';
+    img.style.height = Math.round(img.naturalHeight * scale) + 'px';
+  }
+  const shown = scale === null ? fit : scale;
+  label.textContent = img.naturalWidth ? `${Math.round(shown * 100)}%` : '';
+  stage.title = scale === null ? 'Click to zoom to actual size' : 'Click to fit. Drag to move.';
+  if (scale !== null && ax !== undefined && before.width > 0) {
+    const fx = Math.min(1, Math.max(0, (ax - before.left) / before.width)), fy = Math.min(1, Math.max(0, (ay - before.top) / before.height));
+    const after = img.getBoundingClientRect();
+    stage.scrollLeft += after.left + fx * after.width - ax;
+    stage.scrollTop += after.top + fy * after.height - ay;
+  }
+}
+
+/** Click (or double-click) toggles fitted and actual size; a drag moves a zoomed image; a pinch, ⌘+ and ⌘− zoom. */
+function imageControls(stage, img, label) {
+  let drag = null, moved = false;
+  const clamp = (x) => Math.min(IMG_MAX, Math.max(fitScale(stage, img), x));
+  stage.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || imgScale === null) return;
+    drag = { x: e.clientX, y: e.clientY, l: stage.scrollLeft, t: stage.scrollTop, id: e.pointerId };
+    moved = false;
+  });
+  stage.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (!moved && Math.hypot(dx, dy) < 4) return;
+    if (!moved) { moved = true; stage.classList.add('panning'); try { stage.setPointerCapture(e.pointerId); } catch (err) { /* panning still follows the pointer over the stage */ } }
+    stage.scrollLeft = drag.l - dx;
+    stage.scrollTop = drag.t - dy;
+  });
+  const end = () => { drag = null; stage.classList.remove('panning'); };
+  stage.addEventListener('pointerup', end);
+  stage.addEventListener('pointercancel', end);
+  stage.addEventListener('click', (e) => {
+    if (moved) { moved = false; return; }
+    // The second click of a double-click is not another toggle.
+    if (e.detail > 1 || !img.naturalWidth) return;
+    const fit = fitScale(stage, img);
+    applyZoom(stage, img, label, imgScale === null ? (fit < 1 ? 1 : Math.min(IMG_MAX, 2)) : null, e.clientX, e.clientY);
+  });
+  // A trackpad pinch reaches the page as a wheel event with ctrlKey (and, in WebKit, as gesture events).
+  stage.addEventListener('wheel', (e) => {
+    if (!e.ctrlKey || !img.naturalWidth) return;
+    e.preventDefault();
+    const from = imgScale === null ? fitScale(stage, img) : imgScale;
+    applyZoom(stage, img, label, clamp(from * Math.exp(-e.deltaY * 0.01)), e.clientX, e.clientY);
+  }, { passive: false });
+  let pinchFrom = null;
+  stage.addEventListener('gesturestart', (e) => { e.preventDefault(); pinchFrom = imgScale === null ? fitScale(stage, img) : imgScale; });
+  stage.addEventListener('gesturechange', (e) => {
+    if (pinchFrom === null || !img.naturalWidth) return;
+    e.preventDefault();
+    applyZoom(stage, img, label, clamp(pinchFrom * e.scale), e.clientX, e.clientY);
+  });
+  stage.addEventListener('gestureend', () => { pinchFrom = null; });
+}
+
+/** ⌘+, ⌘− and ⌘0 on the image on screen, about the middle of what is shown. */
+document.addEventListener('keydown', (e) => {
+  if (!e.metaKey || e.altKey || e.ctrlKey || current.view !== 'image') return;
+  const stage = document.querySelector('#doc .img-stage'), img = stage && stage.querySelector('img'), label = document.querySelector('#doc .img-zoom');
+  if (!stage || !img || !img.naturalWidth) return;
+  const r = stage.getBoundingClientRect(), from = imgScale === null ? fitScale(stage, img) : imgScale;
+  const cx = r.left + Math.min(r.width, window.innerWidth) / 2, cy = r.top + Math.min(r.height, window.innerHeight - r.top) / 2;
+  let to;
+  if (e.key === '=' || e.key === '+') to = Math.min(IMG_MAX, from * 1.25);
+  else if (e.key === '-') to = Math.max(fitScale(stage, img), from / 1.25);
+  else if (e.key === '0') to = null;
+  else return;
+  e.preventDefault();
+  applyZoom(stage, img, label, to, cx, cy);
+});
+window.addEventListener('resize', () => {
+  const stage = document.querySelector('#doc .img-stage'), img = stage && stage.querySelector('img');
+  if (stage && img && img.naturalWidth) applyZoom(stage, img, document.querySelector('#doc .img-zoom'), imgScale);
+});
 
 // An archive's listing (sent by the extension from the writer's bsdtar) as a tree of folders and files, built from text nodes.
 const ARCHIVE_ALL_OPEN = 300;
@@ -1497,7 +2104,9 @@ function setFolder(f) {
     for (const d of tree.dirs.values()) d.stale = true;
   }
   const entries = Array.isArray(f.entries) ? f.entries.filter((e) => e && typeof e.name === 'string' && typeof e.path === 'string' && parentOf(e.path) === f.dir) : [];
-  tree.dirs.set(f.dir, { entries: entries.map((e) => ({ name: e.name, path: e.path, dir: e.dir === true, icon: typeof e.icon === 'string' ? e.icon : 'other' })),
+  const num = (v) => (typeof v === 'number' && isFinite(v) ? v : null);
+  tree.dirs.set(f.dir, { entries: entries.map((e) => ({ name: e.name, path: e.path, dir: e.dir === true, icon: typeof e.icon === 'string' ? e.icon : 'other',
+    size: num(e.size), modified: num(e.modified) })),
     more: Math.max(0, +f.more || 0), stale: false });
   requested.delete(f.dir);
   treeVersion++;
@@ -1538,14 +2147,23 @@ function showFolder(p) {
   renderSidebar();
 }
 
-function treeRow(e, depth, open = e.dir && expanded().has(e.path)) {
+/** A row's tooltip: its name, then its size and when it was modified. */
+function rowTitle(e) {
+  const facts = [e.dir ? '' : fmtSize(e.size), e.modified !== null && e.modified !== undefined ? `Modified ${fmtDate(e.modified)}` : ''].filter(Boolean);
+  return [plainName(e.name), facts.join(' · ')].filter(Boolean).join('\n');
+}
+
+function treeRow(r) {
+  const { e, depth, open } = r;
   const a = el('a', `row ${e.dir ? 'folder' : 'file'}`);
   a.href = '#';
-  a.title = e.name;
+  a.title = rowTitle(e);
   a.dataset.path = e.path;
   a.style.setProperty('--depth', depth);
   a.setAttribute('role', 'treeitem');
   a.setAttribute('aria-level', depth + 1);
+  a.setAttribute('aria-setsize', r.size);
+  a.setAttribute('aria-posinset', r.pos);
   const tw = el('span', 'twisty');
   if (e.dir) {
     a.dataset.dir = '1';
@@ -1564,14 +2182,61 @@ function treeRow(e, depth, open = e.dir && expanded().has(e.path)) {
   return a;
 }
 
+// The tree as rows ({ e, depth, open, pos, size } or a { note }), every one of them; only those in view (and a margin) are in
+// the DOM, between two spacers, once there are more than SIDE_VIRTUAL. Every row is SIDE_ROW_H tall (style.css).
+let sideRows = [];
+let sideWin = '';
+const SIDE_ROW_H = 24, SIDE_VIRTUAL = 300, SIDE_OVERSCAN = 30;
+
+function sideNode(r) {
+  if (r.e) return treeRow(r);
+  const n = el('div', 'row-note', r.note);
+  n.style.setProperty('--depth', r.depth);
+  return n;
+}
+
+function sidePad(h) {
+  const d = el('div', 'side-pad');
+  d.setAttribute('aria-hidden', 'true');
+  d.style.height = h + 'px';
+  return d;
+}
+
+/** Puts the rows in view into the list; with `force`, even when the same rows are already there. */
+function drawSideWindow(force) {
+  const list = $('side-list'), n = sideRows.length;
+  let a = 0, b = n;
+  if (n > SIDE_VIRTUAL) {
+    const h = list.clientHeight || window.innerHeight, top = Math.min(list.scrollTop, Math.max(0, n * SIDE_ROW_H - h));
+    a = Math.max(0, Math.floor(top / SIDE_ROW_H) - SIDE_OVERSCAN);
+    b = Math.min(n, Math.ceil((top + h) / SIDE_ROW_H) + SIDE_OVERSCAN);
+  }
+  const key = `${a},${b}`;
+  if (!force && key === sideWin) return;
+  sideWin = key;
+  const nodes = [];
+  if (a > 0) nodes.push(sidePad(a * SIDE_ROW_H));
+  for (let i = a; i < b; i++) nodes.push(sideNode(sideRows[i]));
+  if (b < n) nodes.push(sidePad((n - b) * SIDE_ROW_H));
+  list.replaceChildren(...nodes);
+  markCursor();
+}
+let sideScrollQueued = false;
+$('side-list').addEventListener('scroll', () => {
+  if (sideScrollQueued || sideRows.length <= SIDE_VIRTUAL) return;
+  sideScrollQueued = true;
+  requestAnimationFrame(() => { sideScrollQueued = false; drawSideWindow(false); });
+}, { passive: true });
+
 function renderSidebar() {
   const on = !!tree.root;
   $('sidebar').hidden = !on;
   $('side-toggle').hidden = !on;
   syncToggle();
+  syncSideMenu();
   const key = `${treeVersion}\n${current.path}\n${sideQuery}`;
   if (!on || key === sideDrawn) return;
-  const moved = sideDrawn.split('\n')[1] !== current.path;
+  const moved = sideDrawn.split('\n')[1] !== current.path, refiltered = sideDrawn.split('\n')[2] !== sideQuery;
   sideDrawn = key;
   $('side-head').textContent = tree.name;
   $('side-head').title = `${tree.root}\nClick for an overview of this folder`;
@@ -1581,41 +2246,57 @@ function renderSidebar() {
   const walk = (dir, depth) => {
     const d = tree.dirs.get(dir);
     if (!d) {
-      if (depth) { const n = el('div', 'row-note', 'Loading…'); n.style.setProperty('--depth', depth); rows.push(n); }
+      if (depth) rows.push({ note: 'Loading…', depth });
       return;
     }
-    for (const e of d.entries) {
-      rows.push(treeRow(e, depth));
-      if (e.dir && exp.has(e.path) && depth < 64) walk(e.path, depth + 1);
-    }
-    if (d.more && depth) { const n = el('div', 'row-note', `${d.more.toLocaleString()} more not listed`); n.style.setProperty('--depth', depth); rows.push(n); }
+    d.entries.forEach((e, i) => {
+      const open = e.dir && exp.has(e.path);
+      rows.push({ e, depth, open, pos: i + 1, size: d.entries.length });
+      if (open && depth < 64) walk(e.path, depth + 1);
+    });
+    if (d.more && depth) rows.push({ note: `${d.more.toLocaleString()} more not listed`, depth });
   };
   // Filtered: every listed folder is searched, expanded or not, and a folder stays while anything in it matches. Nothing new
-  // is listed for it.
+  // is listed for it, so a folder past the cap is searched in its listed part only, and the list says so.
+  let partial = false;
   const find = (dir, depth) => {
     const d = tree.dirs.get(dir), out = [];
+    if (d && d.more) partial = true;
     for (const e of d ? d.entries : []) {
       const kids = e.dir && depth < 64 ? find(e.path, depth + 1) : [];
-      if (kids.length || matches(e.name, sideQuery)) out.push(treeRow(e, depth, kids.length > 0), ...kids);
+      if (kids.length || matches(e.name, sideQuery)) out.push({ e, depth, open: kids.length > 0 }, ...kids);
     }
     return out;
   };
-  if (sideQuery) rows.push(...find(tree.root, 0));
-  else walk(tree.root, 0);
-  if (sideQuery && !rows.length) rows.push(el('div', 'row-note', 'No matches'));
-  list.replaceChildren(...rows);
+  if (sideQuery) {
+    rows.push(...find(tree.root, 0));
+    // Filtered rows are numbered among the rows shown at their level under the same parent.
+    const seen = new Map();
+    for (const r of rows) { const k = parentOf(r.e.path); r.pos = (seen.get(k) || 0) + 1; seen.set(k, r.pos); }
+    for (const r of rows) r.size = seen.get(parentOf(r.e.path));
+    if (!rows.length) rows.push({ note: 'No matches', depth: 0 });
+    if (partial) rows.push({ note: 'Only listed files were searched', depth: 0 });
+  } else walk(tree.root, 0);
+  const hadActive = sideRows.some((r) => r.e && r.e.path === current.path);
+  sideRows = rows;
   const top = tree.dirs.get(tree.root);
   $('side-more').hidden = !(top && top.more) || !!sideQuery;
   $('side-more').textContent = top && top.more ? `${top.more.toLocaleString()} more not listed` : '';
   // Keep the document on screen in view; the list scrolls on its own, never the page.
-  const at = list.querySelector('a.active');
+  const at = sideRows.findIndex((r) => r.e && !r.e.dir && r.e.path === current.path);
   for (const [p, t] of keyed) if (performance.now() - t > 2000) keyed.delete(p);
   if (moved && !keyed.delete(current.path) && !keyed.size) cursor = current.path;
-  markCursor();
-  if (at && moved) at.classList.add('arrive');
-  if (at && (moved || at.offsetTop < list.scrollTop || at.offsetTop + at.offsetHeight > list.scrollTop + list.clientHeight)) {
-    list.scrollTop = Math.max(0, at.offsetTop - list.clientHeight / 3);
+  // The list is drawn at its new height first: a scrollTop set while it still holds fewer rows would be clamped. A folder
+  // opened or closed above the document leaves the list where it is.
+  drawSideWindow(true);
+  const y = at * SIDE_ROW_H;
+  const off = y < list.scrollTop || y + SIDE_ROW_H > list.scrollTop + list.clientHeight;
+  if (at >= 0 && (moved || ((refiltered || !hadActive) && off))) {
+    list.scrollTop = Math.max(0, y - list.clientHeight / 3);
+    drawSideWindow(false);
   }
+  const shown = list.querySelector('a.active');
+  if (shown && moved) shown.classList.add('arrive');
 }
 
 /** The file on screen, as a path from the root: the panel's title stays the file Quick Look opened. */
@@ -1721,21 +2402,23 @@ function markCursor() {
   }
 }
 
-/** Scrolls the list, never the page, just enough to show the row. */
+/** Scrolls the list, never the page, just enough to show the row, and draws the rows now in view. */
 function revealRow(r) {
-  const list = $('side-list');
-  if (r.offsetTop < list.scrollTop) list.scrollTop = r.offsetTop;
-  else if (r.offsetTop + r.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = r.offsetTop + r.offsetHeight - list.clientHeight;
+  const list = $('side-list'), y = sideRows.indexOf(r) * SIDE_ROW_H;
+  if (y < 0) return;
+  if (y < list.scrollTop) list.scrollTop = y;
+  else if (y + SIDE_ROW_H > list.scrollTop + list.clientHeight) list.scrollTop = y + SIDE_ROW_H - list.clientHeight;
+  drawSideWindow(false);
 }
 
 // A held arrow key moves the cursor at the key-repeat rate and opens the file it stops on.
 let openTimer = 0;
 function moveCursor(r, open, repeat) {
-  cursor = r.dataset.path;
-  markCursor();
+  cursor = r.e.path;
   revealRow(r);
+  markCursor();
   clearTimeout(openTimer);
-  if (!open || r.dataset.dir || cursor === current.path) return;
+  if (!open || r.e.dir || cursor === current.path) return;
   const path = cursor;
   keyed.set(path, performance.now());
   const go = () => { peek(false); post({ type: 'open', path }); };
@@ -1744,10 +2427,10 @@ function moveCursor(r, open, repeat) {
 
 /** One of Finder's keys for the tree, by KeyboardEvent key name; false when it does nothing here. */
 function sideKey(key, inFilter, repeat) {
-  if (editing || !pop.hidden || !tree.root || !sidebarShown()) return false;
-  const rows = [...$('side-list').querySelectorAll('a.row')];
+  if (editing || !pop.hidden || !sidePop.hidden || !tree.root || !sidebarShown()) return false;
+  const rows = sideRows.filter((x) => x.e);
   if (!rows.length) return false;
-  const i = rows.findIndex((r) => r.dataset.path === cursor);
+  const i = rows.findIndex((x) => x.e.path === cursor);
   const r = rows[i];
   const step = (d) => rows[i < 0 ? (d > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, i + d))];
   switch (key) {
@@ -1756,27 +2439,27 @@ function sideKey(key, inFilter, repeat) {
     case 'Home': moveCursor(rows[0], true, false); break;
     case 'End': moveCursor(rows[rows.length - 1], true, false); break;
     case 'ArrowRight':
-      if (!r || !r.dataset.dir) return false;
+      if (!r || !r.e.dir) return false;
       // Filtered, a folder shows what matches whether or not it is open: the arrows only move, never open or close one.
       if (sideQuery) {
-        if (rows[i + 1] && +rows[i + 1].getAttribute('aria-level') > +r.getAttribute('aria-level')) moveCursor(rows[i + 1], true, false);
+        if (rows[i + 1] && rows[i + 1].depth > r.depth) moveCursor(rows[i + 1], true, false);
         else return false;
         break;
       }
-      if (r.getAttribute('aria-expanded') !== 'true') toggleFolder(r.dataset.path);
-      else if (rows[i + 1] && +rows[i + 1].getAttribute('aria-level') > +r.getAttribute('aria-level')) moveCursor(rows[i + 1], true, false);
+      if (!r.open) toggleFolder(r.e.path);
+      else if (rows[i + 1] && rows[i + 1].depth > r.depth) moveCursor(rows[i + 1], true, false);
       break;
     case 'ArrowLeft': {
       if (!r) return false;
-      if (!sideQuery && r.dataset.dir && expanded().has(r.dataset.path) && r.getAttribute('aria-expanded') === 'true') { toggleFolder(r.dataset.path); break; }
-      const up = rows.find((x) => x.dataset.path === parentOf(r.dataset.path));
+      if (!sideQuery && r.e.dir && expanded().has(r.e.path) && r.open) { toggleFolder(r.e.path); break; }
+      const up = rows.find((x) => x.e.path === parentOf(r.e.path));
       if (!up) return false;
       moveCursor(up, false, false);
       break;
     }
     case 'Enter':
       if (!r) { if (inFilter) moveCursor(rows[0], true, false); else return false; }
-      else if (r.dataset.dir) toggleFolder(r.dataset.path);
+      else if (r.e.dir) toggleFolder(r.e.path);
       else moveCursor(r, true, false);
       break;
     default: return false;
@@ -1854,6 +2537,42 @@ Object.assign(window.sb, {
 });
 document.addEventListener('click', (e) => { if (filterSession && !e.target.closest('#sidebar')) endFilter(); }, true);
 
+// ---------- the sidebar's menu: sort order (a panel key) and hidden files (the settings window's, never the page's) ----------
+
+const sidePop = $('side-pop');
+function syncSideMenu() {
+  sidePop.querySelectorAll('[data-sort]').forEach((b) => b.setAttribute('aria-checked', String((settings.folderSort || 'name') === b.dataset.sort)));
+  $('side-hidden').setAttribute('aria-checked', String(settings.showHiddenFiles === true));
+}
+
+function showSideMenu(open) {
+  if (open) {
+    const b = $('side-menu').getBoundingClientRect(), side = $('sidebar').getBoundingClientRect();
+    sidePop.style.top = Math.round(b.bottom - side.top + 4) + 'px';
+  }
+  sidePop.hidden = !open;
+  $('side-menu').setAttribute('aria-expanded', String(open));
+  if (open) syncSideMenu();
+}
+
+$('side-menu').addEventListener('click', (e) => { e.preventDefault(); showSideMenu(sidePop.hidden); });
+sidePop.addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  e.preventDefault();
+  showSideMenu(false);
+  if (b.dataset.sort) choose('folderSort', b.dataset.sort);
+  else if (b.id === 'side-hidden') post({ type: 'openSettings', tab: 'folders' });
+});
+// While the menu is open, a click anywhere else only closes it.
+document.addEventListener('click', (e) => {
+  if (sidePop.hidden || e.target.closest('#side-pop, #side-menu')) return;
+  showSideMenu(false);
+  e.preventDefault();
+  e.stopPropagation();
+}, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !sidePop.hidden) { showSideMenu(false); e.preventDefault(); } });
+
 // ---------- the Aa popover (in #toolbar, outside #doc: nothing the document renders can reach these messages) ----------
 
 const pop = $('aa-pop');
@@ -1900,14 +2619,39 @@ function showUpdate(u) {
   $('aa-update').hidden = false;
   $('aa').dataset.update = '';
   $('aa').title = `Appearance · ${title}`;
+  $('upd').title = title;
+  syncUpdateButton();
   // A successful update quits this preview; one still here after a while asks whether the installer is still running.
   if (u.state === 'started') updatePolls = 0;
   if (running) updateTimer = setTimeout(() => post({ type: 'updateCheck' }), [10000, 30000][updatePolls++] ?? 60000);
 }
 
-function showPopover(open) {
+// What the Aa popover offers for the view on screen: everything for Markdown; text size and theme for the text views, whose code
+// and tables follow both; nothing for the rest (an image, a PDF, media, an archive, an info card), where Aa is hidden and an
+// update is shown by its own button instead.
+const AA_TEXT_VIEWS = new Set(['code', 'text', 'json', 'csv']);
+const aaMode = (p) => (isMarkdown(p) ? 'full' : AA_TEXT_VIEWS.has(p.view) ? 'text' : 'none');
+
+function syncAa(p) {
+  const mode = aaMode(p);
+  $('aa').hidden = mode === 'none';
+  if (!pop.hidden && pop.dataset.mode !== 'update' && (mode === 'none' || pop.dataset.mode !== mode)) showPopover(false);
+  syncUpdateButton();
+}
+
+/** The update's own button: only when there is an update and Aa, which otherwise carries its dot, is hidden. */
+function syncUpdateButton() {
+  const b = $('upd'), show = $('aa').hidden && 'update' in $('aa').dataset;
+  b.hidden = !show;
+  if (!show && !pop.hidden && pop.dataset.mode === 'update') showPopover(false);
+}
+
+/** `mode`: 'full', 'text' or 'update' (the update row alone); closing takes none. */
+function showPopover(open, mode = aaMode(current)) {
   pop.hidden = !open;
-  $('aa').setAttribute('aria-expanded', String(open));
+  if (open) pop.dataset.mode = mode;
+  $('aa').setAttribute('aria-expanded', String(open && mode !== 'update'));
+  $('upd').setAttribute('aria-expanded', String(open && mode === 'update'));
   if (open) syncPopover();
   syncPdf();
 }
@@ -1919,7 +2663,8 @@ function choose(key, value) {
   window.sb.applySettings({ ...settings, [key]: value });
 }
 
-$('aa').addEventListener('click', () => showPopover(pop.hidden));
+$('aa').addEventListener('click', () => showPopover(pop.hidden || pop.dataset.mode === 'update'));
+$('upd').addEventListener('click', () => showPopover(pop.hidden || pop.dataset.mode !== 'update', 'update'));
 pop.addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b || b.disabled) return;
@@ -1941,7 +2686,7 @@ pop.addEventListener('click', (e) => {
 });
 // While the popover is open, a click anywhere else only closes it (it does not also start an edit or follow a link).
 document.addEventListener('click', (e) => {
-  if (pop.hidden || e.target.closest('#aa-pop, #aa')) return;
+  if (pop.hidden || e.target.closest('#aa-pop, #aa, #upd')) return;
   showPopover(false);
   e.preventDefault();
   e.stopPropagation();

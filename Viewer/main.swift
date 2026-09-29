@@ -171,7 +171,11 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
         panel.ignoresMouseEvents = false
         open = true
         controller.hostAppeared()
-        helper()?.panelState(true, requestID: id, windowNumber: panel.windowNumber)
+        // After this turn of the run loop, once the window server has the panel's first visible frame.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.open, self.request == id else { return }
+            self.helper()?.panelState(true, requestID: id, windowNumber: self.panel.windowNumber)
+        }
     }
 
     private func decline(_ id: Int, _ why: String) {

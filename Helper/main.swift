@@ -16,7 +16,7 @@ final class Endpoint: NSObject, SpacebarHelperProtocol {
     }
     func panelState(_ open: Bool, requestID: Int, windowNumber: Int) {
         guard role == .viewer, let conn else { return }
-        DispatchQueue.main.async { Helper.shared.panelState(open, requestID: requestID, from: conn) }
+        DispatchQueue.main.async { Helper.shared.panelState(open, requestID: requestID, windowNumber: windowNumber, from: conn) }
     }
     func declined(_ requestID: Int) {
         guard role == .viewer else { return }
@@ -57,6 +57,8 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private var observedFocus: AXUIElement?
     private var followPending = false
     private var finderTextFocus = false
+    /// The viewer's panel, as it reported it; checked on screen before its keys are taken, and again every 2 s.
+    private var panelWindow = 0
     private var watchTimer: Timer?
     private let bg = DispatchQueue(label: "md.spacebar.helper.ax", qos: .userInteractive)
 
@@ -95,6 +97,18 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         if tap != nil, observer == nil { observeFinder() }
         // The viewer gives up on a show after 4 s; one it never answered for is closed here.
         if let p = pending, Date().timeIntervalSince(p.at) > 5 { fail(p.id, "no panel in 5 s") }
+        if panelOpen, !panelOnScreen(panelWindow) {
+            log.error("panel window \(self.panelWindow) not on screen: its keys go back to Finder")
+            close("panel not on screen")
+        }
+    }
+
+    /// Whether window `n` is on screen, visible, and the viewer's.
+    private func panelOnScreen(_ n: Int) -> Bool {
+        guard n > 0, viewerPid > 0,
+              let w = (CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(n)) as? [[String: Any]])?.first else { return false }
+        return w[kCGWindowOwnerPID as String] as? pid_t == viewerPid && w[kCGWindowIsOnscreen as String] as? Bool == true
+            && (w[kCGWindowAlpha as String] as? Double ?? 0) > 0
     }
 
     func status() -> HelperStatus {
@@ -163,14 +177,26 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         }
     }
 
-    func panelState(_ open: Bool, requestID: Int, from c: NSXPCConnection) {
+    func panelState(_ open: Bool, requestID: Int, windowNumber: Int, from c: NSXPCConnection, retried: Bool = false) {
         guard c === viewer else { return }
-        // Only a show this helper asked for may open the panel, so a viewer cannot claim Finder's keys on its own.
-        if open {
-            guard pending?.id == requestID else { return log.error("panel open for request \(requestID) not pending: ignored") }
-            pending = nil
+        guard open else { panelOpen = false; panelWindow = 0; return }
+        // Only a show this helper asked for may open the panel, and only with a window of the viewer's really on screen, so a
+        // viewer cannot claim Finder's keys on its own.
+        guard pending?.id == requestID else { return log.error("panel open for request \(requestID) not pending: ignored") }
+        guard panelOnScreen(windowNumber) else {
+            // The window server may not have shown the panel's first frame yet.
+            if !retried {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                    self?.panelState(open, requestID: requestID, windowNumber: windowNumber, from: c, retried: true)
+                }
+            } else {
+                log.error("panel open for request \(requestID): window \(windowNumber) not on screen")
+            }
+            return
         }
-        panelOpen = open
+        pending = nil
+        panelOpen = true
+        panelWindow = windowNumber
     }
 
     func declined(_ id: Int) {
@@ -218,6 +244,12 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         }
         guard type == .keyDown || type == .keyUp else { return pass }
         let e = Self.keyEvent(event, down: type == .keyDown)
+        // A rename or the search field can open without a focus notification arriving first: read the focus now, before a key
+        // that the panel would take from it. Any AX error counts as a text field, so the key stays Finder's.
+        if panelOpen, e.down, !e.isRepeat, !e.tagged, e.targetPid == finderPid, finderPid > 0,
+           KeyRoute.closes(e) || KeyRoute.forwarded(e, sidebarKeys: settings.sidebarKeys) != nil {
+            finderTextFocus = Self.textFocus(finderPid)
+        }
         let ctx = PanelContext(open: panelOpen || pending != nil, finderPid: finderPid, viewerPid: viewerPid, sidebarKeys: settings.sidebarKeys,
                                textFocus: finderTextFocus)
         switch route.route(e, panel: ctx) {
@@ -282,7 +314,8 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         // follow of Finder's selection that failed leaves the panel as it is.
         guard p.space else { return }
         viewerProxy()?.close()
-        repost(to: p.finderPid)
+        // Seconds later the Space is stale: Apple's panel opening then would surprise more than nothing happening.
+        if Date().timeIntervalSince(p.at) < 1 { repost(to: p.finderPid) }
     }
 
     private func close(_ why: String) {
@@ -381,11 +414,19 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private func readTextFocus() {
         let pid = finderPid
         bg.async {
-            let t = AXTrace(budgetMs: 100)
-            let f = t.element(AXUIElementCreateApplication(pid), kAXFocusedUIElementAttribute)
-            let text = f.map { Decision.textRoles.contains(t.role($0) ?? "") || t.subrole($0) == "AXSearchField" } ?? false
+            let text = Self.textFocus(pid)
             DispatchQueue.main.async { self.finderTextFocus = text }
         }
+    }
+
+    /// Whether Finder's focus is a text field, read within the AX budget; true when AX could not say.
+    static func textFocus(_ pid: pid_t) -> Bool {
+        let t = AXTrace()
+        let f = t.element(AXUIElementCreateApplication(pid), kAXFocusedUIElementAttribute)
+        guard t.errors.isEmpty, !t.expired, let f else { return !t.errors.isEmpty || t.expired }
+        let role = t.role(f), sub = t.subrole(f)
+        guard t.errors.isEmpty else { return true }
+        return Decision.textRoles.contains(role ?? "") || sub == "AXSearchField"
     }
 
     private func checkQuickLook() {

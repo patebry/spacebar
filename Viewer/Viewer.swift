@@ -48,9 +48,11 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
 
     private var conn: NSXPCConnection?
     private var retries = 0
-    private let panel: ViewerPanel
-    private let controller = PanelController()
-    private let keys = TapKeySource()
+    let panel: ViewerPanel
+    let controller = PanelController()
+    let keys = TapKeySource()
+    /// Where the panel opens instead of over Finder's window (a harness parks it off screen).
+    static var parkedFrame: NSRect?
     /// The request on screen, or on its way there; 0 when closed.
     private var request = 0
     private var open = false
@@ -79,6 +81,7 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
     func start() {
         connect()
         armIdle()
+        WebHost.shared.whenReady { WebHost.shared.web.evaluateJavaScript("sb.warm && sb.warm(); 0") }
     }
 
     // MARK: The helper
@@ -149,7 +152,7 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
     func suspend() {
         DispatchQueue.main.async {
             guard self.open else { return }
-            self.hide(tell: false)
+            self.hide(tell: false, blank: false)
             self.suspended = true
         }
     }
@@ -217,13 +220,26 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
         hide(tell: open)
     }
 
-    private func hide(tell: Bool) {
+    /// `blank`: the page is emptied, and drawn so, before the panel is ordered out. The next show reveals the panel as soon as
+    /// the page has laid out, which can be a frame before WebKit's drawing of it reaches the screen: that frame is then empty,
+    /// never the last file's content. A panel suspended for `restore` keeps its content.
+    private func hide(tell: Bool, blank: Bool = true) {
         let id = request
         request = 0
         if open { controller.hostDisappearing() }
         let was = open || panel.isVisible
         open = false
-        panel.orderOut(nil)
+        panel.ignoresMouseEvents = true
+        if blank, was {
+            panel.alphaValue = 0
+            controller.webView.callAsyncJavaScript("if (window.sb && sb.blank) sb.blank(); await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)))",
+                                                   arguments: [:], in: nil, in: .page) { [weak self] _ in
+                guard let self, self.request == 0, !self.open else { return }
+                self.panel.orderOut(nil)
+            }
+        } else {
+            panel.orderOut(nil)
+        }
         if tell && was { helper()?.panelState(false, requestID: id, windowNumber: 0) }
         armIdle()
     }
@@ -264,6 +280,7 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
 
     /// About 60% of the visible frame of the screen Finder's front window is on, between 640×480 and 1200×900, centred.
     private func place() {
+        if let f = Self.parkedFrame { return panel.setFrame(f, display: false) }
         let screen = Self.finderScreen() ?? NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
         guard let vf = screen?.visibleFrame else { return }
         let w = min(max(vf.width * 0.6, 640), 1200, vf.width), h = min(max(vf.height * 0.6, 480), 900, vf.height)

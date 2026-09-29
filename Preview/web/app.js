@@ -892,6 +892,7 @@ window.sb = {
     // A re-render of the same file (a change on disk) keeps the app its Open button names; only a new file asks again.
     if (samePath && p.app === undefined && typeof current.app === 'string') p = { ...p, app: current.app };
     current = p;
+    delete root.dataset.blank;
     imgStatus = new Map();
     imgAsked = new Set();
     imgWaiting.clear();
@@ -1002,6 +1003,14 @@ window.sb = {
     const old = document.querySelector('#doc .info-card > svg.ic'), img = thumbNode(current);
     if (old && img) old.replaceWith(img);
   },
+  /** The panel is going away: nothing of this file may show when it next opens on another, until that one is drawn. */
+  blank() { root.dataset.blank = ''; },
+  /** Runs the renderers once on a sample, into nothing on screen, so the first document shown does not pay for their first run
+   *  (the panel's page is loaded long before it). */
+  warm() {
+    try { render('# a\n\n**b** [c](#d) `e`\n\n- [ ] f\n\n| g | h |\n|---|---|\n| 1 | 2 |\n\n$x^2$\n\n```js\nconst i = 1;\n```\n'); codeBlock('let j = 1\n', 'swift'); }
+    catch (e) { /* a warm-up only */ }
+  },
   /** The zoom of the image the extension draws (a bitmap view), as a whole percentage, for the caption. */
   imageZoom(z) {
     if (!z || z.path !== current.path || current.view !== 'bitmap' || !Number.isInteger(z.zoom)) return;
@@ -1073,6 +1082,7 @@ window.sb = {
 
 const TEXT_VIEWS = new Set(['code', 'text', 'json']);
 const HIGHLIGHT_MAX = 512 * 1024;
+const HIGHLIGHT_NOW = 24 * 1024;
 const CSV_ROWS = 50000;
 const CSV_COLS = 200;
 // Bidirectional controls in a file name could make it read as another type; they are dropped wherever a name is shown.
@@ -1180,10 +1190,16 @@ function codeBlock(text, lang) {
   wrap.append(el('pre', 'gutter', Array.from({ length: n }, (_, i) => i + 1).join('\n')));
   const pre = el('pre', 'code');
   const code = el('code', 'hljs');
-  if (lang && window.hljs && hljs.getLanguage(lang) && text.length <= HIGHLIGHT_MAX) {
+  const highlight = () => {
     const html = hljs.highlight(text, { language: lang, ignoreIllegals: true }).value;
-    code.append(DOMPurify.sanitize(html, { ALLOWED_TAGS: ['span'], ALLOWED_ATTR: ['class'], RETURN_DOM_FRAGMENT: true }));
-  } else code.textContent = text;
+    code.replaceChildren(DOMPurify.sanitize(html, { ALLOWED_TAGS: ['span'], ALLOWED_ATTR: ['class'], RETURN_DOM_FRAGMENT: true }));
+  };
+  code.textContent = text;
+  if (lang && window.hljs && hljs.getLanguage(lang) && text.length <= HIGHLIGHT_MAX) {
+    // A long file is painted plain first: highlighting 100 KB takes about 150 ms, which would hold the first paint.
+    if (text.length <= HIGHLIGHT_NOW) highlight();
+    else afterPaint(() => { if (code.isConnected) highlight(); });
+  }
   pre.append(code);
   wrap.append(pre);
   return wrap;

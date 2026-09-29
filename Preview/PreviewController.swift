@@ -1070,19 +1070,25 @@ class PreviewController: NSViewController {
         let cloud = FileTypes.isDataless(url.path)
         // Only a download times out: PDFKit rebuilding a large local PDF may take longer, and is still shown when done.
         let id = loader.load(timesOut: cloud, { () -> (payload: [String: Any], pdf: Result<PDFDocument, PDFPane.LoadError>?,
-                                                       rich: Result<NSAttributedString, RichTextPane.LoadError>?,
-                                                       image: Result<ImagePane.Loaded, ImagePane.LoadError>?, stuck: Bool) in
+                                                       rich: Result<NSAttributedString, RichTextPane.LoadError>?, stuck: Bool) in
             var p = FileView.payload(path: url.path, kind: kind, root: root, reason: reason, canOpen: canOpen, quickLook: !noQuickLook)
             // Text opens in a text editor even where its default app is refused (a script): the writer names the app.
             if Self.textViews.contains(p["view"] as? String ?? ""), LinkPolicy.editorRefusal(url) == nil { p["canOpen"] = true }
             if p["view"] as? String == "info", url.pathExtension.lowercased() == "dmg" { p["details"] = DiskImage.details(url.path) }
             var pdf: Result<PDFDocument, PDFPane.LoadError>?
             var rich: Result<NSAttributedString, RichTextPane.LoadError>?
-            var image: Result<ImagePane.Loaded, ImagePane.LoadError>?
             switch p["view"] as? String {
             case "pdf": pdf = PDFPane.open(url)
             case "rtf": rich = RichTextPane.open(url)
-            case "bitmap": image = ImagePane.open(url)
+            // Decoded by the pane once the page is up; its size, for the caption, is in the file's properties.
+            case "bitmap":
+                if let s = ImagePane.pixelSize(url) {
+                    p["width"] = Int(s.width)
+                    p["height"] = Int(s.height)
+                } else {
+                    p["view"] = "info"
+                    p["note"] = "This image can’t be shown here."
+                }
             case "image" where cloud: _ = try? SchemeHandler.readImage(url)
             case "html" where cloud: _ = FileTypes.materializing { try? Data(contentsOf: url) }
             // One byte downloads the whole file; AVFoundation, reading it later on its own threads, could not.
@@ -1092,7 +1098,7 @@ class PreviewController: NSViewController {
             // Only what FileView downloads counts: an evicted archive is its info card without a download.
             let fetched = ["pdf", "image", "bitmap", "html", "video", "audio", "rtf", "quicklook"].contains(p["view"] as? String)
                 || ([.code, .json, .csv, .text].contains(kind) && (p["size"] as? Int64 ?? .max) <= FolderListing.maxDocumentBytes)
-            return (p, pdf, rich, image, cloud && fetched && FileTypes.isDataless(url.path))
+            return (p, pdf, rich, cloud && fetched && FileTypes.isDataless(url.path))
         }) { [weak self] outcome in
             guard let self, self.host.controller === self, self.fileURL == url, self.fileKind == kind else { return }
             guard case .done(let r) = outcome else {
@@ -1116,32 +1122,20 @@ class PreviewController: NSViewController {
                 p["note"] = e == .tooLarge ? "This document is too large to show here." : "This document can’t be shown here."
             case nil: break
             }
-            var picture: ImagePane.Loaded?
-            switch r.image {
-            case .success(let l)?:
-                picture = l
-                p["width"] = Int(l.size.width)
-                p["height"] = Int(l.size.height)
-            case .failure?:
-                p["view"] = "info"
-                p["note"] = "This image can’t be shown here."
-            case nil: break
-            }
             if r.stuck { return self.showUnavailable(url, reason: reason, cloud: true) }
             // The panel closed while a PDF or media opened: it is shown again when the panel reappears (viewWillAppear).
             if p["view"] as? String == "quicklook" { self.quickLookShown = true }
-            if doc != nil || text != nil || picture != nil || ["video", "audio", "html", "quicklook"].contains(p["view"] as? String), gen != self.pdfGen { return }
+            if doc != nil || text != nil || ["video", "audio", "html", "quicklook", "bitmap"].contains(p["view"] as? String), gen != self.pdfGen { return }
             self.shownCanOpen = p["canOpen"] as? Bool == true
             self.shownText = Self.textViews.contains(p["view"] as? String ?? "")
-            self.finishShow(url, p, pdf: doc, rich: text, image: picture, reason: reason)
+            self.finishShow(url, p, pdf: doc, rich: text, reason: reason)
             if p["view"] as? String == "info", !cloud, self.thumbPending != url.path { self.addThumbnail(url, icon: kind == .app) }
         }
         if cloud, let s = Self.stamp(url) { downloading = (url, id, s) }
         if reason != "change" { showLoading(url, load: id, cloud: cloud) }
     }
 
-    private func finishShow(_ url: URL, _ payload: [String: Any], pdf: PDFDocument?, rich: NSAttributedString? = nil, image: ImagePane.Loaded? = nil,
-                            reason: String) {
+    private func finishShow(_ url: URL, _ payload: [String: Any], pdf: PDFDocument?, rich: NSAttributedString? = nil, reason: String) {
         unavailablePath = nil
         var p = payload
         if let o = opener, o.path == url.path { p["app"] = o.app; p["editor"] = o.editor }
@@ -1171,10 +1165,11 @@ class PreviewController: NSViewController {
             pane.show(rich, path: url.path)
             richPane = pane
         }
-        if let image {
+        if view == "bitmap" {
             let pane = imagePane ?? ImagePane()
             pane.onZoom = { [weak self] path, zoom in self?.js("sb.imageZoom", ["path": path, "zoom": zoom]) }
-            pane.show(image, path: url.path)
+            pane.onFailed = { [weak self] in self?.imageFailed($0, p) }
+            pane.load(url)
             imagePane = pane
         }
         if view == "video" || view == "audio" {
@@ -1285,6 +1280,18 @@ class PreviewController: NSViewController {
         quickLookFailedPath = path
         shownStamp = nil
         show(url, reason: "open")
+    }
+
+    /// An image ImageIO read the size of but cannot decode: its info card, with Apple's thumbnail when there is one.
+    private func imageFailed(_ path: String, _ p: [String: Any]) {
+        guard let url = fileURL, url.path == path, imagePane?.path == path else { return }
+        closePDF()
+        var card = p
+        card["view"] = "info"
+        card["note"] = "This image can’t be shown here."
+        if let o = opener, o.path == path { card["app"] = o.app }
+        render(card)
+        addThumbnail(url)
     }
 
     /// A file AVFoundation cannot play (not media after all, or a codec it lacks): its info card, as for a PDF PDFKit cannot open.

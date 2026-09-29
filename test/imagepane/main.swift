@@ -185,6 +185,21 @@ pane.place(message: ["path": photo, "hide": true], in: webView)
 check("place: hide with no rect conceals", pane.view.isHidden)
 pane.place(message: msg.merging(["path": photo, "dark": false, "radius": 0]) { _, n in n }, in: webView)
 check("place: light again, square corners", !pane.view.isHidden && pane.view.appearance?.name == .aqua && pane.view.layer?.masksToBounds == false)
+// load: decoded off the main thread, then shown; a file ImageIO cannot decode is reported for its info card.
+var failedPaths: [String] = []
+pane.onFailed = { failedPaths.append($0) }
+let tiff = dir.appendingPathComponent("scan.tiff")
+pane.load(tiff)
+check("load: the pane is for the file at once, its image not yet decoded", pane.path == tiff.path && pane.imageView.image == nil)
+spin(until: 5) { pane.imageView.image != nil }
+check("load: decoded off the main thread, then shown fitted", pane.imageView.image?.size == NSSize(width: 120, height: 80) && pane.fitted && failedPaths.isEmpty)
+pane.load(dir.appendingPathComponent("fake.heic"))
+check("load: another file clears the last image at once", pane.imageView.image == nil)
+spin(until: 5) { !failedPaths.isEmpty }
+check("load: a file ImageIO cannot decode is reported, for that file", failedPaths == [dir.appendingPathComponent("fake.heic").path], "\(failedPaths)")
+check("pixelSize: from the properties alone, turned by EXIF, nil for a non-image",
+      ImagePane.pixelSize(dir.appendingPathComponent("turned.heic")) == CGSize(width: 80, height: 120)
+      && ImagePane.pixelSize(dir.appendingPathComponent("fake.heic")) == nil)
 pane.close()
 check("close: out of the container, the image let go", pane.view.superview == nil && pane.path == nil && !pane.placed && pane.imageView.image == nil
       && !pane.key("zoomIn"))

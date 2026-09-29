@@ -231,6 +231,8 @@
     background: color-mix(in srgb, var(--fg) 4%, transparent); }
   #doc .img-stage.zoomed img { flex: none; margin: auto; max-width: none; max-height: none; border-radius: 0; }
   #doc .img-stage.panning { cursor: grabbing; }
+  /* The Space helper's panel closed: emptied until the next file renders. */
+  :root[data-blank] body > * { visibility: hidden !important; }
   /* A PDF fills the rest of the panel under its toolbar, edge to edge; the extension lays its native PDFView over .pdf-area. */
   :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=quicklook], [data-view=rtf], [data-view=bitmap]) body { height: 100vh; overflow: hidden; }
   :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=quicklook], [data-view=rtf], [data-view=bitmap]) #main { display: flex; flex-direction: column; height: 100vh; }

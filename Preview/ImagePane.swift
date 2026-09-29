@@ -26,7 +26,9 @@ final class ImagePane: NSObject {
 
     let view: NSScrollView
     let imageView: NSImageView
+    /// The file the pane is for; `shownPath` once its image is on screen.
     private(set) var path: String?
+    private var shownPath: String?
     private(set) var placed = false
     private(set) var size: CGSize = .zero
     /// Fitted to the area (the zoom follows a resize) rather than at a chosen zoom.
@@ -38,6 +40,8 @@ final class ImagePane: NSObject {
     private var lastPercent = -1
     /// The zoom, as a whole percentage, whenever it changes: the page shows it in the caption.
     var onZoom: (String, Int) -> Void = { _, _ in }
+    /// ImageIO could not decode the file: the owner shows its info card instead.
+    var onFailed: (String) -> Void = { _ in }
 
     override init() {
         view = ImageScrollView(frame: .zero)
@@ -100,10 +104,38 @@ final class ImagePane: NSObject {
         return o >= 5 && o <= 8 ? CGSize(width: h, height: w) : CGSize(width: w, height: h)
     }
 
+    /// Decodes `url` off the main thread, then shows it; the page lays out and paints meanwhile. The same file again (a change
+    /// on disk) keeps the image on screen until the new one is decoded.
+    func load(_ url: URL) {
+        let path = url.path
+        if path != shownPath { imageView.image = nil }
+        self.path = path
+        DispatchQueue.global(qos: .userInitiated).async {
+            let r = Self.open(url)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.path == path else { return }
+                switch r {
+                case .success(let loaded): self.show(loaded, path: path)
+                case .failure: self.onFailed(path)
+                }
+            }
+        }
+    }
+
+    /// Width and height as shown, from the file's properties alone (nothing decoded); nil when ImageIO cannot read them.
+    static func pixelSize(_ url: URL) -> CGSize? {
+        FileTypes.materializing {
+            guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary), CGImageSourceGetCount(src) > 0
+            else { return nil }
+            return orientedSize(src, primaryIndex(src))
+        }
+    }
+
     /// Shows `loaded`, the image at `path`. The same file again (a change on disk) keeps its zoom; another starts fitted.
     func show(_ loaded: Loaded, path: String) {
-        let same = path == self.path
+        let same = path == shownPath
         self.path = path
+        shownPath = path
         size = loaded.size
         reduced = loaded.reduced
         upgrading = false
@@ -230,6 +262,7 @@ final class ImagePane: NSObject {
         view.removeFromSuperview()
         view.isHidden = true
         path = nil
+        shownPath = nil
         placed = false
         size = .zero
         reduced = false

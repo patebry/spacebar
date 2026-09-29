@@ -113,8 +113,8 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
         guard conn != nil else { return }
         conn?.invalidate()
         conn = nil
+        if open || suspended { hide(tell: false) }
         suspended = false
-        if open { hide(tell: false) }
         retries += 1
         guard retries <= 5 else {
             vlog.info("helper unreachable: exiting")
@@ -144,14 +144,15 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
 
     func close() {
         DispatchQueue.main.async {
-            self.suspended = false
             self.hide(tell: true)
+            self.suspended = false
         }
     }
 
     func suspend() {
         DispatchQueue.main.async {
             guard self.open else { return }
+            self.controller.hostSuspending()
             self.hide(tell: false, blank: false)
             self.suspended = true
         }
@@ -164,8 +165,12 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
             self.suspended = false
             self.idle?.cancel()
             self.request = requestID
+            self.panel.alphaValue = 1
+            self.panel.ignoresMouseEvents = false
             self.panel.orderFrontRegardless()
-            self.reveal(requestID)
+            self.open = true
+            self.controller.hostAppeared()
+            self.announce(requestID)
         }
     }
 
@@ -173,6 +178,7 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
 
     private func present(_ urls: [URL], id: Int) {
         guard !urls.isEmpty else { return decline(id, "no paths") }
+        if suspended { hide(tell: false) }
         suspended = false
         idle?.cancel()
         request = id
@@ -206,6 +212,10 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
         panel.ignoresMouseEvents = false
         open = true
         controller.hostAppeared()
+        announce(id)
+    }
+
+    private func announce(_ id: Int) {
         // After this turn of the run loop, once the window server has the panel's first visible frame.
         DispatchQueue.main.async { [weak self] in
             guard let self, self.open, self.request == id else { return }
@@ -226,17 +236,22 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
     private func hide(tell: Bool, blank: Bool = true) {
         let id = request
         request = 0
-        if open { controller.hostDisappearing() }
+        if open || (blank && suspended) { controller.hostDisappearing() }
         let was = open || panel.isVisible
         open = false
         panel.ignoresMouseEvents = true
-        if blank, was {
+        // A suspended panel is out of the window list: it comes back in, unseen, so that WebKit draws the empty page.
+        if blank, was || suspended {
             panel.alphaValue = 0
-            controller.webView.callAsyncJavaScript("if (window.sb && sb.blank) sb.blank(); await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)))",
-                                                   arguments: [:], in: nil, in: .page) { [weak self] _ in
+            if !panel.isVisible { panel.orderFrontRegardless() }
+            let out = { [weak self] in
                 guard let self, self.request == 0, !self.open else { return }
                 self.panel.orderOut(nil)
             }
+            controller.webView.callAsyncJavaScript("if (window.sb && sb.blank) sb.blank(); await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)))",
+                                                   arguments: [:], in: nil, in: .page) { _ in out() }
+            // Should WebKit not draw a frame (the page still loading), the panel still goes.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: out)
         } else {
             panel.orderOut(nil)
         }

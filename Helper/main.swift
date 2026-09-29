@@ -347,8 +347,8 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         log.info("suspend (\(why, privacy: .public))")
     }
 
-    /// Finder came back: the viewer shows the suspended panel again as a new request, which, like a show, takes Finder's keys
-    /// only once `panelState` has seen its window on screen.
+    /// Finder came back: the viewer shows the suspended panel again as a new request, which, like a show, holds Finder's keys
+    /// while pending and keeps them only once `panelState` has seen its window on screen.
     private func restore() {
         suspendedAt = nil
         guard viewer != nil, finderPid > 0 else { return }

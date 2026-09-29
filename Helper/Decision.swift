@@ -96,8 +96,8 @@ enum Decision {
     static let suspendLimit: TimeInterval = 10 * 60
 
     /// An app came forward. Another app hides an open panel, as it hides Apple's Quick Look, and closes a show still on its way;
-    /// Finder brings a hidden panel back within `suspendLimit`. The panel brought back is a show like any other: it takes
-    /// Finder's keys only once `panelOpened` accepts it.
+    /// Finder brings a hidden panel back within `suspendLimit`. The panel brought back is a show like any other: pending, it
+    /// holds the closing and list keys as a Space's show does, and keeps them only once `panelOpened` accepts it.
     static func activated(isFinder: Bool, open: Bool, pending: Bool, suspendedFor age: TimeInterval?) -> ActivationAction {
         if !isFinder { return pending ? .close : open ? .suspend : .none }
         guard let age, !open, !pending else { return .none }

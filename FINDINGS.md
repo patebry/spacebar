@@ -329,7 +329,28 @@ through the call the helper makes over XPC (`show`, from a background thread, th
 every display, and a stand-in writer service that answers at once. *Frame* is show to the panel's first frame with alpha above
 0 in the window server (polled with `CGWindowListCopyWindowInfo`); *painted* is show to the content drawn: the page's
 `rendered` message (posted from the animation frame after it lays out), an `<img>` decoded, or a native view up with its
-content. The helper's own decision (8 ms) is added to each before it is held to its target. @@SPEED@@
+content. The helper's own decision (8 ms) is added to each before it is held to its target. 
+
+Measured on this Mac (macOS 15.4.1, Apple silicon, in daily use), 20 shows of each file, warm, at the commit
+that adds this paragraph:
+
+| File | Frame p50 / p95 | Painted p50 / p95 |
+|---|---|---|
+| Markdown (README.md, 25 KB) | 15 / 22 ms | 44 / 48 ms |
+| Log, 200 KB | 30 / 34 ms | 37 / 44 ms |
+| Swift, 100 KB (highlighted after paint) | 44 / 48 ms | 63 / 76 ms |
+| PNG 1.7 MB, `<img>` | 14 / 21 ms | 25 / 41 ms |
+| JPEG 12 MP, `<img>` | 15 / 18 ms | 25 / 43 ms |
+| HEIC 12 MP, ImagePane | 18 / 22 ms | 50 / 60 ms |
+| PDF, 12 pages, PDFPane | 20 / 21 ms | 33 / 33 ms |
+
+With the helper's 8 ms, frame p95 over every kind is 53 ms (target 60) and painted for Markdown, text, images and PDF 42 ms
+p50 and 58 ms p95 (targets 120 and 200). An arrow to the next file in the sidebar paints in 21 ms p50, 51 ms p95 (a 100 KB
+Swift file among Markdown, text and a PNG; target 50). The first show after the viewer starts: frame 91 ms, painted 129 ms.
+Single outliers of about 500 to 700 ms, one in 140 shows, did not recur under logging or when run alone. Memory: the viewer
+idles at 19 MB footprint (64 MB resident) and at 37 MB (100 MB resident, most of it shared frameworks) after every kind has been
+shown; WebKit's content process is apart. Target 90 MB. Live, the installed helper had 13 MB footprint and 20 MB resident
+(target 25 MB).
 
 - **Stale frame.** The panel is revealed on the page's `painted` message, which is posted once the DOM is built, before
   WebKit has drawn it; WebKit's drawing reached the window server 2 to 3 frames after the panel's alpha, so a panel reused
@@ -354,7 +375,7 @@ out, keeping what it shows, and the helper gives Finder its keys at once. Finder
 it as a new request through the same gate as a show: pending, acknowledged within 150 ms, and taking Finder's keys only
 once `panelState` reports a window the helper sees on screen (with its one retry); a restore that fails the gate closes the
 panel rather than leave it up without keys. A show still on its way when another app comes forward is closed, as before.
-Native views are torn down on suspend and rebuilt on restore, as for Quick Look's own disappear and reappear. Verified by
+Native views stay while suspended (media paused), so a PDF keeps its page and a video its time. Verified by
 `test/helper/run.sh` (the rule); the round trip in Finder needs a live check.
 
 ## Open questions

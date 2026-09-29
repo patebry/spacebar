@@ -142,6 +142,7 @@ let lock = NSLock()
 var windowNumber = 0
 var request = 0
 struct Sample { let frame: Double?; let painted: Double? }
+var closedLeftUp = 0
 
 /// One Space: the helper's show call, from an XPC thread; then the close the next Space or Esc sends.
 func space(_ url: URL) -> Sample {
@@ -163,6 +164,7 @@ func space(_ url: URL) -> Sample {
     }
     viewer.close()
     spin(0.25)
+    if viewer.panel.isVisible { closedLeftUp += 1 }
     return Sample(frame: frameAt.map { ms(t0, $0) }, painted: paintedAt.map { ms(t0, $0) })
 }
 
@@ -293,5 +295,6 @@ target(String(format: "painted p50 %.1f ms <= 120 ms and p95 %.1f ms <= 200 ms (
 target(String(format: "arrow -> next file painted p50 %.1f ms <= 50 ms", pct(keys, 0.5)), keys.count == arrows.count && pct(keys, 0.5) <= 50)
 target(String(format: "viewer idle footprint %.1f MB <= 90 MB", idleFootprint), idleFootprint <= 90)
 target("the first visible frame of the next file never shows the last one", stale.allSatisfy { $0 == 0 })
+target("every close orders the panel out within 250 ms", closedLeftUp == 0)
 print(failures == 0 ? "viewer latency: all targets met" : "viewer latency: \(failures) targets missed")
 exit(failures == 0 ? 0 : 1)

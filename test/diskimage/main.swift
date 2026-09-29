@@ -13,7 +13,7 @@ for (f, name) in want {
     check("\(f): format \(name), not encrypted", details("\(f).dmg") == [["Format", name], ["Encrypted", "No"]], "\(details("\(f).dmg"))")
 }
 check("an encrypted image says so, and nothing it cannot read", details("locked.dmg") == [["Encrypted", "Yes, with a password"]], "\(details("locked.dmg"))")
-check("a raw image with no trailer: not encrypted, no format", details("raw.dmg") == [["Encrypted", "No"]], "\(details("raw.dmg"))")
+check("a raw image with no trailer: nothing said of it", details("raw.dmg").isEmpty, "\(details("raw.dmg"))")
 
 // Hostile trailers: a table past the end, one too large, a table that is not a plist, a chunk count far beyond the data.
 func koly(xmlOffset: UInt64, xmlLength: UInt64) -> Data {
@@ -34,7 +34,7 @@ mish[204 + 16 + 7] = 9
 let table = try! PropertyListSerialization.data(fromPropertyList: ["resource-fork": ["blkx": [["Data": mish]]]], format: .xml, options: 0)
 write("lying.dmg", table, koly(xmlOffset: 0, xmlLength: UInt64(table.count)))
 for n in ["past", "huge", "wrap", "junk"] {
-    check("\(n): a bad trailer gives no format, and no crash", details("\(n).dmg") == [["Encrypted", "No"]], "\(details("\(n).dmg"))")
+    check("\(n): a bad trailer gives nothing, and no crash", details("\(n).dmg").isEmpty, "\(details("\(n).dmg"))")
 }
 check("a block table claiming 4 billion chunks reads only the one it holds", details("lying.dmg") == [["Format", "Compressed (zlib)"], ["Encrypted", "No"]],
       "\(details("lying.dmg"))")

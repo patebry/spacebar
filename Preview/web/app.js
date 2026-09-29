@@ -1196,7 +1196,7 @@ function codeBlock(text, lang) {
   };
   code.textContent = text;
   if (lang && window.hljs && hljs.getLanguage(lang) && text.length <= HIGHLIGHT_MAX) {
-    // A long file is painted plain first: highlighting 100 KB takes about 150 ms, which would hold the first paint.
+    // A long file is painted plain first: highlighting it would hold the first paint.
     if (text.length <= HIGHLIGHT_NOW) highlight();
     else afterPaint(() => { if (code.isConnected) highlight(); });
   }

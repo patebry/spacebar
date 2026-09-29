@@ -279,8 +279,8 @@ class PreviewController: NSViewController {
     private var qlPane: QLFallbackPane?
     /// Whether the file on screen is shown by `qlPane`, so the panel reappearing shows it again.
     private var quickLookShown = false
-    /// A file Apple's preview showed only as an icon: shown as text, or its info card, from then on.
-    private var quickLookFailedPath: String?
+    /// A file Apple's preview showed only as an icon, as it was then (stat stamp): shown as text, or its info card, until it changes.
+    private var quickLookFailed: (path: String, stamp: String?)?
     /// The RTF or RTFD document on screen, drawn natively over the same reserved area; nil for every other view.
     private var richPane: RichTextPane?
     /// An image ImageIO decodes (HEIC, TIFF, RAW…), drawn natively over the same reserved area; nil for every other view.
@@ -535,6 +535,15 @@ class PreviewController: NSViewController {
     func hostAppeared() {
         appeared = true
         wantListKeys()
+    }
+
+    /// The host hides the view for a while and will show it again as it is (`hostAppeared`): the keys are let go and media
+    /// paused, but the native views stay.
+    func hostSuspending() {
+        appeared = false
+        stopEdit(notifyWriter: true)
+        stopFilter(notifyWriter: true)
+        mediaPane?.pause()
     }
 
     /// The host is taking the view away.
@@ -1066,7 +1075,7 @@ class PreviewController: NSViewController {
         // Read off the main thread: text is read, an image in iCloud is downloaded before the page loads it, and PDFKit may
         // scan a large or damaged file to rebuild it. A newer show or open supersedes this one.
         let gen = pdfGen, kind = fileKind, root = rootDir, canOpen = LinkPolicy.fileRefusal(url, allowArchives: kind == .archive) == nil
-        let noQuickLook = quickLookFailedPath == url.path
+        let noQuickLook = quickLookFailed.map { $0.path == url.path && $0.stamp == Self.stamp(url) } ?? false
         let cloud = FileTypes.isDataless(url.path)
         // Only a download times out: PDFKit rebuilding a large local PDF may take longer, and is still shown when done.
         let id = loader.load(timesOut: cloud, { () -> (payload: [String: Any], pdf: Result<PDFDocument, PDFPane.LoadError>?,
@@ -1277,7 +1286,7 @@ class PreviewController: NSViewController {
         guard let url = fileURL, url.path == path, qlPane?.path == path else { return }
         closePDF()
         quickLookShown = false
-        quickLookFailedPath = path
+        quickLookFailed = (path, Self.stamp(url))
         shownStamp = nil
         show(url, reason: "open")
     }

@@ -78,6 +78,14 @@ if let l = loaded("large.tiff"), let full = loaded("large.tiff", maxSide: ImageP
           && l.size == CGSize(width: 4000, height: 1000) && !full.reduced && full.image.width == 4000, "\(l.image.width) \(full.image.width)")
 }
 check("a damaged RAW and a text file named .heic are refused", loaded("junk.dng") == nil && loaded("fake.heic") == nil)
+// A PNG header declaring 12,000 × 12,000 pixels (144 megapixels) and no data: refused from its properties, never decoded.
+if !sandboxed {
+    var ihdr = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13]) + Data("IHDR".utf8)
+    ihdr += Data([0, 0, 0x2E, 0xE0, 0, 0, 0x2E, 0xE0, 8, 2, 0, 0, 0]) + Data([0, 0, 0, 0])
+    try! ihdr.write(to: dir.appendingPathComponent("bomb.tiff"))
+}
+check("an image declaring more than 80 megapixels is refused before any decode", ImagePane.pixelSize(dir.appendingPathComponent("bomb.tiff")) == nil
+      && loaded("bomb.tiff") == nil)
 if sandboxed { exit(failures == 0 ? 0 : 1) }
 
 // ---- routing: which images get the native view ----

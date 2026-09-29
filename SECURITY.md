@@ -40,7 +40,8 @@ Six features reach further than a rendered page, and are in scope:
   pick. The claims are read at run time from the bundle's copy of `scripts/quicklook-types.txt`; without it nothing is
   handed over. Folders, packages other than iWork's, apps, archives, disk images, web archives, mail and contact cards are
   never shown this way (Apple's previews of web content and mail load what they link to; its contact card reads Contacts
-  in spacebar's own process). A test makes a file of every claimed type and checks that none reaches the view.
+  in spacebar's own process). A test makes a file of every claimed type and checks that none reaches the view. The type is
+  checked again just before the view is given the file; a file swapped between that check and Quick Look's read is not.
 - **Images and disk images parsed in the sandbox.** HEIC, AVIF, TIFF, camera RAW, PSD, OpenEXR, TGA, JPEG 2000 and icon
   files are decoded by ImageIO in the sandboxed extension or viewer, as a PDF is by PDFKit, rather than in WebKit's content
   process; the decode is bounded to 8,192 pixels a side and to files of at most 50 MB. A `.dmg`'s format and encryption are

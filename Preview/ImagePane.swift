@@ -22,6 +22,10 @@ final class ImagePane: NSObject {
     /// The longest side of the first decode, and of the whole-image decode a zoom may ask for (past it the image is upsampled).
     static let screenPixels = 2560
     static let maxPixels = 8192
+    /// A file declaring more pixels than this is refused (a small, highly compressed file can declare gigapixels); the
+    /// whole-image decode is held to `maxDecodeArea`.
+    static let maxArea = 80_000_000
+    static let maxDecodeArea = 40_000_000
     static let maxZoom: CGFloat = 8
 
     let view: NSScrollView
@@ -34,6 +38,8 @@ final class ImagePane: NSObject {
     /// Fitted to the area (the zoom follows a resize) rather than at a chosen zoom.
     private(set) var fitted = true
     private var reduced = false
+    /// Bumped by every load and close: a decode that finishes after a newer one started is dropped.
+    private var generation = 0
     /// The width in pixels of the decode on screen.
     private(set) var decodedWidth = 0
     private var upgrading = false
@@ -78,12 +84,14 @@ final class ImagePane: NSObject {
                   CGImageSourceGetCount(src) > 0 else { return .failure(.unreadable) }
             let index = primaryIndex(src)
             guard let size = orientedSize(src, index), size.width >= 1, size.height >= 1 else { return .failure(.unreadable) }
+            guard Int(size.width) * Int(size.height) <= maxArea else { return .failure(.unreadable) }
             let side = Int(max(size.width, size.height))
-            let target = min(side, maxSide)
+            let areaSide = Int(Double(side) * min(1, (Double(maxDecodeArea) / Double(size.width * size.height)).squareRoot()))
+            let target = min(side, maxSide, max(areaSide, 1))
             let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
                                          kCGImageSourceThumbnailMaxPixelSize: target, kCGImageSourceShouldCacheImmediately: true]
             guard let image = CGImageSourceCreateThumbnailAtIndex(src, index, opts as CFDictionary) else { return .failure(.unreadable) }
-            return .success(Loaded(image: image, size: size, reduced: max(image.width, image.height) < min(side, maxPixels)))
+            return .success(Loaded(image: image, size: size, reduced: max(image.width, image.height) < min(side, maxPixels, areaSide)))
         }
     }
 
@@ -110,10 +118,13 @@ final class ImagePane: NSObject {
         let path = url.path
         if path != shownPath { imageView.image = nil }
         self.path = path
+        generation += 1
+        lastPercent = -1
+        let gen = generation
         DispatchQueue.global(qos: .userInitiated).async {
             let r = Self.open(url)
             DispatchQueue.main.async { [weak self] in
-                guard let self, self.path == path else { return }
+                guard let self, self.generation == gen, self.path == path else { return }
                 switch r {
                 case .success(let loaded): self.show(loaded, path: path)
                 case .failure: self.onFailed(path)
@@ -127,7 +138,8 @@ final class ImagePane: NSObject {
         FileTypes.materializing {
             guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary), CGImageSourceGetCount(src) > 0
             else { return nil }
-            return orientedSize(src, primaryIndex(src))
+            guard let s = orientedSize(src, primaryIndex(src)), Int(s.width) * Int(s.height) <= maxArea else { return nil }
+            return s
         }
     }
 
@@ -213,10 +225,11 @@ final class ImagePane: NSObject {
         let scale = view.window?.backingScaleFactor ?? 2
         guard view.magnification * scale * size.width > CGFloat(decodedWidth) * 1.05 else { return }
         upgrading = true
+        let gen = generation
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let r = Self.open(URL(fileURLWithPath: path), maxSide: Self.maxPixels)
             DispatchQueue.main.async {
-                guard let self, self.path == path, case .success(let full) = r, full.size == self.size else { return }
+                guard let self, self.generation == gen, self.path == path, case .success(let full) = r, full.size == self.size else { return }
                 self.reduced = false
                 self.decodedWidth = full.image.width
                 self.imageView.image = NSImage(cgImage: full.image, size: full.size)
@@ -258,6 +271,8 @@ final class ImagePane: NSObject {
 
     /// Takes the view down and lets the image go.
     func close() {
+        generation += 1
+        (view as? ImageScrollView)?.endDrag()
         imageView.image = nil
         view.removeFromSuperview()
         view.isHidden = true
@@ -305,6 +320,13 @@ final class ImageScrollView: NSScrollView {
         let m = magnification
         contentView.scroll(to: NSPoint(x: d.origin.x - dx / m, y: d.origin.y + (contentView.isFlipped ? dy : -dy) / m))
         reflectScrolledClipView(contentView)
+    }
+
+    /// A pane closed mid-drag gets no mouse-up: its cursor is let go here.
+    func endDrag() {
+        if moved { NSCursor.pop() }
+        drag = nil
+        moved = false
     }
 
     override func mouseUp(with e: NSEvent) {

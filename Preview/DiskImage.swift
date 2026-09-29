@@ -21,9 +21,8 @@ enum DiskImage {
         if head == Data("encrcdsa".utf8) || read(fd, at: size - 8, count: 8) == Data("cdsaencr".utf8) {
             return [["Encrypted", "Yes, with a password"]]
         }
-        var rows = [["Encrypted", "No"]]
-        if let f = format(fd, size: size) { rows.insert(["Format", f], at: 0) }
-        return rows
+        guard let f = format(fd, size: size) else { return [] }
+        return [["Format", f], ["Encrypted", "No"]]
     }
 
     private static func read(_ fd: Int32, at offset: Int64, count: Int) -> Data? {
@@ -59,7 +58,7 @@ enum DiskImage {
         let names: [UInt32: String] = [0x8000_0004: "Compressed (ADC)", 0x8000_0005: "Compressed (zlib)", 0x8000_0006: "Compressed (bzip2)",
                                        0x8000_0007: "Compressed (LZFSE)", 0x8000_0008: "Compressed (LZMA)", 0x0000_0001: "Uncompressed"]
         guard let top = sectors.filter({ names[$0.key] != nil && $0.value > 0 }).max(by: { $0.value < $1.value }) else {
-            return sectors.isEmpty ? nil : "Empty"
+            return !sectors.isEmpty && sectors.keys.allSatisfy({ [0, 2].contains($0) }) ? "Empty" : nil
         }
         return names[top.key]
     }

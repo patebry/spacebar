@@ -10,7 +10,9 @@ enum HelperAgent {
     static func commandLine(_ args: [String]) -> Int32? {
         if args.contains("--helper-status") {
             print("agent: \(describe(service.status))")
-            if let s = ask(timeout: 3) { print("helper: pid \(s.pid) trusted=\(s.trusted) tap=\(s.tap) viewer=\(s.viewer)") } else { print("helper: not answering") }
+            if let s = ask(timeout: 3, current: false) {
+                print("helper: pid \(s.pid) trusted=\(s.trusted) tap=\(s.tap) viewer=\(s.viewer)\(isCurrent(s) ? "" : " stale (running replaced code)")")
+            } else { print("helper: not answering") }
             return 0
         }
         if args.contains("--reregister") { return reregister() }
@@ -169,9 +171,17 @@ enum HelperAgent {
         }
     }
 
-    /// The helper's status, when it answers within `timeout` seconds.
-    static func ask(timeout: TimeInterval) -> HelperStatus? {
-        call(timeout: timeout) { proxy, reply in proxy.status { reply(try? JSONDecoder().decode(HelperStatus.self, from: $0)) } } ?? nil
+    /// The helper's status, when it answers within `timeout` seconds. With `current`, only a helper running this app's copy of
+    /// its executable counts: one left running from a replaced bundle is as good as down, and `--reregister` replaces it.
+    static func ask(timeout: TimeInterval, current: Bool = true) -> HelperStatus? {
+        let s = call(timeout: timeout) { proxy, reply in proxy.status { reply(try? JSONDecoder().decode(HelperStatus.self, from: $0)) } } ?? nil
+        guard let s, !current || isCurrent(s) else { return nil }
+        return s
+    }
+
+    static func isCurrent(_ s: HelperStatus) -> Bool {
+        let exe = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/\(HelperIDs.helperApp)/Contents/MacOS/SpacebarHelper").path
+        return !s.binary.isEmpty && s.binary == HelperBinary.stamp(exe)
     }
 
     /// Asks the helper to show macOS's Accessibility prompt; whether it is trusted now, or nil when it did not answer.

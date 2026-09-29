@@ -9,7 +9,7 @@ final class Stub: NSObject, SpacebarHelperProtocol {
     func panelState(_ open: Bool, requestID: Int, windowNumber: Int) {}
     func declined(_ requestID: Int) {}
     func status(reply: @escaping (Data) -> Void) {
-        let s = HelperStatus(pid: getpid(), version: role == .viewer ? "viewer" : "app", enabled: true, trusted: false, tap: false, viewer: false)
+        let s = HelperStatus(pid: getpid(), version: role == .viewer ? "viewer" : "app", enabled: true, trusted: false, tap: false, viewer: false, binary: "")
         reply(role == .app ? (try! JSONEncoder().encode(s)) : Data())
     }
     func promptAccessibility(reply: @escaping (Bool) -> Void) { reply(false) }

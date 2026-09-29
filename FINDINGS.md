@@ -297,7 +297,7 @@ agent's launch constraint (LWCR) to the helper's code, and it keeps that item ac
 `registerLaunchItem` logs "found existing item" with the old UUID. A new build has a new code hash (every change of source or
 CFBundleVersion does; an identical rebuild does not), so AMFI refuses it: "Launch Constraint Violation ... (Constraint not
 matched)", OS_REASON_CODESIGNING, and launchd reports `spawn failed`, `last exit code = 78: EX_CONFIG`, `needs LWCR update`.
-Meanwhile the old helper keeps running from the replaced bundle and answers nobody, since its code on disk changed. The item
+Meanwhile the old helper keeps running from the replaced bundle. It can still answer the settings app's status query, which made `--reregister` report "helper already answering" and leave it running with the old code; so the status carries the stamp (inode and modification time) of the executable the helper started from, and a helper whose stamp no longer matches the file in the app counts as down. The item
 is rebuilt for the new binary (`invalidateLaunchItem`, a new UUID) only when an SMAppService status query arrives after launchd
 has refused a launch of the current submission, about 10 s after it was registered; the next unregister and register then
 launches the helper within 3 s. The old `--reregister` unregistered exactly 10 s after each register (its 10 s wait for an

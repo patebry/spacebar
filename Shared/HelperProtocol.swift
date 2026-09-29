@@ -49,6 +49,18 @@ struct HelperStatus: Codable, Equatable {
     var trusted: Bool
     var tap: Bool
     var viewer: Bool
+    /// The helper's executable as it was when the helper started (`HelperBinary.stamp`). A helper still running after the app
+    /// was replaced in place answers too, from code no longer on disk; the settings app tells the two apart by this.
+    var binary: String
+}
+
+enum HelperBinary {
+    /// The file's inode and modification time; empty when it cannot be read.
+    static func stamp(_ path: String) -> String {
+        var st = stat()
+        guard stat(path, &st) == 0 else { return "" }
+        return "\(st.st_ino)-\(st.st_mtimespec.tv_sec).\(st.st_mtimespec.tv_nsec)"
+    }
 }
 
 /// What the settings window and the welcome sheet say about the helper.

@@ -225,7 +225,7 @@ check("activation: Finder with nothing hidden, or a panel open or on its way, do
 
 // MARK: what the settings window says
 
-let up = HelperStatus(pid: 1, version: "0.3", enabled: true, trusted: true, tap: true, viewer: true)
+let up = HelperStatus(pid: 1, version: "0.3", enabled: true, trusted: true, tap: true, viewer: true, binary: "1-2.3")
 var untrusted = up; untrusted.trusted = false; untrusted.tap = false
 var noTap = up; noTap.tap = false
 check("state: the setting off is Off, whatever else", HelperState.of(enabled: false, agent: .requiresApproval, helper: up, secureInput: true) == .off)
@@ -259,6 +259,19 @@ check("tap: kept while granted", Decision.tapAction(exists: true, trusted: true)
 check("tap: removed once Accessibility is revoked", Decision.tapAction(exists: true, trusted: false) == .remove)
 check("tap: a disabled tap is enabled again only while Accessibility is granted",
       Decision.reenablesTap(trusted: true) && !Decision.reenablesTap(trusted: false))
+
+do {
+    let f = NSTemporaryDirectory() + "helper-stamp-\(getpid())"
+    FileManager.default.createFile(atPath: f, contents: Data("a".utf8))
+    let before = HelperBinary.stamp(f)
+    try? FileManager.default.removeItem(atPath: f)
+    FileManager.default.createFile(atPath: f + ".new", contents: Data("a".utf8))
+    try? FileManager.default.moveItem(atPath: f + ".new", toPath: f)
+    let after = HelperBinary.stamp(f)
+    try? FileManager.default.removeItem(atPath: f)
+    check("binary stamp: a file replaced in place (a new install) stamps differently; a missing one is empty",
+          !before.isEmpty && !after.isEmpty && before != after && HelperBinary.stamp(f).isEmpty)
+}
 
 print(failures == 0 ? "\nall helper checks passed (\(recorded.count) recorded contexts)" : "\n\(failures) helper checks failed")
 exit(failures == 0 ? 0 : 1)

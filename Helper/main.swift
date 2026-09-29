@@ -41,6 +41,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private let listener = NSXPCListener(machServiceName: HelperIDs.machService)
     private var settings = SettingsFile.load()
     private(set) var tap: CFMachPort?
+    private static let binary = HelperBinary.stamp(Bundle.main.executablePath ?? "")
     private var tapSource: CFRunLoopSource?
     private var route = KeyRoute()
     private var viewer: NSXPCConnection?
@@ -134,7 +135,8 @@ final class Helper: NSObject, NSXPCListenerDelegate {
 
     func status() -> HelperStatus {
         HelperStatus(pid: getpid(), version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "",
-                     enabled: settings.spaceHelper, trusted: AXIsProcessTrusted(), tap: tap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false, viewer: viewer != nil)
+                     enabled: settings.spaceHelper, trusted: AXIsProcessTrusted(), tap: tap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false, viewer: viewer != nil,
+                     binary: Self.binary)
     }
 
     // MARK: Connections

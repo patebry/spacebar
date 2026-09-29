@@ -27,13 +27,12 @@ enum Link {
         return nil
     }
 
+    /// The running process's flags as the kernel holds them (CS_RUNTIME), not the file on disk, which can be swapped after exec.
     static func hardened(_ code: SecCode) -> Bool {
-        var staticCode: SecStaticCode?
         var info: CFDictionary?
-        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
-              SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
-              let flags = (info as? [String: Any])?[kSecCodeInfoFlags as String] as? UInt32 else { return false }
-        return flags & SecCodeSignatureFlags.runtime.rawValue != 0
+        guard SecCodeCopySigningInformation(unsafeBitCast(code, to: SecStaticCode.self), SecCSFlags(rawValue: kSecCSDynamicInformation), &info) == errSecSuccess,
+              let status = (info as? [String: Any])?[kSecCodeInfoStatus as String] as? UInt32 else { return false }
+        return status & SecCodeSignatureFlags.runtime.rawValue != 0
     }
 
     /// Gates `listener`; false when this build is unsigned, and then every connection is refused in `accept`.

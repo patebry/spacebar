@@ -425,7 +425,8 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         let f = t.element(AXUIElementCreateApplication(pid), kAXFocusedUIElementAttribute)
         guard t.errors.isEmpty, !t.expired, let f else { return !t.errors.isEmpty || t.expired }
         let role = t.role(f), sub = t.subrole(f)
-        guard t.errors.isEmpty else { return true }
+        // A role left unread because the budget ran out is not an answer.
+        guard t.errors.isEmpty, role != nil || !t.expired else { return true }
         return Decision.textRoles.contains(role ?? "") || sub == "AXSearchField"
     }
 

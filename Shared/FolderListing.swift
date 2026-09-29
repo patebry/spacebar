@@ -89,23 +89,53 @@ enum FileTypes {
         }
     }
 
-    /// Shown by Apple's own Quick Look in a QLPreviewView over the panel (Preview/QLFallbackPane.swift), by exact type. QLPreviewView
-    /// hands a file to whichever extension Quick Look would pick, spacebar included, so no type in scripts/quicklook-types.txt may
-    /// be here (test/qlpane checks), nor any generic zip or package type. RTF has its own view.
-    static let appleQuickLookTypes: Set<String> = [
-        "org.openxmlformats.wordprocessingml.document", "org.openxmlformats.spreadsheetml.sheet", "org.openxmlformats.presentationml.presentation",
-        "com.microsoft.word.doc", "com.microsoft.excel.xls", "com.microsoft.powerpoint.ppt",
-        "com.apple.iwork.pages.sffpages", "com.apple.iwork.pages.pages", "com.apple.iwork.numbers.sffnumbers", "com.apple.iwork.numbers.numbers",
-        "com.apple.iwork.keynote.sffkey", "com.apple.iwork.keynote.key",
-        "public.truetype-ttf-font", "public.opentype-font", "public.truetype-collection-font", "com.apple.truetype-datafork-suitcase-font",
-        "com.pixar.universal-scene-description-mobile", "com.apple.reality",
-    ]
-
-    /// The content type of `path` when it is one Apple's Quick Look shows for spacebar, else nil. Reads metadata only.
+    /// Shown by Apple's own Quick Look in a QLPreviewView over the panel (Preview/QLFallbackPane.swift): a file of no kind of
+    /// spacebar's own whose declared type Quick Look may have a generator for (Office, iWork, fonts, 3D, certificates, calendars,
+    /// e-books). QLPreviewView hands a file to whichever extension Quick Look would pick, spacebar included, so a type spacebar
+    /// claims, or one that conforms to a type it claims, is never shown this way (test/qlpane checks every claim). Nor is a folder,
+    /// a package (bar iWork's documents), an app, an archive or a disk image, anything spacebar shows itself, web content or mail
+    /// (Apple's previews of those load what they link to), or a vCard: its preview reads Contacts in this process.
     static func appleQuickLookType(_ path: String) -> String? {
-        guard let t = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.contentTypeKey]).contentType,
-              appleQuickLookTypes.contains(t.identifier) else { return nil }
-        return t.identifier
+        var st = stat()
+        guard stat(path, &st) == 0, let claims = quickLookClaims,
+              let t = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.contentTypeKey]).contentType else { return nil }
+        let isDir = st.st_mode & S_IFMT == S_IFDIR
+        guard kind(name: (path as NSString).lastPathComponent, isDirectory: isDir, isPackage: isDir, executable: st.st_mode & 0o111 != 0) == .other
+        else { return nil }
+        return quickLookEligible(t, claims: claims) ? t.identifier : nil
+    }
+
+    /// iWork's package documents: the one kind of package Quick Look is asked to show.
+    static let quickLookPackages: Set<String> = ["com.apple.iwork.pages.pages", "com.apple.iwork.numbers.numbers", "com.apple.iwork.keynote.key"]
+    static let quickLookRefused: [UTType] = [.folder, .directory, .package, .bundle, .application, .executable, .archive, .zip, .diskImage,
+                                             .plainText, .sourceCode, .script, .json, .xml, .html, .propertyList, .image, .audiovisualContent,
+                                             .pdf, .rtf, .rtfd, .flatRTFD, .webArchive, .emailMessage, .vCard, .symbolicLink, .aliasFile]
+        + ["com.apple.mail.email", "com.apple.mail.emlx", "com.apple.log"].compactMap { UTType($0) }
+
+    static func quickLookEligible(_ t: UTType, claims: Set<String>) -> Bool {
+        guard t.isDeclared, !t.isDynamic, !claims.contains(t.identifier) else { return false }
+        // Folders are refused below, iWork's packages aside; everything is data.
+        let claimed = claims.compactMap { [UTType.data, .folder, .directory].map(\.identifier).contains($0) ? nil : UTType($0) }
+        if claimed.contains(where: { t.conforms(to: $0) }) { return false }
+        if quickLookPackages.contains(t.identifier) { return true }
+        return !quickLookRefused.contains { t.conforms(to: $0) }
+    }
+
+    /// Every type spacebar's preview extension claims (scripts/quicklook-types.txt, which build.sh copies into each bundle that
+    /// shows files), and the folder and routing types. Nil when the list is missing: then nothing is handed to Quick Look.
+    static var quickLookClaims: Set<String>? = Bundle.main.url(forResource: "quicklook-types", withExtension: "txt")
+        .flatMap { try? String(contentsOf: $0, encoding: .utf8) }.map(claims)
+
+    /// The types a quicklook-types.txt claims: each `claim`, `md.spacebar.type.<first extension>` for each `declare`, and
+    /// md.spacebar.qlmanage, public.folder and public.directory.
+    static func claims(_ text: String) -> Set<String> {
+        var out: Set<String> = ["md.spacebar.qlmanage", "public.folder", "public.directory"]
+        for line in text.split(separator: "\n") {
+            let f = line.split(separator: " ", omittingEmptySubsequences: true)
+            if f.count > 1, f[0] == "claim" { out.insert(String(f[1])) }
+            if f.count > 1, f[0] == "declare", let ext = f[1].split(separator: ",").first { out.insert("md.spacebar.type." + ext) }
+        }
+        return out
     }
 
     /// The explicit map behind every `file` URL; anything missing is application/octet-stream, which the `file` host never serves.
@@ -443,7 +473,8 @@ enum FileView {
     }
 
     /// A file that is not Markdown. `canOpen`: whether the link policy lets the writer open it (else Reveal in Finder only).
-    static func payload(path: String, kind: FileKind, root: String, reason: String, canOpen: Bool) -> [String: Any] {
+    /// `quickLook`: false once Apple's preview of the file showed only an icon; it is then shown as text if it is text.
+    static func payload(path: String, kind: FileKind, root: String, reason: String, canOpen: Bool, quickLook: Bool = true) -> [String: Any] {
         var p = base(path: path, root: root, reason: reason)
         var st = stat()
         guard stat(path, &st) == 0 else { p["view"] = "info"; return p }
@@ -479,7 +510,7 @@ enum FileView {
             view = "rtf"
         case .video where regular && size <= FileTypes.maxFileBytes, .audio where regular && size <= FileTypes.maxFileBytes:
             view = kind.rawValue
-        case .other where (regular ? size <= FileTypes.maxFileBytes : st.st_mode & S_IFMT == S_IFDIR) && FileTypes.appleQuickLookType(path) != nil:
+        case .other where quickLook && (regular ? size <= FileTypes.maxFileBytes : st.st_mode & S_IFMT == S_IFDIR) && FileTypes.appleQuickLookType(path) != nil:
             view = "quicklook"
         // Its contents come later, from the writer. An archive in iCloud is not downloaded to list it.
         case .archive where regular && !FileTypes.isDataless(path):

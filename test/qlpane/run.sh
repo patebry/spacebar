@@ -1,7 +1,8 @@
 #!/bin/bash
-# Builds and runs the checks of Apple's previews in the panel (Preview/QLFallbackPane.swift, FileTypes.appleQuickLookTypes) in an
-# off-screen window: the allowlist against scripts/quicklook-types.txt, which files get the view, placing, the generic-icon
-# fallback and teardown. Then a copy signed with the extension's sandbox entitlements shows a Word document rendering (macOS keeps
+# Builds and runs the checks of Apple's previews in the panel (Preview/QLFallbackPane.swift, FileTypes.appleQuickLookType) in an
+# off-screen window: no type in scripts/quicklook-types.txt ever reaches it, which files get the view, placing, the generic-icon
+# fallback and teardown. Then a copy signed with the extension's sandbox entitlements shows a Word document, a certificate and a
+# calendar event rendering (macOS keeps
 # a container under ~/Library/Containers/md.spacebar.test.qlpane). That copy is an app, not an extension: it renders without the
 # mach-lookup exception too, so whether the extension needs it is seen only through Quick Look (FINDINGS.md).
 # Opens no Quick Look window. QLPANE_RENDER=0 (CI) skips the checks that need Apple's generators or this Mac's type declarations.

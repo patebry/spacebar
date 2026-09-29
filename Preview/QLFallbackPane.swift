@@ -2,10 +2,10 @@ import AppKit
 import Quartz
 import WebKit
 
-/// A file spacebar has no view of its own for, but Apple's Quick Look previews (Office, iWork, fonts, 3D): a QLPreviewView laid
-/// over the part of the panel the page reserves for it, like PDFPane. Only for the exact types in `FileTypes.appleQuickLookTypes`:
-/// QLPreviewView hands a file to whichever extension Quick Look would pick, so a type spacebar claims would start a nested
-/// spacebar inside the pane.
+/// A file spacebar has no view of its own for, but Apple's Quick Look previews (Office, iWork, fonts, 3D, certificates, calendars):
+/// a QLPreviewView laid over the part of the panel the page reserves for it, like PDFPane. Only for the types
+/// `FileTypes.appleQuickLookType` admits: QLPreviewView hands a file to whichever extension Quick Look would pick, so a type
+/// spacebar claims would start a nested spacebar inside the pane.
 ///
 /// Apple's generators run in Quick Look's own daemons, which the sandbox reaches only through the mach-lookup exception in
 /// build.sh. Without it, or for a file the generator cannot read, the view shows a generic icon: the owner then shows the info

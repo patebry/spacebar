@@ -30,56 +30,102 @@ func offscreen() -> (NSWindow, NSView, WKWebView) {
     return (window, container, web)
 }
 
-// Signed with the extension's sandbox entitlements (run.sh): the document the first run wrote, read only.
-if ProcessInfo.processInfo.environment["QLPANE_SANDBOX"] != nil {
-    let (window, _, web) = offscreen()
-    let memo = dir.appendingPathComponent("memo.docx")
-    guard let pane = QLFallbackPane() else { print("FAIL QLPreviewView init in the sandbox"); exit(1) }
+/// Waits for `pane` to show `file` and says what it showed.
+func rendered(_ pane: QLFallbackPane, _ file: URL, in web: WKWebView) -> (QLFallbackPane.Shown, [String], [String]) {
     var failed: [String] = []
     pane.onFailed = { failed.append($0) }
-    pane.show(memo)
-    pane.place(message: ["path": memo.path, "x": 0, "y": 0, "w": 800, "h": 600], in: web)
-    spin(until: QLFallbackPane.failureDelay + 1.5) { !failed.isEmpty || QLFallbackPane.shown(classNames: QLFallbackPane.classNames(pane.view)) == .preview }
+    pane.show(file)
+    pane.place(message: ["path": file.path, "x": 0, "y": 0, "w": 800, "h": 600], in: web)
+    spin(until: QLFallbackPane.failureDelay + 3) { !failed.isEmpty || QLFallbackPane.shown(classNames: QLFallbackPane.classNames(pane.view)) == .preview }
     let tree = QLFallbackPane.classNames(pane.view)
-    check("sandboxed with the extension's entitlements: the Word document renders, no fallback",
-          failed.isEmpty && QLFallbackPane.shown(classNames: tree) == .preview, "\(failed) \(tree.joined(separator: " "))")
-    pane.close()
+    return (QLFallbackPane.shown(classNames: tree), failed, tree)
+}
+
+// Signed with the extension's sandbox entitlements (run.sh): the documents the first run wrote, read only.
+if ProcessInfo.processInfo.environment["QLPANE_SANDBOX"] != nil {
+    let (window, _, web) = offscreen()
+    for (name, what) in [("memo.docx", "the Word document"), ("cert.cer", "a certificate"), ("event.ics", "a calendar event")] {
+        let file = dir.appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath: file.path) else { print("SKIP sandboxed: \(what) (no fixture)"); continue }
+        guard let pane = QLFallbackPane() else { print("FAIL QLPreviewView init in the sandbox"); exit(1) }
+        let (shown, failed, tree) = rendered(pane, file, in: web)
+        check("sandboxed with the extension's entitlements: \(what) renders, no fallback", failed.isEmpty && shown == .preview,
+              "\(failed) \(tree.joined(separator: " "))")
+        pane.close()
+    }
     window.orderOut(nil)
     exit(failures == 0 ? 0 : 1)
 }
-let allow = FileTypes.appleQuickLookTypes
 
-// ---- the allowlist never names a type spacebar claims: QLPreviewView would hand the file back to spacebar ----
-var claims: Set<String> = ["md.spacebar.qlmanage", "public.folder", "public.directory"]
-for line in try! String(contentsOfFile: "scripts/quicklook-types.txt", encoding: .utf8).split(separator: "\n") {
-    let f = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
-    if f.first == "claim", f.count > 1 { claims.insert(f[1]) }
-    if f.first == "declare", f.count > 1 { claims.insert("md.spacebar.type." + f[1].split(separator: ",")[0]) }
-}
-check("claims read from scripts/quicklook-types.txt", claims.contains("net.daringfireball.markdown") && claims.contains("public.zip-archive") && claims.count > 40,
-      "\(claims.count)")
-check("the allowlist and spacebar's claims share no type", allow.isDisjoint(with: claims), "\(allow.intersection(claims).sorted())")
-let zipLike = allow.filter { id in
-    guard let t = UTType(id) else { return false }
-    return t.conforms(to: .zip) || t.conforms(to: .archive) || ["com.apple.package", "public.data", "public.content", "public.font"].contains(id)
-}
-check("no generic zip, archive or parent type", zipLike.isEmpty, "\(zipLike.sorted())")
-check("RTF is not in it (it has its own view)", !allow.contains("public.rtf") && !allow.contains("com.apple.rtfd"))
-renderCheck("every type is declared on this Mac") {
-    let undeclared = allow.filter { UTType($0)?.isDeclared != true }
-    check("every type is declared on this Mac", undeclared.isEmpty, "\(undeclared.sorted())")
-}
-
-// ---- which files get the view: by exact type, never a type spacebar claims ----
-func touch(_ name: String, _ data: Data = Data()) -> String {
+// ---- no type spacebar claims ever reaches QLPreviewView: it would hand the file back to spacebar ----
+FileTypes.quickLookClaims = FileTypes.claims(try! String(contentsOfFile: "scripts/quicklook-types.txt", encoding: .utf8))
+let claims = FileTypes.quickLookClaims!
+check("claims read from scripts/quicklook-types.txt", claims.contains("net.daringfireball.markdown") && claims.contains("public.zip-archive")
+      && claims.contains("md.spacebar.type.toml") && claims.count > 100, "\(claims.count)")
+func touch(_ name: String, _ data: Data = Data([0x7f, 0, 1, 2])) -> String {
     let u = dir.appendingPathComponent(name)
     try! data.write(to: u)
     return u.path
 }
+func payload(_ path: String, quickLook: Bool = true) -> [String: Any] {
+    var st = stat()
+    _ = stat(path, &st)
+    let isDir = st.st_mode & S_IFMT == S_IFDIR
+    let kind = FileTypes.kind(name: (path as NSString).lastPathComponent, isDirectory: isDir, isPackage: isDir)
+    return FileView.payload(path: path, kind: kind, root: dir.path, reason: "open", canOpen: true, quickLook: quickLook)
+}
+// A file of each claimed type: named by the type's own extension, a declared one's first, and public.data as a file with none.
+var samples: [(String, String)] = []
+var untested: [String] = []
+let declared = try! String(contentsOfFile: "scripts/quicklook-types.txt", encoding: .utf8).split(separator: "\n")
+    .compactMap { l -> (String, String)? in
+        let f = l.split(separator: " ")
+        return f.count > 1 && f[0] == "declare" ? ("md.spacebar.type." + f[1].split(separator: ",")[0], String(f[1].split(separator: ",")[0])) : nil
+    }
+for id in claims.sorted() {
+    let ext = declared.first { $0.0 == id }?.1 ?? UTType(id)?.preferredFilenameExtension
+    if id == "public.data" { samples.append((touch("claimed-data"), id)); continue }
+    guard let ext else { untested.append(id); continue }
+    samples.append((touch("claimed-\(samples.count).\(ext)"), id))
+}
+let reached = samples.filter { FileTypes.appleQuickLookType($0.0) != nil || payload($0.0)["view"] as? String == "quicklook" }
+check("no file of any claimed type (\(samples.count)) gets Apple's preview", reached.isEmpty, "\(reached.map(\.1))")
+check("every claim but the folder and routing types has a sample", Set(untested) == ["md.spacebar.qlmanage", "public.folder", "public.directory"]
+      || Set(untested).isSubset(of: ["md.spacebar.qlmanage", "public.folder", "public.directory", "net.daringfireball.markdown", "public.markdown"]),
+      "\(untested)")
+let allClaimed = claims.compactMap(UTType.init)
+check("the rule refuses every claimed type, and every type that conforms to one, even without a file", allClaimed.allSatisfy { !FileTypes.quickLookEligible($0, claims: claims) }
+      && ["public.geojson", "com.apple.xcode.strings-text"].compactMap(UTType.init).filter { t in allClaimed.contains { t.conforms(to: $0) && $0 != .data } }
+        .allSatisfy { !FileTypes.quickLookEligible($0, claims: claims) })
+check("without the claims list nothing is handed to Quick Look", { () -> Bool in
+    let saved = FileTypes.quickLookClaims
+    FileTypes.quickLookClaims = nil
+    defer { FileTypes.quickLookClaims = saved }
+    return FileTypes.appleQuickLookType(touch("nolist.docx")) == nil
+}())
+
+// ---- which files get the view: any declared type of no kind of spacebar's own, bar folders, packages, apps, archives, disk images ----
 let docxData = try! NSAttributedString(string: "spacebar quick look pane\n" + String(repeating: "A paragraph of text.\n", count: 20))
     .data(from: NSRange(location: 0, length: 20), documentAttributes: [.documentType: NSAttributedString.DocumentType.officeOpenXML])
 let docx = touch("memo.docx", docxData)
-let expected: [(String, String)] = [
+let ics = touch("event.ics", Data(("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//spacebar//test//EN\r\nBEGIN:VEVENT\r\nUID:1@spacebar.test\r\n"
+    + "DTSTAMP:20260929T120000Z\r\nDTSTART:20261001T150000Z\r\nDTEND:20261001T160000Z\r\nSUMMARY:Spacebar review\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n").utf8))
+let vcf = touch("person.vcf", Data("BEGIN:VCARD\r\nVERSION:3.0\r\nN:Doe;Jane;;;\r\nFN:Jane Doe\r\nEMAIL:jane@example.com\r\nEND:VCARD\r\n".utf8))
+// A self-signed certificate, DER, from the system's openssl.
+let cert = dir.appendingPathComponent("cert.cer")
+do {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/usr/bin/openssl")
+    p.arguments = ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=spacebar test", "-days", "30", "-outform", "DER",
+                   "-keyout", dir.appendingPathComponent("cert.key").path, "-out", cert.path]
+    p.standardOutput = FileHandle.nullDevice
+    p.standardError = FileHandle.nullDevice
+    try? p.run()
+    p.waitUntilExit()
+}
+let haveCert = FileManager.default.fileExists(atPath: cert.path)
+if !haveCert { print("SKIP certificate fixture: /usr/bin/openssl did not make one") }
+var expected: [(String, String)] = [
     (docx, "org.openxmlformats.wordprocessingml.document"), (touch("sheet.xlsx"), "org.openxmlformats.spreadsheetml.sheet"),
     (touch("deck.pptx"), "org.openxmlformats.presentationml.presentation"), (touch("old.doc"), "com.microsoft.word.doc"),
     (touch("old.xls"), "com.microsoft.excel.xls"), (touch("old.ppt"), "com.microsoft.powerpoint.ppt"),
@@ -87,30 +133,36 @@ let expected: [(String, String)] = [
     (touch("flat.key"), "com.apple.iwork.keynote.sffkey"), (touch("font.ttf"), "public.truetype-ttf-font"), (touch("font.otf"), "public.opentype-font"),
     (touch("fonts.ttc"), "public.truetype-collection-font"), (touch("font.dfont"), "com.apple.truetype-datafork-suitcase-font"),
     (touch("model.usdz"), "com.pixar.universal-scene-description-mobile"), (touch("scene.reality"), "com.apple.reality"),
+    (touch("pem.crt"), "public.x509-certificate"), (touch("bin.der"), "public.x509-certificate"), (touch("keys.p12"), "com.rsa.pkcs-12"),
+    (touch("keys.pfx"), "com.rsa.pkcs-12"), (ics, "com.apple.ical.ics"), (touch("book.epub"), "org.idpf.epub-container"),
+    (touch("mesh.obj"), "public.geometry-definition-format"), (touch("mesh.stl"), "public.standard-tesselated-geometry-format"),
+    (touch("mesh.glb"), "org.khronos.glb"), (touch("scene.usd"), "com.pixar.universal-scene-description"),
 ]
-var pkgs: [(String, String)] = []
+if haveCert { expected.append((cert.path, "public.x509-certificate")) }
 for (ext, id) in [("pages", "com.apple.iwork.pages.pages"), ("numbers", "com.apple.iwork.numbers.numbers"), ("key", "com.apple.iwork.keynote.key")] {
     let p = dir.appendingPathComponent("bundle.\(ext)")
     try! FileManager.default.createDirectory(at: p, withIntermediateDirectories: true)
     try! Data("<x/>".utf8).write(to: p.appendingPathComponent("index.xml"))
-    pkgs.append((p.path, id))
+    expected.append((p.path, id))
 }
-func payload(_ path: String) -> [String: Any] {
-    var st = stat()
-    _ = stat(path, &st)
-    let isDir = st.st_mode & S_IFMT == S_IFDIR
-    let kind = FileTypes.kind(name: (path as NSString).lastPathComponent, isDirectory: isDir, isPackage: isDir)
-    return FileView.payload(path: path, kind: kind, root: dir.path, reason: "open", canOpen: true)
+renderCheck("Office, iWork (a file or a package), fonts, 3D, certificates, a calendar and an e-book get Apple's preview") {
+    let wrong = expected.filter { FileTypes.appleQuickLookType($0.0) != $0.1 || payload($0.0)["view"] as? String != "quicklook" }
+    check("Office, iWork (a file or a package), fonts, 3D, certificates, a calendar and an e-book get Apple's preview (\(expected.count))", wrong.isEmpty,
+          wrong.map { "\(($0.0 as NSString).lastPathComponent)=\(FileTypes.appleQuickLookType($0.0) ?? "nil")/\(payload($0.0)["view"] ?? "nil")" }.joined(separator: " "))
 }
-let wrong = (expected + pkgs).filter { FileTypes.appleQuickLookType($0.0) != $0.1 || payload($0.0)["view"] as? String != "quicklook" }
-check("each allowlisted type, a file or an iWork package, resolves to its exact type and the quicklook view (\(expected.count + pkgs.count))", wrong.isEmpty,
-      wrong.map { "\(($0.0 as NSString).lastPathComponent)=\(FileTypes.appleQuickLookType($0.0) ?? "nil")/\(payload($0.0)["view"] ?? "nil")" }.joined(separator: " "))
-check("every allowlisted type is covered by a sample", Set((expected + pkgs).map(\.1)) == allow, "\(allow.subtracting((expected + pkgs).map(\.1)).sorted())")
+let appDir = dir.appendingPathComponent("Tool.app/Contents")
+try! FileManager.default.createDirectory(at: appDir, withIntermediateDirectories: true)
 let others = [touch("notes.md", Data("# hi\n".utf8)), touch("a.zip", Data("PK\u{3}\u{4}".utf8)), touch("doc.rtf", Data("{\\rtf1 hi}".utf8)),
               touch("blob.dat", Data([0, 1, 2])), touch("page.html", Data("<p>".utf8)), touch("script.py", Data("print(1)\n".utf8)),
-              touch("noext", Data([0, 1, 2]))]
+              touch("noext", Data([0, 1, 2])), touch("disk.dmg"), touch("disk.iso"), touch("disk.sparseimage"), touch("site.webarchive"),
+              touch("mail.eml"), touch("font.woff2"), touch("pic.heic"), touch("clip.webm"), touch("tune.ogg"),
+              touch("setup.pkg"), touch("installer.mpkg"), touch("tool.xcconfig", Data("A = B\n".utf8)), vcf, appDir.deletingLastPathComponent().path, dir.path]
 let leaked = others.filter { FileTypes.appleQuickLookType($0) != nil || payload($0)["view"] as? String == "quicklook" }
-check("Markdown, a zip, RTF, HTML, code and unknown data never get it", leaked.isEmpty, "\(leaked)")
+check("Markdown, archives, disk images, apps and installers, web archives, mail, images, media, text, dyn types, folders and a vCard never get it",
+      leaked.isEmpty, "\(leaked.map { ($0 as NSString).lastPathComponent })")
+check("a vCard is shown as its text: Apple's preview of it reads Contacts in the viewer's own process", payload(vcf)["view"] as? String == "text")
+check("once Apple's preview showed only an icon, a text file is shown as text and anything else as its info card",
+      payload(ics, quickLook: false)["view"] as? String == "text" && payload(touch("dead.docx"), quickLook: false)["view"] as? String == "info")
 let big = dir.appendingPathComponent("huge.docx")
 FileManager.default.createFile(atPath: big.path, contents: nil)
 let h = try! FileHandle(forWritingTo: big)
@@ -163,6 +215,15 @@ renderCheck("a Word document renders in the pane (off screen), no fallback") {
     let tree = QLFallbackPane.classNames(pane.view)
     check("a Word document renders in the pane (off screen), no fallback", failed.isEmpty && QLFallbackPane.shown(classNames: tree) == .preview
           && tree.contains("QLWeb2View"), tree.joined(separator: " "))
+}
+
+renderCheck("a certificate and a calendar event render through Apple's generators, out of process") {
+    for (file, what) in [(cert, "a certificate"), (URL(fileURLWithPath: ics), "a calendar event")] where FileManager.default.fileExists(atPath: file.path) {
+        guard let p = QLFallbackPane() else { return check("a second pane", false) }
+        let (shown, failed, tree) = rendered(p, file, in: web)
+        check("\(what) renders in the pane, no fallback", failed.isEmpty && shown == .preview, "\(failed) \(tree.joined(separator: " "))")
+        p.close()
+    }
 }
 
 // A second file in the same pane (the sidebar), then a damaged one: the generic icon, and the owner is told.

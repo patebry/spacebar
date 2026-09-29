@@ -167,7 +167,7 @@ appex() {
   cp "$PREVIEW_BIN" "$dir/Contents/MacOS/$2"
   cp "$WRITER_BIN" "$xpc/Contents/MacOS/$WRITER_EXE"
   cp -R Preview/web "$dir/Contents/Resources/web"
-  cp LICENSE THIRD_PARTY_NOTICES.md "$dir/Contents/Resources/"
+  cp LICENSE THIRD_PARTY_NOTICES.md scripts/quicklook-types.txt "$dir/Contents/Resources/"
   plist Preview/Info.plist "$dir/Contents/Info.plist" "$1" "$2" "$3" "$4"
   plist Writer/Info.plist "$xpc/Contents/Info.plist" "$1" "$2" "$3" "$4"
   codesign "${SIGN_ARGS[@]}" "$xpc"
@@ -187,7 +187,8 @@ mkdir -p "$VIEWER_DIR/Contents/MacOS" "$VIEWER_DIR/Contents/Resources" "$VIEWER_
 cp "$VIEWER_BIN" "$VIEWER_DIR/Contents/MacOS/$VIEWER_EXE"
 cp "$WRITER_BIN" "$VIEWER_XPC/Contents/MacOS/$WRITER_EXE"
 cp -R Preview/web "$VIEWER_DIR/Contents/Resources/web"
-cp LICENSE THIRD_PARTY_NOTICES.md "$VIEWER_DIR/Contents/Resources/"
+# What spacebar claims: Apple's previews in the panel are never asked for these (FileTypes.appleQuickLookType).
+cp LICENSE THIRD_PARTY_NOTICES.md scripts/quicklook-types.txt "$VIEWER_DIR/Contents/Resources/"
 plist Viewer/Info.plist "$VIEWER_DIR/Contents/Info.plist" "$VIEWER_ID" "$VIEWER_EXE" "$APP_NAME"
 plist Writer/Info.plist "$VIEWER_XPC/Contents/Info.plist" "$VIEWER_ID"
 # Under the hardened runtime, like the helper: the helper admits only peers that are, so no library can be injected into a

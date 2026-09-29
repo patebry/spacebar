@@ -1760,6 +1760,17 @@ def main():
               'Word document: the page reserves the rest of the panel under its toolbar for Apple\'s preview, no frame', json.dumps(v))
         check(rect and rect['path'] == memo and near([float(rect[k]) for k in 'xywh'], v['area']) and rect['hide'] in ('0', 'false'),
               'Word document: the page posts the area for the native preview', json.dumps(rect))
+        # Any declared type of no kind of spacebar's own goes to Apple's generators: a certificate and a calendar event do; a vCard,
+        # whose preview would read Contacts in the viewer's own process, is shown as its text.
+        with open(os.path.join(ql, 'event.ics'), 'w') as f:
+            f.write('BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:1@spacebar.test\r\nDTSTART:20261001T150000Z\r\nSUMMARY:Review\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n')
+        with open(os.path.join(ql, 'person.vcf'), 'w') as f:
+            f.write('BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Jane Doe\r\nEND:VCARD\r\n')
+        subprocess.run(['/usr/bin/openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-subj', '/CN=spacebar test', '-days', '30', '-outform', 'DER',
+                        '-keyout', os.path.join(ql, 'cert.key'), '-out', os.path.join(ql, 'cert.cer')], check=True, capture_output=True)
+        got = {n: media(os.path.join(ql, n))[0]['view'] for n in ('cert.cer', 'event.ics', 'person.vcf')}
+        check(got == {'cert.cer': 'quicklook', 'event.ics': 'quicklook', 'person.vcf': 'text'},
+              'a certificate and a calendar event get Apple\'s preview; a vCard is shown as text', json.dumps(got))
 
         # ---- the seam between the two newest native views: RTF (AppKit's text view) and Apple's preview, and back to the page's own ----
         notes = os.path.join(ql, 'notes.rtf')

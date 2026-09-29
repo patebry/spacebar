@@ -279,6 +279,8 @@ class PreviewController: NSViewController {
     private var qlPane: QLFallbackPane?
     /// Whether the file on screen is shown by `qlPane`, so the panel reappearing shows it again.
     private var quickLookShown = false
+    /// A file Apple's preview showed only as an icon: shown as text, or its info card, from then on.
+    private var quickLookFailedPath: String?
     /// The RTF or RTFD document on screen, drawn natively over the same reserved area; nil for every other view.
     private var richPane: RichTextPane?
     /// An image ImageIO decodes (HEIC, TIFF, RAW…), drawn natively over the same reserved area; nil for every other view.
@@ -1064,12 +1066,13 @@ class PreviewController: NSViewController {
         // Read off the main thread: text is read, an image in iCloud is downloaded before the page loads it, and PDFKit may
         // scan a large or damaged file to rebuild it. A newer show or open supersedes this one.
         let gen = pdfGen, kind = fileKind, root = rootDir, canOpen = LinkPolicy.fileRefusal(url, allowArchives: kind == .archive) == nil
+        let noQuickLook = quickLookFailedPath == url.path
         let cloud = FileTypes.isDataless(url.path)
         // Only a download times out: PDFKit rebuilding a large local PDF may take longer, and is still shown when done.
         let id = loader.load(timesOut: cloud, { () -> (payload: [String: Any], pdf: Result<PDFDocument, PDFPane.LoadError>?,
                                                        rich: Result<NSAttributedString, RichTextPane.LoadError>?,
                                                        image: Result<ImagePane.Loaded, ImagePane.LoadError>?, stuck: Bool) in
-            var p = FileView.payload(path: url.path, kind: kind, root: root, reason: reason, canOpen: canOpen)
+            var p = FileView.payload(path: url.path, kind: kind, root: root, reason: reason, canOpen: canOpen, quickLook: !noQuickLook)
             // Text opens in a text editor even where its default app is refused (a script): the writer names the app.
             if Self.textViews.contains(p["view"] as? String ?? ""), LinkPolicy.editorRefusal(url) == nil { p["canOpen"] = true }
             var pdf: Result<PDFDocument, PDFPane.LoadError>?
@@ -1186,7 +1189,7 @@ class PreviewController: NSViewController {
             htmlPane?.show(url, over: host.web)
         }
         if view == "quicklook", let pane = qlPane {
-            pane.onFailed = { [weak self] in self?.quickLookFailed($0, p) }
+            pane.onFailed = { [weak self] in self?.quickLookFailed($0) }
             pane.show(url)
         }
         log.info("show \(view, privacy: .public) (\(self.fileKind.rawValue, privacy: .public))")
@@ -1272,16 +1275,15 @@ class PreviewController: NSViewController {
         }
     }
 
-    /// A file Quick Look showed only as its generic icon (no generator reachable, or one that could not read it): its info card.
-    private func quickLookFailed(_ path: String, _ p: [String: Any]) {
+    /// A file Quick Look showed only as its generic icon (no generator reachable, or one that could not read it): its text when
+    /// it is text, else its info card.
+    private func quickLookFailed(_ path: String) {
         guard let url = fileURL, url.path == path, qlPane?.path == path else { return }
         closePDF()
         quickLookShown = false
-        var card = p
-        card["view"] = "info"
-        if let o = opener, o.path == path { card["app"] = o.app }
-        render(card)
-        addThumbnail(url)
+        quickLookFailedPath = path
+        shownStamp = nil
+        show(url, reason: "open")
     }
 
     /// A file AVFoundation cannot play (not media after all, or a codec it lacks): its info card, as for a PDF PDFKit cannot open.

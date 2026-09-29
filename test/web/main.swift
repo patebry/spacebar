@@ -96,6 +96,7 @@ func object(_ json: String) -> [String: Any] {
 
 let args = CommandLine.arguments
 let webRoot = URL(fileURLWithPath: args[1])
+FileTypes.quickLookClaims = (try? String(contentsOf: webRoot.appendingPathComponent("../../scripts/quicklook-types.txt"), encoding: .utf8)).map(FileTypes.claims)
 _ = NSApplication.shared
 let rec = Recorder()
 let scheme = SchemeHandler(webRoot: webRoot)

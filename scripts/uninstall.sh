@@ -3,11 +3,15 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh
 #
-# Quits ~/Applications/spacebar.app, unregisters its Quick Look extensions, and deletes it. Settings in
-# ~/Library/Application Support/spacebar are kept unless you pass --purge. Safe to run more than once.
+# Stops the Space helper and quits its viewer, resets the permissions macOS keeps for them, quits
+# ~/Applications/spacebar.app, unregisters its Quick Look extensions, and deletes it. Settings in
+# ~/Library/Application Support/spacebar and the viewer's container are kept unless you pass --purge. Safe to run more
+# than once.
 set -eu
 
 APP_NAME=spacebar.app
+HELPER_LABEL=md.spacebar.helper
+VIEWER_ID=md.spacebar.viewer
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 
 usage() {
@@ -16,9 +20,10 @@ Remove spacebar from ~/Applications.
 
 usage: uninstall.sh [--purge] [--dry-run] [--no-register] [--help]
 
-  --purge        also delete your settings and themes in ~/Library/Application Support/spacebar
+  --purge        also delete your settings and themes in ~/Library/Application Support/spacebar, and the Space
+                 helper viewer's container in ~/Library/Containers/md.spacebar.viewer
   --dry-run      print what would change without changing anything
-  --no-register  delete files only: skip quitting, pluginkit, lsregister and qlmanage
+  --no-register  delete files only: skip quitting, launchctl, tccutil, pluginkit, lsregister and qlmanage
                  (or set SPACEBAR_SKIP_REGISTER=1)
   --help         show this help
 EOF
@@ -44,6 +49,18 @@ quit_extensions() {
     tries=$((tries + 1))
   done
   pkill -f "$(path_regex "$1")Contents/PlugIns/" || true
+}
+
+# quit_viewer <bundle path>: as in install.sh, the Space helper's viewer, its writer first.
+quit_viewer() {
+  viewer=$(path_regex "$1/Contents/Helpers/spacebar Viewer.app")
+  pkill -f "${viewer}Contents/XPCServices/" || true
+  tries=0
+  while [ "$tries" -lt 30 ] && pgrep -f "${viewer}Contents/XPCServices/" >/dev/null 2>&1; do
+    sleep 0.2
+    tries=$((tries + 1))
+  done
+  pkill -f "$viewer" || true
 }
 
 # Started from the settings window (SPACEBAR_UNINSTALL_SELF=1): removes the private copy this script runs from, but only a
@@ -82,6 +99,16 @@ DEST="$HOME/Applications/$APP_NAME"
 SUPPORT="$HOME/Library/Application Support/spacebar"
 LEGACY_SUPPORT="$HOME/Library/Application Support/spacebar.md"
 
+# The Space helper first, so nothing starts the viewer again: its launchd agent out, the viewer quit, then what macOS keeps
+# for them, the helper's Accessibility grant and every permission of the viewer's. Its Login Item entry goes when the app
+# does; the Background Task Management database is never reset.
+if [ "$SKIP_REGISTER" != 1 ]; then
+  run_quiet launchctl bootout "gui/$(id -u)/$HELPER_LABEL" || true
+  if [ "$DRY_RUN" = 1 ]; then say "would quit the Space helper's viewer running from $DEST, its writer first"; else quit_viewer "$DEST"; fi
+  run_quiet tccutil reset Accessibility "$HELPER_LABEL" || true
+  run_quiet tccutil reset All "$VIEWER_ID" || true
+fi
+
 if [ -e "$DEST" ]; then
   if [ "$SKIP_REGISTER" != 1 ]; then
     if [ "$DRY_RUN" = 1 ]; then say "would quit the Quick Look extensions running from $DEST, their writers first"; else quit_extensions "$DEST"; fi
@@ -102,7 +129,7 @@ else
 fi
 
 if [ "$PURGE" = 1 ]; then
-  for dir in "$SUPPORT" "$LEGACY_SUPPORT"; do
+  for dir in "$SUPPORT" "$LEGACY_SUPPORT" "$HOME/Library/Containers/$VIEWER_ID"; do
     if [ -e "$dir" ]; then
       run rm -rf "$dir"
       [ "$DRY_RUN" = 1 ] || say "Removed $dir"

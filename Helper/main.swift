@@ -165,8 +165,12 @@ final class Helper: NSObject, NSXPCListenerDelegate {
 
     func panelState(_ open: Bool, requestID: Int, from c: NSXPCConnection) {
         guard c === viewer else { return }
+        // Only a show this helper asked for may open the panel, so a viewer cannot claim Finder's keys on its own.
+        if open {
+            guard pending?.id == requestID else { return log.error("panel open for request \(requestID) not pending: ignored") }
+            pending = nil
+        }
         panelOpen = open
-        if open, pending?.id == requestID { pending = nil }
     }
 
     func declined(_ id: Int) {

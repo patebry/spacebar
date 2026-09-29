@@ -11,7 +11,7 @@ within a week. Fixes ship in the next release, and the advisory is published onc
 Only the latest release is supported. [FINDINGS.md](FINDINGS.md#security-model) describes the threat model: a Markdown file,
 and whatever sits beside it, is treated as hostile.
 
-Four features reach further than a rendered page, and are in scope:
+Five features reach further than a rendered page, and are in scope:
 
 - **HTML files** open in a separate web view with no message handler, no `spacebar:` scheme and no stored data. By default
   a file without the quarantine flag runs its scripts and may load from the web, like a browser would; only files a
@@ -43,3 +43,20 @@ Four features reach further than a rendered page, and are in scope:
   running one, only into `~/Applications/spacebar.app`, and only after the downloaded zip's SHA-256 matches the release's.
   The version check reads just the version number of GitHub's latest release, at most once a day. The uninstaller, started
   from Settings, quits the extensions' helpers before it deletes anything and does not start while an update runs.
+- **The Space helper** ("Use spacebar for every file", off until you turn it on) splits the privileges between two processes.
+  `spacebar Helper.app` (`md.spacebar.helper`) is a launchd agent with Accessibility and an active event tap, no sandbox and no
+  entitlements, under the hardened runtime. It is built from its own few files and the settings reader, with none of the
+  file-reading code and no WebKit, and it never opens a file: it reads Finder's focus and selection through Accessibility,
+  within a 60 ms budget in which any error hands the key back. It takes a plain Space only when it is on its way to Finder,
+  and other keys only while its panel is open and really on screen (the viewer's window, visible, at least 200×150 and on a
+  display, checked when it opens and every 2 seconds); it passes every key while Finder's focus is in a text field or another
+  process has the keyboard, and forwards only names from a fixed list. `spacebar Viewer.app` (`md.spacebar.viewer`) renders
+  files with the preview extension's code and exactly its entitlements plus the lookup of the helper's one Mach service; it
+  cannot claim the keys itself, since the helper accepts a panel only for a show it asked for. The helper's Mach service admits
+  only the viewer and the settings app: signed by the helper's own leaf certificate, under the hardened runtime as the kernel
+  holds it for the running process, and without the entitlements that allow DYLD_ variables or turn off library validation;
+  the role is fixed per connection, and each call checks it. The viewer and the app require the helper's identity in turn.
+  Residual risks: the helper sees every key event while it runs, so it is kept small and acts on so few; a compromised viewer
+  has what the Quick Look extension has, plus a process that stays alive (it exits after 30 minutes closed); and the release
+  signing key now also gates Accessibility, so it must stay in CI secrets only. The uninstaller boots the agent out, quits the viewer
+  and resets both apps' privacy permissions.

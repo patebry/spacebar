@@ -17,13 +17,14 @@ In Finder, Space opens spacebar for Markdown, folders, code and scripts, JSON, Y
 archives, and files with no extension (a `Dockerfile`, a `CHANGELOG`, a dotfile). The full list is
 [`scripts/quicklook-types.txt`](scripts/quicklook-types.txt).
 
-Plain text, rich text, HTML, CSV, PDF, images, video and audio keep Apple's own preview in Finder: Quick Look never hands a
-file of those types to another app's extension, so spacebar cannot take them. Inside spacebar's sidebar every one of them
-opens, as the table below shows. Another installed app that claims one of spacebar's types (a Markdown or code previewer)
+Unless you turn on [**Use spacebar for every file**](#use-spacebar-for-every-file), plain text, rich text, HTML, CSV, PDF,
+images, video and audio keep Apple's own preview in Finder: Quick Look never hands a file of those types to another app's
+extension, so spacebar cannot take them. Inside spacebar's sidebar every one of them opens, as the table below shows. Another installed app that claims one of spacebar's types (a Markdown or code previewer)
 may still win it: `install.sh` lists the ones it finds and how many of spacebar's types each claims, and Settings, General
 lists them with a Turn Off button.
 
-What the panel shows for each file in the sidebar:
+What the panel shows for each file in the sidebar, and, with **Use spacebar for every file** on, for each file you press
+Space on in Finder:
 
 | File | Shown as |
 |---|---|
@@ -51,6 +52,25 @@ Text over 2 MB shows its first 2 MB. An archive lists its first 5,000 entries. I
 
 The preview sits in a thin outlined page under a toolbar row: the sidebar button and the path on the left, Aa and Open on the
 right. **Minimal chrome** (Settings, Appearance) goes back to floating buttons over the page.
+
+### Use spacebar for every file
+
+Quick Look hands spacebar only the types above. Turn on **Use spacebar for every file in Finder** (Settings, General, or the
+welcome sheet's second step) and Space in Finder opens spacebar for any file you select, plain text, CSV, HTML, PDF, images,
+video and audio included, in the same panel with the same sidebar. Space, Esc, ⌘W or ⌘. close it in one press. While it is
+open the arrow keys move through spacebar's sidebar, or, with **Arrow keys move through the sidebar** (Settings, Sidebar)
+off, through Finder's selection, and the panel follows. Space in a rename or the search field, with Apple's Quick Look already
+open, or in any other app is left alone, and a Space spacebar cannot answer within 150 ms goes back to Finder, so Quick Look
+opens as usual. An HTML file opened with Space never runs its scripts.
+
+This works through a small helper, `spacebar Helper.app`, that macOS starts at login (it is listed in Login Items) and that
+needs **Accessibility**. Accessibility lets spacebar notice when you press Space in Finder and read which file is selected;
+it never reads what you type anywhere else. The helper acts on a plain Space pressed in Finder, and, only while spacebar's
+panel is open, on the keys that drive it (Esc, the arrows, Home, End, Page Up and Down, Return, ⌘W, ⌘., ⌘O, ⌘F and zoom).
+It never opens a file: a separate viewer does, sandboxed like the Quick Look extension. Settings, General shows whether it is
+on, waiting for Accessibility, blocked in Login Items, or paused by secure input (a password field has the keyboard).
+Turning it off removes it from Login Items; the uninstaller also removes its Accessibility entry.
+[SECURITY.md](SECURITY.md) has how the privileges are split.
 
 ### Folders and Obsidian vaults
 
@@ -113,10 +133,12 @@ Read [`scripts/install.sh`](scripts/install.sh) before you run it. It:
    `github.com/patebry/spacebar/releases/latest/download/`, with no GitHub API calls, and stops unless the SHA-256 matches;
 3. copies the new app into `~/Applications` beside the old one (no `sudo`);
 4. if `~/Applications/spacebar.app` exists, quits it and its Quick Look extensions (the helpers that save edits first, so a
-   save in flight finishes), unregisters them, moves it aside, moves the new copy into its place and only then deletes the old
-   one (it is put back if the move fails). Nothing else is deleted;
+   save in flight finishes), unregisters them, moves it aside, moves the new copy into its place, quits the Space helper's
+   viewer the same way, and only then deletes the old one (it is put back if the move fails). Nothing else is deleted;
 5. registers it with `lsregister` and `pluginkit`, turns the preview on, turns folder previews on unless you turned them off,
-   and resets Quick Look (`qlmanage -r`);
+   and resets Quick Look (`qlmanage -r`). If the Space helper is registered, it registers it again in the background, which
+   takes up to a minute and a half (macOS refuses a replaced helper until then), logged to
+   `~/Library/Logs/spacebar-helper.log`;
 6. lists other Quick Look extensions that are turned on and claim file types spacebar previews (QLMarkdown for Markdown,
    a syntax highlighter for code), with how many of spacebar's types each claims by kind, says how to turn them off, and warns
    if another copy of spacebar is in `/Applications`. It never turns off or deletes anything itself.
@@ -147,8 +169,11 @@ gh attestation verify spacebar.zip -R patebry/spacebar
 curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh
 ```
 
-This unregisters and deletes `~/Applications/spacebar.app`. **Uninstall spacebar…** in Settings, Advanced, runs the same
-script from inside the app (not while an update runs). Both quit spacebar's Quick Look extensions first. To also delete your settings and themes in `~/Library/Application Support/spacebar`:
+This stops the Space helper, resets the Accessibility permission it had and the viewer's permissions, unregisters and
+deletes `~/Applications/spacebar.app`. **Uninstall spacebar…** in Settings, Advanced, runs the same
+script from inside the app (not while an update runs), after removing the helper from Login Items. Both quit spacebar's
+Quick Look extensions first. To also delete your settings and themes in `~/Library/Application Support/spacebar`, and the
+viewer's container in `~/Library/Containers/md.spacebar.viewer`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh -s -- --purge
@@ -172,7 +197,7 @@ sandbox container after each rebuild. Other options are documented at the top of
 Tests that run off screen, without Quick Look (the test builds target Apple silicon):
 
 ```sh
-for t in settings scheme linkpolicy cas dataless editkeys filterkeys pdfpane htmlpane mediapane qlpane richtext encoding archive claims rivals updates report welcome; do test/$t/run.sh; done
+for t in settings scheme linkpolicy cas dataless editkeys filterkeys pdfpane htmlpane mediapane qlpane richtext encoding archive claims rivals updates report welcome helper helperlink; do test/$t/run.sh; done
 python3 test/webcheck.py && python3 test/webthemes.py && python3 test/remoteimages.py && python3 test/sidebar.py
 ```
 
@@ -187,6 +212,9 @@ spacebar.app                         settings window (SwiftUI)
    └─ XPCServices/…writer.xpc        small unsandboxed helper: saves edits, opens links and files, owns the key panel for
                                      inline editing and the sidebar's keys, lists archives, checks for and starts updates
 └─ PlugIns/SpacebarFolders.appex     the same preview for folders (on by default; turn off in Settings)
+└─ Helpers/spacebar Helper.app       "Use spacebar for every file": a launchd agent with Accessibility and an event tap; reads
+   │                                 Finder's selection, never a file; no sandbox, no entitlements
+└─ Helpers/spacebar Viewer.app       the panel it opens: the same preview code, sandboxed like the extension, with its own writer
 ```
 
 Quick Look extensions never receive key events, so inline editing uses a click-through, non-activating panel owned by the
@@ -224,6 +252,10 @@ writer service; Finder stays in front. Saves are compare-and-swap: if the file c
   Only the viewer's Open button hands an archive to its default app; a link never does.
 - The preview extension has a read-only sandbox exception for the whole disk, so relative images beside a document load and
   the sidebar can show the folder's files.
+- The Space helper, when you turn it on, has Accessibility and sees every key event, so it is kept small: it acts only on
+  Space in Finder and on the panel's own keys while the panel is open, forwards only a fixed list of key names, never opens a
+  file, and talks only to the viewer and the settings app signed by the same certificate, under the hardened runtime. The
+  viewer that renders files is sandboxed like the preview extension and never sees a key the helper did not send it.
 - The preview extension has the `com.apple.security.network.client` entitlement. WKWebView's helper processes crash-loop
   in a sandboxed extension without it. spacebar has no network code of its own; the only requests the page can make are
   remote images, which are blocked unless you allow them.

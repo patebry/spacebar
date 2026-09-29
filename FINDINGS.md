@@ -259,6 +259,38 @@ Releases are signed with a self-signed certificate, "spacebar Release", rather t
   keychain. Without them, as in a fork, it builds ad-hoc and warns. Each `spacebar.zip` also has a GitHub build provenance
   attestation (`gh attestation verify spacebar.zip -R patebry/spacebar`).
 
+## Space helper
+
+**Why a helper.** Quick Look hands an app's extension only the types it claims, and never plain text, rich text, HTML, CSV,
+PDF, images, video or audio: Apple keeps those. Inside the preview, the extension gets no key events, so Space and Esc take
+two presses while the sidebar holds the keys (above). Both limits are Quick Look's, so the only way past them is not to go
+through it: a process that sees Space in Finder, reads the selection, and opens spacebar's own panel. That needs
+Accessibility (an event tap that can swallow keys, and AX reads of Finder), which nothing that parses files should hold. So
+there are two processes: `spacebar Helper.app`, unsandboxed, with Accessibility and the tap, built without any file-reading
+code; and `spacebar Viewer.app`, sandboxed like the extension, which runs the same `PreviewController` in a non-activating
+floating panel and never sees a key the helper did not send it. Rejected: one unsandboxed process (a renderer exploit would
+get a keylogger) and hosting the Quick Look extension remotely (no public API). SECURITY.md has the privilege split.
+
+**P0, before building it.**
+- *Replacing the app in place breaks the agent.* After `spacebar.app` is swapped for a new copy, launchd refuses to start the
+  new helper (a launch constraint violation) while `SMAppService` still reports the agent enabled. Unregistering and
+  registering again fixes it, but only after 20 to 90 seconds; sooner than about 20 s it did not take. `Spacebar --reregister`
+  does that (unregister, wait, register, retry for about 3 minutes, then check the helper answers), and install.sh, and so
+  the one-click update, starts it in the background whenever the agent is loaded.
+- *The viewer reaches the helper from its sandbox* through `temporary-exception.mach-lookup.global-name` for the one Mach
+  name, `md.spacebar.helper`; nothing else is added to the extension's entitlements.
+- *Each is its own responsible process* for privacy prompts: Accessibility is granted to "spacebar Helper", and the viewer,
+  launched by the helper without activating, asks for Files and Folders access itself, on first need.
+- *Handing a Space back to Finder* (`CGEventPostToPid`, tagged so the tap lets it through) was left open by P0: whether Finder
+  honours it is logged 600 ms later. It is used only when the viewer declines or does not answer within 150 ms, and not at
+  all for a Space more than a second old.
+
+**Speed.** Space to decision (the AX reads of Finder and `Decision.space`), against a budget of 60 ms past which the key goes
+to Finder: in the spike's recording of 14 Finder contexts (list, icon, column and gallery views, the desktop, a rename, the
+search field, Quick Look open), 6.2 ms median and 10.9 ms at most; on the P2 build in daily use, 9 Spaces that opened the
+panel, 7.5 ms median and 14.3 ms at most. The target is 8 ms p50. Space to painted (target 120 ms p50, 200 ms p95) and
+arrow to next file (50 ms) are not measured yet.
+
 ## Open questions
 
 Folder previews and live settings ship. Folder previews were verified by hand in Finder; live settings are covered by

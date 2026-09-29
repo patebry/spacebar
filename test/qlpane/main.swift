@@ -95,8 +95,43 @@ check("every claim but the folder and routing types has a sample", Set(untested)
       "\(untested)")
 let allClaimed = claims.compactMap(UTType.init)
 check("the rule refuses every claimed type, and every type that conforms to one, even without a file", allClaimed.allSatisfy { !FileTypes.quickLookEligible($0, claims: claims) }
-      && ["public.geojson", "com.apple.xcode.strings-text"].compactMap(UTType.init).filter { t in allClaimed.contains { t.conforms(to: $0) && $0 != .data } }
+      && ["public.geojson"].compactMap(UTType.init).filter { t in allClaimed.contains { t.conforms(to: $0) && $0 != .data } }
         .allSatisfy { !FileTypes.quickLookEligible($0, claims: claims) })
+
+// ---- text stays on spacebar's own text view, bar the calendar and the Wavefront model Apple draws ----
+var utf16 = Data([0xff, 0xfe])
+utf16.append("\"greeting\" = \"Hello\";\n".data(using: .utf16LittleEndian)!)
+let textFiles = [touch("Localizable.strings", utf16), touch("project.pbxproj", Data("// !$*UTF8*$!\n{ archiveVersion = 1; }\n".utf8)),
+                 touch("user.pbxuser", Data("{ }\n".utf8)), touch("list.m3u", Data("#EXTM3U\nsong.mp3\n".utf8)),
+                 touch("list.pls", Data("[playlist]\nFile1=song.mp3\n".utf8)), touch("crash.ips", Data("{\"app_name\":\"x\"}\n".utf8)),
+                 touch("rows.ndjson", Data("{\"a\":1}\n".utf8)), touch("captions.scc", Data("Scenarist_SCC V1.0\n".utf8)),
+                 touch("sheet.slk", Data("ID;P\nE\n".utf8)), touch("event.vcs", Data("BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n".utf8))]
+let textLeaked = textFiles.filter { FileTypes.appleQuickLookType($0) != nil || payload($0)["view"] as? String != "text" }
+check("text files of no kind of spacebar's own (.strings, .pbxproj, playlists, crash reports, captions) are shown as text (\(textFiles.count))",
+      textLeaked.isEmpty, textLeaked.map { "\(($0 as NSString).lastPathComponent)=\(FileTypes.appleQuickLookType($0) ?? "nil")/\(payload($0)["view"] ?? "nil")" }.joined(separator: " "))
+check("a UTF-16 .strings file is decoded", (payload(textFiles[0])["text"] as? String)?.contains("\"greeting\" = \"Hello\"") == true)
+check("the rule refuses public.text, public.plain-text and Xcode's strings type even without a file",
+      ["public.text", "public.plain-text", "com.apple.xcode.strings-text", "public.utf16-plain-text"].compactMap(UTType.init)
+        .allSatisfy { !FileTypes.quickLookEligible($0, claims: claims) })
+renderCheck("every declared type on this Mac that conforms to public.text stays off Apple's preview") {
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister")
+    p.arguments = ["-dump"]
+    let pipe = Pipe()
+    p.standardOutput = pipe
+    p.standardError = FileHandle.nullDevice
+    try? p.run()
+    let dump = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    p.waitUntilExit()
+    var ids = Set<String>()
+    for line in dump.split(separator: "\n") where line.hasPrefix("type id:") || line.hasPrefix("uti:") || line.hasPrefix("conforms to:") {
+        for word in line.split(whereSeparator: { $0 == " " || $0 == "," }).dropFirst() where word.contains(".") { ids.insert(String(word)) }
+    }
+    let text = ids.compactMap(UTType.init).filter { $0.isDeclared && $0.conforms(to: .text) }
+    let sent = text.filter { FileTypes.quickLookEligible($0, claims: claims) && !FileTypes.quickLookDrawnText.contains($0.identifier) }
+    check("every declared type on this Mac that conforms to public.text (\(text.count)) stays off Apple's preview", text.count > 50 && sent.isEmpty,
+          "\(text.count) text types; sent: \(sent.map(\.identifier).sorted())")
+}
 check("without the claims list nothing is handed to Quick Look", { () -> Bool in
     let saved = FileTypes.quickLookClaims
     FileTypes.quickLookClaims = nil

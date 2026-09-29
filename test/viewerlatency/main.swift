@@ -9,8 +9,11 @@ let files = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPa
 let runs = Int(CommandLine.arguments[2]) ?? 20
 func now() -> UInt64 { DispatchTime.now().uptimeNanoseconds }
 func ms(_ a: UInt64, _ b: UInt64) -> Double { Double(b &- a) / 1e6 }
-func spin(_ s: Double) { RunLoop.main.run(until: Date().addingTimeInterval(s)) }
-func spin(until: Double, _ done: () -> Bool) { let end = Date().addingTimeInterval(until); while !done() && Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.001)) } }
+// Each turn in its own autorelease pool, as NSApplication's event loop gives the viewer: without one, what AppKit and PDFKit
+// autorelease while drawing is never let go, and would count as the viewer's memory.
+func turn(_ until: Date) { autoreleasepool { _ = RunLoop.main.run(mode: .default, before: until) } }
+func spin(_ s: Double) { let end = Date().addingTimeInterval(s); while Date() < end { turn(min(end, Date().addingTimeInterval(0.05))) } }
+func spin(until: Double, _ done: () -> Bool) { let end = Date().addingTimeInterval(until); while !done() && Date() < end { turn(Date().addingTimeInterval(0.001)) } }
 
 // ---- fixtures, all under 5 MB: a photo-like PNG, JPEG and HEIC, a 12-page PDF, a log, and siblings for the sidebar. Made by
 // a run of their own (`--fixtures`), so none of their memory is counted as the viewer's. ----
@@ -45,6 +48,8 @@ if CommandLine.arguments.count > 3, CommandLine.arguments[3] == "--fixtures" {
     red.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
     red.fill(CGRect(x: 0, y: 0, width: 800, height: 600))
     write("red.png", "public.png", red.makeImage()!)
+    write("red.heic", "public.heic", red.makeImage()!)
+    try! Data("not an image".utf8).write(to: files.appendingPathComponent("broken.heic"))
     do {
         let url = files.appendingPathComponent("report.pdf") as CFURL
         var box = CGRect(x: 0, y: 0, width: 612, height: 792)
@@ -89,12 +94,15 @@ let viewer = Viewer.shared
 /// from the animation frame after it lays out); an <img> is also waited for until it is decoded.
 final class Painted: NSObject, WKScriptMessageHandler {
     var last: (path: String, view: String, at: UInt64)?
+    /// Each render drawn, as "path view".
+    var renders: [String] = []
     func userContentController(_ ucc: WKUserContentController, didReceive m: WKScriptMessage) {
         WebHost.shared.userContentController(ucc, didReceive: m)
         guard let b = m.body as? [String: Any], b["type"] as? String == "rendered" else { return }
         let at = now()
         m.webView?.evaluateJavaScript("[current.path, current.view]") { r, _ in
             guard let pv = r as? [String], pv.count == 2 else { return }
+            self.renders.append("\(pv[0]) \(pv[1])")
             guard pv[1] == "image" else { self.last = (pv[0], pv[1], at); return }
             m.webView?.callAsyncJavaScript("const i = document.querySelector('#doc .img-stage img'); if (i) await i.decode(); return 1;",
                                            arguments: [:], in: nil, in: .page) { _ in self.last = (pv[0], pv[1], now()) }
@@ -143,6 +151,9 @@ var windowNumber = 0
 var request = 0
 struct Sample { let frame: Double?; let painted: Double? }
 var closedLeftUp = 0
+/// LATENCY_TARGETS=0 (CI): the latency targets are printed, not graded, and each close is given longer to settle.
+let graded = ProcessInfo.processInfo.environment["LATENCY_TARGETS"] != "0"
+let settle = graded ? 0.25 : 1.0
 
 /// One Space: the helper's show call, from an XPC thread; then the close the next Space or Esc sends.
 func space(_ url: URL) -> Sample {
@@ -163,7 +174,7 @@ func space(_ url: URL) -> Sample {
         return paintedAt != nil && frameDone
     }
     viewer.close()
-    spin(0.25)
+    spin(settle)
     if viewer.panel.isVisible { closedLeftUp += 1 }
     return Sample(frame: frameAt.map { ms(t0, $0) }, painted: paintedAt.map { ms(t0, $0) })
 }
@@ -227,6 +238,10 @@ func redShare(_ img: CGImage?) -> Double {
     }
     return Double(red) / Double(max(n, 1))
 }
+/// The panel's red share as the window server has it; the capture is let go at once, so it is not counted as the viewer's memory.
+func capturedRed() -> Double {
+    autoreleasepool { redShare(CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(viewer.panel.windowNumber), [.boundsIgnoreFraming])) }
+}
 var stale: [Double] = []
 for _ in 0..<5 {
     _ = space(files.appendingPathComponent("red.png"))
@@ -236,7 +251,7 @@ for _ in 0..<5 {
     var first: Double?
     spin(until: 3) {
         if first == nil, viewer.panel.alphaValue > 0, viewer.panel.isVisible {
-            first = redShare(CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(viewer.panel.windowNumber), [.boundsIgnoreFraming]))
+            first = capturedRed()
         }
         return first != nil
     }
@@ -283,9 +298,104 @@ spin(3)
 let idleFootprint = footprint()
 print(String(format: "\nviewer idle after every run: footprint %.1f MB, resident %.1f MB", idleFootprint, resident()))
 
+// ---- a suspended panel (another app came forward), then restored, closed or replaced: only a restore shows the old content ----
+func firstFrame(until: Double = 3) -> Double? {
+    var first: Double?
+    spin(until: until) {
+        if first == nil, viewer.panel.alphaValue > 0, viewer.panel.isVisible {
+            first = capturedRed()
+        }
+        return first != nil
+    }
+    return first
+}
+func suspended(_ image: String, before: () -> Void = {}) {
+    request += 1
+    let id = request
+    painted.last = nil
+    let url = files.appendingPathComponent(image)
+    DispatchQueue.global().async { viewer.show([url.path], requestID: id) { _ in } }
+    spin(until: 5) { painted.last?.path == url.path && viewer.panel.alphaValue > 0 && (image.hasSuffix(".png") || nativeUp()) }
+    spin(0.1)
+    before()
+    DispatchQueue.global().async { viewer.suspend() }
+    spin(0.3)
+}
+func restoreReply() -> Bool? {
+    request += 1
+    var answer: Bool?
+    let id = request
+    DispatchQueue.global().async { viewer.restore(id) { ok in DispatchQueue.main.async { answer = ok } } }
+    spin(until: 2) { answer != nil }
+    return answer
+}
+var restored: [Double] = [], afterClose: [Double] = [], replaced: [Double] = [], closedShown = 0, closedRestored = 0
+for image in ["red.png", "red.heic"] {
+    for _ in 0..<3 {
+        suspended(image)
+        _ = restoreReply()
+        restored.append(firstFrame() ?? -1)
+        viewer.close()
+        spin(settle)
+
+        suspended(image)
+        viewer.close()
+        if firstFrame(until: 0.5) != nil { closedShown += 1 }
+        if restoreReply() != false || viewer.panel.alphaValue > 0 { closedRestored += 1 }
+        request += 1
+        let a = request
+        DispatchQueue.global().async { viewer.show([files.appendingPathComponent("notes.md").path], requestID: a) { _ in } }
+        afterClose.append(firstFrame() ?? -1)
+        viewer.close()
+        spin(settle)
+
+        suspended(image)
+        request += 1
+        let b = request
+        DispatchQueue.global().async { viewer.show([files.appendingPathComponent("notes.md").path], requestID: b) { _ in } }
+        replaced.append(firstFrame() ?? -1)
+        viewer.close()
+        spin(settle)
+    }
+}
+// A PDF keeps its page through a suspend and restore.
+func pdfView() -> PDFView? {
+    var stack = viewer.panel.contentView.map { [$0] } ?? []
+    while let v = stack.popLast() {
+        if let p = v as? PDFView, p.document != nil { return p }
+        stack += v.subviews
+    }
+    return nil
+}
+var pdfPage = -1
+suspended("report.pdf") {
+    if let p = pdfView(), let page = p.document?.page(at: 6) { p.go(to: page) }
+    spin(0.3)
+}
+_ = restoreReply()
+spin(0.3)
+if let p = pdfView(), let page = p.currentPage { pdfPage = p.document?.index(for: page) ?? -1 }
+viewer.close()
+spin(settle)
+print("PDF at page 7, suspended and restored: at page \(pdfPage + 1)")
+let shares = { (xs: [Double]) in xs.map { String(format: "%.2f", $0) }.joined(separator: " ") }
+print("suspended red image (PNG, then HEIC), red in the first visible frame: restored \(shares(restored)); closed, then Markdown \(shares(afterClose)); replaced by Markdown \(shares(replaced))")
+
+// ---- an image that fell back to its info card is rendered once, not shown again when the panel appears ----
+let broken = files.appendingPathComponent("broken.heic")
+var brokenRenders: [Int] = []
+for _ in 0..<3 {
+    painted.renders = []
+    _ = space(broken)
+    spin(0.5)
+    brokenRenders.append(painted.renders.filter { $0.hasPrefix(broken.path + " ") && !$0.hasSuffix(" loading") }.count)
+}
+print("an undecodable HEIC, renders per show: \(brokenRenders.map(String.init).joined(separator: " "))")
+
 // ---- the targets: Space -> frame includes the helper's own decision (7.5 ms p50 measured in Finder, FINDINGS.md), added here ----
 var failures = 0
-func target(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)"); if !ok { failures += 1 } }
+func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)"); if !ok { failures += 1 } }
+func target(_ name: String, _ ok: Bool) { graded ? check(name, ok) : print("INFO \(name)") }
 let decision = 8.0
 let frames = allFrames.compactMap { $0 }, paints = targetPainted.compactMap { $0 }, keys = arrows.compactMap { $0 }
 target(String(format: "frame p95 %.1f ms (viewer %.1f + helper decision %.0f) <= 60 ms", pct(frames, 0.95) + decision, pct(frames, 0.95), decision),
@@ -294,7 +404,13 @@ target(String(format: "painted p50 %.1f ms <= 120 ms and p95 %.1f ms <= 200 ms (
        paints.count == targetPainted.count && pct(paints, 0.5) + decision <= 120 && pct(paints, 0.95) + decision <= 200)
 target(String(format: "arrow -> next file painted p50 %.1f ms <= 50 ms", pct(keys, 0.5)), keys.count == arrows.count && pct(keys, 0.5) <= 50)
 target(String(format: "viewer idle footprint %.1f MB <= 90 MB", idleFootprint), idleFootprint <= 90)
-target("the first visible frame of the next file never shows the last one", stale.allSatisfy { $0 == 0 })
-target("every close orders the panel out within 250 ms", closedLeftUp == 0)
+check("the first visible frame of the next file never shows the last one", stale.allSatisfy { $0 == 0 })
+check(String(format: "every close orders the panel out within %.0f ms", settle * 1000), closedLeftUp == 0)
+check("a suspended panel restored shows its content again (the red check sees red)", restored.allSatisfy { $0 > 0.9 })
+check("a suspended PDF restored is still at its page", pdfPage == 6)
+check("a suspended panel closed never appears again, and a restore after the close is refused", closedShown == 0 && closedRestored == 0)
+check("a suspended panel closed, then shown for another file: the first visible frame has none of the old one", afterClose.allSatisfy { $0 == 0 })
+check("a suspended panel replaced by a show of another file: the first visible frame has none of the old one", replaced.allSatisfy { $0 == 0 })
+check("an image that fell back to its info card is rendered once per show", brokenRenders.allSatisfy { $0 == 1 })
 print(failures == 0 ? "viewer latency: all targets met" : "viewer latency: \(failures) targets missed")
 exit(failures == 0 ? 0 : 1)

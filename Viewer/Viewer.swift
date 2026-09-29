@@ -236,7 +236,8 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
     private func hide(tell: Bool, blank: Bool = true) {
         let id = request
         request = 0
-        if open || (blank && suspended) { controller.hostDisappearing() }
+        // A suspend has let go of the keys already (hostSuspending) and keeps the native views for restore.
+        if blank, open || suspended { controller.hostDisappearing() }
         let was = open || panel.isVisible
         open = false
         panel.ignoresMouseEvents = true

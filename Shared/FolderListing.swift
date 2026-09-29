@@ -118,8 +118,12 @@ enum FileTypes {
         let claimed = claims.compactMap { [UTType.data, .folder, .directory].map(\.identifier).contains($0) ? nil : UTType($0) }
         if claimed.contains(where: { t.conforms(to: $0) }) { return false }
         if quickLookPackages.contains(t.identifier) { return true }
+        // Text stays on spacebar's text view (.strings, .pbxproj, playlists, crash reports), bar the text formats Apple draws.
+        if t.conforms(to: .text), !quickLookDrawnText.contains(t.identifier) { return false }
         return !quickLookRefused.contains { t.conforms(to: $0) }
     }
+    /// Declared as text, but Apple's preview draws them: a calendar's events and a Wavefront model.
+    static let quickLookDrawnText: Set<String> = ["com.apple.ical.ics", "public.geometry-definition-format"]
 
     /// Every type spacebar's preview extension claims (scripts/quicklook-types.txt, which build.sh copies into each bundle that
     /// shows files), and the folder and routing types. Nil when the list is missing: then nothing is handed to Quick Look.

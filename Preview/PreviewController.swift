@@ -285,6 +285,10 @@ class PreviewController: NSViewController {
     private var richPane: RichTextPane?
     /// An image ImageIO decodes (HEIC, TIFF, RAW…), drawn natively over the same reserved area; nil for every other view.
     private var imagePane: ImagePane?
+    /// The view the last finished show put up for the file on screen (a fallback's "info" or "text" included); nil while it loads.
+    private var shownView: String?
+    /// The `pdfGen` of the show still loading, which puts its own view up unless a close has since made it stale.
+    private var loadingGen: Int?
     /// Bumped by every render, so a thumbnail made for an info card no longer on screen is dropped.
     private var renderGen = 0
     /// The file a thumbnail is being made for: a file changing on disk re-renders its card without starting another.
@@ -518,17 +522,38 @@ class PreviewController: NSViewController {
 
     /// The host is about to show the view again.
     func hostWillAppear() {
-        // Shown again without a new prepare: the native view closed when the preview disappeared, so bring it back.
+        // Shown again without a new prepare: the native view closed when the preview disappeared, so bring it back. Not a view
+        // that fell back to text or an info card, and not a load still under way: either would be shown twice.
+        if let v = shownView {
+            if !hasPane(v) { reshow() }
+            return
+        }
+        if loadingGen == pdfGen { return }
         let closed = (fileKind == .pdf && pdfPane == nil) || (fileKind == .html && htmlPane == nil) || ([.video, .audio].contains(fileKind) && mediaPane == nil)
             // Apple's preview by its type, not only by quickLookShown: a load still running when the panel went is stale, and
             // its completion would leave the page on "Loading…".
             || (fileKind == .other && qlPane == nil && (quickLookShown || fileURL.flatMap { FileTypes.appleQuickLookType($0.path) } != nil))
             || (fileKind == .rtf && richPane == nil)
             || (fileKind == .image && imagePane == nil && fileURL.map { FileTypes.nativeImageExtensions.contains($0.pathExtension.lowercased()) } == true)
-        if closed, let url = fileURL, host.controller === self {
-            shownStamp = nil
-            host.whenReady { [weak self] in self?.show(url, reason: "open") }
+        if closed { reshow() }
+    }
+
+    private func hasPane(_ view: String) -> Bool {
+        switch view {
+        case "pdf": return pdfPane != nil
+        case "html": return htmlPane != nil
+        case "video", "audio": return mediaPane != nil
+        case "quicklook": return qlPane != nil
+        case "rtf": return richPane != nil
+        case "bitmap": return imagePane != nil
+        default: return true
         }
+    }
+
+    private func reshow() {
+        guard let url = fileURL, host.controller === self else { return }
+        shownStamp = nil
+        host.whenReady { [weak self] in self?.show(url, reason: "open") }
     }
 
     /// The view is on screen.
@@ -870,6 +895,7 @@ class PreviewController: NSViewController {
         fileURL = url
         fileKind = kind
         quickLookShown = false
+        shownView = nil
         shownStamp = nil
         shownCanOpen = false
         shownText = false
@@ -966,6 +992,7 @@ class PreviewController: NSViewController {
     /// The info card for a file that could not be read in time. A later change on disk (the download landing) reads it again.
     private func showUnavailable(_ url: URL, reason: String, cloud: Bool) {
         closePDF()
+        shownView = "info"
         shownStamp = nil
         shownCanOpen = false
         shownText = false
@@ -1072,6 +1099,8 @@ class PreviewController: NSViewController {
         if reason == "change", stamp == shownStamp || awaitingDownload(url) { return }
         shownStamp = stamp
         pdfGen += 1
+        shownView = nil
+        loadingGen = pdfGen
         // Read off the main thread: text is read, an image in iCloud is downloaded before the page loads it, and PDFKit may
         // scan a large or damaged file to rebuild it. A newer show or open supersedes this one.
         let gen = pdfGen, kind = fileKind, root = rootDir, canOpen = LinkPolicy.fileRefusal(url, allowArchives: kind == .archive) == nil
@@ -1109,7 +1138,9 @@ class PreviewController: NSViewController {
                 || ([.code, .json, .csv, .text].contains(kind) && (p["size"] as? Int64 ?? .max) <= FolderListing.maxDocumentBytes)
             return (p, pdf, rich, cloud && fetched && FileTypes.isDataless(url.path))
         }) { [weak self] outcome in
-            guard let self, self.host.controller === self, self.fileURL == url, self.fileKind == kind else { return }
+            guard let self else { return }
+            if self.loadingGen == gen { self.loadingGen = nil }
+            guard self.host.controller === self, self.fileURL == url, self.fileKind == kind else { return }
             guard case .done(let r) = outcome else {
                 log.error("show timed out \(url.path, privacy: .private)")
                 return self.showUnavailable(url, reason: reason, cloud: cloud)
@@ -1161,6 +1192,7 @@ class PreviewController: NSViewController {
             if qlPane == nil { view = "info"; p["view"] = view; noPane = true }
         }
         quickLookShown = view == "quicklook"
+        shownView = view
         closePDF(keeping: view)
         if let pdf {
             let pane = pdfPane ?? PDFPane()
@@ -1295,6 +1327,7 @@ class PreviewController: NSViewController {
     private func imageFailed(_ path: String, _ p: [String: Any]) {
         guard let url = fileURL, url.path == path, imagePane?.path == path else { return }
         closePDF()
+        shownView = "info"
         var card = p
         card["view"] = "info"
         card["note"] = "This image can’t be shown here."
@@ -1307,6 +1340,7 @@ class PreviewController: NSViewController {
     private func mediaFailed(_ path: String, _ p: [String: Any]) {
         guard let url = fileURL, url.path == path, mediaPane?.path == path else { return }
         closePDF()
+        shownView = "info"
         var card = p
         card["view"] = "info"
         card["note"] = "This file can’t be played here."

@@ -208,6 +208,21 @@ check("focus: the budget spent before the element was read counts", Decision.tex
 check("focus: the budget spent before the role was read counts", Decision.textFocus(FocusRead(found: true, expired: true)))
 check("focus: a role read before the budget ran out still answers", !Decision.textFocus(FocusRead(found: true, role: "AXOutline", expired: true)))
 
+// MARK: another app in front, and Finder back
+
+check("activation: another app hides an open panel", Decision.activated(isFinder: false, open: true, pending: false, suspendedFor: nil) == .suspend)
+check("activation: another app closes a show still on its way", Decision.activated(isFinder: false, open: false, pending: true, suspendedFor: nil) == .close
+      && Decision.activated(isFinder: false, open: true, pending: true, suspendedFor: nil) == .close)
+check("activation: another app with nothing open does nothing", Decision.activated(isFinder: false, open: false, pending: false, suspendedFor: 3) == .none
+      && Decision.activated(isFinder: false, open: false, pending: false, suspendedFor: nil) == .none)
+check("activation: Finder back brings a hidden panel back", Decision.activated(isFinder: true, open: false, pending: false, suspendedFor: 3) == .restore
+      && Decision.activated(isFinder: true, open: false, pending: false, suspendedFor: Decision.suspendLimit - 1) == .restore)
+check("activation: Finder back after the limit forgets it", Decision.activated(isFinder: true, open: false, pending: false, suspendedFor: Decision.suspendLimit) == .forget)
+check("activation: Finder with nothing hidden, or a panel open or on its way, does nothing",
+      Decision.activated(isFinder: true, open: false, pending: false, suspendedFor: nil) == .none
+      && Decision.activated(isFinder: true, open: true, pending: false, suspendedFor: 3) == .none
+      && Decision.activated(isFinder: true, open: false, pending: true, suspendedFor: 3) == .none)
+
 // MARK: what the settings window says
 
 let up = HelperStatus(pid: 1, version: "0.3", enabled: true, trusted: true, tap: true, viewer: true)

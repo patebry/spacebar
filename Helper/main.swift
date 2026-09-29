@@ -45,6 +45,10 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private var viewer: NSXPCConnection?
     private var viewerPid: pid_t = 0
     private var panelOpen = false
+    /// When another app came forward over the open panel, which the viewer then ordered out; nil when nothing is suspended.
+    private var suspendedAt: Date?
+    /// The request bringing a suspended panel back: if it fails, the panel must not stay up without Finder's keys.
+    private var restoring = 0
     /// The show on its way to the viewer: `space` when a swallowed Space asked for it, and so must go back to Finder if it fails.
     private var pending: (id: Int, finderPid: pid_t, space: Bool, acked: Bool, at: Date)?
     private var requestSeq = 0
@@ -87,7 +91,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         let s = SettingsFile.load()
         guard s.spaceHelper else {
             log.info("spaceHelper turned off: exiting")
-            if panelOpen || pending != nil { viewerProxy()?.close() }
+            if panelOpen || pending != nil || suspendedAt != nil { viewerProxy()?.close() }
             // Time for the close to reach the viewer.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(0) }
             watchTimer?.invalidate()
@@ -148,6 +152,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         viewerPid = c.processIdentifier
         relaunchDelay = 1
         panelOpen = false
+        suspendedAt = nil
     }
 
     private func lost(_ c: NSXPCConnection?, pid: pid_t) {
@@ -156,6 +161,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         viewer = nil
         viewerPid = 0
         panelOpen = false
+        suspendedAt = nil
         if let p = pending { fail(p.id, "viewer gone") }
         // A viewer that keeps dying is relaunched less and less often.
         nextLaunch = Date(timeIntervalSinceNow: relaunchDelay)
@@ -194,6 +200,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         guard open else {
             panelOpen = false
             panelWindow = 0
+            suspendedAt = nil
             if Decision.closeEndsPending(pendingID: pending?.id, requestID: requestID) { pending = nil }
             return
         }
@@ -307,11 +314,18 @@ final class Helper: NSObject, NSXPCListenerDelegate {
 
     /// Asks the viewer to show `paths`. A viewer that does not answer within 150 ms, or declines, hands a Space back to Finder.
     private func show(_ paths: [String], finderPid: pid_t, space: Bool) {
+        if space { suspendedAt = nil }
+        lastShown = paths
+        request(finderPid: finderPid, space: space) { proxy, id, reply in proxy.show(paths, requestID: id, reply: reply) }
+    }
+
+    /// Makes request `id` pending and sends it with `call`; one not acknowledged within 150 ms, or refused, fails.
+    private func request(finderPid: pid_t, space: Bool, _ call: (SpacebarViewerProtocol, Int, @escaping (Bool) -> Void) -> Void) {
         requestSeq += 1
         let id = requestSeq
         pending = (id, finderPid, space, false, Date())
-        lastShown = paths
-        viewerProxy(onError: { [weak self] in self?.fail(id, "xpc error") })?.show(paths, requestID: id) { ok in
+        guard let proxy = viewerProxy(onError: { [weak self] in self?.fail(id, "xpc error") }) else { return fail(id, "no viewer") }
+        call(proxy, id) { ok in
             DispatchQueue.main.async { [weak self] in
                 guard let self, let p = self.pending, p.id == id else { return }
                 if ok { self.pending?.acked = true } else { self.fail(id, "refused") }
@@ -323,10 +337,36 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         }
     }
 
+    /// Another app came forward over the open panel: the viewer orders it out and Finder's keys are Finder's again.
+    private func suspend(_ why: String) {
+        viewerProxy()?.suspend()
+        panelOpen = false
+        panelWindow = 0
+        offscreenMisses = 0
+        suspendedAt = Date()
+        log.info("suspend (\(why, privacy: .public))")
+    }
+
+    /// Finder came back: the viewer shows the suspended panel again as a new request, which, like a show, takes Finder's keys
+    /// only once `panelState` has seen its window on screen.
+    private func restore() {
+        suspendedAt = nil
+        guard viewer != nil, finderPid > 0 else { return }
+        log.info("restore")
+        request(finderPid: finderPid, space: false) { proxy, id, reply in
+            restoring = id
+            proxy.restore(id, reply: reply)
+        }
+    }
+
     private func fail(_ id: Int, _ why: String) {
         guard let p = pending, p.id == id else { return }
         pending = nil
         log.info("show \(id) failed: \(why, privacy: .public)")
+        if id == restoring {
+            viewerProxy()?.close()
+            return
+        }
         switch Decision.failed(space: p.space, age: Date().timeIntervalSince(p.at)) {
         case .leave: break
         case .close: viewerProxy()?.close()
@@ -338,6 +378,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
 
     private func close(_ why: String) {
         pending = nil
+        suspendedAt = nil
         guard panelOpen || viewer != nil else { return }
         viewerProxy()?.close()
         panelOpen = false
@@ -375,11 +416,21 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         if tap != nil { observeFinder() }
     }
 
-    /// Another app coming forward closes the panel, as Finder going to the background hides Quick Look's.
+    /// Another app coming forward hides the panel, as Finder going to the background hides Quick Look's; Finder coming back
+    /// brings it back.
     @objc private func appActivated(_ note: Notification) {
-        guard panelOpen || pending != nil, let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-              app.bundleIdentifier != finderID, app.processIdentifier != viewerPid else { return }
-        close("\(app.bundleIdentifier ?? "another app") active")
+        guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication, app.processIdentifier != viewerPid else { return }
+        let who = app.bundleIdentifier ?? "another app"
+        switch Decision.activated(isFinder: who == finderID, open: panelOpen, pending: pending != nil,
+                                  suspendedFor: suspendedAt.map { Date().timeIntervalSince($0) }) {
+        case .none: break
+        case .close: close("\(who) active")
+        case .suspend: suspend("\(who) active")
+        case .restore: restore()
+        case .forget:
+            suspendedAt = nil
+            viewerProxy()?.close()
+        }
     }
 
     /// Finder's selection changes: with sidebarKeys off the arrows move Finder's selection, and the panel follows it. The same

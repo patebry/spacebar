@@ -36,6 +36,10 @@ enum HelperIDs {
     /// A key the helper took from Finder while the panel is open (`HelperKeys`), with `HelperMods` bits.
     func key(_ name: String, isRepeat: Bool, mods: Int)
     func close()
+    /// Another app came forward: the panel is ordered out, keeping what it shows for `restore`.
+    func suspend()
+    /// Finder came back: the suspended panel shows again as request `requestID`. Replies false when nothing is suspended.
+    func restore(_ requestID: Int, reply: @escaping (Bool) -> Void)
 }
 
 struct HelperStatus: Codable, Equatable {

@@ -92,6 +92,18 @@ enum Decision {
             && displays.contains { $0.intersects(w.bounds) }
     }
 
+    /// How long a panel hidden by another app coming forward waits for Finder to come back.
+    static let suspendLimit: TimeInterval = 10 * 60
+
+    /// An app came forward. Another app hides an open panel, as it hides Apple's Quick Look, and closes a show still on its way;
+    /// Finder brings a hidden panel back within `suspendLimit`. The panel brought back is a show like any other: it takes
+    /// Finder's keys only once `panelOpened` accepts it.
+    static func activated(isFinder: Bool, open: Bool, pending: Bool, suspendedFor age: TimeInterval?) -> ActivationAction {
+        if !isFinder { return pending ? .close : open ? .suspend : .none }
+        guard let age, !open, !pending else { return .none }
+        return age < suspendLimit ? .restore : .forget
+    }
+
     /// Whether Finder's focus is a text field. Any AX error, or a budget spent before the role was read, counts as one.
     static func textFocus(_ r: FocusRead) -> Bool {
         if r.errors { return true }
@@ -102,6 +114,8 @@ enum Decision {
 }
 
 enum FailAction: Equatable { case leave, close, closeAndRepost }
+
+enum ActivationAction: Equatable { case none, close, suspend, restore, forget }
 
 enum PanelGate: Equatable { case accept, notPending, retry, fail }
 

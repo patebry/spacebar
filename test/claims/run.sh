@@ -101,6 +101,9 @@ def ents(path):
 info = lambda b: plistlib.load(open(f'{b}/Contents/Info.plist', 'rb'))
 
 check(sorted(os.listdir(H)) == ['spacebar Helper.app', 'spacebar Viewer.app'], 'Contents/Helpers holds the helper and the viewer only', os.listdir(H))
+named = re.search(r'static let accessibilityName = "([^"]+)"', open('App/Panes.swift').read())
+check(named and named.group(1) + '.app' == os.path.basename(helper),
+      "the app names the helper as Accessibility lists it, by its bundle's file name", named and named.group(1))
 for path in [f'{helper}/Contents/MacOS/SpacebarHelper', f'{viewer}/Contents/MacOS/SpacebarViewer', f'{writer}/Contents/MacOS/SpacebarWriter',
              f'{viewer}/Contents/Resources/web/index.html', agent]:
     check(os.path.isfile(path), 'bundle has ' + path[len(app) + 1:])

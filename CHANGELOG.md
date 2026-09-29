@@ -1,0 +1,39 @@
+# Changelog
+
+Each release's notes on GitHub also list its commits. This file keeps what changed for someone using spacebar.
+
+## 0.3.0 (unreleased)
+
+Waits for the Developer ID: the first release with the Space helper is notarized.
+
+### Use spacebar for every file
+
+- **Space in Finder opens spacebar for any file**, not only the types Quick Look hands it: plain text, CSV, HTML (scripts
+  off), PDF, images, video and audio open in spacebar's own panel with the same sidebar. Off until you turn it on in the
+  welcome sheet or Settings, General.
+- Space, Esc, ⌘W and ⌘. close the panel in one press; the arrow keys drive the sidebar, or Finder's selection with the
+  panel following. Several selected files open with a sidebar of just those files.
+- The panel hides while another app is in front and comes back with Finder, a PDF at its page and a video at its time.
+- A rename, the search field, ⌘Y, secure input and every other app keep their keys; a Space spacebar cannot answer in
+  150 ms goes to Quick Look.
+- It works through a small helper that needs Accessibility (listed as "spacebar Helper") and runs at login; it never opens a
+  file, and a sandboxed viewer renders them. SECURITY.md has the threat model. Settings, General shows its state.
+- Installing, updating and uninstalling handle the helper: an update brings it back within about 20 seconds, and the
+  uninstaller removes it with its permissions.
+
+### Viewers
+
+- HEIC, AVIF, TIFF, camera RAW, PSD, OpenEXR, TGA, JPEG 2000 and icons are decoded natively, with fit, zoom and pan.
+- Office, iWork, fonts, 3D, certificates, calendars and e-books show Apple's own preview inside the panel; files declared as
+  text (`.strings`, `.pbxproj`, playlists, crash reports) stay in spacebar's text view.
+- `.dmg` files are claimed; their card shows the format and whether the image is encrypted, without mounting it.
+- Rich text is drawn natively; text in any common encoding is detected and named.
+- CSV and TSV show as a sortable table of up to 50,000 rows; JSON as a tree; notebooks render.
+- The native player also plays M4B, 3GP, MPEG-1/2 and AMR.
+- A Markdown image that does not load shows a placeholder.
+
+### Sidebar and settings
+
+- Big folders stay fast (the sidebar draws only the rows in view), and it takes the arrow keys as soon as the preview opens.
+- Settings, General lists other Quick Look extensions that claim spacebar's types, with a Turn Off button.
+- A welcome window on first launch, and a new app icon.

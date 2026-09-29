@@ -38,10 +38,10 @@ Space on in Finder:
 | Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.xml`, `.yaml`, `.toml`, `.sql`, `.plist`, `Makefile` and more) | highlighted source with line numbers; a binary property list is shown as XML. A language with no bundled grammar (`Dockerfile`, `.ps1`, `.bat`, Dart, Scala, Elixir, Haskell, Zig and others) is plain text with line numbers |
 | Archives (`.zip`, `.tar`, `.tgz`, `.tar.gz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz`, `.7z`, `.rar`, `.zst`, `.tzst`) | its files and folders as a tree, with sizes and dates, listed without extracting anything; Open with its default app |
 | JSON | pretty-printed and highlighted, with a Raw toggle |
-| CSV and TSV | a table, first row as the header, up to 1,000 rows |
-| Text (`.txt`, `.log`, `.conf`, `.env`, `LICENSE`, `.env.example` and other text) | as is, with line numbers. Text need not be UTF-8: a byte order mark (UTF-8, UTF-16, UTF-32), UTF-16 without one, and legacy encodings (Windows-1252, Latin-1, Shift JIS, GB 18030, EUC-KR, Big5, Windows-1251 and others) are detected, and the kind line names the encoding |
+| CSV and TSV | a table, first row as the header, up to 50,000 rows and 200 columns |
+| Text (`.txt`, `.log`, `.conf`, `.env`, `LICENSE`, `.env.example`, `.strings`, `.pbxproj` and any other file macOS declares as text) | as is, with line numbers. Text need not be UTF-8: a byte order mark (UTF-8, UTF-16, UTF-32), UTF-16 without one, and legacy encodings (Windows-1252, Latin-1, Shift JIS, GB 18030, EUC-KR, Big5, Windows-1251 and others) are detected, and the kind line names the encoding |
 | Rich text (`.rtf`, `.rtfd`) | drawn by AppKit's own text view, fonts, colours, tables and pictures as the document has them (mapped for a dark theme, as TextEdit does); never as RTF source |
-| Office, iWork, fonts, 3D, certificates, calendars, e-books and other files macOS previews (`.docx`, `.xlsx`, `.pptx`, `.pages`, `.numbers`, `.key`, `.ttf`, `.otf`, `.usdz`, `.obj`, `.stl`, `.glb`, `.cer`, `.crt`, `.p12`, `.ics`, `.epub` and any other type macOS declares and spacebar has no view of its own for) | Apple's own Quick Look preview, inside the panel; the file's text, or the info card, when Quick Look cannot show it. A contact card (`.vcf`) is shown as its text: Apple's preview of it would read your Contacts |
+| Office, iWork, fonts, 3D, certificates, calendars, e-books and other files macOS previews (`.docx`, `.xlsx`, `.pptx`, `.pages`, `.numbers`, `.key`, `.ttf`, `.otf`, `.usdz`, `.obj`, `.stl`, `.glb`, `.cer`, `.crt`, `.p12`, `.ics`, `.epub` and any other type macOS declares, is not text, and spacebar has no view of its own for) | Apple's own Quick Look preview, inside the panel; the file's text, or the info card, when Quick Look cannot show it. A contact card (`.vcf`) is shown as its text: Apple's preview of it would read your Contacts |
 | Disk images (`.dmg`) | the info card, with the image's format and whether it is encrypted, read from the file without mounting it |
 | Anything else | an info card: Finder's large thumbnail when there is one, kind, size, date modified, and Open with its default app (Reveal in Finder for apps and executables) |
 
@@ -58,22 +58,53 @@ right. **Minimal chrome** (Settings, Appearance) goes back to floating buttons o
 ### Use spacebar for every file
 
 Quick Look hands spacebar only the types above. Turn on **Use spacebar for every file in Finder** (Settings, General, or the
-welcome sheet's second step) and Space in Finder opens spacebar for any file you select, plain text, CSV, HTML, PDF, images,
-video and audio included, in the same panel with the same sidebar. Space, Esc, ⌘W or ⌘. close it in one press. Like Apple's
-Quick Look, it hides while another app is in front and comes back when you return to Finder. While it is
-open the arrow keys move through spacebar's sidebar, or, with **Arrow keys move through the sidebar** (Settings, Sidebar)
-off, through Finder's selection, and the panel follows. Space in a rename or the search field, with Apple's Quick Look already
-open, or in any other app is left alone, and a Space spacebar cannot answer within 150 ms goes back to Finder, so Quick Look
-opens as usual. An HTML file opened with Space never runs its scripts.
+second step of the welcome sheet) and Space in Finder opens spacebar for any file you select, in the same panel with the same
+sidebar:
 
-This works through a small helper, `spacebar Helper.app`, that macOS starts at login (it is listed in Login Items) and that
-needs **Accessibility**. Accessibility lets spacebar notice when you press Space in Finder and read which file is selected;
-it never reads what you type anywhere else. The helper acts on a plain Space pressed in Finder, and, only while spacebar's
-panel is open, on the keys that drive it (Esc, the arrows, Home, End, Page Up and Down, Return, ⌘W, ⌘., ⌘O, ⌘F and zoom).
-It never opens a file: a separate viewer does, sandboxed like the Quick Look extension. Settings, General shows whether it is
-on, waiting for Accessibility, blocked in Login Items, or paused by secure input (a password field has the keyboard).
-Turning it off removes it from Login Items; the uninstaller also removes its Accessibility entry.
-[SECURITY.md](SECURITY.md) has how the privileges are split.
+| You press Space in Finder on | Without it | With it |
+|---|---|---|
+| Markdown, folders, code, JSON, YAML, XML, logs, archives, `.dmg`, files with no extension | spacebar, inside Quick Look | spacebar's own panel |
+| Plain text, CSV, HTML, rich text | Apple's preview | spacebar's panel (HTML with its scripts off) |
+| PDF, images (HEIC and camera RAW too), video, audio | Apple's preview | spacebar's panel |
+| Office, iWork, fonts, 3D, certificates, calendars, e-books | Apple's preview | Apple's preview, inside spacebar's panel |
+| Apps and other packages | Apple's preview | Apple's preview (spacebar hands them back) |
+| Several files at once | Quick Look, one at a time | spacebar's panel, with a sidebar of just those files |
+
+With it on:
+
+- Space, Esc, ⌘W or ⌘. close the panel in one press.
+- While it is open the arrow keys move through spacebar's sidebar, or, with **Arrow keys move through the sidebar**
+  (Settings, Sidebar) off, through Finder's selection, and the panel follows.
+- Like Apple's Quick Look, it hides while another app is in front and comes back when you return to Finder, a PDF at its page
+  and a video at its time.
+- Space in a rename or the search field, with Apple's Quick Look already open, or in any other app is left alone. ⌘Y still
+  opens Apple's Quick Look. A Space spacebar cannot answer within 150 ms goes back to Finder, so Quick Look opens as usual.
+- While a password field or another app has secure input on, macOS gives spacebar no keys, so Space opens Apple's Quick Look;
+  Settings, General says so.
+
+#### What it asks macOS for
+
+It works through a small helper app inside spacebar, which macOS lists as **spacebar Helper**. Turning the setting on asks
+for two things:
+
+- **Accessibility** (System Settings, Privacy & Security, Accessibility: turn on **spacebar Helper**). This lets the helper
+  notice a Space pressed in Finder and read which files are selected. It sees your key presses while it runs, but acts only
+  on a plain Space in Finder and, while spacebar's panel is open, on the keys that drive it (Esc, the arrows, Home, End, Page
+  Up and Down, Return, ⌘W, ⌘., ⌘O, ⌘F and zoom). It never records what you type, and no character you type leaves it: it
+  tells the panel only a key's name, such as "down".
+- **Running in the background** (System Settings, General, Login Items & Extensions: **spacebar**, under Allow in the
+  Background). macOS starts the helper at login and keeps it running.
+
+The helper never opens a file. A separate viewer does, sandboxed like the Quick Look extension, and the first time it shows a
+file in Documents, Desktop, Downloads or iCloud Drive macOS may ask whether **spacebar** may access that folder. Settings,
+General shows whether the helper is on, waiting for Accessibility, blocked in Login Items, or paused by secure input.
+[SECURITY.md](SECURITY.md#the-space-helper) has how the privileges are split.
+
+#### Turning it off
+
+Turn off **Use spacebar for every file in Finder** in Settings, General. The helper stops and leaves Login Items, and Space
+in Finder is Quick Look's again. Its Accessibility entry stays, unused, until you remove it in System Settings or
+[uninstall](#uninstall) spacebar, which removes it for you.
 
 ### Folders and Obsidian vaults
 
@@ -126,9 +157,11 @@ curl -fsSL https://spacebar.patebryant.com/install.sh | sh
 
 Then select a file or folder in Finder and press Space.
 
+<!-- gatekeeper: the release notes copy this paragraph (.github/workflows/release.yml) -->
 spacebar is **not notarized**: there is no Apple Developer ID behind it yet. Use the install command; a browser download
 of the zip will be blocked by Gatekeeper. Files that curl downloads are not quarantined, so Gatekeeper does not stop the app,
 but it also means you are trusting this repository's build rather than Apple's check.
+<!-- /gatekeeper -->
 Read [`scripts/install.sh`](scripts/install.sh) before you run it. It:
 
 1. checks for macOS 13 or later;
@@ -172,8 +205,9 @@ gh attestation verify spacebar.zip -R patebry/spacebar
 curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh
 ```
 
-This stops the Space helper, resets the Accessibility permission it had and the viewer's permissions, unregisters and
-deletes `~/Applications/spacebar.app`. **Uninstall spacebar…** in Settings, Advanced, runs the same
+This stops the Space helper (its launchd agent, then the helper, the viewer and the viewer's writer), resets the
+Accessibility permission the helper had and every permission the viewer had, unregisters spacebar's Quick Look extensions and
+deletes `~/Applications/spacebar.app`, which takes its Login Items entry with it. **Uninstall spacebar…** in Settings, Advanced, runs the same
 script from inside the app (not while an update runs), after removing the helper from Login Items. Both quit spacebar's
 Quick Look extensions first. To also delete your settings and themes in `~/Library/Application Support/spacebar`, and the
 viewer's container in `~/Library/Containers/md.spacebar.viewer`:
@@ -205,6 +239,8 @@ python3 test/webcheck.py && python3 test/webthemes.py && python3 test/remoteimag
 ```
 
 The other scripts in `test/` drive real Quick Look windows and synthetic input; run them on a machine you are not using.
+`test/helper_live.command` is a checklist for the Space helper in Finder: you press the keys, and it grades each step from
+the helper's and viewer's logs. It sends no input itself.
 
 ## How it works
 
@@ -256,9 +292,10 @@ writer service; Finder stays in front. Saves are compare-and-swap: if the file c
 - The preview extension has a read-only sandbox exception for the whole disk, so relative images beside a document load and
   the sidebar can show the folder's files.
 - The Space helper, when you turn it on, has Accessibility and sees every key event, so it is kept small: it acts only on
-  Space in Finder and on the panel's own keys while the panel is open, forwards only a fixed list of key names, never opens a
-  file, and talks only to the viewer and the settings app signed by the same certificate, under the hardened runtime. The
-  viewer that renders files is sandboxed like the preview extension and never sees a key the helper did not send it.
+  Space in Finder and on the panel's own keys while the panel is open, forwards only a fixed list of key names (never a
+  character), never opens a file, and talks only to the viewer and the settings app signed by the same certificate, under the
+  hardened runtime. The viewer that renders files is sandboxed like the preview extension and never sees a key the helper
+  did not send it.
 - The preview extension has the `com.apple.security.network.client` entitlement. WKWebView's helper processes crash-loop
   in a sandboxed extension without it. spacebar has no network code of its own; the only requests the page can make are
   remote images, which are blocked unless you allow them.

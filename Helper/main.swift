@@ -385,7 +385,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         log.info("close (\(why, privacy: .public))")
     }
 
-    /// Hands a Space back to Finder, tagged so this tap lets it through. Whether Finder honours it is logged (P0 left it open).
+    /// Hands a Space back to Finder, tagged so this tap lets it through. Whether Finder honours it is logged: not yet checked live.
     private func repost(to pid: pid_t) {
         let src = CGEventSource(stateID: .hidSystemState)
         src?.userData = Decision.repostTag

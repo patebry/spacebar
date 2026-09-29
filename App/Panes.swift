@@ -220,7 +220,9 @@ struct GeneralPane: View {
 
 enum HelperCopy {
     static let what = "Space opens spacebar for any file you select in Finder, images, PDFs and video included, not only the types Quick Look hands it. Space or Esc closes it."
-    static let privacy = "This uses Accessibility, which lets spacebar notice when you press Space in Finder and read which file is selected. It never reads what you type anywhere else. Turning it off removes spacebar from Login Items; Quick Look then previews as before."
+    /// The name System Settings lists the helper under in Accessibility: the bundle's file name, not its display name.
+    static let accessibilityName = "spacebar Helper"
+    static let privacy = "This uses Accessibility, listed there as \(accessibilityName), which lets spacebar notice when you press Space in Finder and read which file is selected. It never reads what you type anywhere else. Turning it off removes spacebar from Login Items; Quick Look then previews as before."
 
     static func title(_ s: HelperState) -> String {
         switch s {
@@ -237,7 +239,7 @@ enum HelperCopy {
     static func detail(_ s: HelperState) -> String? {
         switch s {
         case .needsLoginItems: return "Turn on spacebar in System Settings, General, Login Items & Extensions."
-        case .needsAccessibility: return "Turn on spacebar in System Settings, Privacy & Security, Accessibility."
+        case .needsAccessibility: return "Turn on \(accessibilityName) in System Settings, Privacy & Security, Accessibility."
         case .secureInput: return "A password field or another app has secure input on, so Space goes to Quick Look until it ends."
         case .notRunning: return "macOS did not start spacebar's helper, as happens for a while after an update. spacebar starts it again by itself."
         default: return nil

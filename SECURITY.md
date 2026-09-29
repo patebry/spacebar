@@ -38,8 +38,8 @@ Six features reach further than a rendered page, and are in scope:
   The view is used only for a declared type of no kind of spacebar's own that spacebar does not claim and that conforms to
   nothing it claims (`FileTypes.appleQuickLookType`), because Quick Look hands the file to whichever extension it would
   pick. The claims are read at run time from the bundle's copy of `scripts/quicklook-types.txt`; without it nothing is
-  handed over. Folders, packages other than iWork's, apps, archives, disk images, web archives, mail and contact cards are
-  never shown this way (Apple's previews of web content and mail load what they link to; its contact card reads Contacts
+  handed over. Folders, packages other than iWork's, apps, archives, disk images, web archives, mail, contact cards and
+  text (any type declared as text but a calendar and a Wavefront model, which Apple draws) are never shown this way (Apple's previews of web content and mail load what they link to; its contact card reads Contacts
   in spacebar's own process). A test makes a file of every claimed type and checks that none reaches the view. The type is
   checked again just before the view is given the file; a file swapped between that check and Quick Look's read is not.
 - **Images and disk images parsed in the sandbox.** HEIC, AVIF, TIFF, camera RAW, PSD, OpenEXR, TGA, JPEG 2000 and icon
@@ -52,22 +52,83 @@ Six features reach further than a rendered page, and are in scope:
   running one, only into `~/Applications/spacebar.app`, and only after the downloaded zip's SHA-256 matches the release's.
   The version check reads just the version number of GitHub's latest release, at most once a day. The uninstaller, started
   from Settings, quits the extensions' helpers before it deletes anything and does not start while an update runs.
-- **The Space helper** ("Use spacebar for every file", off until you turn it on) splits the privileges between two processes.
-  `spacebar Helper.app` (`md.spacebar.helper`) is a launchd agent with Accessibility and an active event tap, no sandbox and no
-  entitlements, under the hardened runtime. It is built from its own few files and the settings reader, with none of the
-  file-reading code and no WebKit, and it never opens a file: it reads Finder's focus and selection through Accessibility,
-  within a 60 ms budget in which any error hands the key back. It takes a plain Space only when it is on its way to Finder,
-  and other keys only while its panel is open and really on screen (the viewer's window, visible, at least 200×150 and on a
-  display, checked when it opens and every 2 seconds); it passes every key while Finder's focus is in a text field or another
-  process has the keyboard, and forwards only names from a fixed list. `spacebar Viewer.app` (`md.spacebar.viewer`) renders
-  files with the preview extension's code and exactly its entitlements plus the lookup of the helper's one Mach service; it
-  cannot claim the keys itself, since the helper accepts a panel only for a show it asked for. When another app comes
-  forward the panel is hidden and Finder has its keys back at once; Finder coming back brings it back only as a new request,
-  through the same check that its window is up and on screen, and a restore that fails it closes the panel. The helper's Mach service admits
-  only the viewer and the settings app: signed by the helper's own leaf certificate, under the hardened runtime as the kernel
-  holds it for the running process, and without the entitlements that allow DYLD_ variables or turn off library validation;
-  the role is fixed per connection, and each call checks it. The viewer and the app require the helper's identity in turn.
-  Residual risks: the helper sees every key event while it runs, so it is kept small and acts on so few; a compromised viewer
-  has what the Quick Look extension has, plus a process that stays alive (it exits after 30 minutes closed); and the release
-  signing key now also gates Accessibility, so it must stay in CI secrets only. The uninstaller boots the agent out, quits the viewer
-  and resets both apps' privacy permissions.
+- **The Space helper** ("Use spacebar for every file", off until you turn it on) holds Accessibility and an event tap. Its
+  threat model is below.
+
+## The Space helper
+
+**What it protects.** With the helper on, one process sees every key event in the session. The design goal is that nothing
+which parses a file can become a keylogger, and that nothing on the Mac can use the helper to learn what was typed or to
+drive Finder.
+
+**Privilege split.** Two processes, each with only what its job needs:
+
+| | `spacebar Helper.app` (`md.spacebar.helper`) | `spacebar Viewer.app` (`md.spacebar.viewer`) |
+|---|---|---|
+| Runs as | a launchd agent, started at login | a floating panel, started by the helper when needed; exits after 30 minutes closed |
+| Holds | Accessibility and an active event tap | the preview extension's sandbox and exactly its entitlements, plus the lookup of the helper's one Mach service |
+| Sandbox, entitlements | none and none, under the hardened runtime | sandboxed, under the hardened runtime, with its own unsandboxed writer as the extension has |
+| Code | its own few files and the settings reader; none of the file-reading code, no WebKit (the claims test checks the binary's symbols and libraries) | the preview extension's code, reused |
+| Touches files | never: it reads Finder's focus and selection through Accessibility and passes paths on | reads and renders them, as the extension does |
+| Keys | sees them all | only the key names the helper sends it |
+
+A renderer exploit in the viewer gets what a Quick Look extension exploit gets today, plus a process that stays alive a while;
+it gets no key events and no Accessibility.
+
+**The XPC gate.** The helper's Mach service, `md.spacebar.helper`, admits only the viewer and the settings app:
+
+- *Code-signing requirement.* The listener requires `identifier "md.spacebar.viewer" or identifier "md.spacebar"`, signed by
+  the same leaf certificate as the helper itself (read at run time from the helper's own signature, so a build trusts only
+  its own siblings), and carrying neither `com.apple.security.cs.allow-dyld-environment-variables` nor
+  `com.apple.security.cs.disable-library-validation`: either would let a library be injected into a process the helper
+  trusts. An ad-hoc or unsigned helper has no certificate to pin and refuses every connection.
+- *Hardened runtime, from the kernel.* The peer must run under the hardened runtime as the kernel holds it for the running
+  process (`kSecCSDynamicInformation`), not as the file on disk says, since the file can be swapped after launch.
+- *One role per connection.* The helper decides once whether the peer is the viewer or the app, then pins the connection to
+  that one identity (`setCodeSigningRequirement`), so every later message is checked against it by the kernel's audit token,
+  not the pid, and each method checks the role: the app's connection cannot call the viewer's methods and the other way round.
+- *Both ways.* The viewer and the app require the helper's identity in turn (`identifier "md.spacebar.helper"` and the same
+  leaf certificate) before they send it anything.
+
+`test/helperlink/run.sh` runs the real listener as a temporary launchd job and checks that the viewer and the app are
+admitted, and that an ad-hoc client claiming the viewer's identifier, a same-certificate client under another identifier,
+and the viewer's identity without the hardened runtime, with DYLD variables allowed or with library validation off are all
+refused.
+
+**The panel-state gate.** The helper takes keys other than Space only while a spacebar panel is really open on screen:
+
+- The viewer cannot claim the keys itself. The helper accepts a panel only for a show it asked for (a pending request id),
+  and only once the viewer reports a window the helper can see in the window server: its window, visible, at least 200×150
+  and on a display. It checks again every 2 seconds and gives the keys back to Finder when the window is gone.
+- A show the viewer does not acknowledge within 150 ms is dropped and the Space goes to Finder (a Space more than a second
+  old is not re-sent).
+- When another app comes forward the panel is suspended and Finder has its keys back at once. Finder coming back restores it
+  only as a new request through the same gate, and a restore that fails the gate closes the panel.
+- Every key passes while Finder's focus is in a text field (a rename, the search field; any Accessibility error counts as a
+  text field) or another process has the keyboard. A Space passes while Apple's Quick Look is open, and Apple's Quick Look
+  opening closes spacebar's panel.
+
+**No key characters leave the helper.** The tap reads a key's code and modifier flags. It reads the character only for a
+key pressed with ⌘, to tell ⌘W, ⌘., ⌘O, ⌘F and the zoom keys apart, and keeps it in that one event. What crosses to the
+viewer is a name from a fixed list (`up`, `down`, `left`, `right`, `home`, `end`, `pageup`, `pagedown`, `return`, `open`,
+`find`, `zoomIn`, `zoomOut`, `zoomReset`), a repeat flag and modifier bits; the viewer drops any other name. The helper logs
+decisions and timings, never a key.
+
+**Secure input.** While a password field or another app has secure input on, macOS sends no key events to event taps, so the
+helper sees nothing and Space reaches Finder's own Quick Look. Settings, General shows "Secure input on".
+
+**Residual risks.**
+
+- The helper sees every key event while it runs. It is kept small and acts on few keys, but a bug in it is a bug in a
+  process with Accessibility.
+- A compromised viewer has what the Quick Look extension has, plus a process that stays alive while the panel is in use.
+- The signing key now also gates Accessibility: whoever holds it can build a viewer the helper trusts, and a helper that
+  inherits the Accessibility grant. It lives only in CI secrets. Until the Developer ID release, the certificate is
+  self-signed, so macOS pins the helper's launch constraint to its code hash rather than to a Team ID.
+- A file swapped between the viewer's type check and Quick Look's read may reach Apple's generator for a type spacebar claims.
+  It is still parsed by Apple's generator, out of process, and shown in the sandboxed viewer.
+
+**Turning it off and removing it.** Turning the setting off unregisters the agent, and the helper exits. The uninstaller
+boots the agent out, quits the helper, the viewer and the viewer's writer, resets the helper's Accessibility grant and every
+permission of the viewer's (`tccutil reset`), and with `--purge` deletes the viewer's container; `test/report/run.sh` checks
+each step of its dry run.

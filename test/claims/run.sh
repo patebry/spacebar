@@ -129,6 +129,9 @@ check(ve == expected, "viewer: exactly the preview extension's entitlements plus
 check(pe.get('com.apple.security.app-sandbox') is True and 'md.spacebar.helper' not in pe.get(mach, []), 'the extension itself is unchanged')
 check(ents(helper) == {}, 'helper: no entitlements (so no sandbox)', ents(helper))
 check(ents(writer) == {}, "viewer's writer: no entitlements, like the extensions' writers", ents(writer))
+INJECTABLE = ['com.apple.security.cs.allow-dyld-environment-variables', 'com.apple.security.cs.disable-library-validation']
+carriers = [p for p in (viewer, writer, app, helper) for k in INJECTABLE if k in ents(p)]
+check(not carriers, 'the viewer, its writer, the app and the helper carry no entitlement that lets a library in', carriers)
 _, _, hd = run('codesign', '-dv', helper)
 _, _, vd = run('codesign', '-dv', viewer)
 check(re.search(r'flags=0x[0-9a-f]*\([^)]*runtime', hd) is not None, 'helper: hardened runtime', hd)
@@ -151,7 +154,8 @@ cert = f'{tmp}/spacebar-claims-cert0'
 if os.path.exists(cert):
     leaf = hashlib.sha1(open(cert, 'rb').read()).hexdigest().upper()
     os.remove(cert)
-    req = lambda ids: '=(' + ' or '.join(f'identifier "{i}"' for i in ids) + f') and certificate leaf = H"{leaf}"'
+    req = lambda ids: ('=(' + ' or '.join(f'identifier "{i}"' for i in ids) + f') and certificate leaf = H"{leaf}"'
+                       + ''.join(f' and !entitlement["{k}"] exists' for k in INJECTABLE))
     client = req(['md.spacebar.viewer', 'md.spacebar'])
     check(run('codesign', '--verify', '-R' + client, viewer)[0] == 0 and run('codesign', '--verify', '-R' + client, app)[0] == 0,
           "the viewer and the app meet the helper's client requirement")

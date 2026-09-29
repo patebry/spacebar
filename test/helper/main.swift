@@ -166,5 +166,50 @@ n.release()
 check("held: release forgets held keys (the tap was off)", n.held.isEmpty && n.route(key(KeyCode.down, down: false), panel: closed) == .pass)
 check("held: nothing stays held after the key-ups", { var k = KeyRoute(); _ = k.route(key(KeyCode.escape), panel: open); _ = k.route(key(KeyCode.escape, down: false), panel: closed); return k.held.isEmpty }())
 
+// MARK: panel gate, failed shows, focus reads
+
+check("gate: the pending show with its window up is accepted", Decision.panelOpened(pendingID: 4, requestID: 4, onScreen: true, retried: false) == .accept)
+check("gate: a show not pending is ignored", Decision.panelOpened(pendingID: 5, requestID: 4, onScreen: true, retried: false) == .notPending)
+check("gate: nothing pending is ignored", Decision.panelOpened(pendingID: nil, requestID: 4, onScreen: true, retried: false) == .notPending)
+check("gate: a window not up yet gets one retry", Decision.panelOpened(pendingID: 4, requestID: 4, onScreen: false, retried: false) == .retry)
+check("gate: a window still not up after the retry fails the show", Decision.panelOpened(pendingID: 4, requestID: 4, onScreen: false, retried: true) == .fail)
+check("gate: the retry accepts a window up by then", Decision.panelOpened(pendingID: 4, requestID: 4, onScreen: true, retried: true) == .accept)
+check("close: the viewer closing the pending show ends it", Decision.closeEndsPending(pendingID: 4, requestID: 4))
+check("close: another request's close leaves it", !Decision.closeEndsPending(pendingID: 4, requestID: 3))
+check("close: a close with no request (0) leaves it", !Decision.closeEndsPending(pendingID: 0, requestID: 0) && !Decision.closeEndsPending(pendingID: nil, requestID: 0))
+
+check("failed: a fresh Space closes the viewer and goes back to Finder", Decision.failed(space: true, age: 0.2) == .closeAndRepost)
+check("failed: a Space just under 1 s is still fresh", Decision.failed(space: true, age: 0.99) == .closeAndRepost)
+check("failed: a Space 1 s old is stale: closed, not handed back", Decision.failed(space: true, age: 1) == .close)
+check("failed: a stale Space after the 5 s timeout is not handed back", Decision.failed(space: true, age: 5.2) == .close)
+check("failed: a follow of Finder's selection leaves the panel", Decision.failed(space: false, age: 0.1) == .leave && Decision.failed(space: false, age: 9) == .leave)
+
+let screenA = CGRect(x: 0, y: 0, width: 1512, height: 982), screenB = CGRect(x: 1512, y: -200, width: 2560, height: 1440)
+let win = WindowInfo(owner: viewer, onScreen: true, alpha: 1, bounds: CGRect(x: 300, y: 200, width: 900, height: 640))
+func visible(_ w: WindowInfo, _ displays: [CGRect] = [screenA, screenB], pid: Int32 = viewer) -> Bool { Decision.panelVisible(w, viewerPid: pid, displays: displays) }
+check("window: the viewer's, on screen, on a display", visible(win))
+check("window: another process's is not", !visible(WindowInfo(owner: 1526, onScreen: true, alpha: 1, bounds: win.bounds)))
+check("window: no viewer pid, nothing is", !visible(WindowInfo(owner: 0, onScreen: true, alpha: 1, bounds: win.bounds), pid: 0))
+check("window: off screen is not", !visible(WindowInfo(owner: viewer, onScreen: false, alpha: 1, bounds: win.bounds)))
+check("window: transparent is not", !visible(WindowInfo(owner: viewer, onScreen: true, alpha: 0, bounds: win.bounds)))
+check("window: 199 wide is too small", !visible(WindowInfo(owner: viewer, onScreen: true, alpha: 1, bounds: CGRect(x: 10, y: 10, width: 199, height: 600))))
+check("window: 149 high is too small", !visible(WindowInfo(owner: viewer, onScreen: true, alpha: 1, bounds: CGRect(x: 10, y: 10, width: 600, height: 149))))
+check("window: exactly 200×150 is enough", visible(WindowInfo(owner: viewer, onScreen: true, alpha: 1, bounds: CGRect(x: 10, y: 10, width: 200, height: 150))))
+check("window: parked off every display is not", !visible(WindowInfo(owner: viewer, onScreen: true, alpha: 1, bounds: CGRect(x: -5000, y: -5000, width: 900, height: 640))))
+check("window: on the second display is", visible(WindowInfo(owner: viewer, onScreen: true, alpha: 1, bounds: CGRect(x: 2000, y: -100, width: 900, height: 640))))
+check("window: no displays known, none is", !visible(win, []))
+
+check("focus: an outline is not a text field", !Decision.textFocus(FocusRead(found: true, role: "AXOutline")))
+for role in ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"] { check("focus: \(role) is", Decision.textFocus(FocusRead(found: true, role: role))) }
+check("focus: a search field by subrole is", Decision.textFocus(FocusRead(found: true, role: "AXTextField", subrole: "AXSearchField")))
+check("focus: nothing focused, read in time, is not", !Decision.textFocus(FocusRead(found: false)))
+check("focus: any AX error counts as a text field", Decision.textFocus(FocusRead(found: false, errors: true)) && Decision.textFocus(FocusRead(found: true, role: "AXOutline", errors: true)))
+check("focus: the budget spent before the element was read counts", Decision.textFocus(FocusRead(found: false, expired: true)))
+check("focus: the budget spent before the role was read counts", Decision.textFocus(FocusRead(found: true, expired: true)))
+check("focus: a role read before the budget ran out still answers", !Decision.textFocus(FocusRead(found: true, role: "AXOutline", expired: true)))
+
+check("requirement: pins the injection entitlements out", HelperSigning.requirement(identifiers: ["a"], leaf: "AB").hasSuffix(
+    #" and !entitlement["com.apple.security.cs.allow-dyld-environment-variables"] exists and !entitlement["com.apple.security.cs.disable-library-validation"] exists"#))
+
 print(failures == 0 ? "\nall helper checks passed (\(recorded.count) recorded contexts)" : "\n\(failures) helper checks failed")
 exit(failures == 0 ? 0 : 1)

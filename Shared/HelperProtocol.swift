@@ -79,8 +79,12 @@ enum HelperSigning {
         return digest.map { String(format: "%02X", $0) }.joined()
     }
 
+    /// Entitlements that would let a library into a hardened process; no peer may carry them.
+    static let injectable = ["com.apple.security.cs.allow-dyld-environment-variables", "com.apple.security.cs.disable-library-validation"]
+
     static func requirement(identifiers: [String], leaf: String) -> String {
         "(" + identifiers.map { "identifier \"\($0)\"" }.joined(separator: " or ") + ") and certificate leaf = H\"\(leaf)\""
+            + injectable.map { " and !entitlement[\"\($0)\"] exists" }.joined()
     }
 
     /// What the viewer and the settings app require of the helper; nil when this build is unsigned.

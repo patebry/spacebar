@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 /// One key event as the tap saw it, reduced to what routing needs.
 struct KeyEvent: Equatable {
@@ -60,6 +61,64 @@ enum Decision {
         let paths = c.selection.filter { $0.hasPrefix("/") }
         return paths.isEmpty ? .pass("no-selection") : .show(paths)
     }
+
+    /// A Space older than this is not handed back to Finder: Apple's panel opening then would surprise more than nothing.
+    static let staleSpace: TimeInterval = 1
+
+    /// What a failed show leaves behind. A Space goes back to Finder while it is fresh, and the viewer, which may still answer
+    /// late, must not open over Apple's panel. A follow of Finder's selection that failed leaves the panel as it is.
+    static func failed(space: Bool, age: TimeInterval) -> FailAction {
+        guard space else { return .leave }
+        return age < staleSpace ? .closeAndRepost : .close
+    }
+
+    /// The viewer's word that its panel opened for `requestID`: only a pending show may take Finder's keys, and only with its
+    /// window really up. The window server may not have the first frame yet, so it gets one retry.
+    static func panelOpened(pendingID: Int?, requestID: Int, onScreen: Bool, retried: Bool) -> PanelGate {
+        guard let p = pendingID, p == requestID else { return .notPending }
+        if onScreen { return .accept }
+        return retried ? .fail : .retry
+    }
+
+    /// The viewer closed its panel while showing `requestID`: the show it was answering is over.
+    static func closeEndsPending(pendingID: Int?, requestID: Int) -> Bool {
+        requestID > 0 && pendingID == requestID
+    }
+
+    /// Whether the viewer's window is worth taking Finder's keys for: the viewer's, on screen, visible, big enough to read and
+    /// on a display.
+    static func panelVisible(_ w: WindowInfo, viewerPid: Int32, displays: [CGRect]) -> Bool {
+        viewerPid > 0 && w.owner == viewerPid && w.onScreen && w.alpha > 0 && w.bounds.width >= 200 && w.bounds.height >= 150
+            && displays.contains { $0.intersects(w.bounds) }
+    }
+
+    /// Whether Finder's focus is a text field. Any AX error, or a budget spent before the role was read, counts as one.
+    static func textFocus(_ r: FocusRead) -> Bool {
+        if r.errors { return true }
+        guard r.found else { return r.expired }
+        if r.role == nil, r.expired { return true }
+        return textRoles.contains(r.role ?? "") || r.subrole == "AXSearchField"
+    }
+}
+
+enum FailAction: Equatable { case leave, close, closeAndRepost }
+
+enum PanelGate: Equatable { case accept, notPending, retry, fail }
+
+struct WindowInfo: Equatable {
+    var owner: Int32
+    var onScreen: Bool
+    var alpha: Double
+    var bounds: CGRect
+}
+
+/// One read of Finder's focused element within the AX budget.
+struct FocusRead: Equatable {
+    var found: Bool
+    var role: String? = nil
+    var subrole: String? = nil
+    var errors = false
+    var expired = false
 }
 
 struct PanelContext: Equatable {

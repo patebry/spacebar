@@ -186,12 +186,13 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
     }
 
     private func hide(tell: Bool) {
+        let id = request
         request = 0
         if open { controller.hostDisappearing() }
         let was = open || panel.isVisible
         open = false
         panel.orderOut(nil)
-        if tell && was { helper()?.panelState(false, requestID: 0, windowNumber: 0) }
+        if tell && was { helper()?.panelState(false, requestID: id, windowNumber: 0) }
         armIdle()
     }
 

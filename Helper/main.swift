@@ -59,6 +59,8 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private var finderTextFocus = false
     /// The viewer's panel, as it reported it; checked on screen before its keys are taken, and again every 2 s.
     private var panelWindow = 0
+    /// Checks in a row that found the panel's window off screen; one can be a frame the window server had not drawn yet.
+    private var offscreenMisses = 0
     private var watchTimer: Timer?
     private let bg = DispatchQueue(label: "md.spacebar.helper.ax", qos: .userInteractive)
 
@@ -97,18 +99,28 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         if tap != nil, observer == nil { observeFinder() }
         // The viewer gives up on a show after 4 s; one it never answered for is closed here.
         if let p = pending, Date().timeIntervalSince(p.at) > 5 { fail(p.id, "no panel in 5 s") }
-        if panelOpen, !panelOnScreen(panelWindow) {
+        offscreenMisses = panelOpen && !panelOnScreen(panelWindow) ? offscreenMisses + 1 : 0
+        if offscreenMisses >= 2 {
             log.error("panel window \(self.panelWindow) not on screen: its keys go back to Finder")
             close("panel not on screen")
         }
     }
 
-    /// Whether window `n` is on screen, visible, and the viewer's.
+    /// Whether window `n` is the viewer's, on screen, visible, and on a display (`Decision.panelVisible`).
     private func panelOnScreen(_ n: Int) -> Bool {
-        guard n > 0, viewerPid > 0,
-              let w = (CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(n)) as? [[String: Any]])?.first else { return false }
-        return w[kCGWindowOwnerPID as String] as? pid_t == viewerPid && w[kCGWindowIsOnscreen as String] as? Bool == true
-            && (w[kCGWindowAlpha as String] as? Double ?? 0) > 0
+        guard n > 0, let w = (CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(n)) as? [[String: Any]])?.first,
+              let b = (w[kCGWindowBounds as String] as? NSDictionary).flatMap({ CGRect(dictionaryRepresentation: $0) }) else { return false }
+        let info = WindowInfo(owner: w[kCGWindowOwnerPID as String] as? pid_t ?? 0, onScreen: w[kCGWindowIsOnscreen as String] as? Bool == true,
+                              alpha: w[kCGWindowAlpha as String] as? Double ?? 0, bounds: b)
+        return Decision.panelVisible(info, viewerPid: viewerPid, displays: Self.displays())
+    }
+
+    private static func displays() -> [CGRect] {
+        var n: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &n) == .success, n > 0 else { return [] }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(n))
+        guard CGGetActiveDisplayList(n, &ids, &n) == .success else { return [] }
+        return ids.prefix(Int(n)).map(CGDisplayBounds)
     }
 
     func status() -> HelperStatus {
@@ -179,24 +191,29 @@ final class Helper: NSObject, NSXPCListenerDelegate {
 
     func panelState(_ open: Bool, requestID: Int, windowNumber: Int, from c: NSXPCConnection, retried: Bool = false) {
         guard c === viewer else { return }
-        guard open else { panelOpen = false; panelWindow = 0; return }
-        // Only a show this helper asked for may open the panel, and only with a window of the viewer's really on screen, so a
-        // viewer cannot claim Finder's keys on its own.
-        guard pending?.id == requestID else { return log.error("panel open for request \(requestID) not pending: ignored") }
-        guard panelOnScreen(windowNumber) else {
-            // The window server may not have shown the panel's first frame yet.
-            if !retried {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-                    self?.panelState(open, requestID: requestID, windowNumber: windowNumber, from: c, retried: true)
-                }
-            } else {
-                log.error("panel open for request \(requestID): window \(windowNumber) not on screen")
-            }
+        guard open else {
+            panelOpen = false
+            panelWindow = 0
+            if Decision.closeEndsPending(pendingID: pending?.id, requestID: requestID) { pending = nil }
             return
         }
-        pending = nil
-        panelOpen = true
-        panelWindow = windowNumber
+        // So a viewer cannot claim Finder's keys on its own.
+        switch Decision.panelOpened(pendingID: pending?.id, requestID: requestID, onScreen: panelOnScreen(windowNumber), retried: retried) {
+        case .notPending:
+            log.error("panel open for request \(requestID) not pending: ignored")
+        case .retry:
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.panelState(open, requestID: requestID, windowNumber: windowNumber, from: c, retried: true)
+            }
+        case .fail:
+            log.error("panel open for request \(requestID): window \(windowNumber) not on screen")
+            fail(requestID, "window not on screen")
+        case .accept:
+            pending = nil
+            panelOpen = true
+            panelWindow = windowNumber
+            offscreenMisses = 0
+        }
     }
 
     func declined(_ id: Int) {
@@ -246,7 +263,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         let e = Self.keyEvent(event, down: type == .keyDown)
         // A rename or the search field can open without a focus notification arriving first: read the focus now, before a key
         // that the panel would take from it. Any AX error counts as a text field, so the key stays Finder's.
-        if panelOpen, e.down, !e.isRepeat, !e.tagged, e.targetPid == finderPid, finderPid > 0,
+        if panelOpen || pending != nil, e.down, !e.isRepeat, !e.tagged, e.targetPid == finderPid, finderPid > 0,
            KeyRoute.closes(e) || KeyRoute.forwarded(e, sidebarKeys: settings.sidebarKeys) != nil {
             finderTextFocus = Self.textFocus(finderPid)
         }
@@ -310,12 +327,13 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         guard let p = pending, p.id == id else { return }
         pending = nil
         log.info("show \(id) failed: \(why, privacy: .public)")
-        // A Space goes back to Finder, and the viewer, which may still answer late, must not open over Apple's panel. A
-        // follow of Finder's selection that failed leaves the panel as it is.
-        guard p.space else { return }
-        viewerProxy()?.close()
-        // Seconds later the Space is stale: Apple's panel opening then would surprise more than nothing happening.
-        if Date().timeIntervalSince(p.at) < 1 { repost(to: p.finderPid) }
+        switch Decision.failed(space: p.space, age: Date().timeIntervalSince(p.at)) {
+        case .leave: break
+        case .close: viewerProxy()?.close()
+        case .closeAndRepost:
+            viewerProxy()?.close()
+            repost(to: p.finderPid)
+        }
     }
 
     private func close(_ why: String) {
@@ -422,12 +440,14 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     /// Whether Finder's focus is a text field, read within the AX budget; true when AX could not say.
     static func textFocus(_ pid: pid_t) -> Bool {
         let t = AXTrace()
-        let f = t.element(AXUIElementCreateApplication(pid), kAXFocusedUIElementAttribute)
-        guard t.errors.isEmpty, !t.expired, let f else { return !t.errors.isEmpty || t.expired }
-        let role = t.role(f), sub = t.subrole(f)
-        // A role left unread because the budget ran out is not an answer.
-        guard t.errors.isEmpty, role != nil || !t.expired else { return true }
-        return Decision.textRoles.contains(role ?? "") || sub == "AXSearchField"
+        var r = FocusRead(found: false)
+        if let f = t.element(AXUIElementCreateApplication(pid), kAXFocusedUIElementAttribute) {
+            r.found = true
+            if t.errors.isEmpty { r.role = t.role(f); r.subrole = t.subrole(f) }
+        }
+        r.errors = !t.errors.isEmpty
+        r.expired = t.expired
+        return Decision.textFocus(r)
     }
 
     private func checkQuickLook() {

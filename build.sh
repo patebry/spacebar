@@ -190,8 +190,10 @@ cp -R Preview/web "$VIEWER_DIR/Contents/Resources/web"
 cp LICENSE THIRD_PARTY_NOTICES.md "$VIEWER_DIR/Contents/Resources/"
 plist Viewer/Info.plist "$VIEWER_DIR/Contents/Info.plist" "$VIEWER_ID" "$VIEWER_EXE" "$APP_NAME"
 plist Writer/Info.plist "$VIEWER_XPC/Contents/Info.plist" "$VIEWER_ID"
-codesign "${SIGN_ARGS[@]}" "$VIEWER_XPC"
-codesign "${SIGN_ARGS[@]}" --entitlements "$VIEWER_ENT" "$VIEWER_DIR"
+# Under the hardened runtime, like the helper: the helper admits only peers that are, so no library can be injected into a
+# process it trusts.
+codesign "${SIGN_ARGS[@]}" --options runtime "$VIEWER_XPC"
+codesign "${SIGN_ARGS[@]}" --options runtime --entitlements "$VIEWER_ENT" "$VIEWER_DIR"
 
 # The helper: unsandboxed and without entitlements, under the hardened runtime. launchd starts it from the app's agent plist.
 HELPER_DIR="$APP/Contents/Helpers/$APP_NAME Helper.app"
@@ -201,7 +203,7 @@ plist Helper/Info.plist "$HELPER_DIR/Contents/Info.plist" "$HELPER_ID" "$HELPER_
 sed -e "s#__HELPER_ID__#$HELPER_ID#g" -e "s#__HELPER_PROGRAM__#Contents/Helpers/$APP_NAME Helper.app/Contents/MacOS/$HELPER_EXE#g" -e "s#__APP_ID__#$APP_ID#g" \
   Helper/agent.plist > "$APP/Contents/Library/LaunchAgents/$HELPER_ID.plist"
 codesign "${SIGN_ARGS[@]}" --options runtime "$HELPER_DIR"
-codesign "${SIGN_ARGS[@]}" "$APP"
+codesign "${SIGN_ARGS[@]}" --options runtime "$APP"
 rm -rf "$OBJ"
 echo "built $APP ($(lipo -archs "$APP/Contents/MacOS/$APP_EXE"), macOS $MIN_OS+)"
 [ "${NO_INSTALL:-0}" = 1 ] && exit 0

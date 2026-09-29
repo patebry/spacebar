@@ -153,8 +153,9 @@ ENTITLEMENTS = """<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "
 SANDBOX_ID = 'md.spacebar.test.webcheck'
 
 
-def sandboxed(tree, check):
-    """The harness signed with the preview extension's sandbox entitlements (build.sh's Preview.entitlements with the default
+def sandboxed(tree, check, runtime=False):
+    """The harness signed with the preview extension's sandbox entitlements (and, `runtime`, under the hardened runtime, as the
+    Space helper's viewer is signed) (build.sh's Preview.entitlements with the default
     READ_ACCESS=abs-ro): PDFKit must read the PDF, and an image from the `file` host must still render. macOS keeps a container for it under
     ~/Library/Containers/md.spacebar.test.webcheck."""
     out = tempfile.mkdtemp(prefix='spacebar-sandbox-')
@@ -165,8 +166,11 @@ def sandboxed(tree, check):
                    [os.path.join(ROOT, *p) for p in (('test', 'web', 'main.swift'), ('Shared', 'Settings.swift'), ('Shared', 'WebShell.swift'),
                                                       ('Shared', 'FolderListing.swift'), ('Shared', 'FolderScan.swift'), ('Shared', 'LinkPolicy.swift'), ('Preview', 'PDFPane.swift'))] +
                    ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist', '-Xlinker', plist, '-o', exe], check=True)
-    subprocess.run(['codesign', '--force', '--sign', '-', '-i', SANDBOX_ID, '--entitlements', ent, exe], check=True, capture_output=True)
+    subprocess.run(['codesign', '--force', '--sign', '-', '-i', SANDBOX_ID] + (['--options', 'runtime'] if runtime else []) + ['--entitlements', ent, exe],
+                   check=True, capture_output=True)
     ents = subprocess.run(['codesign', '-d', '--entitlements', '-', exe], capture_output=True, text=True).stdout
+    flags = subprocess.run(['codesign', '-dv', exe], capture_output=True, text=True).stderr
+    label = 'hardened like the viewer' if runtime else 'sandboxed like the extension'
     proc = subprocess.Popen([exe, os.path.join(ROOT, 'Preview', 'web')], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
                             env=dict(os.environ, SPACEBAR_SUPPORT_DIR=os.path.join(out, 'support')))
 
@@ -182,11 +186,13 @@ def sandboxed(tree, check):
         cmd('@wait:0.5')
         pdf = cmd('@pdf')['result']
         check('app-sandbox' in ents and pdf['open'] and pdf['placed'] and pdf['text'] == 'Hello PDF' and pdf.get('pixel') and pdf['pixel'][2] > 200,
-              'sandboxed like the extension: PDFKit reads and draws the PDF', json.dumps(pdf))
+              f'{label}: PDFKit reads and draws the PDF', json.dumps(pdf) + (' runtime flag missing' if runtime and 'runtime' not in flags else ''))
+        if runtime:
+            check('runtime' in flags, f'{label}: signed with the runtime flag', flags)
         cmd('@render:' + os.path.join(tree, 'photo.png'))
         cmd('@wait:0.5')
         w = cmd("@eval:(document.querySelector('#doc .viewer-image img') || {}).naturalWidth")['result']
-        check(w and w > 0, 'sandboxed like the extension: an image renders from the file host', f'naturalWidth {w}')
+        check(w and w > 0, f'{label}: an image renders from the file host', f'naturalWidth {w}')
     finally:
         proc.stdin.close()
         proc.wait(timeout=20)
@@ -2012,6 +2018,7 @@ def main():
         check(not csp and not errs, 'no CSP violations or page errors logged', json.dumps(csp + errs)[:300])
         page.close()
         sandboxed(tree, check)
+        sandboxed(tree, check, runtime=True)
         panel_host(check)
     finally:
         if page.proc.poll() is None:

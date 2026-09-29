@@ -26,3 +26,7 @@ cp "$out/qlpane" "$out/qlpane-sandboxed"
   echo '</dict></plist>'; } > "$out/ent.plist"
 codesign --force --sign - -i md.spacebar.test.qlpane --entitlements "$out/ent.plist" "$out/qlpane-sandboxed" 2>/dev/null
 QLPANE_SANDBOX=1 "$out/qlpane-sandboxed" "$out"
+# The same under the hardened runtime, as build.sh signs the Space helper's viewer.
+codesign --force --sign - -i md.spacebar.test.qlpane --options runtime --entitlements "$out/ent.plist" "$out/qlpane-sandboxed" 2>/dev/null
+[[ $(codesign -dv "$out/qlpane-sandboxed" 2>&1) == *runtime\)* ]] || { echo "FAIL the hardened copy is not signed with the runtime"; exit 1; }
+QLPANE_SANDBOX=1 "$out/qlpane-sandboxed" "$out"

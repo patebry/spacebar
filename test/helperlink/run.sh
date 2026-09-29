@@ -1,6 +1,7 @@
 #!/bin/bash
 # The helper's listener accepts the viewer (and the settings app) signed by its own certificate, and refuses an ad-hoc client
-# claiming the viewer's identifier and a client signed by the same certificate under another identifier. The listener runs as
+# claiming the viewer's identifier, a client signed by the same certificate under another identifier, and the viewer's identity
+# without the hardened runtime (a library could be injected into it). The listener runs as
 # a temporary launchd job under a test Mach name, removed at the end; the real md.spacebar.helper agent is never touched.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
@@ -17,13 +18,14 @@ trap 'launchctl bootout "$domain/$label" 2>/dev/null || true; rm -rf "$out"' EXI
 build() { xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 "$@"; }
 build test/helperlink/listener/main.swift Helper/Link.swift Shared/HelperProtocol.swift -o "$out/listener"
 build test/helperlink/client/main.swift Shared/HelperProtocol.swift -o "$out/client"
-sign() { codesign --force --timestamp=none --sign "$1" --identifier "$2" "$3" 2>/dev/null; }
+sign() { codesign --force --timestamp=none --options runtime --sign "$1" --identifier "$2" "$3" 2>/dev/null; }
 sign "$SIGN_ID" md.spacebar.helper "$out/listener"
-for c in viewer app adhoc other; do cp "$out/client" "$out/client-$c"; done
+for c in viewer app adhoc other soft; do cp "$out/client" "$out/client-$c"; done
 sign "$SIGN_ID" md.spacebar.viewer "$out/client-viewer"
 sign "$SIGN_ID" md.spacebar "$out/client-app"
 sign - md.spacebar.viewer "$out/client-adhoc"
 sign "$SIGN_ID" md.spacebar.viewer.other "$out/client-other"
+codesign --force --timestamp=none --sign "$SIGN_ID" --identifier md.spacebar.viewer "$out/client-soft" 2>/dev/null
 cat > "$out/$label.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -43,4 +45,5 @@ expect viewer "hello true, status none" "the viewer (same certificate, md.spaceb
 expect app "hello false, status app" "the settings app (same certificate, md.spacebar) is accepted, as the app"
 expect adhoc "error 4097" "an ad-hoc client claiming md.spacebar.viewer is refused"
 expect other "error 4097" "a client with the same certificate and another identifier is refused"
+expect soft "error 4097" "the viewer's identity without the hardened runtime is refused"
 [ $failures = 0 ] && echo "all helper link checks passed" || { echo "$failures helper link checks failed"; exit 1; }

@@ -132,6 +132,10 @@ check(ents(writer) == {}, "viewer's writer: no entitlements, like the extensions
 _, _, hd = run('codesign', '-dv', helper)
 _, _, vd = run('codesign', '-dv', viewer)
 check(re.search(r'flags=0x[0-9a-f]*\([^)]*runtime', hd) is not None, 'helper: hardened runtime', hd)
+_, _, wd = run('codesign', '-dv', writer)
+_, _, ad = run('codesign', '-dv', app)
+runtime = lambda d: re.search(r'flags=0x[0-9a-f]*\([^)]*runtime', d) is not None
+check(runtime(vd) and runtime(wd) and runtime(ad), "the viewer, its writer and the app: hardened runtime (the helper admits no other peer)", [vd, wd, ad])
 check('Identifier=md.spacebar.helper' in hd and 'Identifier=md.spacebar.viewer' in vd, 'signed under their bundle IDs')
 code, _, err = run('codesign', '--verify', '--strict', '--deep', app)
 check(code == 0, 'the app verifies, helpers included', err)

@@ -99,7 +99,6 @@ struct WelcomeView: View {
             }
         }
         .onAppear { store.set("helperOffered", true) }
-        .onDisappear { if turnedOn { system.unwatchHelper() } }
     }
 
     @ViewBuilder private var progress: some View {
@@ -148,6 +147,7 @@ struct WelcomeView: View {
                 return
             }
         }
+        if turnedOn { system.unwatchHelper() }
         done()
     }
 }

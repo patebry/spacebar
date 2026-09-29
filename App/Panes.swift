@@ -125,9 +125,8 @@ struct GeneralPane: View {
                     Text("Every File")
                 } footer: {
                     Text(HelperCopy.privacy).settingsFooter()
+                        .background(Color.clear.onAppear { system.watchHelper() }.onDisappear { system.unwatchHelper() })
                 }
-                .onAppear { system.watchHelper() }
-                .onDisappear { system.unwatchHelper() }
             }
 
             Section {

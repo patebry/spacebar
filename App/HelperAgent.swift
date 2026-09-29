@@ -36,10 +36,9 @@ enum HelperAgent {
     }
 
     /// Whether this copy has a helper it can talk to: bundled, and signed with a certificate (an ad-hoc build's link refuses all).
-    static var available: Bool {
+    static let available: Bool =
         FileManager.default.fileExists(atPath: Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/\(HelperIDs.helperApp)").path)
             && HelperSigning.helperRequirement() != nil
-    }
 
     static var agent: HelperState.Agent {
         switch service.status {

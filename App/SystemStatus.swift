@@ -113,7 +113,7 @@ final class SystemStatus: ObservableObject {
             let state = HelperState.of(enabled: enabled, agent: agent, helper: status, secureInput: IsSecureEventInputEnabled())
             if state == .needsAccessibility, self.takePrompt() { _ = HelperAgent.promptAccessibility(timeout: 3) }
             DispatchQueue.main.async {
-                self.helper = state
+                if self.helper != state { self.helper = state }
                 self.helperPolling = false
             }
         }

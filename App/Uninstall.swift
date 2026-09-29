@@ -22,12 +22,12 @@ enum Uninstall {
         guard let script = Bundle.main.url(forResource: "uninstall", withExtension: "sh") else { return "The uninstaller is missing from this copy of spacebar." }
         // The installer would put back what the uninstaller removes, or find its app gone mid-swap.
         guard !Updates.isRunning(log: updateLog) else { return "An update is running. Try again once it has finished." }
-        // The script boots the helper out too, but only this app can remove it from Login Items.
-        HelperAgent.unregister()
         // SPACEBAR_UNINSTALL_SELF: the script removes the private copy it runs from; this app has quit by then.
         let env = ["HOME": home.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": NSTemporaryDirectory(), "SPACEBAR_UNINSTALL_SELF": "1"]
         switch Updates.runDetached(script: script, arguments: arguments(purge: purge), log: log, environment: env, job: .uninstall) {
         case .success:
+            // The script boots the helper out too, but only this app can remove it from Login Items.
+            HelperAgent.unregister()
             NSApp.terminate(nil)
             return nil
         case .failure(let e):

@@ -11,7 +11,7 @@ within a week. Fixes ship in the next release, and the advisory is published onc
 Only the latest release is supported. [FINDINGS.md](FINDINGS.md#security-model) describes the threat model: a Markdown file,
 and whatever sits beside it, is treated as hostile.
 
-Five features reach further than a rendered page, and are in scope:
+Six features reach further than a rendered page, and are in scope:
 
 - **HTML files** open in a separate web view with no message handler, no `spacebar:` scheme and no stored data. By default
   a file without the quarantine flag runs its scripts and may load from the web, like a browser would; only files a
@@ -29,15 +29,23 @@ Five features reach further than a rendered page, and are in scope:
   `/Volumes`, so no writes, no network and no reads of the user's files. The archive is passed as a descriptor the helper
   opened after checking its name and type; output is capped at 2 MB and 5,000 entries, names at 4 KB and 64 folders deep,
   and the run at 5 seconds. Nothing is extracted. Only the viewer's Open button may hand an archive to its default app.
-- **Apple's previews in the panel.** Office, iWork, font and 3D files in the sidebar are shown by Apple's own Quick Look in a
-  `QLPreviewView`, and Apple's generators run in Quick Look's daemons, not in spacebar. The sandboxed extensions can reach
+- **Apple's previews in the panel.** Office, iWork, font, 3D, certificate, calendar and other files macOS previews are shown
+  by Apple's own Quick Look in a `QLPreviewView`, and Apple's generators run in Quick Look's daemons, not in spacebar. The sandboxed extensions can reach
   those daemons only through `com.apple.security.temporary-exception.mach-lookup.global-name` for `com.apple.quicklook` and
   `com.apple.quicklook.ThumbnailsAgent`, which grants lookup of those two Quick Look services only; no file or network
   entitlement is added. Apple's generators already parse these files for the info card's thumbnail (QuickLookThumbnailing),
   so the parsers reached are not new.
-  The view is used only for an exact list of types spacebar does not claim (`FileTypes.appleQuickLookTypes`), because
-  Quick Look hands the file to whichever extension it would pick; a test checks the list never meets
-  `scripts/quicklook-types.txt`.
+  The view is used only for a declared type of no kind of spacebar's own that spacebar does not claim and that conforms to
+  nothing it claims (`FileTypes.appleQuickLookType`), because Quick Look hands the file to whichever extension it would
+  pick. The claims are read at run time from the bundle's copy of `scripts/quicklook-types.txt`; without it nothing is
+  handed over. Folders, packages other than iWork's, apps, archives, disk images, web archives, mail and contact cards are
+  never shown this way (Apple's previews of web content and mail load what they link to; its contact card reads Contacts
+  in spacebar's own process). A test makes a file of every claimed type and checks that none reaches the view.
+- **Images and disk images parsed in the sandbox.** HEIC, AVIF, TIFF, camera RAW, PSD, OpenEXR, TGA, JPEG 2000 and icon
+  files are decoded by ImageIO in the sandboxed extension or viewer, as a PDF is by PDFKit, rather than in WebKit's content
+  process; the decode is bounded to 8,192 pixels a side and to files of at most 50 MB. A `.dmg`'s format and encryption are
+  read from its trailer and block table in the same sandboxed process, with every offset checked against the file, the
+  table at most 16 MB and 2 million entries; nothing is mounted or run.
 - **The one-click update** runs the app's own copy of `scripts/install.sh`, sealed by the app's signature, detached from Quick
   Look with only `HOME`, `PATH`, `TMPDIR` and a status path in its environment. It installs only a version newer than the
   running one, only into `~/Applications/spacebar.app`, and only after the downloaded zip's SHA-256 matches the release's.
@@ -52,7 +60,9 @@ Five features reach further than a rendered page, and are in scope:
   display, checked when it opens and every 2 seconds); it passes every key while Finder's focus is in a text field or another
   process has the keyboard, and forwards only names from a fixed list. `spacebar Viewer.app` (`md.spacebar.viewer`) renders
   files with the preview extension's code and exactly its entitlements plus the lookup of the helper's one Mach service; it
-  cannot claim the keys itself, since the helper accepts a panel only for a show it asked for. The helper's Mach service admits
+  cannot claim the keys itself, since the helper accepts a panel only for a show it asked for. When another app comes
+  forward the panel is hidden and Finder has its keys back at once; Finder coming back brings it back only as a new request,
+  through the same check that its window is up and on screen, and a restore that fails it closes the panel. The helper's Mach service admits
   only the viewer and the settings app: signed by the helper's own leaf certificate, under the hardened runtime as the kernel
   holds it for the running process, and without the entitlements that allow DYLD_ variables or turn off library validation;
   the role is fixed per connection, and each call checks it. The viewer and the app require the helper's identity in turn.

@@ -14,7 +14,7 @@ silicon and Intel).
 ### What Space opens in spacebar
 
 In Finder, Space opens spacebar for Markdown, folders, code and scripts, JSON, YAML, XML, TOML, property lists, logs,
-archives, and files with no extension (a `Dockerfile`, a `CHANGELOG`, a dotfile). The full list is
+archives, disk images (`.dmg`), and files with no extension (a `Dockerfile`, a `CHANGELOG`, a dotfile). The full list is
 [`scripts/quicklook-types.txt`](scripts/quicklook-types.txt).
 
 Unless you turn on [**Use spacebar for every file**](#use-spacebar-for-every-file), plain text, rich text, HTML, CSV, PDF,
@@ -29,18 +29,20 @@ Space on in Finder:
 | File | Shown as |
 |---|---|
 | Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`, `.mkdn`) | rendered, with inline editing and task toggles |
-| Images (`.png`, `.jpg`, `.gif`, `.webp`, `.heic`, `.avif`, `.bmp`, `.tiff`, `.ico`, `.svg`) | fitted to the panel, with its dimensions and size; SVG as an image only |
+| Images (`.png`, `.jpg`, `.gif`, `.webp`, `.bmp`, `.ico`, `.svg`) | fitted to the panel, with its dimensions and size; a click toggles fitted and actual size, a drag moves it, a pinch or ⌘+ ⌘− ⌘0 zoom; SVG as an image only |
+| HEIC, AVIF, TIFF, camera RAW (`.dng`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.orf`, `.raf`, `.rw2`), Photoshop (`.psd`), OpenEXR, TGA, JPEG 2000, icons (`.icns`) | decoded by macOS's own ImageIO and drawn natively in the panel, turned as the camera recorded it, with the same fit, zoom and pan |
 | PDF | drawn natively by PDFKit in the panel, fitted to its width, pages in one scroll |
 | HTML (`.html`, `.htm`) | rendered in its own web view: with its scripts and web content unless it was marked as downloaded, with neither when it was (see below) |
-| Video (`.mp4`, `.m4v`, `.mov`) | played by AVKit in the panel, paused on its first frame until you press play |
-| Audio (`.mp3`, `.m4a`, `.aac`, `.wav`, `.aif`, `.aiff`, `.flac`, `.caf`) | the same player, under the file's artwork or icon |
+| Video (`.mp4`, `.m4v`, `.mov`, `.3gp`, `.mpg`, `.mpeg`, `.m2v`) | played by AVKit in the panel, paused on its first frame until you press play |
+| Audio (`.mp3`, `.m4a`, `.m4b`, `.aac`, `.wav`, `.aif`, `.aiff`, `.flac`, `.caf`, `.amr`) | the same player, under the file's artwork or icon |
 | Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.xml`, `.yaml`, `.toml`, `.sql`, `.plist`, `Makefile` and more) | highlighted source with line numbers; a binary property list is shown as XML. A language with no bundled grammar (`Dockerfile`, `.ps1`, `.bat`, Dart, Scala, Elixir, Haskell, Zig and others) is plain text with line numbers |
 | Archives (`.zip`, `.tar`, `.tgz`, `.tar.gz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz`, `.7z`, `.rar`, `.zst`, `.tzst`) | its files and folders as a tree, with sizes and dates, listed without extracting anything; Open with its default app |
 | JSON | pretty-printed and highlighted, with a Raw toggle |
 | CSV and TSV | a table, first row as the header, up to 1,000 rows |
 | Text (`.txt`, `.log`, `.conf`, `.env`, `LICENSE`, `.env.example` and other text) | as is, with line numbers. Text need not be UTF-8: a byte order mark (UTF-8, UTF-16, UTF-32), UTF-16 without one, and legacy encodings (Windows-1252, Latin-1, Shift JIS, GB 18030, EUC-KR, Big5, Windows-1251 and others) are detected, and the kind line names the encoding |
 | Rich text (`.rtf`, `.rtfd`) | drawn by AppKit's own text view, fonts, colours, tables and pictures as the document has them (mapped for a dark theme, as TextEdit does); never as RTF source |
-| Office, iWork, fonts and 3D (`.docx`, `.xlsx`, `.pptx`, `.doc`, `.xls`, `.ppt`, `.pages`, `.numbers`, `.key`, `.ttf`, `.otf`, `.ttc`, `.dfont`, `.usdz`, `.reality`) | Apple's own Quick Look preview, inside the panel; the info card when Quick Look cannot show the file |
+| Office, iWork, fonts, 3D, certificates, calendars, e-books and other files macOS previews (`.docx`, `.xlsx`, `.pptx`, `.pages`, `.numbers`, `.key`, `.ttf`, `.otf`, `.usdz`, `.obj`, `.stl`, `.glb`, `.cer`, `.crt`, `.p12`, `.ics`, `.epub` and any other type macOS declares and spacebar has no view of its own for) | Apple's own Quick Look preview, inside the panel; the file's text, or the info card, when Quick Look cannot show it. A contact card (`.vcf`) is shown as its text: Apple's preview of it would read your Contacts |
+| Disk images (`.dmg`) | the info card, with the image's format and whether it is encrypted, read from the file without mounting it |
 | Anything else | an info card: Finder's large thumbnail when there is one, kind, size, date modified, and Open with its default app (Reveal in Finder for apps and executables) |
 
 The Open button in the toolbar opens Markdown in your editor (Settings, General: **Open files in**). Code, JSON, CSV and text
@@ -57,7 +59,8 @@ right. **Minimal chrome** (Settings, Appearance) goes back to floating buttons o
 
 Quick Look hands spacebar only the types above. Turn on **Use spacebar for every file in Finder** (Settings, General, or the
 welcome sheet's second step) and Space in Finder opens spacebar for any file you select, plain text, CSV, HTML, PDF, images,
-video and audio included, in the same panel with the same sidebar. Space, Esc, ⌘W or ⌘. close it in one press. While it is
+video and audio included, in the same panel with the same sidebar. Space, Esc, ⌘W or ⌘. close it in one press. Like Apple's
+Quick Look, it hides while another app is in front and comes back when you return to Finder. While it is
 open the arrow keys move through spacebar's sidebar, or, with **Arrow keys move through the sidebar** (Settings, Sidebar)
 off, through Finder's selection, and the panel follows. Space in a rename or the search field, with Apple's Quick Look already
 open, or in any other app is left alone, and a Space spacebar cannot answer within 150 ms goes back to Finder, so Quick Look
@@ -197,7 +200,7 @@ sandbox container after each rebuild. Other options are documented at the top of
 Tests that run off screen, without Quick Look (the test builds target Apple silicon):
 
 ```sh
-for t in settings scheme linkpolicy cas dataless editkeys filterkeys pdfpane htmlpane mediapane qlpane richtext encoding archive claims rivals updates report welcome helper helperlink; do test/$t/run.sh; done
+for t in settings scheme linkpolicy cas dataless editkeys filterkeys pdfpane htmlpane mediapane qlpane imagepane diskimage richtext encoding archive claims rivals updates report welcome helper helperlink viewerlatency; do test/$t/run.sh; done
 python3 test/webcheck.py && python3 test/webthemes.py && python3 test/remoteimages.py && python3 test/sidebar.py
 ```
 

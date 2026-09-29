@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 /// extension's claims overlap it. The claims themselves are in scripts/quicklook-types.txt (the app carries a copy); keep
 /// `summary` in step with it.
 enum QuickLookClaims {
-    static let summary = "Markdown, folders, code and scripts, JSON, YAML, XML, TOML, property lists, logs, archives, and files with no extension"
+    static let summary = "Markdown, folders, code and scripts, JSON, YAML, XML, TOML, property lists, logs, archives, disk images, and files with no extension"
     static let tagline = "Press Space. See everything."
 
     /// The kinds of file the claims fall into, by the section of quicklook-types.txt they are listed in.

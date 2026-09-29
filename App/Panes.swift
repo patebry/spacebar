@@ -109,6 +109,27 @@ struct GeneralPane: View {
                     .settingsFooter()
             }
 
+            if HelperAgent.available {
+                Section {
+                    Toggle(isOn: helperToggle) {
+                        Text("Use spacebar for every file in Finder")
+                        Text(HelperCopy.what)
+                    }
+                    LabeledContent {
+                        HelperStatusView(state: system.helper)
+                    } label: {
+                        Text("Status")
+                        if let why = HelperCopy.detail(system.helper) { Text(why) }
+                    }
+                } header: {
+                    Text("Every File")
+                } footer: {
+                    Text(HelperCopy.privacy).settingsFooter()
+                }
+                .onAppear { system.watchHelper() }
+                .onDisappear { system.unwatchHelper() }
+            }
+
             Section {
                 if system.rivals.isEmpty {
                     Label(system.refreshing ? "Checking…" : "No other Quick Look extension claims the files spacebar previews.", systemImage: "checkmark.circle")
@@ -168,6 +189,10 @@ struct GeneralPane: View {
         }
     }
 
+    private var helperToggle: Binding<Bool> {
+        Binding(get: { store.settings.spaceHelper }, set: { system.setHelper($0, store: store) })
+    }
+
     private var editorChoices: [EditorApp] {
         var apps = system.editors
         if let id = store.settings.editorBundleID, !apps.contains(where: { $0.id == id }) { apps.append(system.editor(for: id)) }
@@ -188,6 +213,63 @@ struct GeneralPane: View {
         case .enabled: return "On"
         case .disabled: return "Off in System Settings"
         case .missing: return "Not registered"
+        }
+    }
+}
+
+// MARK: - The Space helper
+
+enum HelperCopy {
+    static let what = "Space opens spacebar for any file you select in Finder, images, PDFs and video included, not only the types Quick Look hands it. Space or Esc closes it."
+    static let privacy = "This uses Accessibility, which lets spacebar notice when you press Space in Finder and read which file is selected. It never reads what you type anywhere else. Turning it off removes spacebar from Login Items; Quick Look then previews as before."
+
+    static func title(_ s: HelperState) -> String {
+        switch s {
+        case .off: return "Off"
+        case .notRunning: return "Not running"
+        case .starting: return "Starting…"
+        case .needsLoginItems: return "Blocked in Login Items"
+        case .needsAccessibility: return "Waiting for Accessibility"
+        case .secureInput: return "Secure input on"
+        case .on: return "On"
+        }
+    }
+
+    static func detail(_ s: HelperState) -> String? {
+        switch s {
+        case .needsLoginItems: return "Turn on spacebar in System Settings, General, Login Items & Extensions."
+        case .needsAccessibility: return "Turn on spacebar in System Settings, Privacy & Security, Accessibility."
+        case .secureInput: return "A password field or another app has secure input on, so Space goes to Quick Look until it ends."
+        case .notRunning: return "macOS did not start spacebar's helper."
+        default: return nil
+        }
+    }
+
+    static func color(_ s: HelperState) -> Color {
+        switch s {
+        case .on: return .green
+        case .off, .starting: return .gray
+        default: return .orange
+        }
+    }
+}
+
+/// The helper's state as a dot and a word, with the one button that moves it on.
+struct HelperStatusView: View {
+    @EnvironmentObject var store: SettingsStore
+    @EnvironmentObject var system: SystemStatus
+    let state: HelperState
+
+    var body: some View {
+        HStack(spacing: 8) {
+            StatusDot(color: HelperCopy.color(state))
+            Text(HelperCopy.title(state))
+            switch state {
+            case .needsLoginItems: Button("Open Login Items…") { HelperAgent.openLoginItems() }
+            case .needsAccessibility: Button("Open Accessibility Settings…") { HelperAgent.openAccessibility() }
+            case .notRunning: Button("Try Again") { system.setHelper(true, store: store) }
+            default: EmptyView()
+            }
         }
     }
 }
@@ -617,7 +699,7 @@ struct AdvancedPane: View {
 
             Section {
                 LabeledContent("Opens with Space in Finder") {
-                    Text(QuickLookClaims.summary).multilineTextAlignment(.trailing).fixedSize(horizontal: false, vertical: true)
+                    Text(store.settings.spaceHelper ? "Every file" : QuickLookClaims.summary).multilineTextAlignment(.trailing).fixedSize(horizontal: false, vertical: true)
                 }
                 LabeledContent("Inside spacebar", value: "Every file in the folder")
             } header: {
@@ -655,11 +737,12 @@ struct AdvancedPane: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("• ~/Applications/spacebar.app")
                 Text("• its Quick Look extensions, unregistered from macOS")
+                Text("• its Space helper, and the Accessibility permission you gave it")
             }
             .padding(.leading, 4)
             Toggle(isOn: $purge) {
                 Text("Also delete my settings and themes")
-                Text("~/Library/Application Support/spacebar, and spacebar.md there from older versions").font(.caption).foregroundStyle(.secondary)
+                Text("~/Library/Application Support/spacebar (and spacebar.md there from older versions), and the helper's viewer container").font(.caption).foregroundStyle(.secondary)
             }
             .toggleStyle(.checkbox)
             Text("Nothing else is touched: your files stay where they are. What the uninstaller did is written to ~/Library/Logs/spacebar-uninstall.log.")

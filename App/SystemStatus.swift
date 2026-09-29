@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import UniformTypeIdentifiers
 
 enum ExtensionState: Equatable {
@@ -37,8 +38,15 @@ final class SystemStatus: ObservableObject {
     @Published private(set) var refreshing = false
     @Published private(set) var editors: [EditorApp] = []
     @Published private(set) var defaultEditorName: String?
+    @Published private(set) var helper = HelperState.off
 
     private let queue = DispatchQueue(label: "md.spacebar.status")
+    private let helperQueue = DispatchQueue(label: "md.spacebar.status.helper")
+    private var helperTimer: Timer?
+    private var helperWatchers = 0
+    private var helperPolling = false
+    /// Turned on while Login Items still blocked the helper: its Accessibility prompt is asked for once it runs.
+    private var promptWhenRunning = false
 
     func refresh() {
         guard !refreshing else { return }
@@ -74,6 +82,72 @@ final class SystemStatus: ObservableObject {
             _ = Self.run("/usr/bin/qlmanage", ["-r"])
             let state = Self.state(of: Self.foldersID)
             DispatchQueue.main.async { self.folders = state }
+        }
+    }
+
+    // MARK: The Space helper
+
+    /// Polls the helper every second while someone shows its state (the General tab, the welcome sheet).
+    func watchHelper() {
+        helperWatchers += 1
+        guard helperTimer == nil else { return }
+        helperTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.pollHelper() }
+        pollHelper()
+    }
+
+    func unwatchHelper() {
+        helperWatchers = max(0, helperWatchers - 1)
+        guard helperWatchers == 0 else { return }
+        helperTimer?.invalidate()
+        helperTimer = nil
+    }
+
+    func pollHelper() {
+        guard !helperPolling else { return }
+        helperPolling = true
+        let enabled = SettingsFile.load().spaceHelper
+        helperQueue.async {
+            let agent = HelperAgent.agent
+            // Asked only when it should be running: a connection would start a helper that exits at once when it is off.
+            let status = enabled && agent == .enabled ? HelperAgent.ask(timeout: 0.8) : nil
+            let state = HelperState.of(enabled: enabled, agent: agent, helper: status, secureInput: IsSecureEventInputEnabled())
+            if state == .needsAccessibility, self.takePrompt() { _ = HelperAgent.promptAccessibility(timeout: 3) }
+            DispatchQueue.main.async {
+                self.helper = state
+                self.helperPolling = false
+            }
+        }
+    }
+
+    private func takePrompt() -> Bool {
+        DispatchQueue.main.sync {
+            defer { promptWhenRunning = false }
+            return promptWhenRunning
+        }
+    }
+
+    /// The settings toggle and the welcome sheet's Turn On. On: the setting, the agent registered (Login Items opened when
+    /// macOS wants approval first), and the helper asked to show the Accessibility prompt. Off: the setting, which the helper
+    /// reads and exits on, and the agent unregistered.
+    func setHelper(_ on: Bool, store: SettingsStore) {
+        store.set("spaceHelper", on)
+        promptWhenRunning = false
+        helperQueue.async {
+            if on {
+                switch HelperAgent.register() {
+                case .requiresApproval:
+                    DispatchQueue.main.async {
+                        self.promptWhenRunning = true
+                        HelperAgent.openLoginItems()
+                    }
+                case .enabled:
+                    if HelperAgent.promptAccessibility(timeout: 10) == nil { DispatchQueue.main.async { self.promptWhenRunning = true } }
+                case .notRegistered, .notFound: break
+                }
+            } else {
+                HelperAgent.unregister()
+            }
+            DispatchQueue.main.async { self.pollHelper() }
         }
     }
 

@@ -39,7 +39,7 @@ final class SettingsStore: ObservableObject {
 
     func resetToDefaults() {
         var d = Settings().dictionary
-        d["welcomeShown"] = settings.welcomeShown
+        for k in ["welcomeShown", "helperOffered", "spaceHelper"] { d[k] = settings.dictionary[k] }
         apply(SettingsFile.update(d))
     }
 

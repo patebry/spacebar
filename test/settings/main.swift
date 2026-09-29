@@ -79,6 +79,11 @@ check("folderSort: a panel key, name or modified only", Settings.panelPatch("fol
 check("welcomeShown: off by default, a bool only, not a panel key, kept by the file", !Settings().welcomeShown && Settings(dictionary: ["welcomeShown": true]).welcomeShown
       && [1, "true", NSNull()].allSatisfy { !Settings(dictionary: ["welcomeShown": $0]).welcomeShown } && decode(#"{"welcomeShown":true}"#)?.welcomeShown == true
       && Settings.allKeys.contains("welcomeShown") && Settings.panelPatch("welcomeShown", true) == nil)
+check("spaceHelper and helperOffered: off by default, bools only, never panel keys",
+      !Settings().spaceHelper && !Settings().helperOffered && Settings(dictionary: ["spaceHelper": true, "helperOffered": true]).helperOffered
+      && [1, "true", NSNull()].allSatisfy { !Settings(dictionary: ["spaceHelper": $0, "helperOffered": $0]).spaceHelper && !Settings(dictionary: ["helperOffered": $0]).helperOffered }
+      && decode(#"{"helperOffered":true,"spaceHelper":true}"#).map { $0.helperOffered && $0.spaceHelper } == true
+      && Settings.panelPatch("spaceHelper", true) == nil && Settings.panelPatch("helperOffered", true) == nil)
 check("minimal chrome: off by default, a bool only, not a panel key", !Settings().minimalChrome && Settings(dictionary: ["minimalChrome": true]).minimalChrome
       && !Settings(dictionary: ["minimalChrome": 1]).minimalChrome && decode(#"{"minimalChrome":true}"#)?.minimalChrome == true
       && !Settings.panelKeys.contains("minimalChrome") && Settings.panelPatch("minimalChrome", true) == nil && Settings.allKeys.contains("minimalChrome"))

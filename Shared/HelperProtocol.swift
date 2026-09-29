@@ -47,6 +47,28 @@ struct HelperStatus: Codable, Equatable {
     var viewer: Bool
 }
 
+/// What the settings window and the welcome sheet say about the helper.
+enum HelperState: Equatable {
+    case off, notRunning, starting, needsLoginItems, needsAccessibility, secureInput, on
+
+    /// SMAppService's status of the agent, without importing ServiceManagement here.
+    enum Agent { case enabled, requiresApproval, notRegistered, notFound }
+
+    static func of(enabled: Bool, agent: Agent, helper: HelperStatus?, secureInput: Bool) -> HelperState {
+        guard enabled else { return .off }
+        switch agent {
+        case .requiresApproval: return .needsLoginItems
+        case .notRegistered, .notFound: return .notRunning
+        case .enabled: break
+        }
+        guard let h = helper else { return .starting }
+        if !h.trusted { return .needsAccessibility }
+        // The tap starts within the helper's next 2 s check after Accessibility is granted.
+        if !h.tap { return .starting }
+        return secureInput ? .secureInput : .on
+    }
+}
+
 /// Names of the keys the helper routes to the viewer while its panel is open.
 enum HelperKeys {
     static let list: Set<String> = ["up", "down", "left", "right", "home", "end", "pageup", "pagedown", "return"]

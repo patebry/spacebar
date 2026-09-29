@@ -1,8 +1,8 @@
 import AppKit
 
 /// Uninstall from the settings window: the app's own copy of scripts/uninstall.sh, started detached like the one-click update,
-/// then the app quits (the script quits it anyway). The script removes only ~/Applications/spacebar.app and its Quick Look
-/// registrations, and with --purge the settings folder.
+/// then the app quits (the script quits it anyway). The script removes only ~/Applications/spacebar.app, its Quick Look
+/// registrations and the Space helper's agent and permissions, and with --purge the settings folder and the viewer's container.
 enum Uninstall {
     static var home: URL { URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true) }
     static var installed: URL { home.appendingPathComponent("Applications/spacebar.app") }
@@ -22,6 +22,8 @@ enum Uninstall {
         guard let script = Bundle.main.url(forResource: "uninstall", withExtension: "sh") else { return "The uninstaller is missing from this copy of spacebar." }
         // The installer would put back what the uninstaller removes, or find its app gone mid-swap.
         guard !Updates.isRunning(log: updateLog) else { return "An update is running. Try again once it has finished." }
+        // The script boots the helper out too, but only this app can remove it from Login Items.
+        HelperAgent.unregister()
         // SPACEBAR_UNINSTALL_SELF: the script removes the private copy it runs from; this app has quit by then.
         let env = ["HOME": home.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": NSTemporaryDirectory(), "SPACEBAR_UNINSTALL_SELF": "1"]
         switch Updates.runDetached(script: script, arguments: arguments(purge: purge), log: log, environment: env, job: .uninstall) {

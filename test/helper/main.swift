@@ -208,6 +208,21 @@ check("focus: the budget spent before the element was read counts", Decision.tex
 check("focus: the budget spent before the role was read counts", Decision.textFocus(FocusRead(found: true, expired: true)))
 check("focus: a role read before the budget ran out still answers", !Decision.textFocus(FocusRead(found: true, role: "AXOutline", expired: true)))
 
+// MARK: what the settings window says
+
+let up = HelperStatus(pid: 1, version: "0.3", enabled: true, trusted: true, tap: true, viewer: true)
+var untrusted = up; untrusted.trusted = false; untrusted.tap = false
+var noTap = up; noTap.tap = false
+check("state: the setting off is Off, whatever else", HelperState.of(enabled: false, agent: .requiresApproval, helper: up, secureInput: true) == .off)
+check("state: blocked in Login Items", HelperState.of(enabled: true, agent: .requiresApproval, helper: nil, secureInput: false) == .needsLoginItems)
+check("state: not registered is not running", HelperState.of(enabled: true, agent: .notRegistered, helper: nil, secureInput: false) == .notRunning
+      && HelperState.of(enabled: true, agent: .notFound, helper: nil, secureInput: false) == .notRunning)
+check("state: registered, not answering yet, is starting", HelperState.of(enabled: true, agent: .enabled, helper: nil, secureInput: false) == .starting)
+check("state: waiting for Accessibility", HelperState.of(enabled: true, agent: .enabled, helper: untrusted, secureInput: true) == .needsAccessibility)
+check("state: trusted, tap not up yet, is starting", HelperState.of(enabled: true, agent: .enabled, helper: noTap, secureInput: false) == .starting)
+check("state: secure input on", HelperState.of(enabled: true, agent: .enabled, helper: up, secureInput: true) == .secureInput)
+check("state: on", HelperState.of(enabled: true, agent: .enabled, helper: up, secureInput: false) == .on)
+
 check("requirement: pins the injection entitlements out", HelperSigning.requirement(identifiers: ["a"], leaf: "AB").hasSuffix(
     #" and !entitlement["com.apple.security.cs.allow-dyld-environment-variables"] exists and !entitlement["com.apple.security.cs.disable-library-validation"] exists"#))
 

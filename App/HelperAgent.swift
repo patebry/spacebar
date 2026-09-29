@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import ServiceManagement
 
 /// The Space helper's launchd agent (Contents/Library/LaunchAgents/md.spacebar.helper.plist), registered by this app.
@@ -35,6 +35,37 @@ enum HelperAgent {
         return 1
     }
 
+    /// Whether this copy has a helper it can talk to: bundled, and signed with a certificate (an ad-hoc build's link refuses all).
+    static var available: Bool {
+        FileManager.default.fileExists(atPath: Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/\(HelperIDs.helperApp)").path)
+            && HelperSigning.helperRequirement() != nil
+    }
+
+    static var agent: HelperState.Agent {
+        switch service.status {
+        case .enabled: return .enabled
+        case .requiresApproval: return .requiresApproval
+        case .notFound: return .notFound
+        default: return .notRegistered
+        }
+    }
+
+    /// Registers the agent (already registered is fine) and returns what launchd says now. Blocks: call it off the main thread.
+    static func register() -> HelperState.Agent {
+        do { try service.register() } catch { NSLog("spacebar: helper register: %@", error.localizedDescription) }
+        return agent
+    }
+
+    static func unregister() {
+        do { try service.unregister() } catch { NSLog("spacebar: helper unregister: %@", error.localizedDescription) }
+    }
+
+    static func openLoginItems() { SMAppService.openSystemSettingsLoginItems() }
+
+    static func openAccessibility() {
+        if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") { NSWorkspace.shared.open(u) }
+    }
+
     static func describe(_ s: SMAppService.Status) -> String {
         switch s {
         case .notRegistered: return "not registered"
@@ -47,6 +78,16 @@ enum HelperAgent {
 
     /// The helper's status, when it answers within `timeout` seconds.
     static func ask(timeout: TimeInterval) -> HelperStatus? {
+        call(timeout: timeout) { proxy, reply in proxy.status { reply(try? JSONDecoder().decode(HelperStatus.self, from: $0)) } } ?? nil
+    }
+
+    /// Asks the helper to show macOS's Accessibility prompt; whether it is trusted now, or nil when it did not answer.
+    static func promptAccessibility(timeout: TimeInterval) -> Bool? {
+        call(timeout: timeout) { proxy, reply in proxy.promptAccessibility(reply: reply) }
+    }
+
+    /// One call to the helper over a connection that requires its signature; blocks for at most `timeout` seconds.
+    private static func call<T>(timeout: TimeInterval, _ body: (SpacebarHelperProtocol, @escaping (T) -> Void) -> Void) -> T? {
         guard let req = HelperSigning.helperRequirement() else { return nil }
         let c = NSXPCConnection(machServiceName: HelperIDs.machService, options: [])
         c.remoteObjectInterface = NSXPCInterface(with: SpacebarHelperProtocol.self)
@@ -55,10 +96,10 @@ enum HelperAgent {
         defer { c.invalidate() }
         let done = DispatchSemaphore(value: 0)
         let lock = NSLock()
-        var out: HelperStatus?
-        let proxy = c.remoteObjectProxyWithErrorHandler { _ in done.signal() } as? SpacebarHelperProtocol
-        proxy?.status { data in
-            lock.lock(); out = try? JSONDecoder().decode(HelperStatus.self, from: data); lock.unlock()
+        var out: T?
+        guard let proxy = c.remoteObjectProxyWithErrorHandler({ _ in done.signal() }) as? SpacebarHelperProtocol else { return nil }
+        body(proxy) { v in
+            lock.lock(); out = v; lock.unlock()
             done.signal()
         }
         _ = done.wait(timeout: .now() + timeout)

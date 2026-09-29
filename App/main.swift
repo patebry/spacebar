@@ -41,7 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let u = URL(string: arg), let t = SettingsTab(url: u) { tab = t }
         }
         showSettings(tab ?? .general)
-        Welcome.presentIfNeeded(over: window?.window, store: store)
+        Welcome.presentIfNeeded(over: window?.window, store: store, system: system)
         // For screenshots of a development build started from a shell, which macOS otherwise leaves in the background.
         if ProcessInfo.processInfo.environment["SPACEBAR_ACTIVATE"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(300)) { [weak self] in

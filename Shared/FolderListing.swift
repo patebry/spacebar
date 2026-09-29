@@ -22,9 +22,9 @@ enum FileKind: String {
 enum FileTypes {
     static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "mkdn"]
     static let htmlExtensions: Set<String> = ["html", "htm"]
-    /// Played by AVFoundation. WebM, Ogg and Matroska are not: AVFoundation cannot open them.
-    static let videoExtensions: Set<String> = ["mp4", "m4v", "mov"]
-    static let audioExtensions: Set<String> = ["mp3", "m4a", "aac", "wav", "aif", "aiff", "flac", "caf"]
+    /// Played by AVFoundation (test/mediapane plays each). WebM, Ogg, Opus and Matroska are not: AVFoundation cannot open them.
+    static let videoExtensions: Set<String> = ["mp4", "m4v", "mov", "3gp", "mpg", "mpeg", "m2v"]
+    static let audioExtensions: Set<String> = ["mp3", "m4a", "m4b", "aac", "wav", "aif", "aiff", "flac", "caf", "amr"]
     /// Images. SVG is here: as an image (`<img>`) it runs no script.
     static let imageExtensions = Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "svg"]).union(nativeImageExtensions)
     /// Images the panel decodes with ImageIO (Preview/ImagePane.swift) rather than as `<img>`: WebKit's decoding of these is
@@ -72,7 +72,7 @@ enum FileTypes {
         "sheet": ["xls", "xlsx", "xlsm", "numbers", "ods"],
         "slides": ["ppt", "pptx", "key", "odp"],
         "model": ["obj", "stl", "usdz", "usd", "usda", "usdc", "fbx", "glb", "gltf", "3ds", "dae", "blend", "ply", "reality", "3mf"],
-        "video": ["webm", "mkv", "avi", "ogv", "wmv", "flv", "mpg", "mpeg", "3gp", "m2v"],
+        "video": ["webm", "mkv", "avi", "ogv", "wmv", "flv"],
         "audio": ["ogg", "oga", "opus", "wma", "mid", "midi", "ape", "alac"],
     ]
 

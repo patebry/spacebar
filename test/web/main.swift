@@ -32,7 +32,8 @@
 // Every render sends the sidebar listing of the root first (FolderListing, as the extension does) and renders the file by its
 // kind (FileView for anything but Markdown). The page's "list" lists a folder the tree named, "open" renders a listed file,
 // "openFile" and "reveal" are recorded as "_openFile" / "_reveal" (or "_openRefused"), each checked as the extension does;
-// "setting" goes through the extension's gate (Settings.panelPatch) and the writer's update (SettingsFile.updateFromPanel),
+// "imageStatus" is answered by ImageCheck as the extension answers it, and "revealImageFolder" recorded as "_revealFolder" (or
+// "_revealRefused"); "setting" goes through the extension's gate (Settings.panelPatch) and the writer's update (SettingsFile.updateFromPanel),
 // recorded as "_written" or "_settingRefused". No subframe may load (ShellPolicy).
 // A PDF is shown as the extension shows it: a PDFPane (Preview/PDFPane.swift) over the web view, placed by the page's "pdfRect"
 // messages and closed by the next render of anything else.
@@ -198,6 +199,7 @@ var currentText = false
 var offered: Set<String> = []
 var linkIndex: LinkIndex?
 var pendingAnchor: String?
+let images = ImageCheck()
 
 func rootFor(_ url: URL) -> String {
     if let rootOverride { return rootOverride }
@@ -235,6 +237,7 @@ func renderFile(_ file: String, listFirst: Bool = true) {
     if rootOverride == nil { url = URL(fileURLWithPath: url.deletingLastPathComponent().resolvingSymlinksInPath().path).appendingPathComponent(url.lastPathComponent) }
     if newRoot != root { root = newRoot; listings = [:]; knownDirs = [root]; offered = []; linkIndex = nil }
     scheme.fileRoot = root
+    if url.path != currentFile { images.reset() }
     currentFile = url.path
     var st = stat()
     _ = stat(url.path, &st)
@@ -345,6 +348,13 @@ rec.onLoadRemoteImages = { path in
     DispatchQueue.main.async { renderFile(f) }
 }
 
+// As the extension: a missing image that appears renders the document again.
+images.onAppeared = {
+    guard let f = currentFile, images.doc == f else { return }
+    rec.messages.append(["type": "_imagesAppeared"])
+    DispatchQueue.main.async { renderFile(f) }
+}
+
 // As the extension: only a listed file opens; a setting passes the extension's gate, then the writer's update.
 rec.onOpen = { path in
     guard let p = listedFile(path) else { rec.messages.append(["type": "_openRefused", "path": path]); return }
@@ -364,6 +374,16 @@ rec.onMessage = { type, body in
             rec.messages.append(["type": "_listRefused", "path": path ?? ""]); return
         }
         DispatchQueue.main.async { sendFolder(p) }
+    case "imageStatus":
+        guard let f = currentFile, currentKind == .markdown, body["doc"] as? String == f, let r = images.answer(body["paths"], doc: f) else {
+            rec.messages.append(["type": "_imageStatusRefused"]); return
+        }
+        web.evaluateJavaScript("sb.imageStatus(\(jsonString(["doc": f, "images": r]))); 0")
+    case "revealImageFolder":
+        guard let f = currentFile, currentKind == .markdown, body["doc"] as? String == f, let dir = images.revealable(path, doc: f) else {
+            rec.messages.append(["type": "_revealRefused", "path": path ?? ""]); return
+        }
+        rec.messages.append(["type": "_revealFolder", "path": dir.path])
     case "pdfRect":
         if currentKind == .pdf { pdfPane?.place(message: body, in: web) }
     case "overview":

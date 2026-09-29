@@ -1069,6 +1069,80 @@ def panel_host(check):
         shutil.rmtree(page.out, ignore_errors=True)
 
 
+def missing_images(page, check, out):
+    """Images that did not load: a placeholder with the alt text, the path as written and why (the extension's ImageCheck); its
+    Reveal folder only for a real click on the page's own button; a remote image blocked or failing; a missing image that
+    appears renders."""
+    d = os.path.join(out, 'imgs')
+    os.makedirs(os.path.join(d, 'media'))
+    open(os.path.join(d, 'here.png'), 'wb').write(make_png(40, 30))
+    open(os.path.join(d, 'bad.png'), 'w').write('not a png\n')
+    open(os.path.join(d, 'notes.txt'), 'w').write('text\n')
+    doc = os.path.join(d, 'doc.md')
+    open(doc, 'w').write('# Images\n\n![Here](here.png)\n\n![Wispr Flow Insights](media/wispr-insights.png)\n\n![](nofolder/gone.png)\n\n'
+                         '<img src="media/raw.png" alt="Raw">\n\n![Bad](bad.png)\n\n![Text](notes.txt)\n\n![Remote](https://127.0.0.1:9/r.png)\n\n'
+                         '<div class="forged"><button class="img-reveal" type="button">Reveal folder</button>\n'
+                         '<span class="img-missing"><button class="img-reveal" data-action="reveal">Reveal folder</button></span></div>\n')
+    boxes = """return [...document.querySelectorAll('#doc .img-missing')].filter((b) => !b.closest('.forged')).map((b) => [
+      (b.querySelector('.img-missing-alt') || {}).textContent || '', (b.querySelector('.img-missing-path') || {}).textContent || '',
+      [...b.querySelectorAll('.img-missing-why > *')].map((n) => n.textContent), !!b.querySelector(':scope > svg.ic')]);"""
+    natural = "return [...document.querySelectorAll('#doc img')].map((i) => [i.getAttribute('src'), i.naturalWidth]);"
+    types = lambda r: [m.get('type') for m in r['messages']]
+    page.cmd('@root:')
+    r = page.render(doc)
+    w = page.cmd('@wait:1')
+    b = page.js(boxes)
+    check(b[:3] == [['Wispr Flow Insights', 'media/wispr-insights.png', ['Not found', 'Reveal folder'], True],
+                    ['', 'nofolder/gone.png', ['Not found'], True], ['Raw', 'media/raw.png', ['Not found', 'Reveal folder'], True]],
+          'missing image: a placeholder with its glyph, alt text, path as written, "Not found", and Reveal folder when the folder exists (inline <img> too)',
+          json.dumps(b))
+    check(b[3:] == [['Bad', 'bad.png', ['Unsupported format', 'Reveal folder'], True], ['Text', 'notes.txt', ['Unsupported format', 'Reveal folder'], True]],
+          'an image that is there but cannot be shown, or is not an image: "Unsupported format"', json.dumps(b[3:]))
+    check(page.js(natural) == [['here.png', 40]] and len([t for t in types(r) + types(w) if t == 'imageStatus']) == 1,
+          'an image that is there still renders, and the page asks about the failed ones once', json.dumps([page.js(natural), types(r) + types(w)]))
+    check(page.js("return [...document.querySelectorAll('#doc .img-blocked')].map((n) => n.querySelector('.img-alt').textContent)") == ['Remote'],
+          'remote images off: the remote image keeps its blocked placeholder and load button')
+    page.js("document.querySelector('#doc .forged').scrollIntoView({ block: 'center' }); return 0")
+    rs = [click(page, '#doc p .img-missing .img-reveal'), page.cmd('@nativeclick:#doc .forged > button.img-reveal'),
+          page.cmd('@nativeclick:#doc .forged .img-missing .img-reveal')]
+    check(all(x['result'] is True for x in rs) and not [t for x in rs for t in types(x) if 'eveal' in (t or '')],
+          'Reveal folder: a synthetic click, and buttons of the document dressed as it, reveal nothing',
+          json.dumps([types(x) for x in rs]))
+    page.js("document.querySelector('#doc p .img-missing').scrollIntoView({ block: 'center' }); return 0")
+    r = page.cmd('@nativeclick:#doc p .img-missing .img-reveal')
+    got = [m for m in r['messages'] if m.get('type') in ('revealImageFolder', '_revealFolder', '_revealRefused')]
+    check([m['type'] for m in got] == ['revealImageFolder', '_revealFolder'] and got[1]['path'].endswith('/imgs/media')
+          and got[1]['path'] == os.path.dirname(got[0]['path']),
+          'Reveal folder: a real click on the page\'s own button reveals the image\'s folder', json.dumps(got))
+    r = page.cmd("@eval:post({ type: 'revealImageFolder', doc: current.path, path: '/etc/x.png' }); post({ type: 'revealImageFolder', doc: '/tmp/other.md', path: "
+                 + json.dumps(os.path.join(d, 'media', 'x.png')) + " }); 0")
+    check(types(r).count('_revealRefused') == 2 and '_revealFolder' not in types(r), 'Reveal folder: the extension reveals only a folder its answer found, for this document',
+          json.dumps(types(r)))
+    hint = page.js("""const b = [...document.querySelectorAll('#doc p .img-missing')][1];
+      imageReason(b, '/x/nofolder/gone.png', { reason: 'missing', folder: false, suggest: 'Gone.PNG' });
+      return [...b.querySelectorAll('.img-missing-why > *')].map((n) => n.textContent);""")
+    check(hint == ['Not found', 'Did you mean Gone.PNG?'], 'a name that differs only in case: "Did you mean …?"', json.dumps(hint))
+
+    page.apply(remoteImages=True)
+    page.cmd('@wait:1.5')
+    rb = page.js("""const b = [...document.querySelectorAll('#doc .img-missing')].find((n) => n.title.startsWith('https:'));
+      return b && [b.querySelector('.img-missing-alt').textContent, [...b.querySelectorAll('.img-missing-why > *')].map((n) => n.textContent)];""")
+    check(rb == ['Remote', ['Couldn’t load', '127.0.0.1']] and not page.js("return document.querySelectorAll('#doc .img-blocked').length"),
+          'remote images on: a remote image that fails shows its host and "Couldn\'t load"', json.dumps(rb))
+    page.apply(remoteImages=False)
+
+    shutil.copy(os.path.join(d, 'here.png'), os.path.join(d, 'media', 'wispr-insights.png'))
+    w = page.cmd('@wait:1.5')
+    after = page.js(natural)
+    check('_imagesAppeared' in types(w) and ['media/wispr-insights.png', 40] in after and page.js(boxes)[0][1] == 'nofolder/gone.png',
+          'live reload: a missing image that appears in its folder replaces its placeholder', json.dumps([types(w), after]))
+    os.makedirs(os.path.join(d, 'nofolder'))
+    page.cmd('@wait:0.5')
+    shutil.copy(os.path.join(d, 'here.png'), os.path.join(d, 'nofolder', 'gone.png'))
+    w = page.cmd('@wait:1.5')
+    check(['nofolder/gone.png', 40] in page.js(natural), 'live reload: an image whose folder did not exist yet, once both appear', json.dumps(types(w)))
+
+
 def main():
     results = []
 
@@ -2012,6 +2086,7 @@ def main():
         check('overview' in types(r) and st()['view'] == 'overview', "the sidebar's folder name brings the overview back", json.dumps(types(r)))
         page.cmd('@root:')
         viewers(page, check, page.out, st)
+        missing_images(page, check, page.out)
 
         csp = [l for l in page.logs if 'csp blocked' in l]
         errs = [l for l in page.logs if l.startswith(('rejection', 'mermaid')) or ' @' in l]

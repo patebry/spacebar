@@ -2,13 +2,14 @@
 """The page on its own, outside Quick Look: Preview/web in an offscreen WKWebView (test/web/main.swift) renders the hostile
 corpus and the demo fixture. Hostile documents must post nothing but the page's own bookkeeping messages and leave no script,
 frame, handler or script URL in the DOM; links a click reports are listed for the Swift-side policy (checked by hostile.py).
-The demo must still render math, highlighting, mermaid, task boxes and its sibling image."""
+The demo must still render math, highlighting, mermaid, task boxes and its sibling image. A missing image gets its placeholder,
+whose Reveal folder only a real click on the page's own button can press."""
 import json, os, shutil, subprocess, sys, tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import hostile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PAGE_TYPES = {'ready', 'painted', 'rendered', 'log', 'caretPainted', 'editBlock', 'editCancel', 'editStop'}
+PAGE_TYPES = {'ready', 'painted', 'rendered', 'log', 'caretPainted', 'editBlock', 'editCancel', 'editStop', 'imageStatus'}
 
 exe = os.path.join(hostile.OUT, 'webcheck')
 # Compiled with the extension's own scheme handler and document-start settings script.
@@ -56,7 +57,34 @@ for line in out.stdout.splitlines():
             if m.get('type') == '_refused': print('   scheme handler:', m['msg'][:160])
         for l in logs: print('   log:', l[:160])
     results.append(ok)
-if out.returncode or len(results) != len(fixtures) + 2:
+# A missing image: the placeholder, and a Reveal folder that the document's own buttons and script-made clicks cannot press.
+imgdir = os.path.join(hostile.OUT, 'imgcheck')
+os.makedirs(os.path.join(imgdir, 'media'), exist_ok=True)
+shutil.copy(os.path.join(ROOT, 'test', 'fixtures', 'img.png'), imgdir)
+missing = os.path.join(imgdir, 'missing.md')
+open(missing, 'w').write('# Missing\n\n![Shot](img.png)\n\n![Wispr Flow Insights](media/wispr-insights.png)\n\n'
+                         '<div class="forged"><button class="img-reveal" type="button" data-action="reveal">Reveal folder</button></div>\n')
+PLACEHOLDER = """JSON.stringify((() => { const b = document.querySelector('#doc p .img-missing');
+  return { box: b && [b.querySelector('.img-missing-alt').textContent, b.querySelector('.img-missing-path').textContent,
+    [...b.querySelectorAll('.img-missing-why > *')].map((n) => n.textContent)], img: document.querySelector('#doc img').naturalWidth }; })())"""
+SYNTH = """(() => { const b = document.querySelector('#doc p .img-reveal'); for (const t of ['pointerdown', 'mousedown', 'mouseup', 'click'])
+  b.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true })); b.click(); return 0; })()"""
+out2 = subprocess.run([exe, os.path.join(ROOT, 'Preview', 'web'), '@render:' + missing, '@wait:1', '@eval:' + PLACEHOLDER, '@eval:' + SYNTH,
+                       '@nativeclick:#doc .forged button', '@nativeclick:#doc p .img-reveal'], capture_output=True, text=True, timeout=120, env=env)
+steps = [json.loads(l) for l in out2.stdout.splitlines()]
+if len(steps) == 6:
+    shown = json.loads(steps[2]['result'])
+    reveals = [[m.get('type') for m in st['messages'] if 'eveal' in m.get('type', '')] for st in steps[3:]]
+    ok = shown['box'] == ['Wispr Flow Insights', 'media/wispr-insights.png', ['Not found', 'Reveal folder']] and shown['img'] > 0
+    print(f"{'PASS' if ok else 'FAIL'} missing image: placeholder with alt, path and reason; the image beside it renders: {json.dumps(shown)}")
+    results.append(ok)
+    ok = reveals == [[], [], ['revealImageFolder', '_revealFolder']] and all(st['result'] is True for st in steps[4:])
+    print(f"{'PASS' if ok else 'FAIL'} missing image: Reveal folder only for a real click on the page's own button: {json.dumps(reveals)}")
+    results.append(ok)
+else:
+    print('FAIL missing image: harness gave', len(steps), 'answers', out2.stderr[-500:])
+    results += [False, False]
+if out.returncode or len(results) != len(fixtures) + 4:
     print(out.stderr[-2000:])
     results.append(False)
 print(f'\n{sum(results)}/{len(results)} page checks passed; files in {hostile.OUT}')

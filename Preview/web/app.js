@@ -309,6 +309,7 @@ function render(text, depth = 0) {
   obsidian(frag, depth);
   if (!settings.taskToggles) frag.querySelectorAll('input[type=checkbox]').forEach((n) => { n.disabled = true; });
   if (settings.remoteImages !== true && current.remoteImagesOnce !== true) blockRemoteImages(frag);
+  if (depth === 0) frag.querySelectorAll('img').forEach(watchImage);
   const head = fm && frontMatterNode(fm);
   if (head) frag.prepend(head);
   return frag;
@@ -348,6 +349,96 @@ function loadRemoteImages(e) {
   armed = null;
   if (!e.isTrusted || !pressed || !loadButtons.has(b) || !current.path) return;
   post({ type: 'loadRemoteImages', path: current.path });
+}
+
+// ---------- an image that did not load ----------
+// Its placeholder shows the alt text, the path as the document wrote it and why. For a local file the extension answers why
+// (imageStatus), for the paths that failed only. The Reveal button is made here and remembered, like the load button, so
+// nothing in the document can press it.
+const IMG_REASONS = { missing: 'Not found', unreadable: 'Can’t read', unsupported: 'Unsupported format', tooLarge: 'Too large to show',
+  notDownloaded: 'Not downloaded from iCloud' };
+const IMG_ASK_MAX = 256;
+let imgAsked = new Set();
+let imgStatus = new Map();
+const imgWaiting = new Map();
+const imgOf = new WeakMap();
+const imgRetried = new WeakSet();
+const revealButtons = new WeakMap();
+let imgAsk = null;
+
+function watchImage(img) { img.addEventListener('error', () => imageFailed(img), { once: true }); }
+
+function imageFailed(img) {
+  if (!img.parentNode) return;
+  const src = img.getAttribute('src') || '';
+  let url = null, written = img.classList.contains('wl-img') ? img.dataset.wl || '' : src;
+  try { url = new URL(src, document.baseURI); } catch { /* shown as written */ }
+  try { written = decodeURI(written); } catch { /* kept encoded */ }
+  const box = el('span', 'img-missing');
+  const text = el('span', 'img-missing-text');
+  const alt = img.getAttribute('alt');
+  if (alt) text.append(el('span', 'img-missing-alt', alt));
+  if (written) text.append(el('span', 'img-missing-path', written));
+  const why = text.appendChild(el('span', 'img-missing-why'));
+  box.append(icon('image', 20), text);
+  box.title = written;
+  imgOf.set(box, img);
+  img.replaceWith(box);
+  let path = null;
+  if (url && url.protocol === 'spacebar:' && url.host === 'file') try { path = decodeURIComponent(url.pathname); } catch { /* not asked about */ }
+  if (path) {
+    if (imgStatus.has(path)) imageReason(box, path, imgStatus.get(path));
+    else askImage(path, box);
+  } else if (url && /^https?:$/.test(url.protocol)) {
+    why.append(el('span', 'img-reason', 'Couldn’t load'), el('span', 'img-host', url.hostname));
+  } else why.append(el('span', 'img-reason', 'Couldn’t load'));
+}
+
+function askImage(path, box) {
+  if (!imgWaiting.has(path)) imgWaiting.set(path, []);
+  imgWaiting.get(path).push(box);
+  if (imgAsk) return;
+  imgAsk = setTimeout(() => {
+    imgAsk = null;
+    const paths = [...imgWaiting.keys()].filter((p) => !imgAsked.has(p) && imgAsked.size < IMG_ASK_MAX && imgAsked.add(p));
+    for (let i = 0; i < paths.length && current.path; i += 64) post({ type: 'imageStatus', doc: current.path, paths: paths.slice(i, i + 64) });
+  }, 0);
+}
+
+function imageReason(box, path, s) {
+  const img = imgOf.get(box);
+  if (s.reason === 'ok') {
+    // Readable now (it appeared, or its read was cut short): tried once more, and a second failure is the file itself.
+    imgStatus.set(path, { ...s, reason: 'unsupported' });
+    if (!img || imgRetried.has(img) || !box.isConnected) return imageReason(box, path, imgStatus.get(path));
+    const again = img.cloneNode(false);
+    imgRetried.add(again);
+    watchImage(again);
+    box.replaceWith(again);
+    return;
+  }
+  const why = box.querySelector('.img-missing-why');
+  why.replaceChildren(el('span', 'img-reason', IMG_REASONS[s.reason] || 'Couldn’t load'));
+  if (typeof s.suggest === 'string' && s.suggest) why.append(el('span', 'img-hint', `Did you mean ${s.suggest}?`));
+  if (s.folder === true) {
+    const b = el('button', 'img-reveal', 'Reveal folder');
+    b.type = 'button';
+    b.title = 'Shows the folder this image should be in, in Finder';
+    revealButtons.set(b, path);
+    b.addEventListener('pointerdown', (e) => { armed = e.isTrusted ? b : null; });
+    b.addEventListener('click', revealImageFolder);
+    why.append(b);
+  }
+}
+
+/** As loadRemoteImages: only a real click that went down on one of the page's own Reveal buttons. */
+function revealImageFolder(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  const b = e.currentTarget, pressed = armed === b, path = revealButtons.get(b);
+  armed = null;
+  if (!e.isTrusted || !pressed || !path || !current.path) return;
+  post({ type: 'revealImageFolder', doc: current.path, path });
 }
 
 /** Mermaid's strict mode disables click directives but keeps markup in labels; links and positioning there are the document's. */
@@ -801,6 +892,9 @@ window.sb = {
     // A re-render of the same file (a change on disk) keeps the app its Open button names; only a new file asks again.
     if (samePath && p.app === undefined && typeof current.app === 'string') p = { ...p, app: current.app };
     current = p;
+    imgStatus = new Map();
+    imgAsked = new Set();
+    imgWaiting.clear();
     // Each render may come with a new native PDF view (the extension closes it for anything else): place it afresh.
     pdfPosted = '';
     $('base').href = p.base;
@@ -945,6 +1039,17 @@ window.sb = {
     delete $('aa').dataset.update;
     $('aa').title = 'Appearance';
     syncUpdateButton();
+  },
+  /** Why the local images that failed did not load: {doc, images: {path: {reason, folder, suggest?}}}. */
+  imageStatus(r) {
+    if (!r || r.doc !== current.path || !r.images || typeof r.images !== 'object') return;
+    for (const [path, s] of Object.entries(r.images)) {
+      if (!s || typeof s !== 'object') continue;
+      const boxes = imgWaiting.get(path) || [];
+      imgWaiting.delete(path);
+      if (s.reason !== 'ok') imgStatus.set(path, s);
+      for (const b of boxes) if (b.isConnected) imageReason(b, path, s);
+    }
   },
   installCopied(r) {
     const b = $('aa-copy');

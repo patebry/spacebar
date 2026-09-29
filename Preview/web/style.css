@@ -50,6 +50,19 @@
   .img-blocked { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: .2em .8em; font-size: .8em; color: var(--muted); border: 1px dashed var(--border); border-radius: 6px; padding: .2em .6em; }
   .img-load { font: inherit; color: var(--link); background: none; border: 0; padding: 0; cursor: pointer; }
   .img-load:hover { text-decoration: underline; text-underline-offset: 2px; }
+  /* An image that did not load: what it was, where the document looks for it, and why. */
+  .img-missing { display: inline-flex; align-items: flex-start; gap: .65em; max-width: 100%; box-sizing: border-box; vertical-align: top;
+    padding: .6em .85em; border: 1px dashed var(--border); border-radius: 8px; background: color-mix(in srgb, var(--code-bg) 45%, transparent);
+    font-size: .82em; line-height: 1.45; color: var(--muted); text-align: left; }
+  .img-missing > .ic { color: var(--muted); margin-top: .1em; }
+  .img-missing-text { display: flex; flex-direction: column; gap: .15em; min-width: 0; }
+  .img-missing-alt { color: var(--fg); font-weight: 600; overflow-wrap: anywhere; }
+  .img-missing-path { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere; }
+  .img-missing-why { display: flex; flex-wrap: wrap; align-items: baseline; gap: .15em .8em; }
+  .img-missing-why:empty { display: none; }
+  .img-reason { color: var(--fg); }
+  .img-reveal { font: inherit; color: var(--link); background: none; border: 0; padding: 0; cursor: pointer; }
+  .img-reveal:hover { text-decoration: underline; text-underline-offset: 2px; }
 
   /* A document's SVG or math inside a link must not reach past its own box and take clicks meant for the text around it. */
   #doc svg { overflow: hidden !important; } #doc a .katex { pointer-events: none !important; } pre.mermaid { contain: paint !important; }

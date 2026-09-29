@@ -279,6 +279,30 @@ if let proc = ProcessInfo.processInfo.environment["SPACEBAR_TEST_PROC"] {
     vprocs.values.forEach { if $0.isRunning { $0.terminate() } }
 }
 
+// install.sh's start_reregister returns at once, and the app's --reregister runs on in the background with its output in the
+// log: a stand-in app that takes 2 s records its arguments.
+do {
+    let fake = dir.appendingPathComponent("fakeapp/spacebar.app", isDirectory: true)
+    let exe = fake.appendingPathComponent("Contents/MacOS/Spacebar")
+    try! FileManager.default.createDirectory(at: exe.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try! "#!/bin/sh\nsleep 2\necho \"stand-in ran with $*\"\n".write(to: exe, atomically: true, encoding: .utf8)
+    chmod(exe.path, 0o755)
+    let hlog = dir.appendingPathComponent("helperlogs/Logs/spacebar-helper.log")
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/bin/sh")
+    p.arguments = ["-c", #"eval "$(sed -n '/^start_reregister() {/,/^}/p' scripts/install.sh)"; start_reregister "$1" "$2""#, "sh", fake.path, hlog.path]
+    p.standardOutput = FileHandle.nullDevice
+    p.standardError = FileHandle.nullDevice
+    let t0 = Date()
+    try! p.run()
+    p.waitUntilExit()
+    let took = Date().timeIntervalSince(t0)
+    check("install.sh: start_reregister does not wait for the reregister", p.terminationStatus == 0 && took < 1.5)
+    let said = waitFor("stand-in ran", in: hlog, seconds: 10)
+    check("install.sh: the reregister runs in the background, logged under a header", said.contains("reregister after install ===")
+          && said.contains("stand-in ran with --reregister"))
+}
+
 // install.sh's dry run through to registration, from a made-up release: with the helper's agent loaded (a launchctl stub in
 // PATH answers for it) it would register the helper again in the background, and never otherwise; with a copy installed it
 // would quit the viewer after the swap. A dry run changes nothing, and runs no real launchctl.

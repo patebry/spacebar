@@ -223,6 +223,13 @@ check("state: trusted, tap not up yet, is starting", HelperState.of(enabled: tru
 check("state: secure input on", HelperState.of(enabled: true, agent: .enabled, helper: up, secureInput: true) == .secureInput)
 check("state: on", HelperState.of(enabled: true, agent: .enabled, helper: up, secureInput: false) == .on)
 
+check("reregister: on, registered, three silent polls", HelperState.shouldReregister(enabled: true, agent: .enabled, answering: false, misses: 3))
+check("reregister: not before three polls", !HelperState.shouldReregister(enabled: true, agent: .enabled, answering: false, misses: 2))
+check("reregister: never while it answers", !HelperState.shouldReregister(enabled: true, agent: .enabled, answering: true, misses: 9))
+check("reregister: never with the setting off", !HelperState.shouldReregister(enabled: false, agent: .enabled, answering: false, misses: 9))
+check("reregister: never while Login Items blocks it or it is not registered (the toggle's job)",
+      [HelperState.Agent.requiresApproval, .notRegistered, .notFound].allSatisfy { !HelperState.shouldReregister(enabled: true, agent: $0, answering: false, misses: 9) })
+
 check("requirement: pins the injection entitlements out", HelperSigning.requirement(identifiers: ["a"], leaf: "AB").hasSuffix(
     #" and !entitlement["com.apple.security.cs.allow-dyld-environment-variables"] exists and !entitlement["com.apple.security.cs.disable-library-validation"] exists"#))
 

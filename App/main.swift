@@ -36,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         store.start()
+        system.checkHelperAtLaunch()
         var tab = pendingTab ?? ProcessInfo.processInfo.environment["SPACEBAR_INITIAL_TAB"].flatMap { SettingsTab(rawValue: $0.lowercased()) }
         for arg in CommandLine.arguments.dropFirst() {
             if let u = URL(string: arg), let t = SettingsTab(url: u) { tab = t }

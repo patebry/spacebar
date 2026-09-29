@@ -39,12 +39,15 @@ final class SystemStatus: ObservableObject {
     @Published private(set) var editors: [EditorApp] = []
     @Published private(set) var defaultEditorName: String?
     @Published private(set) var helper = HelperState.off
+    /// A `--reregister` this app started is running.
+    @Published private(set) var reregistering = false
 
     private let queue = DispatchQueue(label: "md.spacebar.status")
     private let helperQueue = DispatchQueue(label: "md.spacebar.status.helper")
     private var helperTimer: Timer?
     private var helperWatchers = 0
     private var helperPolling = false
+    private var helperMisses = 0
     /// Turned on while Login Items still blocked the helper: its Accessibility prompt is asked for once it runs.
     private var promptWhenRunning = false
 
@@ -105,18 +108,62 @@ final class SystemStatus: ObservableObject {
     func pollHelper() {
         guard !helperPolling else { return }
         helperPolling = true
-        let enabled = SettingsFile.load().spaceHelper
+        let settings = SettingsFile.load()
         helperQueue.async {
             let agent = HelperAgent.agent
             // Asked only when it should be running: a connection would start a helper that exits at once when it is off.
-            let status = enabled && agent == .enabled ? HelperAgent.ask(timeout: 0.8) : nil
-            let state = HelperState.of(enabled: enabled, agent: agent, helper: status, secureInput: IsSecureEventInputEnabled())
+            let status = settings.spaceHelper && agent == .enabled ? HelperAgent.ask(timeout: 0.8) : nil
+            var state = HelperState.of(enabled: settings.spaceHelper, agent: agent, helper: status, secureInput: IsSecureEventInputEnabled())
             if state == .needsAccessibility, self.takePrompt() { _ = HelperAgent.promptAccessibility(timeout: 3) }
             DispatchQueue.main.async {
+                self.helperMisses = settings.spaceHelper && agent == .enabled && status == nil ? self.helperMisses + 1 : 0
+                if HelperState.shouldReregister(enabled: settings.spaceHelper, agent: agent, answering: status != nil, misses: self.helperMisses) {
+                    state = .notRunning
+                    self.reregister()
+                }
                 if self.helper != state { self.helper = state }
                 self.helperPolling = false
             }
         }
+    }
+
+    /// At launch: a helper that should be running but does not answer (the app was just replaced) is restarted at once.
+    func checkHelperAtLaunch() {
+        let settings = SettingsFile.load()
+        guard settings.spaceHelper, HelperAgent.available else { return }
+        helperQueue.async {
+            let agent = HelperAgent.agent
+            let answering = agent == .enabled && HelperAgent.ask(timeout: 3) != nil
+            guard HelperState.shouldReregister(enabled: settings.spaceHelper, agent: agent, answering: answering, misses: answering ? 0 : HelperState.missesBeforeReregister) else { return }
+            DispatchQueue.main.async { self.reregister() }
+        }
+    }
+
+    /// Runs this app's own `--reregister` as a separate process (it takes 10 s to minutes, and outlives the window), logged
+    /// to ~/Library/Logs/spacebar-helper.log. One at a time from here; the command itself also refuses a second concurrent run.
+    func reregister() {
+        guard !reregistering, let exe = Bundle.main.executablePath else { return }
+        let logURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/spacebar-helper.log")
+        try? FileManager.default.createDirectory(at: logURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if !FileManager.default.fileExists(atPath: logURL.path) { FileManager.default.createFile(atPath: logURL.path, contents: nil) }
+        guard let log = try? FileHandle(forWritingTo: logURL) else { return }
+        log.seekToEndOfFile()
+        log.write(Data("=== \(Date()) reregister from the settings app ===\n".utf8))
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: exe)
+        p.arguments = ["--reregister"]
+        p.standardOutput = log
+        p.standardError = log
+        p.standardInput = FileHandle.nullDevice
+        p.terminationHandler = { _ in
+            try? log.close()
+            DispatchQueue.main.async {
+                self.reregistering = false
+                self.helperMisses = 0
+                self.pollHelper()
+            }
+        }
+        do { try p.run(); reregistering = true } catch { try? log.close() }
     }
 
     private func takePrompt() -> Bool {

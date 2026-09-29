@@ -84,6 +84,16 @@ check("spaceHelper and helperOffered: off by default, bools only, never panel ke
       && [1, "true", NSNull()].allSatisfy { !Settings(dictionary: ["spaceHelper": $0, "helperOffered": $0]).spaceHelper && !Settings(dictionary: ["helperOffered": $0]).helperOffered }
       && decode(#"{"helperOffered":true,"spaceHelper":true}"#).map { $0.helperOffered && $0.spaceHelper } == true
       && Settings.panelPatch("spaceHelper", true) == nil && Settings.panelPatch("helperOffered", true) == nil)
+do {
+    // The settings app restarts the helper only for spaceHelper as settings.json has it: a hand-edited non-bool is off.
+    let gate = { (raw: [String: Any]) in HelperState.shouldReregister(enabled: Settings(dictionary: raw).spaceHelper, agent: .enabled, answering: false, misses: 3) }
+    check("spaceHelper gates the automatic reregister", gate(["spaceHelper": true]) && !gate([:]) && !gate(["spaceHelper": false])
+          && !gate(["spaceHelper": 1]) && !gate(["spaceHelper": "true"]))
+    _ = SettingsFile.update(["spaceHelper": true])
+    _ = SettingsFile.updateFromPanel(Data(#"{"spaceHelper":false}"#.utf8))
+    check("the preview panel cannot turn the helper (and so its reregister) off", SettingsFile.load().spaceHelper)
+    _ = SettingsFile.update(["spaceHelper": false])
+}
 check("minimal chrome: off by default, a bool only, not a panel key", !Settings().minimalChrome && Settings(dictionary: ["minimalChrome": true]).minimalChrome
       && !Settings(dictionary: ["minimalChrome": 1]).minimalChrome && decode(#"{"minimalChrome":true}"#)?.minimalChrome == true
       && !Settings.panelKeys.contains("minimalChrome") && Settings.panelPatch("minimalChrome", true) == nil && Settings.allKeys.contains("minimalChrome"))

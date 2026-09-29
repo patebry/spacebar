@@ -239,7 +239,7 @@ enum HelperCopy {
         case .needsLoginItems: return "Turn on spacebar in System Settings, General, Login Items & Extensions."
         case .needsAccessibility: return "Turn on spacebar in System Settings, Privacy & Security, Accessibility."
         case .secureInput: return "A password field or another app has secure input on, so Space goes to Quick Look until it ends."
-        case .notRunning: return "macOS did not start spacebar's helper."
+        case .notRunning: return "macOS did not start spacebar's helper, as happens for a while after an update. spacebar starts it again by itself."
         default: return nil
         }
     }
@@ -262,11 +262,11 @@ struct HelperStatusView: View {
     var body: some View {
         HStack(spacing: 8) {
             StatusDot(color: HelperCopy.color(state))
-            Text(HelperCopy.title(state))
+            Text(system.reregistering && state != .on ? "Restarting…" : HelperCopy.title(state))
             switch state {
             case .needsLoginItems: Button("Open Login Items…") { HelperAgent.openLoginItems() }
             case .needsAccessibility: Button("Open Accessibility Settings…") { HelperAgent.openAccessibility() }
-            case .notRunning: Button("Try Again") { system.setHelper(true, store: store) }
+            case .notRunning: Button("Try Again") { system.reregister() }.disabled(system.reregistering)
             default: EmptyView()
             }
         }

@@ -15,8 +15,8 @@
 #      Nothing outside those three exact paths is removed (and, when spacebar's Update button started this run, the
 #      private copy of this script it ran).
 #   5. Registers it with Launch Services and pluginkit, turns on its preview extensions, and resets Quick Look's cache.
-#      If the Space helper's agent is registered, registers it again in the background (logged to
-#      ~/Library/Logs/spacebar-helper.log): after the app is replaced, launchd refuses the new helper until then.
+#      If the Space helper's agent is registered, registers it again in the background, retrying for up to 10 minutes
+#      (logged to ~/Library/Logs/spacebar-helper.log): after the app is replaced, launchd refuses the new helper until then.
 #   6. Lists any other Quick Look extensions that are turned on and claim file types spacebar previews (Markdown, code,
 #      data, text, archives), and warns about a second copy in /Applications. It never turns anything off or deletes
 #      anything else itself.
@@ -165,6 +165,14 @@ quit_viewer() {
     tries=$((tries + 1))
   done
   pkill -f "$viewer" || true
+}
+
+# start_reregister <bundle path> <log>: starts the app's `--reregister` in the background and returns at once. It brings the
+# Space helper back after the swap (about 15 s, retrying with backoff for up to 10 minutes), appending to <log>.
+start_reregister() {
+  mkdir -p "${2%/*}" 2>/dev/null || true
+  printf '=== %s reregister after install ===\n' "$(date '+%Y-%m-%d %H:%M:%S')" >>"$2" 2>/dev/null || true
+  nohup "$1/Contents/MacOS/Spacebar" --reregister >>"$2" 2>&1 </dev/null &
 }
 
 # Re-registers a copy that was unregistered for a swap that did not happen.
@@ -370,15 +378,13 @@ else
   if [ "$DRY_RUN" != 1 ] && pgrep -f "$(path_regex "$DEST")Contents/PlugIns/" >/dev/null 2>&1; then
     say "note: a Quick Look preview from the old version is still open; close it to load the new one."
   fi
-  # Unregistered and registered again, which takes 20-90 s: the installer does not wait for it.
+  # launchd refuses a replaced helper until it is registered again (FINDINGS.md, Space helper): not waited for.
   if launchctl print "gui/$(id -u)/$HELPER_LABEL" >/dev/null 2>&1; then
     helper_log="$HOME/Library/Logs/spacebar-helper.log"
     if [ "$DRY_RUN" = 1 ]; then
       say "would run in the background: $DEST/Contents/MacOS/Spacebar --reregister >>$helper_log"
     else
-      mkdir -p "${helper_log%/*}" 2>/dev/null || true
-      printf '=== %s reregister after install ===\n' "$(date '+%Y-%m-%d %H:%M:%S')" >>"$helper_log" 2>/dev/null || true
-      nohup "$DEST/Contents/MacOS/Spacebar" --reregister >>"$helper_log" 2>&1 </dev/null &
+      start_reregister "$DEST" "$helper_log"
       say "Registering the Space helper again in the background (log: $helper_log)."
     fi
   fi

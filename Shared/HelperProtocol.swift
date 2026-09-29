@@ -69,6 +69,17 @@ enum HelperState: Equatable {
     }
 }
 
+extension HelperState {
+    /// Polls in a row without an answer before the settings app restarts the helper itself.
+    static let missesBeforeReregister = 3
+
+    /// Whether the settings app should run `--reregister` itself: the helper should run and is registered, but has not
+    /// answered for `misses` polls in a row, as after the app was replaced in place and launchd refuses the new helper.
+    static func shouldReregister(enabled: Bool, agent: Agent, answering: Bool, misses: Int) -> Bool {
+        enabled && agent == .enabled && !answering && misses >= missesBeforeReregister
+    }
+}
+
 /// Names of the keys the helper routes to the viewer while its panel is open.
 enum HelperKeys {
     static let list: Set<String> = ["up", "down", "left", "right", "home", "end", "pageup", "pagedown", "return"]

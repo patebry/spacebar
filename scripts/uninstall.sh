@@ -54,6 +54,11 @@ quit_extensions() {
 # quit_viewer <bundle path>: as in install.sh, the Space helper's viewer, its writer first.
 quit_viewer() {
   viewer=$(path_regex "$1/Contents/Helpers/spacebar Viewer.app")
+  if [ "$DRY_RUN" = 1 ]; then
+    say "would run: pkill -f ${viewer}Contents/XPCServices/"
+    say "  wait up to 6 s for that writer to exit, then run: pkill -f $viewer"
+    return 0
+  fi
   pkill -f "${viewer}Contents/XPCServices/" || true
   tries=0
   while [ "$tries" -lt 30 ] && pgrep -f "${viewer}Contents/XPCServices/" >/dev/null 2>&1; do
@@ -104,7 +109,9 @@ LEGACY_SUPPORT="$HOME/Library/Application Support/spacebar.md"
 # does; the Background Task Management database is never reset.
 if [ "$SKIP_REGISTER" != 1 ]; then
   run_quiet launchctl bootout "gui/$(id -u)/$HELPER_LABEL" || true
-  if [ "$DRY_RUN" = 1 ]; then say "would quit the Space helper's viewer running from $DEST, its writer first"; else quit_viewer "$DEST"; fi
+  # A helper still running from the bundle (its job gone, launchd not yet done with it) goes too.
+  run_quiet pkill -f "$(path_regex "$DEST/Contents/Helpers/spacebar Helper.app")" || true
+  quit_viewer "$DEST"
   run_quiet tccutil reset Accessibility "$HELPER_LABEL" || true
   run_quiet tccutil reset All "$VIEWER_ID" || true
 fi

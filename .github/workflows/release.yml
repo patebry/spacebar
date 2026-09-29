@@ -22,7 +22,15 @@ jobs:
         # Apple's Quick Look generators may not answer on a runner: test/qlpane skips its renders.
         env:
           QLPANE_RENDER: '0'
-        run: for t in settings scheme linkpolicy cas editkeys pdfpane htmlpane mediapane qlpane diskimage richtext encoding archive filterkeys rivals updates report welcome; do test/$t/run.sh; done
+        run: for t in settings scheme linkpolicy cas editkeys pdfpane htmlpane mediapane qlpane imagepane diskimage richtext encoding archive filterkeys rivals updates report welcome helper; do test/$t/run.sh; done
+
+      # The Space helper's viewer off screen: what a suspended, restored, closed or replaced panel shows is graded; a shared
+      # runner's timings and memory are printed, not graded.
+      - name: Viewer checks
+        env:
+          LATENCY_TARGETS: '0'
+          RUNS: '5'
+        run: test/viewerlatency/run.sh
 
       # One stable identity for every release keeps the designated requirement the same, so an update does not make macOS
       # ask again about the extension's sandbox container (FINDINGS.md). Forks without the secrets build ad-hoc.
@@ -54,11 +62,19 @@ jobs:
             { echo "::error::SPACEBAR_SIGNING_P12 holds no \"spacebar Release\" identity"; exit 1; }
           { echo "SIGN_ID=spacebar Release"; echo "SIGN_KEYCHAIN=$kc"; } >> "$GITHUB_ENV"
 
+      # The helper's XPC gate against clients signed with this identity; skipped for an ad-hoc build. It bootstraps a test
+      # launchd job in the runner's GUI domain and removes it; without that domain it warns and skips.
+      - name: Helper link
+        env:
+          HELPERLINK_OPTIONAL: '1'
+        run: test/helperlink/run.sh
+
       - name: Build (universal, not installed)
         run: VERSION="${GITHUB_REF_NAME#v}" BUILD_NUMBER="$GITHUB_RUN_NUMBER" ./build.sh --no-install
 
-      # The built plists claim exactly scripts/quicklook-types.txt; checked on this build, not a rebuild.
-      - name: Quick Look claims
+      # The built plists claim exactly scripts/quicklook-types.txt, and the helper's and viewer's bundles have their layout,
+      # entitlements, hardened runtime and signatures; checked on this build, not a rebuild.
+      - name: Quick Look claims and helper bundles
         run: SKIP_BUILD=1 test/claims/run.sh
 
       - name: Check and package
@@ -73,8 +89,13 @@ jobs:
             case " $archs " in *" x86_64 "*) ;; *) echo "::error::$f has no x86_64 slice"; exit 1 ;; esac
             count=$((count + 1))
           done < <(find spacebar.app -path '*/MacOS/*' -type f -print0)
-          [ "$count" -ge 5 ] || { echo "::error::expected at least 5 executables under */MacOS/*, found $count"; exit 1; }
+          # The app, two extensions and their writers, the Space helper, its viewer and the viewer's writer.
+          [ "$count" -ge 8 ] || { echo "::error::expected at least 8 executables under */MacOS/*, found $count"; exit 1; }
           codesign --verify --deep --strict spacebar.app
+          for b in "spacebar.app/Contents/Helpers/spacebar Helper.app" "spacebar.app/Contents/Helpers/spacebar Viewer.app"; do
+            codesign --verify --strict "$b"
+            codesign -dv "$b" 2>&1 | grep -q 'flags=.*runtime' || { echo "::error::$b is not signed with the hardened runtime"; exit 1; }
+          done
           codesign -d -r- spacebar.app
           ditto -c -k --keepParent spacebar.app spacebar.zip
           shasum -a 256 spacebar.zip > spacebar.zip.sha256
@@ -93,6 +114,9 @@ jobs:
           else
             signing="Releases are signed with one stable, self-signed identity (\"spacebar Release\"). If you are upgrading from v0.1.0, which was ad-hoc signed, you may see one macOS prompt about spacebar's data; allow it. Later updates keep the same signer and should not ask again."
           fi
+          # The Gatekeeper paragraph lives in README.md only, between its gatekeeper markers.
+          gatekeeper=$(sed -n '/^<!-- gatekeeper/,/^<!-- \/gatekeeper -->/{/^<!--/d;p;}' README.md)
+          [ -n "$gatekeeper" ] || { echo "::error::README.md has no gatekeeper paragraph"; exit 1; }
           cat > "$RUNNER_TEMP/notes.md" <<EOF
           ## Install
 
@@ -100,7 +124,7 @@ jobs:
           curl -fsSL https://spacebar.patebryant.com/install.sh | sh
           \`\`\`
 
-          spacebar is not notarized: use the install command; a browser download will be blocked by Gatekeeper.
+          $gatekeeper
 
           $signing
 

@@ -3,17 +3,24 @@
 # claiming the viewer's identifier, a client signed by the same certificate under another identifier, and the viewer's identity
 # without the hardened runtime or with an entitlement that lets a library in (either way one could be injected into it). The listener runs as
 # a temporary launchd job under a test Mach name, removed at the end; the real md.spacebar.helper agent is never touched.
+#   SIGN_ID=...  the identity to sign with (CI's "spacebar Release", self-signed, so not "valid" to find-identity -v); - skips
+#   HELPERLINK_OPTIONAL=1  (CI) a session without a GUI launchd domain, or one that refuses the test job, skips instead of failing
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+[ "${SIGN_ID:-}" = - ] && { echo "SKIP ad-hoc signing: the link refuses every client"; exit 0; }
 SIGN_ID=${SIGN_ID:-$(head -n1 .sign-id 2>/dev/null || true)}
-identities=$(security find-identity -v -p codesigning 2>/dev/null || true)
-if [ -z "$SIGN_ID" ] || ! grep -qF "$SIGN_ID" <<<"$identities"; then
-  SIGN_ID=$(sed -nE 's/^ *[0-9]+\) ([0-9A-F]{40}) ".*"$/\1/p' <<<"$identities" | head -1)
+if [ -z "$SIGN_ID" ] || ! security find-identity -p codesigning 2>/dev/null | grep -qF "$SIGN_ID"; then
+  SIGN_ID=$(security find-identity -v -p codesigning 2>/dev/null | sed -nE 's/^ *[0-9]+\) ([0-9A-F]{40}) ".*"$/\1/p' | head -1)
 fi
 [ -n "$SIGN_ID" ] || { echo "SKIP no code-signing identity: the link cannot be checked"; exit 0; }
 out=$(mktemp -d)
 label=md.spacebar.helperlinktest.$$
 domain=gui/$(id -u)
+skip_or_fail() {
+  if [ "${HELPERLINK_OPTIONAL:-0}" = 1 ]; then echo "SKIP $1"; echo "::warning title=helperlink skipped::$1"; exit 0; fi
+  echo "FAIL $1"; exit 1
+}
+launchctl print "$domain" >/dev/null 2>&1 || skip_or_fail "no GUI launchd domain ($domain) to run the test listener in"
 trap 'launchctl bootout "$domain/$label" 2>/dev/null || true; rm -rf "$out"' EXIT
 build() { xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 "$@"; }
 build test/helperlink/listener/main.swift Helper/Link.swift Shared/HelperProtocol.swift -o "$out/listener"
@@ -41,7 +48,7 @@ cat > "$out/$label.plist" <<PLIST
 <key>MachServices</key><dict><key>$label</key><true/></dict>
 </dict></plist>
 PLIST
-launchctl bootstrap "$domain" "$out/$label.plist"
+launchctl bootstrap "$domain" "$out/$label.plist" || skip_or_fail "launchd refused the test job in $domain"
 failures=0
 expect() {
   local got; got=$("$out/client-$1" "$label")

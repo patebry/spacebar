@@ -232,6 +232,19 @@ running=$(pgrep -x "$APPEX_EXE" || true)
 [ -n "$running" ] && echo "note: $APPEX_EXE still running (pid $running); close its Quick Look preview to load this build"
 qlmanage -r >/dev/null 2>&1
 qlmanage -r cache >/dev/null 2>&1
+# As install.sh after its swap: the viewer running the replaced code quits, its writer first (the helper starts the new one),
+# and a registered helper is registered again in the background, since launchd refuses a replaced helper until then.
+viewer=$(printf '^%s/' "$DEST/Contents/Helpers/$APP_NAME Viewer.app" | sed 's/[][\.*$+?(){}|]/\\&/g')
+pkill -f "${viewer}Contents/XPCServices/" || true
+for _ in $(seq 30); do pgrep -f "${viewer}Contents/XPCServices/" >/dev/null || break; sleep 0.2; done
+pkill -f "$viewer" || true
+if launchctl print "gui/$(id -u)/$HELPER_ID" >/dev/null 2>&1; then
+  helper_log="$HOME/Library/Logs/spacebar-helper.log"
+  mkdir -p "$(dirname "$helper_log")"
+  printf '=== %s reregister after build.sh ===\n' "$(date '+%Y-%m-%d %H:%M:%S')" >>"$helper_log"
+  nohup "$DEST/Contents/MacOS/$APP_EXE" --reregister >>"$helper_log" 2>&1 </dev/null &
+  echo "registering the Space helper again in the background (log: $helper_log)"
+fi
 echo "installed $DEST (READ_ACCESS=$READ_ACCESS PROBE=${PROBE:-0} SIGN_ID=$SIGN_ID)"
 pluginkit -mAvvv -i "$APPEX_ID" | sed -n '1,4p'
 pluginkit -m -i "$FOLDERS_ID"

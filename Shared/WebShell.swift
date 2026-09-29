@@ -160,6 +160,132 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
     }
 }
 
+/// Why a document's local images did not load, for the page's placeholders. The page asks only about images that failed, and
+/// the answer goes to the page alone: nothing is loaded or read. The folders an answer found are the only ones the page may
+/// then ask to reveal, and a missing image's nearest folder is watched, so the document renders again once the image appears.
+final class ImageCheck {
+    static let maxPaths = 64
+    /// Paths answered per document: a document naming thousands of images gets placeholders without reasons past this.
+    static let maxPerDoc = 256
+    static let maxWatches = 16
+    static let maxListed = 5000
+    private(set) var doc: String?
+    private var folders: Set<String> = []
+    private var missing: Set<String> = []
+    private var answered: Set<String> = []
+    /// Each folder's entries by lowercased name, read once per document for the case hint.
+    private var listed: [String: [String: String]] = [:]
+    private var watches: [String: FolderWatch] = [:]
+    /// A missing image of the document is now there.
+    var onAppeared: () -> Void = {}
+
+    func reset() {
+        doc = nil
+        folders = []
+        missing = []
+        answered = []
+        listed = [:]
+        watches = [:]
+    }
+
+    /// {reason: missing | unreadable | unsupported | tooLarge | notDownloaded | ok, folder: its folder exists, suggest: a name
+    /// in that folder differing only in case}. `ok`: readable now, so the page tries it once more.
+    static func status(_ path: String, caseMatch match: (String, String) -> String? = { caseMatch($0, in: $1) }) -> [String: Any] {
+        let dir = (path as NSString).deletingLastPathComponent
+        var st = stat()
+        let folder = stat(dir, &st) == 0 && st.st_mode & S_IFMT == S_IFDIR
+        var out: [String: Any] = ["folder": folder]
+        if stat(path, &st) != 0 {
+            let missing = errno == ENOENT || errno == ENOTDIR
+            out["reason"] = missing ? "missing" : "unreadable"
+            if missing, folder, let s = match((path as NSString).lastPathComponent, dir) { out["suggest"] = s }
+        } else if st.st_mode & S_IFMT != S_IFREG || !FileTypes.contentType(forPath: path).hasPrefix("image/") {
+            out["reason"] = "unsupported"
+        } else if Int64(st.st_size) > FileTypes.maxImageBytes {
+            out["reason"] = "tooLarge"
+        } else if st.st_flags & 0x4000_0000 != 0 {
+            out["reason"] = "notDownloaded"
+        } else {
+            let fd = open(path, O_RDONLY | O_NONBLOCK)
+            if fd >= 0 { close(fd) }
+            out["reason"] = fd >= 0 ? "ok" : "unreadable"
+        }
+        return out
+    }
+
+    /// The entry of `dir` whose name is `name` but for case, if any; at most maxListed entries are looked at.
+    static func caseMatch(_ name: String, in dir: String) -> String? {
+        caseMatch(name, among: entries(dir))
+    }
+
+    static func entries(_ dir: String) -> [String] {
+        guard let d = opendir(dir) else { return [] }
+        defer { closedir(d) }
+        var names: [String] = []
+        while names.count < maxListed, let e = readdir(d) {
+            names.append(withUnsafePointer(to: e.pointee.d_name) { $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) } })
+        }
+        return names
+    }
+
+    static func caseMatch(_ name: String, among names: [String]) -> String? {
+        let want = name.lowercased()
+        return names.first { $0 != name && $0.lowercased() == want }
+    }
+
+    /// The statuses of `raw` (the page's list of absolute, plain paths) for `doc`, the document on screen; nil for a bad list.
+    func answer(_ raw: Any?, doc: String) -> [String: Any]? {
+        guard let list = raw as? [Any], list.count <= Self.maxPaths else { return nil }
+        if doc != self.doc { reset(); self.doc = doc }
+        var out: [String: Any] = [:]
+        for case let p as String in list where p.utf8.count <= 4096 && p.hasPrefix("/")
+            && URL(fileURLWithPath: p, isDirectory: false).standardizedFileURL.path == p {
+            guard answered.contains(p) || answered.count < Self.maxPerDoc else { break }
+            answered.insert(p)
+            let s = Self.status(p) { name, dir in
+                if self.listed[dir] == nil {
+                    self.listed[dir] = Dictionary(Self.entries(dir).map { ($0.lowercased(), $0) }) { a, _ in a }
+                }
+                return self.listed[dir]?[name.lowercased()].flatMap { $0 == name ? nil : $0 }
+            }
+            out[p] = s
+            let dir = (p as NSString).deletingLastPathComponent
+            if s["folder"] as? Bool == true { folders.insert(dir) }
+            if s["reason"] as? String == "missing" {
+                missing.insert(p)
+                watchNearest(dir)
+            }
+        }
+        return out
+    }
+
+    /// The folder of `path`, when one of `doc`'s answers found it and it is still a folder.
+    func revealable(_ path: String?, doc: String) -> URL? {
+        guard doc == self.doc, let path else { return nil }
+        let dir = (path as NSString).deletingLastPathComponent
+        var st = stat()
+        guard folders.contains(dir), stat(dir, &st) == 0, st.st_mode & S_IFMT == S_IFDIR else { return nil }
+        return URL(fileURLWithPath: dir, isDirectory: true)
+    }
+
+    /// The deepest existing folder on the way to `dir`: a new entry there may be the image, or a folder on its way to it.
+    private func watchNearest(_ dir: String) {
+        var d = dir
+        var st = stat()
+        while d != "/", !(stat(d, &st) == 0 && st.st_mode & S_IFMT == S_IFDIR) { d = (d as NSString).deletingLastPathComponent }
+        guard d != "/", watches[d] == nil, watches.count < Self.maxWatches else { return }
+        watches[d] = FolderWatch(path: d) { [weak self] in self?.changed() }
+    }
+
+    private func changed() {
+        var st = stat()
+        let appeared = missing.filter { stat($0, &st) == 0 }
+        missing.subtract(appeared)
+        for p in missing { watchNearest((p as NSString).deletingLastPathComponent) }
+        if !appeared.isEmpty { onAppeared() }
+    }
+}
+
 /// Which navigations the preview's web view allows: the shell page in the main frame, and no subframe at all (the document's
 /// frames are sanitized away and blocked by the CSP; a PDF is a native view, not a frame).
 enum ShellPolicy {

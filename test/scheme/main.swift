@@ -148,5 +148,49 @@ try! fh.truncate(atOffset: UInt64(FileTypes.maxImageBytes) + 1)
 try! fh.close()
 check("file host: the image read is bounded", (try? SchemeHandler.readImage(big)) == nil && (try? SchemeHandler.readImage(tree.appendingPathComponent("a.png"))) == Data("x".utf8))
 
+// Why a document's image did not load: what the page's placeholder says, and the only folders it may reveal.
+let imgs = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("imgcheck-\(getpid())")
+try! fm.createDirectory(at: imgs.appendingPathComponent("media"), withIntermediateDirectories: true)
+try! Data("x".utf8).write(to: imgs.appendingPathComponent("media/Shot.PNG"))
+try! Data("x".utf8).write(to: imgs.appendingPathComponent("notes.txt"))
+try! Data("x".utf8).write(to: imgs.appendingPathComponent("locked.png"))
+chmod(imgs.appendingPathComponent("locked.png").path, 0)
+try! fm.createDirectory(at: imgs.appendingPathComponent("dir.png"), withIntermediateDirectories: true)
+let ip = { (rel: String) in imgs.appendingPathComponent(rel).path }
+func reason(_ rel: String) -> String? { ImageCheck.status(ip(rel))["reason"] as? String }
+check("image status: missing, with its folder", reason("media/gone.png") == "missing" && ImageCheck.status(ip("media/gone.png"))["folder"] as? Bool == true)
+check("image status: missing, without a folder", reason("nofolder/gone.png") == "missing" && ImageCheck.status(ip("nofolder/gone.png"))["folder"] as? Bool == false)
+check("image status: not an image, or not a file, is unsupported", reason("notes.txt") == "unsupported" && reason("dir.png") == "unsupported")
+check("image status: a file that cannot be opened is unreadable", reason("locked.png") == "unreadable")
+check("image status: a readable image is ok", reason("media/Shot.PNG") == "ok")
+check("image status: a name differing only in case is suggested", ImageCheck.caseMatch("shot.png", in: ip("media")) == "Shot.PNG"
+      && ImageCheck.caseMatch("Shot.PNG", among: ["Shot.PNG"]) == nil && ImageCheck.caseMatch("a.JPG", among: ["b.jpg", "A.jpg"]) == "A.jpg"
+      && ImageCheck.caseMatch("gone.png", in: ip("media")) == nil)
+let ic = ImageCheck()
+let doc = ip("doc.md")
+let ans = ic.answer([ip("media/gone.png"), ip("nofolder/gone.png"), "relative.png", ip("media/../media/gone.png"), 7], doc: doc)
+check("image check: answers absolute, plain paths only", ans.map { Set($0.keys) } == [ip("media/gone.png"), ip("nofolder/gone.png")])
+check("image check: a list too long is refused", ic.answer(Array(repeating: ip("a.png"), count: ImageCheck.maxPaths + 1), doc: doc) == nil)
+check("image check: reveals a folder an answer found, for that document only", ic.revealable(ip("media/x.png"), doc: doc)?.path == ip("media")
+      && ic.revealable(ip("nofolder/x.png"), doc: doc) == nil && ic.revealable("/etc/hosts", doc: doc) == nil
+      && ic.revealable(ip("media/x.png"), doc: ip("other.md")) == nil)
+let many = ImageCheck()
+let first = many.answer((0..<64).map { ip("media/m\($0).png") }, doc: doc)?.count ?? 0
+let more = (1...4).map { k in many.answer((0..<64).map { ip("media/m\(k * 64 + $0).png") }, doc: doc)?.count ?? 0 }
+check("image check: a document's paths are answered up to a bound", first == 64 && more == [64, 64, 64, 0] && ImageCheck.maxPerDoc == 256)
+check("image status: the hint comes from the folder's listing, only for a missing file in an existing folder",
+      ImageCheck.status(ip("media/gone2.png")) { n, _ in n.uppercased() }["suggest"] as? String == "GONE2.PNG"
+      && ImageCheck.status(ip("nofolder/gone2.png")) { n, _ in n.uppercased() }["suggest"] == nil
+      && ImageCheck.status(ip("media/shoot.png"))["suggest"] == nil)
+var appeared = 0
+ic.onAppeared = { appeared += 1 }
+try! Data("x".utf8).write(to: imgs.appendingPathComponent("media/gone.png"))
+spin(1) { appeared > 0 }
+check("image check: a missing image that appears is reported", appeared == 1)
+_ = ic.answer([ip("media/gone.png")], doc: ip("other.md"))
+check("image check: another document forgets the folders", ic.revealable(ip("media/x.png"), doc: doc) == nil)
+chmod(imgs.appendingPathComponent("locked.png").path, 0o644)
+try? fm.removeItem(at: imgs)
+
 print("\n\(failures == 0 ? "all" : "\(failures) FAILED of") scheme checks")
 exit(failures == 0 ? 0 : 1)

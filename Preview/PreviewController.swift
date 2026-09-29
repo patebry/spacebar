@@ -294,6 +294,17 @@ class PreviewController: NSViewController {
     private let loader = FileLoader()
     /// The file on screen shows the info card because it could not be read (Reveal in Finder is allowed for it, Markdown too).
     private var unavailablePath: String?
+    /// Why the document's local images did not load, the folders their placeholders may reveal, and the watch that renders the
+    /// document again when one appears.
+    private lazy var images: ImageCheck = {
+        let c = ImageCheck()
+        c.onAppeared = { [weak self] in
+            guard let self, self.edit == nil, !self.torn, self.fileKind == .markdown, let url = self.fileURL, let text = self.docText,
+                  self.images.doc == url.path else { return }
+            self.push(text: text, path: url.path, reason: "images")
+        }
+        return c
+    }()
     /// Bumped by every write sent: a read that started before a write may hold the bytes the write replaced.
     private var writeEpoch = 0
     /// The file the load in flight reads, while iCloud downloads it: a change event meanwhile waits for that read instead of
@@ -709,6 +720,7 @@ class PreviewController: NSViewController {
         queuedSave = nil
         closePDF()
         host.remoteImages.reset()
+        images.reset()
         fileURL = nil
         fileKind = .other
         quickLookShown = false
@@ -832,6 +844,7 @@ class PreviewController: NSViewController {
         mediaPane?.pause()
         unavailablePath = nil
         host.remoteImages.reset()
+        images.reset()
         showingOverview = false
         folderPending = false
         overviewRequested = false
@@ -1464,6 +1477,18 @@ class PreviewController: NSViewController {
             log.info("remote images loaded once for the previewed file")
             if let e = edit { stopEdit(notifyWriter: true, keepRetired: true); retired.append(e) }
             if let url = fileURL, let text = docText { push(text: text, path: url.path, reason: "remoteImages") }
+        case "imageStatus":
+            // The document's images that failed: why, for their placeholders.
+            guard let url = fileURL, fileKind == .markdown, m.string("doc", max: 4096) == url.path,
+                  let r = images.answer(body["paths"], doc: url.path) else { return refuse("imageStatus", "not the document on screen") }
+            js("sb.imageStatus", ["doc": url.path, "images": r])
+        case "revealImageFolder":
+            // A placeholder's Reveal button: only a folder an answer for this document found.
+            guard let url = fileURL, fileKind == .markdown, m.string("doc", max: 4096) == url.path,
+                  let dir = images.revealable(m.string("path", max: 4096), doc: url.path) else {
+                return refuse("revealImageFolder", "not a folder of this document's images")
+            }
+            helper { $0.reveal(dir) { ok in if !ok { DispatchQueue.main.async { self.status("could not show \(dir.lastPathComponent) in Finder") } } } }
         case "pdfRect":
             // Where the page reserved the PDF's place, in CSS pixels of the viewport; `hide` while the page has something above it.
             if fileKind == .pdf { pdfPane?.place(message: body, in: host.web) }

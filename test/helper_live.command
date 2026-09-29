@@ -4,7 +4,7 @@
 # opens no window; it reads logs, `--helper-status`, `launchctl` and `ioreg`, and makes a scratch folder of test files.
 # Double-click it in Finder, or run it in Terminal:
 #   test/helper_live.command            the whole checklist
-#   test/helper_live.command 7 12       only those steps (numbers as listed below)
+#   test/helper_live.command 7 12       only those steps (numbers as listed below; 14 is Accessibility off and on)
 # After a restart, run it again: it checks that the helper came back by itself first.
 set -uo pipefail
 APP=${SPACEBAR_APP:-$HOME/Applications/spacebar.app}
@@ -178,6 +178,20 @@ if want 12; then
   back=$(( $(date +%s) - swapped ))
   grade "a new helper, trusted, with its tap, $back s after the app was replaced (target about 20 s)" "fresh && [ $back -le 30 ]"
   tail -n 5 "$HOME/Library/Logs/spacebar-helper.log" 2>/dev/null | sed 's/^/    /'
+fi
+
+if want 14; then
+  bold "14. Accessibility turned off, then on again"
+  echo "  In System Settings, Privacy & Security, Accessibility, turn off spacebar Helper. Wait 5 s, then press Space on a file"
+  echo "  in Finder (Apple's Quick Look should open; close it)."
+  mark; wait_done
+  grade "the helper removed its tap" "since | grep -q 'tap off: Accessibility revoked'"
+  grade "--helper-status says trusted=false tap=false" "status | grep -q 'trusted=false tap=false'"
+  grade "spacebar's panel did not open" "[ $(count 'space show') = 0 ]"
+  echo "  Turn spacebar Helper back on. Wait 5 s."
+  mark; wait_done
+  grade "a new tap" "since | grep -q 'tap on'"
+  grade "--helper-status says trusted=true tap=true" "status | grep -q 'trusted=true tap=true'"
 fi
 
 if want 13; then

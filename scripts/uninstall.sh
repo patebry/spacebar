@@ -5,7 +5,8 @@
 #
 # Stops the Space helper and quits its viewer, resets the permissions macOS keeps for them, quits
 # ~/Applications/spacebar.app, unregisters its Quick Look extensions, and deletes it. Settings in
-# ~/Library/Application Support/spacebar and the viewer's container are kept unless you pass --purge. Safe to run more
+# ~/Library/Application Support/spacebar and the helper's log are kept unless you pass --purge; sandbox containers are
+# listed, not deleted. Safe to run more
 # than once.
 set -eu
 
@@ -20,8 +21,8 @@ Remove spacebar from ~/Applications.
 
 usage: uninstall.sh [--purge] [--dry-run] [--no-register] [--help]
 
-  --purge        also delete your settings and themes in ~/Library/Application Support/spacebar, and the Space
-                 helper viewer's container in ~/Library/Containers/md.spacebar.viewer
+  --purge        also delete your settings and themes in ~/Library/Application Support/spacebar and the Space
+                 helper's log in ~/Library/Logs; sandbox containers are listed for you to delete
   --dry-run      print what would change without changing anything
   --no-register  delete files only: skip quitting, launchctl, tccutil, pluginkit, lsregister and qlmanage
                  (or set SPACEBAR_SKIP_REGISTER=1)
@@ -136,14 +137,14 @@ else
 fi
 
 if [ "$PURGE" = 1 ]; then
-  for dir in "$SUPPORT" "$LEGACY_SUPPORT" "$HOME/Library/Containers/$VIEWER_ID"; do
+  for dir in "$SUPPORT" "$LEGACY_SUPPORT" "$HOME/Library/Logs/spacebar-helper.log" "$HOME/Library/Logs/spacebar-helper.lock"; do
     if [ -e "$dir" ]; then
       run rm -rf "$dir"
       [ "$DRY_RUN" = 1 ] || say "Removed $dir"
     fi
   done
   # Deleting another app's sandbox container makes macOS ask for permission, so it is left to you.
-  for id in md.spacebar.preview md.spacebar.preview.folders; do
+  for id in md.spacebar.preview md.spacebar.preview.folders "$VIEWER_ID"; do
     if [ -e "$HOME/Library/Containers/$id" ]; then
       say "Left the sandbox container ~/Library/Containers/$id; delete it in Finder if you like."
     fi

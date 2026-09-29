@@ -33,8 +33,8 @@ enum HelperIDs {
 @objc(SpacebarViewerProtocol) protocol SpacebarViewerProtocol {
     /// Show `paths` (Finder's selection). The reply only acknowledges; a decline comes back through `declined`.
     func show(_ paths: [String], requestID: Int, reply: @escaping (Bool) -> Void)
-    /// A key the helper took from Finder while the panel is open (`HelperKeys`), with `HelperMods` bits.
-    func key(_ name: String, isRepeat: Bool, mods: Int)
+    /// A key the helper took from Finder while the panel is open, by its name in `HelperKeys`.
+    func key(_ name: String, isRepeat: Bool)
     func close()
     /// Another app came forward: the panel is ordered out, keeping what it shows for `restore`.
     func suspend()
@@ -82,6 +82,10 @@ extension HelperState {
     static func shouldReregister(enabled: Bool, agent: Agent, answering: Bool, misses: Int) -> Bool {
         enabled && agent == .enabled && !answering && misses >= missesBeforeReregister
     }
+
+    /// Whether the settings app registers the agent at launch: the setting is on but the agent is not registered, as after a
+    /// reinstall that kept the settings. One waiting for approval in Login Items is left to the user.
+    static func registersAtLaunch(enabled: Bool, agent: Agent) -> Bool { enabled && agent == .notRegistered }
 }
 
 /// Names of the keys the helper routes to the viewer while its panel is open.

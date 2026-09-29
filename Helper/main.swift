@@ -41,6 +41,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private let listener = NSXPCListener(machServiceName: HelperIDs.machService)
     private var settings = SettingsFile.load()
     private(set) var tap: CFMachPort?
+    private var tapSource: CFRunLoopSource?
     private var route = KeyRoute()
     private var viewer: NSXPCConnection?
     private var viewerPid: pid_t = 0
@@ -98,7 +99,11 @@ final class Helper: NSObject, NSXPCListenerDelegate {
             return
         }
         settings = s
-        if tap == nil, AXIsProcessTrusted() { createTap() }
+        switch Decision.tapAction(exists: tap != nil, trusted: AXIsProcessTrusted()) {
+        case .create: createTap()
+        case .remove: removeTap()
+        case .none: break
+        }
         if tap != nil { ensureViewer() }
         if tap != nil, observer == nil { observeFinder() }
         // The viewer gives up on a show after 4 s; one it never answered for is closed here.
@@ -129,7 +134,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
 
     func status() -> HelperStatus {
         HelperStatus(pid: getpid(), version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "",
-                     enabled: settings.spaceHelper, trusted: AXIsProcessTrusted(), tap: tap != nil, viewer: viewer != nil)
+                     enabled: settings.spaceHelper, trusted: AXIsProcessTrusted(), tap: tap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false, viewer: viewer != nil)
     }
 
     // MARK: Connections
@@ -237,9 +242,24 @@ final class Helper: NSObject, NSXPCListenerDelegate {
             return log.error("tap create failed")
         }
         tap = port
-        CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0), .commonModes)
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
+        tapSource = source
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: port, enable: true)
         log.info("tap on")
+    }
+
+    /// Accessibility was revoked: the tap goes, the panel closes, and a new tap is made if it is granted again.
+    private func removeTap() {
+        guard let port = tap else { return }
+        CGEvent.tapEnable(tap: port, enable: false)
+        if let tapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), tapSource, .commonModes) }
+        CFMachPortInvalidate(port)
+        tap = nil
+        tapSource = nil
+        route.release()
+        close("accessibility revoked")
+        log.error("tap off: Accessibility revoked")
     }
 
     private static func keyEvent(_ event: CGEvent, down: Bool) -> KeyEvent {
@@ -261,9 +281,14 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         let pass = Unmanaged.passUnretained(event)
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             route.release()
-            log.error("tap re-enabled (\(type == .tapDisabledByTimeout ? "timeout" : "user input", privacy: .public))")
+            let why = type == .tapDisabledByTimeout ? "timeout" : "user input"
+            guard let tap, Decision.reenablesTap(trusted: AXIsProcessTrusted()) else {
+                log.error("tap disabled (\(why, privacy: .public)), Accessibility not granted: not re-enabled")
+                return pass
+            }
+            CGEvent.tapEnable(tap: tap, enable: true)
+            log.error("tap re-enabled (\(why, privacy: .public))")
             return pass
         }
         guard type == .keyDown || type == .keyUp else { return pass }
@@ -283,7 +308,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
             close("key")
             return nil
         case .forward(let name):
-            viewerProxy()?.key(name, isRepeat: e.isRepeat, mods: e.mods.rawValue)
+            viewerProxy()?.key(name, isRepeat: e.isRepeat)
             return nil
         case .space:
             return space() ? nil : pass

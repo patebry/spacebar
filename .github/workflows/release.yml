@@ -101,6 +101,40 @@ jobs:
           shasum -a 256 spacebar.zip > spacebar.zip.sha256
           cat spacebar.zip.sha256
 
+      # From v0.3 a release ships only notarized and stapled: without the credentials, or if Apple refuses the build, the
+      # release fails here. Earlier tags skip this. The credentials, Developer ID signing and the .dmg come with P6.
+      - name: Notarize (v0.3 and later)
+        env:
+          NOTARY_KEY: ${{ secrets.SPACEBAR_NOTARY_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.SPACEBAR_NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.SPACEBAR_NOTARY_ISSUER }}
+        run: |
+          v=${GITHUB_REF_NAME#v}
+          if [ "$(printf '0.3.0\n%s\n' "$v" | sort -V | head -1)" != 0.3.0 ]; then
+            echo "$GITHUB_REF_NAME is before v0.3: not notarized"
+            exit 0
+          fi
+          if [ -z "$NOTARY_KEY" ] || [ -z "$NOTARY_KEY_ID" ] || [ -z "$NOTARY_ISSUER" ]; then
+            echo "::error title=Not notarized::$GITHUB_REF_NAME needs SPACEBAR_NOTARY_KEY, SPACEBAR_NOTARY_KEY_ID and SPACEBAR_NOTARY_ISSUER: from v0.3 every release is notarized"
+            exit 1
+          fi
+          key="$RUNNER_TEMP/notary.p8"
+          printf '%s' "$NOTARY_KEY" > "$key"
+          xcrun notarytool submit build/spacebar.zip --key "$key" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" \
+            --wait --output-format json > "$RUNNER_TEMP/notary.json"
+          rm -f "$key"
+          cat "$RUNNER_TEMP/notary.json"
+          status=$(plutil -extract status raw -o - "$RUNNER_TEMP/notary.json" 2>/dev/null || true)
+          [ "$status" = Accepted ] || { echo "::error title=Not notarized::notarytool status: ${status:-none}"; exit 1; }
+          xcrun stapler staple build/spacebar.app
+          xcrun stapler validate build/spacebar.app
+          # The zip is made again from the stapled app, and its checksum with it.
+          cd build
+          rm -f spacebar.zip spacebar.zip.sha256
+          ditto -c -k --keepParent spacebar.app spacebar.zip
+          shasum -a 256 spacebar.zip > spacebar.zip.sha256
+          cat spacebar.zip.sha256
+
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

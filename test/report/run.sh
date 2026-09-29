@@ -55,10 +55,13 @@ check "neither matches a copy of spacebar installed elsewhere" sh -c "$(declare 
 check "without --dry-run the same patterns are used" grep -q 'pkill -f "\${viewer}Contents/XPCServices/"' scripts/uninstall.sh
 check "--no-register leaves launchd and TCC alone" sh -c "! (HOME='$home' sh scripts/uninstall.sh --dry-run --no-register </dev/null 2>&1 | grep -qe launchctl -e tccutil)"
 check "the uninstaller never resets Background Task Management" sh -c "! grep -q sfltool scripts/uninstall.sh"
-mkdir -p "$home/Library/Containers/md.spacebar.viewer" "$home/Library/Containers/md.spacebar.preview"
-check "--purge also removes the viewer's container, and only that container" \
-  test "$(removed --purge)" = "$(printf '%s\n%s\n%s' "$app" "$support" "$home/Library/Containers/md.spacebar.viewer")"
-check "without --purge the viewer's container stays" test "$(removed)" = "$app"
+mkdir -p "$home/Library/Containers/md.spacebar.viewer" "$home/Library/Containers/md.spacebar.preview" "$home/Library/Logs"
+touch "$home/Library/Logs/spacebar-helper.log" "$home/Library/Logs/spacebar-helper.lock" "$home/Library/Logs/other.log"
+check "--purge also removes the helper's log and lock, and no container" \
+  test "$(removed --purge)" = "$(printf '%s\n%s\n%s\n%s' "$app" "$support" "$home/Library/Logs/spacebar-helper.log" "$home/Library/Logs/spacebar-helper.lock")"
+check "--purge lists the viewer's container and the extension's for you to delete" \
+  sh -c "dry=\$(HOME='$home' sh scripts/uninstall.sh --dry-run --purge </dev/null 2>&1); for id in md.spacebar.viewer md.spacebar.preview; do printf '%s\n' \"\$dry\" | grep -qx \"Left the sandbox container ~/Library/Containers/\$id; delete it in Finder if you like.\" || exit 1; done"
+check "without --purge the log and the containers stay" test "$(removed)" = "$app"
 # Run from a private copy in a spacebar-update-* folder of TMPDIR, as the settings window starts it: the copy removes itself,
 # and only with the marker. A dry run against the scratch HOME touches nothing else.
 tmpd="$out/tmp"; mkdir -p "$tmpd/spacebar-update-self" "$tmpd/spacebar-update-kept"

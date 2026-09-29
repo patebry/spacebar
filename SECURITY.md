@@ -66,14 +66,14 @@ drive Finder.
 
 | | `spacebar Helper.app` (`md.spacebar.helper`) | `spacebar Viewer.app` (`md.spacebar.viewer`) |
 |---|---|---|
-| Runs as | a launchd agent, started at login | a floating panel, started by the helper when needed; exits after 30 minutes closed |
+| Runs as | a launchd agent, started at login | a floating panel the helper keeps running while it is on: after 30 minutes closed it exits and the helper starts a fresh one, so it is recycled, never stopped |
 | Holds | Accessibility and an active event tap | the preview extension's sandbox and exactly its entitlements, plus the lookup of the helper's one Mach service |
 | Sandbox, entitlements | none and none, under the hardened runtime | sandboxed, under the hardened runtime, with its own unsandboxed writer as the extension has |
 | Code | its own few files and the settings reader; none of the file-reading code, no WebKit (the claims test checks the binary's symbols and libraries) | the preview extension's code, reused |
 | Touches files | never: it reads Finder's focus and selection through Accessibility and passes paths on | reads and renders them, as the extension does |
 | Keys | sees them all | only the key names the helper sends it |
 
-A renderer exploit in the viewer gets what a Quick Look extension exploit gets today, plus a process that stays alive a while;
+A renderer exploit in the viewer gets what a Quick Look extension exploit gets today, plus a process that is always running;
 it gets no key events and no Accessibility.
 
 **The XPC gate.** The helper's Mach service, `md.spacebar.helper`, admits only the viewer and the settings app:
@@ -112,7 +112,7 @@ refused.
 **No key characters leave the helper.** The tap reads a key's code and modifier flags. It reads the character only for a
 key pressed with ⌘, to tell ⌘W, ⌘., ⌘O, ⌘F and the zoom keys apart, and keeps it in that one event. What crosses to the
 viewer is a name from a fixed list (`up`, `down`, `left`, `right`, `home`, `end`, `pageup`, `pagedown`, `return`, `open`,
-`find`, `zoomIn`, `zoomOut`, `zoomReset`), a repeat flag and modifier bits; the viewer drops any other name. The helper logs
+`find`, `zoomIn`, `zoomOut`, `zoomReset`), and a repeat flag; the viewer drops any other name. The helper logs
 decisions and timings, never a key.
 
 **Secure input.** While a password field or another app has secure input on, macOS sends no key events to event taps, so the
@@ -122,7 +122,8 @@ helper sees nothing and Space reaches Finder's own Quick Look. Settings, General
 
 - The helper sees every key event while it runs. It is kept small and acts on few keys, but a bug in it is a bug in a
   process with Accessibility.
-- A compromised viewer has what the Quick Look extension has, plus a process that stays alive while the panel is in use.
+- A compromised viewer has what the Quick Look extension has, plus a process that runs for as long as the helper is on (a
+  fresh one every 30 minutes the panel stays closed).
 - The signing key now also gates Accessibility: whoever holds it can build a viewer the helper trusts, and a helper that
   inherits the Accessibility grant. It lives only in CI secrets. Until the Developer ID release, the certificate is
   self-signed, so macOS pins the helper's launch constraint to its code hash rather than to a Team ID.
@@ -131,5 +132,5 @@ helper sees nothing and Space reaches Finder's own Quick Look. Settings, General
 
 **Turning it off and removing it.** Turning the setting off unregisters the agent, and the helper exits. The uninstaller
 boots the agent out, quits the helper, the viewer and the viewer's writer, resets the helper's Accessibility grant and every
-permission of the viewer's (`tccutil reset`), and with `--purge` deletes the viewer's container; `test/report/run.sh` checks
+permission of the viewer's (`tccutil reset`), and with `--purge` deletes the helper's log and lists the viewer's container for you to delete (macOS asks before one app deletes another's); `test/report/run.sh` checks
 each step of its dry run.

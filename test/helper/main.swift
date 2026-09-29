@@ -238,6 +238,11 @@ check("state: trusted, tap not up yet, is starting", HelperState.of(enabled: tru
 check("state: secure input on", HelperState.of(enabled: true, agent: .enabled, helper: up, secureInput: true) == .secureInput)
 check("state: on", HelperState.of(enabled: true, agent: .enabled, helper: up, secureInput: false) == .on)
 
+check("launch: the setting on and the agent not registered (a reinstall that kept settings) registers it",
+      HelperState.registersAtLaunch(enabled: true, agent: .notRegistered))
+check("launch: never with the setting off, nor for an agent waiting in Login Items or already registered",
+      !HelperState.registersAtLaunch(enabled: false, agent: .notRegistered) && !HelperState.registersAtLaunch(enabled: true, agent: .requiresApproval)
+      && !HelperState.registersAtLaunch(enabled: true, agent: .enabled))
 check("reregister: on, registered, three silent polls", HelperState.shouldReregister(enabled: true, agent: .enabled, answering: false, misses: 3))
 check("reregister: not before three polls", !HelperState.shouldReregister(enabled: true, agent: .enabled, answering: false, misses: 2))
 check("reregister: never while it answers", !HelperState.shouldReregister(enabled: true, agent: .enabled, answering: true, misses: 9))
@@ -247,6 +252,13 @@ check("reregister: never while Login Items blocks it or it is not registered (th
 
 check("requirement: pins the injection entitlements out", HelperSigning.requirement(identifiers: ["a"], leaf: "AB").hasSuffix(
     #" and !entitlement["com.apple.security.cs.allow-dyld-environment-variables"] exists and !entitlement["com.apple.security.cs.disable-library-validation"] exists"#))
+
+check("tap: made once Accessibility is granted", Decision.tapAction(exists: false, trusted: true) == .create)
+check("tap: none while Accessibility is not granted", Decision.tapAction(exists: false, trusted: false) == .none)
+check("tap: kept while granted", Decision.tapAction(exists: true, trusted: true) == .none)
+check("tap: removed once Accessibility is revoked", Decision.tapAction(exists: true, trusted: false) == .remove)
+check("tap: a disabled tap is enabled again only while Accessibility is granted",
+      Decision.reenablesTap(trusted: true) && !Decision.reenablesTap(trusted: false))
 
 print(failures == 0 ? "\nall helper checks passed (\(recorded.count) recorded contexts)" : "\n\(failures) helper checks failed")
 exit(failures == 0 ? 0 : 1)

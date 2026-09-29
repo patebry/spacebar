@@ -2,7 +2,7 @@ import AppKit
 
 /// Uninstall from the settings window: the app's own copy of scripts/uninstall.sh, started detached like the one-click update,
 /// then the app quits (the script quits it anyway). The script removes only ~/Applications/spacebar.app, its Quick Look
-/// registrations and the Space helper's agent and permissions, and with --purge the settings folder and the viewer's container.
+/// registrations and the Space helper's agent and permissions, and with --purge the settings folder and the helper's log.
 enum Uninstall {
     static var home: URL { URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true) }
     static var installed: URL { home.appendingPathComponent("Applications/spacebar.app") }

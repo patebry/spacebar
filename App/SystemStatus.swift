@@ -133,6 +133,11 @@ final class SystemStatus: ObservableObject {
         guard settings.spaceHelper, HelperAgent.available else { return }
         helperQueue.async {
             let agent = HelperAgent.agent
+            if HelperState.registersAtLaunch(enabled: settings.spaceHelper, agent: agent) {
+                _ = HelperAgent.register()
+                DispatchQueue.main.async { self.pollHelper() }
+                return
+            }
             let answering = agent == .enabled && HelperAgent.ask(timeout: 3) != nil
             guard HelperState.shouldReregister(enabled: settings.spaceHelper, agent: agent, answering: answering, misses: answering ? 0 : HelperState.missesBeforeReregister) else { return }
             DispatchQueue.main.async { self.reregister() }

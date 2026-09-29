@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Produced test/helper/contexts.json (the helper routing test's recorded Finder contexts); kept to regenerate it.
 """Converts the Space decisions the helper spike logged live (~/Library/Logs/SpacebarHelperSpike.log, one `space` line per Space
 pressed) into test/helper/contexts.json: what the AX reads found, and what the spike decided. Paths are replaced by placeholders.
 Every Finder context is kept; other apps once each. The icon and gallery rows are told apart by the order the test script ran

@@ -277,7 +277,7 @@ for i in 0..<(runs * 2) {
     let target = walk.appendingPathComponent(walkNames[next])
     painted.last = nil
     let t0 = now()
-    DispatchQueue.global(qos: .userInteractive).async { viewer.key(down ? "down" : "up", isRepeat: false, mods: 0) }
+    DispatchQueue.global(qos: .userInteractive).async { viewer.key(down ? "down" : "up", isRepeat: false) }
     var got: UInt64?
     spin(until: 3) {
         if got == nil, let p = painted.last, p.path == target.path {

@@ -137,7 +137,7 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
         }
     }
 
-    func key(_ name: String, isRepeat: Bool, mods: Int) {
+    func key(_ name: String, isRepeat: Bool) {
         guard HelperKeys.all.contains(name) else { return }
         DispatchQueue.main.async { if self.open { self.route(name, isRepeat: isRepeat) } }
     }

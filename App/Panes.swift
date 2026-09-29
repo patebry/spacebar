@@ -743,7 +743,7 @@ struct AdvancedPane: View {
             .padding(.leading, 4)
             Toggle(isOn: $purge) {
                 Text("Also delete my settings and themes")
-                Text("~/Library/Application Support/spacebar (and spacebar.md there from older versions), and the helper's viewer container").font(.caption).foregroundStyle(.secondary)
+                Text("~/Library/Application Support/spacebar (and spacebar.md there from older versions), and the Space helper's log").font(.caption).foregroundStyle(.secondary)
             }
             .toggleStyle(.checkbox)
             Text("Nothing else is touched: your files stay where they are. What the uninstaller did is written to ~/Library/Logs/spacebar-uninstall.log.")

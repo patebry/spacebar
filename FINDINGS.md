@@ -388,7 +388,7 @@ replaced panel shows and that a PDF keeps its page; `test/helper_live.command` w
 **The live checklist.** `test/helper_live.command` runs in Terminal while you use Finder: Finder's four views and the
 Desktop, rename and search keeping their Space, one-press Space and Esc, the sidebar's arrows, multi-select, hide and
 restore, a `.dmg`, camera RAW when there is a file, ⌘Y, secure input, the helper back after an update, and after a restart.
-It tails the helper's, viewer's and preview's logs (`log stream`, subsystem `md.spacebar`) and grades each step from them,
+Its step 14 turns Accessibility off and on: the helper removes its tap once the grant is gone (it re-enables a tap macOS disabled only while Accessibility is granted) and makes a new one when it is back, within its 2 s check; `--helper-status` reports whether the tap is enabled, not only whether it exists. It tails the helper's, viewer's and preview's logs (`log stream`, subsystem `md.spacebar`) and grades each step from them,
 asking you only what the logs cannot show. It sends no input itself.
 
 ## Open questions

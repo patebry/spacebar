@@ -64,10 +64,11 @@ sidebar:
 | You press Space in Finder on | Without it | With it |
 |---|---|---|
 | Markdown, folders, code, JSON, YAML, XML, logs, archives, `.dmg`, files with no extension | spacebar, inside Quick Look | spacebar's own panel |
-| Plain text, CSV, HTML, rich text | Apple's preview | spacebar's panel (HTML with its scripts off) |
+| Plain text, CSV, HTML, rich text (`.rtf`) | Apple's preview | spacebar's panel (HTML with its scripts off) |
 | PDF, images (HEIC and camera RAW too), video, audio | Apple's preview | spacebar's panel |
-| Office, iWork, fonts, 3D, certificates, calendars, e-books | Apple's preview | Apple's preview, inside spacebar's panel |
-| Apps and other packages | Apple's preview | Apple's preview (spacebar hands them back) |
+| Office, iWork saved as a single file, fonts, 3D, certificates, calendars, e-books | Apple's preview | Apple's preview, inside spacebar's panel |
+| Installers and binaries as single files (`.pkg`, `.mpkg`, `.exe`, `.dylib`) | Apple's preview | spacebar's info card |
+| Apps and other packages, iWork documents saved as packages, `.rtfd` packages | Apple's preview | Apple's preview: spacebar declines them and hands the Space back to Finder |
 | Several files at once | Quick Look, one at a time | spacebar's panel, with a sidebar of just those files |
 
 With it on:
@@ -209,12 +210,16 @@ This stops the Space helper (its launchd agent, then the helper, the viewer and 
 Accessibility permission the helper had and every permission the viewer had, unregisters spacebar's Quick Look extensions and
 deletes `~/Applications/spacebar.app`, which takes its Login Items entry with it. **Uninstall spacebar…** in Settings, Advanced, runs the same
 script from inside the app (not while an update runs), after removing the helper from Login Items. Both quit spacebar's
-Quick Look extensions first. To also delete your settings and themes in `~/Library/Application Support/spacebar`, and the
-viewer's container in `~/Library/Containers/md.spacebar.viewer`:
+Quick Look extensions first. To also delete your settings and themes in `~/Library/Application Support/spacebar` and the
+helper's log in `~/Library/Logs`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh -s -- --purge
 ```
+
+macOS asks before one app deletes another's sandbox container, so the uninstaller lists the containers spacebar leaves in
+`~/Library/Containers` (`md.spacebar.preview`, `md.spacebar.preview.folders`, `md.spacebar.viewer`) for you to delete in
+Finder.
 
 ## Build from source
 

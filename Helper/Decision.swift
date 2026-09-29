@@ -98,6 +98,14 @@ enum Decision {
     /// An app came forward. Another app hides an open panel, as it hides Apple's Quick Look, and closes a show still on its way;
     /// Finder brings a hidden panel back within `suspendLimit`. The panel brought back is a show like any other: pending, it
     /// holds the closing and list keys as a Space's show does, and keeps them only once `panelOpened` accepts it.
+    static func tapAction(exists: Bool, trusted: Bool) -> TapAction {
+        exists ? (trusted ? .none : .remove) : (trusted ? .create : .none)
+    }
+
+    /// A tap macOS disabled (a timeout, or user input such as Accessibility being turned off) is enabled again only while
+    /// Accessibility is still granted; otherwise the watch removes it.
+    static func reenablesTap(trusted: Bool) -> Bool { trusted }
+
     static func activated(isFinder: Bool, open: Bool, pending: Bool, suspendedFor age: TimeInterval?) -> ActivationAction {
         if !isFinder { return pending ? .close : open ? .suspend : .none }
         guard let age, !open, !pending else { return .none }
@@ -116,6 +124,10 @@ enum Decision {
 enum FailAction: Equatable { case leave, close, closeAndRepost }
 
 enum ActivationAction: Equatable { case none, close, suspend, restore, forget }
+
+/// What the watch does with the event tap: made once Accessibility is granted, torn down once it is revoked.
+enum TapAction: Equatable { case none, create, remove }
+
 
 enum PanelGate: Equatable { case accept, notPending, retry, fail }
 

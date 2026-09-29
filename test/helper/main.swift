@@ -14,7 +14,7 @@ func describe(_ d: SpaceDecision) -> String { if case .show = d { return "show" 
 // MARK: recorded contexts
 
 struct Recorded: Decodable {
-    let label: String, id: Int, front: String, role: String?, subrole: String?, ql: Bool, errs: [String], latencyMs: Double
+    let label: String, id: Int, front: String, target: String, role: String?, subrole: String?, ql: Bool, errs: [String], latencyMs: Double
     let selection: [String], expect: String
 }
 let recorded = try! JSONDecoder().decode([Recorded].self, from: Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[1])))
@@ -24,6 +24,9 @@ for r in recorded {
     let d = Decision.space(c)
     check("recorded \(r.label) (space \(r.id)): \(r.expect)", describe(d) == r.expect, describe(d))
     if case .show(let p) = d { check("recorded \(r.label) (space \(r.id)): shows the whole selection", p == r.selection) }
+    var k = KeyRoute()
+    let routed = k.route(KeyEvent(code: KeyCode.space, targetPid: r.target == "finder" ? 583 : 1526), panel: PanelContext(open: false, finderPid: 583, viewerPid: 900))
+    check("recorded \(r.label) (space \(r.id)): its target pid \(r.target == "finder" ? "asks for" : "skips") the AX read", routed == (r.target == "finder" ? .space : .pass))
 }
 let labels = Set(recorded.map { $0.label.hasPrefix("other app") ? "other app" : $0.label })
 check("recorded: every context the spike covered", labels.isSuperset(of: ["list", "icon", "column", "gallery", "desktop", "rename", "search", "qlopen", "other app"]),
@@ -69,7 +72,8 @@ for (m, n) in [(HelperMods.command, "⌘"), (.shift, "⇧"), (.option, "⌥"), (
 check("closed: the helper's own re-posted Space passes", routeOnce(key(KeyCode.space, tagged: true), closed) == .pass)
 check("closed: Esc, arrows and Return pass", [KeyCode.escape, KeyCode.down, KeyCode.up, KeyCode.returnKey].allSatisfy { routeOnce(key($0), closed) == .pass })
 check("closed: a key-up nobody took passes", routeOnce(key(KeyCode.space, down: false), closed) == .pass)
-check("closed: Space to another app still asks (Decision says not-finder)", routeOnce(key(KeyCode.space, to: 1526), closed) == .space)
+check("closed: Space to another process (a launcher's panel over Finder) passes", routeOnce(key(KeyCode.space, to: 1526), closed) == .pass)
+check("closed: Space with no target pid passes", routeOnce(key(KeyCode.space, to: 0), PanelContext(open: false, finderPid: 0, viewerPid: 0)) == .pass)
 
 // A Space that opened the panel: its repeats and its key-up never reach Finder.
 var r = KeyRoute()
@@ -127,6 +131,13 @@ for (code, n) in [(KeyCode.space, "Space"), (KeyCode.escape, "Esc"), (KeyCode.do
 check("open, writer has the keys: ⌘W passes", routeOnce(key(13, "w", mods: .command, to: writer), open) == .pass)
 check("open, no viewer pid: a target of 0 is not the viewer", routeOnce(key(KeyCode.down, to: 0), PanelContext(open: true, finderPid: finder, viewerPid: 0)) == .pass)
 
+// Finder's focus in a text field while the panel is open: a rename or the search field keeps its keys.
+let typing = PanelContext(open: true, finderPid: finder, viewerPid: viewer, textFocus: true)
+for (code, n) in [(KeyCode.space, "Space"), (KeyCode.escape, "Esc"), (KeyCode.down, "↓"), (KeyCode.returnKey, "Return")] {
+    check("open, Finder text field focused: \(n) passes", routeOnce(key(code), typing) == .pass)
+}
+check("open, Finder text field focused: keys to the viewer are still routed", routeOnce(key(KeyCode.down, to: viewer), typing) == .forward("down"))
+
 // sidebarKeys off: the arrows move Finder's selection, and the helper follows it.
 let noSidebar = PanelContext(open: true, finderPid: finder, viewerPid: viewer, sidebarKeys: false)
 for code in [KeyCode.up, KeyCode.down, KeyCode.left, KeyCode.right] {
@@ -146,6 +157,13 @@ check("held: its key-up is swallowed", h.route(key(KeyCode.down, down: false), p
 var g = KeyRoute()
 _ = g.route(key(KeyCode.down), panel: open)
 check("held: a routed arrow's repeat after the panel closed is swallowed", g.route(key(KeyCode.down, rep: true), panel: closed) == .swallow)
+var m = KeyRoute()
+_ = m.route(key(KeyCode.escape), panel: open)
+check("held: a fresh press after a missed key-up is routed, not swallowed", m.route(key(KeyCode.escape), panel: closed) == .pass)
+var n = KeyRoute()
+_ = n.route(key(KeyCode.down), panel: open)
+n.release()
+check("held: release forgets held keys (the tap was off)", n.held.isEmpty && n.route(key(KeyCode.down, down: false), panel: closed) == .pass)
 check("held: nothing stays held after the key-ups", { var k = KeyRoute(); _ = k.route(key(KeyCode.escape), panel: open); _ = k.route(key(KeyCode.escape, down: false), panel: closed); return k.held.isEmpty }())
 
 print(failures == 0 ? "\nall helper checks passed (\(recorded.count) recorded contexts)" : "\n\(failures) helper checks failed")

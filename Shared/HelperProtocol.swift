@@ -19,8 +19,8 @@ enum HelperIDs {
 @objc(SpacebarHelperProtocol) protocol SpacebarHelperProtocol {
     /// Viewer: it is up and takes `show`, `key` and `close` on this connection.
     func hello(reply: @escaping (Bool) -> Void)
-    /// Viewer: its panel opened or closed.
-    func panelState(_ open: Bool, windowNumber: Int)
+    /// Viewer: its panel opened (showing `requestID`) or closed.
+    func panelState(_ open: Bool, requestID: Int, windowNumber: Int)
     /// Viewer: it will not show request `requestID`; Apple's Quick Look gets the Space instead.
     func declined(_ requestID: Int)
     /// Settings app: `HelperStatus` as JSON.

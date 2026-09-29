@@ -54,13 +54,15 @@ enum HelperAgent {
         c.resume()
         defer { c.invalidate() }
         let done = DispatchSemaphore(value: 0)
+        let lock = NSLock()
         var out: HelperStatus?
         let proxy = c.remoteObjectProxyWithErrorHandler { _ in done.signal() } as? SpacebarHelperProtocol
         proxy?.status { data in
-            out = try? JSONDecoder().decode(HelperStatus.self, from: data)
+            lock.lock(); out = try? JSONDecoder().decode(HelperStatus.self, from: data); lock.unlock()
             done.signal()
         }
         _ = done.wait(timeout: .now() + timeout)
+        lock.lock(); defer { lock.unlock() }
         return out
     }
 }

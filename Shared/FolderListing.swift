@@ -645,6 +645,7 @@ enum FolderListing {
     /// The Markdown file a folder preview opens on when the folder itself holds one: its README, else its first Markdown file in
     /// the sidebar's order. Nil sends the preview to FolderScan.
     /// `l` with only the entries named in `names`: the sidebar of a multiple selection, which moves among the selected items.
+    /// Entries past the listing's caps are not in `l` (but for the pinned file on screen).
     static func only(_ l: Listing, names: Set<String>) -> Listing {
         Listing(dir: l.dir, entries: l.entries.filter { names.contains($0.name) }, more: 0)
     }

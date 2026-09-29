@@ -157,6 +157,11 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
             panel.orderFrontRegardless()
         }
         controller.start(selection: urls, reason: "space")
+        // The controller reports ready within 3 s even for a slow file; past that something is stuck, and Apple takes over.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            guard let self, self.request == id, !self.open else { return }
+            self.decline(id, "not ready in 4 s")
+        }
     }
 
     private func ready(_ id: Int) {
@@ -166,7 +171,7 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
         panel.ignoresMouseEvents = false
         open = true
         controller.hostAppeared()
-        helper()?.panelState(true, windowNumber: panel.windowNumber)
+        helper()?.panelState(true, requestID: id, windowNumber: panel.windowNumber)
     }
 
     private func decline(_ id: Int, _ why: String) {
@@ -182,7 +187,7 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
         let was = open || panel.isVisible
         open = false
         panel.orderOut(nil)
-        if tell && was { helper()?.panelState(false, windowNumber: 0) }
+        if tell && was { helper()?.panelState(false, requestID: 0, windowNumber: 0) }
         armIdle()
     }
 

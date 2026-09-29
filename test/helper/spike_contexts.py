@@ -25,6 +25,7 @@ for line in open(LOG, encoding='utf-8'):
         label = ctx.split('.', 1)[1]
     expect = 'show' if f['decision'] == 'would-swallow' else 'pass:' + f['reason']
     out.append({'label': label, 'id': int(f['id']), 'front': 'finder' if f['front'] == 'com.apple.finder' else 'other',
+                'target': 'finder' if f['tgt'] == 'com.apple.finder' else 'other',
                 'role': None if f['role'] == '-' else f['role'], 'subrole': None if f['sub'] == '-' else f['sub'],
                 'ql': f['ql'] == '1', 'errs': [] if f['errs'] == '-' else f['errs'].split(','),
                 'latencyMs': float(f['latency'].rstrip('ms')), 'selection': [f'/Users/u/sel{i}' for i in range(int(f['n']))],

@@ -6,7 +6,7 @@ final class Stub: NSObject, SpacebarHelperProtocol {
     let role: Link.Role
     init(role: Link.Role) { self.role = role }
     func hello(reply: @escaping (Bool) -> Void) { reply(role == .viewer) }
-    func panelState(_ open: Bool, windowNumber: Int) {}
+    func panelState(_ open: Bool, requestID: Int, windowNumber: Int) {}
     func declined(_ requestID: Int) {}
     func status(reply: @escaping (Data) -> Void) {
         let s = HelperStatus(pid: getpid(), version: role == .viewer ? "viewer" : "app", enabled: true, trusted: false, tap: false, viewer: false)

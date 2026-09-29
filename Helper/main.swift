@@ -14,9 +14,9 @@ final class Endpoint: NSObject, SpacebarHelperProtocol {
         guard role == .viewer, let conn else { return reply(false) }
         DispatchQueue.main.async { Helper.shared.viewerHello(conn); reply(true) }
     }
-    func panelState(_ open: Bool, windowNumber: Int) {
+    func panelState(_ open: Bool, requestID: Int, windowNumber: Int) {
         guard role == .viewer, let conn else { return }
-        DispatchQueue.main.async { Helper.shared.panelState(open, from: conn) }
+        DispatchQueue.main.async { Helper.shared.panelState(open, requestID: requestID, from: conn) }
     }
     func declined(_ requestID: Int) {
         guard role == .viewer else { return }
@@ -56,6 +56,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private var observer: AXObserver?
     private var observedFocus: AXUIElement?
     private var followPending = false
+    private var finderTextFocus = false
     private var watchTimer: Timer?
     private let bg = DispatchQueue(label: "md.spacebar.helper.ax", qos: .userInteractive)
 
@@ -83,13 +84,17 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         guard s.spaceHelper else {
             log.info("spaceHelper turned off: exiting")
             if panelOpen || pending != nil { viewerProxy()?.close() }
-            exit(0)
+            // Time for the close to reach the viewer.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { exit(0) }
+            watchTimer?.invalidate()
+            return
         }
         settings = s
         if tap == nil, AXIsProcessTrusted() { createTap() }
         if tap != nil { ensureViewer() }
         if tap != nil, observer == nil { observeFinder() }
-        if let p = pending, Date().timeIntervalSince(p.at) > 3.5 { pending = nil }
+        // The viewer gives up on a show after 4 s; one it never answered for is closed here.
+        if let p = pending, Date().timeIntervalSince(p.at) > 5 { fail(p.id, "no panel in 5 s") }
     }
 
     func status() -> HelperStatus {
@@ -158,10 +163,10 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         }
     }
 
-    func panelState(_ open: Bool, from c: NSXPCConnection) {
+    func panelState(_ open: Bool, requestID: Int, from c: NSXPCConnection) {
         guard c === viewer else { return }
         panelOpen = open
-        if open { pending = nil }
+        if open, pending?.id == requestID { pending = nil }
     }
 
     func declined(_ id: Int) {
@@ -203,12 +208,14 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         let pass = Unmanaged.passUnretained(event)
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            route.release()
             log.error("tap re-enabled (\(type == .tapDisabledByTimeout ? "timeout" : "user input", privacy: .public))")
             return pass
         }
         guard type == .keyDown || type == .keyUp else { return pass }
         let e = Self.keyEvent(event, down: type == .keyDown)
-        let ctx = PanelContext(open: panelOpen || pending != nil, finderPid: finderPid, viewerPid: viewerPid, sidebarKeys: settings.sidebarKeys)
+        let ctx = PanelContext(open: panelOpen || pending != nil, finderPid: finderPid, viewerPid: viewerPid, sidebarKeys: settings.sidebarKeys,
+                               textFocus: finderTextFocus)
         switch route.route(e, panel: ctx) {
         case .pass: return pass
         case .swallow: return nil
@@ -267,9 +274,11 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         guard let p = pending, p.id == id else { return }
         pending = nil
         log.info("show \(id) failed: \(why, privacy: .public)")
-        // The viewer may still answer late; it must not open over Apple's panel.
+        // A Space goes back to Finder, and the viewer, which may still answer late, must not open over Apple's panel. A
+        // follow of Finder's selection that failed leaves the panel as it is.
+        guard p.space else { return }
         viewerProxy()?.close()
-        if p.space { repost(to: p.finderPid) }
+        repost(to: p.finderPid)
     }
 
     private func close(_ why: String) {
@@ -348,7 +357,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
 
     func axNotification(_ name: String) {
         if name == kAXFocusedUIElementChangedNotification as String || name == kAXWindowCreatedNotification as String {
-            if name == kAXFocusedUIElementChangedNotification as String { observeFocused() }
+            if name == kAXFocusedUIElementChangedNotification as String { observeFocused(); readTextFocus() }
             if panelOpen { checkQuickLook() }
             return
         }
@@ -362,6 +371,16 @@ final class Helper: NSObject, NSXPCListenerDelegate {
                 guard self.panelOpen, !paths.isEmpty, paths != self.lastShown else { return }
                 self.show(paths, finderPid: pid, space: false)
             }
+        }
+    }
+
+    private func readTextFocus() {
+        let pid = finderPid
+        bg.async {
+            let t = AXTrace(budgetMs: 100)
+            let f = t.element(AXUIElementCreateApplication(pid), kAXFocusedUIElementAttribute)
+            let text = f.map { Decision.textRoles.contains(t.role($0) ?? "") || t.subrole($0) == "AXSearchField" } ?? false
+            DispatchQueue.main.async { self.finderTextFocus = text }
         }
     }
 

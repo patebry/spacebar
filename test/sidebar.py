@@ -1028,10 +1028,10 @@ def panel_host(check):
         g = page.js("""const r = document.documentElement, t = document.getElementById('side-toggle').getBoundingClientRect();
           return [r.dataset.host, getComputedStyle(r).getPropertyValue('--titlebar-inset').trim(), Math.round(t.left)];""")
         check(g[0] == 'panel' and g[1] == '68px' and g[2] >= 68, "panel: the host is set at document start, and the sidebar button clears the traffic lights", json.dumps(g))
-        page.cmd('@eval:sb.listKeysWanted(' + json.dumps({'root': root}) + '); 0')
-        w = page.cmd('@wait:0.3')
-        fb = msgs(w, 'filterBegin')
-        check(len(fb) == 1 and str(fb[0].get('list')).lower() == 'true' and str(fb[0].get('auto')).lower() == 'true',
+        r = page.cmd('@eval:sb.listKeysWanted(' + json.dumps({'root': root}) + '); 0')
+        fb = msgs(r, 'filterBegin') + msgs(page.cmd('@wait:0.3'), 'filterBegin')
+        flag = lambda m, k: str(m.get(k)).lower() in ('1', 'true')
+        check(len(fb) == 1 and flag(fb[0], 'list') and flag(fb[0], 'auto'),
               'panel: the list session starts on its own, as in Quick Look', json.dumps(fb))
         seq = int(fb[0]['seq']) if fb else -1
         r = page.cmd('@eval:sb.filterKey(' + json.dumps({'seq': seq, 'key': 'down'}) + '); 0')

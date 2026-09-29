@@ -68,6 +68,8 @@ struct PanelContext: Equatable {
     var finderPid: Int32
     var viewerPid: Int32
     var sidebarKeys = true
+    /// Finder's focus is in a text field (a rename, the search field): its keys are the user's typing.
+    var textFocus = false
 }
 
 enum Route: Equatable {
@@ -86,16 +88,23 @@ struct KeyRoute {
 
     mutating func hold(_ code: Int64) { held.insert(code) }
 
+    /// Forgets every held key: after the tap was off, their key-ups may never come.
+    mutating func release() { held.removeAll() }
+
     mutating func route(_ e: KeyEvent, panel: PanelContext) -> Route {
         if e.tagged { return .pass }
         if !e.down { return held.remove(e.code) != nil ? .swallow : .pass }
         let mine = panel.open && (e.targetPid == panel.finderPid || (panel.viewerPid > 0 && e.targetPid == panel.viewerPid))
+        // A fresh press of a held key means its key-up was missed: route it as new.
+        if held.contains(e.code), !e.isRepeat { held.remove(e.code) }
         if held.contains(e.code) {
             if mine, e.isRepeat, let name = Self.forwarded(e, sidebarKeys: panel.sidebarKeys), HelperKeys.list.contains(name) { return .forward(name) }
             return .swallow
         }
-        guard panel.open else { return Decision.wantsSpace(e) ? .space : .pass }
-        guard mine else { return .pass }
+        // Only a Space on its way to Finder: a non-activating panel of another app (a launcher, a password manager) can have
+        // the keys while Finder stays frontmost.
+        guard panel.open else { return Decision.wantsSpace(e) && e.targetPid == panel.finderPid && e.targetPid > 0 ? .space : .pass }
+        guard mine, !(panel.textFocus && e.targetPid == panel.finderPid) else { return .pass }
         if Self.closes(e) { held.insert(e.code); return .close }
         if let name = Self.forwarded(e, sidebarKeys: panel.sidebarKeys) { held.insert(e.code); return .forward(name) }
         return .pass

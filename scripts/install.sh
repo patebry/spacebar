@@ -10,10 +10,13 @@
 #      rate-limited.
 #   3. Unzips the new spacebar.app and copies it into ~/Applications as .spacebar.app.new (no sudo).
 #   4. If ~/Applications/spacebar.app exists: quits that copy and unregisters its Quick Look extensions, renames it to
-#      .spacebar.app.old, quits its extensions still running, renames the new copy into its place, then deletes
-#      .spacebar.app.old. If the new copy cannot be moved in, the old one is put back. Nothing outside those three exact
-#      paths is removed (and, when spacebar's Update button started this run, the private copy of this script it ran).
+#      .spacebar.app.old, quits its extensions still running, renames the new copy into its place, quits the Space
+#      helper's viewer, then deletes .spacebar.app.old. If the new copy cannot be moved in, the old one is put back.
+#      Nothing outside those three exact paths is removed (and, when spacebar's Update button started this run, the
+#      private copy of this script it ran).
 #   5. Registers it with Launch Services and pluginkit, turns on its preview extensions, and resets Quick Look's cache.
+#      If the Space helper's agent is registered, registers it again in the background (logged to
+#      ~/Library/Logs/spacebar-helper.log): after the app is replaced, launchd refuses the new helper until then.
 #   6. Lists any other Quick Look extensions that are turned on and claim file types spacebar previews (Markdown, code,
 #      data, text, archives), and warns about a second copy in /Applications. It never turns anything off or deletes
 #      anything else itself.
@@ -25,6 +28,7 @@ INSTALL_URL=https://spacebar.patebryant.com/install.sh
 APP_NAME=spacebar.app
 APPEX_ID=md.spacebar.preview
 FOLDERS_ID=md.spacebar.preview.folders
+HELPER_LABEL=md.spacebar.helper
 # A stalled connection gives up instead of hanging the install.
 CURL_LIMITS="--connect-timeout 15 --max-time 600"
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
@@ -148,6 +152,19 @@ quit_extensions() {
     tries=$((tries + 1))
   done
   pkill -f "$(path_regex "$1")Contents/PlugIns/" || true
+}
+
+# quit_viewer <bundle path>: quits the Space helper's viewer running from it, its writer first with the same 6 seconds. The
+# helper starts a new one from the new copy when it next needs it.
+quit_viewer() {
+  viewer=$(path_regex "$1/Contents/Helpers/spacebar Viewer.app")
+  pkill -f "${viewer}Contents/XPCServices/" || true
+  tries=0
+  while [ "$tries" -lt 30 ] && pgrep -f "${viewer}Contents/XPCServices/" >/dev/null 2>&1; do
+    sleep 0.2
+    tries=$((tries + 1))
+  done
+  pkill -f "$viewer" || true
 }
 
 # Re-registers a copy that was unregistered for a swap that did not happen.
@@ -278,6 +295,7 @@ if [ "$DRY_RUN" = 1 ]; then
     if [ "$SKIP_REGISTER" != 1 ]; then
       say "after the first move, would run: pkill -f $(path_regex "$DEST")Contents/PlugIns/[^/]*/Contents/XPCServices/,"
       say "  wait up to 6 s for those writers to exit, then run: pkill -f $(path_regex "$DEST")Contents/PlugIns/ (and the same for $OLD)"
+      say "after the swap, would quit the Space helper's viewer running from $DEST, its writer first"
     fi
   else
     say "would move $NEW to $DEST"
@@ -323,6 +341,7 @@ else
     SWAPPING=0
     UNREGISTERED=0
     MADE_NEW=0
+    [ "$SKIP_REGISTER" = 1 ] || quit_viewer "$DEST"
     rm -rf "$OLD" || say "note: could not delete $OLD; delete it yourself."
   else
     mv "$NEW" "$DEST" || fail "could not move the new copy into $DEST."
@@ -350,6 +369,18 @@ else
   run_quiet qlmanage -r cache || true
   if [ "$DRY_RUN" != 1 ] && pgrep -f "$(path_regex "$DEST")Contents/PlugIns/" >/dev/null 2>&1; then
     say "note: a Quick Look preview from the old version is still open; close it to load the new one."
+  fi
+  # Unregistered and registered again, which takes 20-90 s: the installer does not wait for it.
+  if launchctl print "gui/$(id -u)/$HELPER_LABEL" >/dev/null 2>&1; then
+    helper_log="$HOME/Library/Logs/spacebar-helper.log"
+    if [ "$DRY_RUN" = 1 ]; then
+      say "would run in the background: $DEST/Contents/MacOS/Spacebar --reregister >>$helper_log"
+    else
+      mkdir -p "${helper_log%/*}" 2>/dev/null || true
+      printf '=== %s reregister after install ===\n' "$(date '+%Y-%m-%d %H:%M:%S')" >>"$helper_log" 2>/dev/null || true
+      nohup "$DEST/Contents/MacOS/Spacebar" --reregister >>"$helper_log" 2>&1 </dev/null &
+      say "Registering the Space helper again in the background (log: $helper_log)."
+    fi
   fi
 fi
 

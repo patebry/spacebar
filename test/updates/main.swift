@@ -1,6 +1,8 @@
 // Checks Shared/Updates.swift: version parsing and comparison, the release response, the cache and the last run's status, what
 // the popover offers, the detached run (against a stub), scripts/install.sh's exit record in a dry run that fails its
-// download from a missing file:// URL, and the order its quit_extensions stops stand-in processes in. Build and run with test/updates/run.sh. Touches no network and installs nothing.
+// download from a missing file:// URL, the order its quit_extensions and quit_viewer stop stand-in processes in, and its dry run
+// through registration with the Space helper's agent loaded or not. Build and run with test/updates/run.sh. Touches no network
+// and installs nothing.
 import Foundation
 
 var failures = 0
@@ -241,6 +243,99 @@ if let proc = ProcessInfo.processInfo.environment["SPACEBAR_TEST_PROC"] {
     check("install.sh: quits the writer before the extension", (ended["writer"] ?? .max) <= (ended["extension"] ?? .min) && took >= 0.9 && took < 7)
     check("install.sh: leaves another app's extension running", ended["other"] == nil && procs["other"]!.isRunning)
     procs.values.forEach { if $0.isRunning { $0.terminate() } }
+
+    // quit_viewer: the Space helper's viewer, its writer first; the helper itself (launchd's to restart) and the extensions stay.
+    let helpers = bundle.appendingPathComponent("Contents/Helpers")
+    let vmarker = dir.appendingPathComponent("viewer-quit-order.txt")
+    let vexes = [("vwriter", helpers.appendingPathComponent("spacebar Viewer.app/Contents/XPCServices/md.spacebar.viewer.writer.xpc/Contents/MacOS/SpacebarWriter"), "1000"),
+                 ("viewer", helpers.appendingPathComponent("spacebar Viewer.app/Contents/MacOS/SpacebarViewer"), "0"),
+                 ("helper", helpers.appendingPathComponent("spacebar Helper.app/Contents/MacOS/SpacebarHelper"), "0"),
+                 ("extension", bundle.appendingPathComponent("Contents/PlugIns/P.appex/Contents/MacOS/P"), "0")]
+    var vprocs: [String: Process] = [:]
+    for (name, exe, delay) in vexes {
+        try? FileManager.default.createDirectory(at: exe.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if !FileManager.default.fileExists(atPath: exe.path) { try! FileManager.default.copyItem(atPath: proc, toPath: exe.path) }
+        let p = Process()
+        p.executableURL = exe
+        p.arguments = [vmarker.path, name, delay]
+        try! p.run()
+        vprocs[name] = p
+    }
+    usleep(300_000)
+    let vquit = Process()
+    vquit.executableURL = URL(fileURLWithPath: "/bin/sh")
+    vquit.arguments = ["-c", #"eval "$(sed -n '/^path_regex()/p; /^quit_viewer() {/,/^}/p' scripts/install.sh)"; quit_viewer "$1""#, "sh", bundle.path]
+    let v0 = Date()
+    try! vquit.run()
+    vquit.waitUntilExit()
+    let vtook = Date().timeIntervalSince(v0)
+    usleep(300_000)
+    let vended = ((try? String(contentsOf: vmarker, encoding: .utf8)) ?? "").split(separator: "\n").reduce(into: [String: Int64]()) {
+        let f = $1.split(separator: " "); if f.count == 2 { $0[String(f[0])] = Int64(f[1]) }
+    }
+    check("install.sh: quits the viewer's writer before the viewer, waiting for it", (vended["vwriter"] ?? .max) <= (vended["viewer"] ?? .min) && vtook >= 0.9 && vtook < 7)
+    check("install.sh: quit_viewer leaves the helper and the extensions running", vended["helper"] == nil && vended["extension"] == nil
+          && vprocs["helper"]!.isRunning && vprocs["extension"]!.isRunning)
+    vprocs.values.forEach { if $0.isRunning { $0.terminate() } }
+}
+
+// install.sh's dry run through to registration, from a made-up release: with the helper's agent loaded (a launchctl stub in
+// PATH answers for it) it would register the helper again in the background, and never otherwise; with a copy installed it
+// would quit the viewer after the swap. A dry run changes nothing, and runs no real launchctl.
+do {
+    let fm = FileManager.default
+    let rel = dir.appendingPathComponent("release", isDirectory: true)
+    let staged = dir.appendingPathComponent("staged/spacebar.app/Contents/PlugIns/SpacebarPreview.appex/Contents", isDirectory: true)
+    try! fm.createDirectory(at: staged, withIntermediateDirectories: true)
+    try! fm.createDirectory(at: rel, withIntermediateDirectories: true)
+    func sh(_ cmd: String, env: [String: String] = [:]) -> (Int32, String) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", cmd]
+        p.environment = env.isEmpty ? ProcessInfo.processInfo.environment : env
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = out
+        p.standardInput = FileHandle.nullDevice
+        try! p.run()
+        let said = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        p.waitUntilExit()
+        return (p.terminationStatus, said)
+    }
+    _ = sh("cd '\(dir.path)/staged' && ditto -c -k --keepParent spacebar.app '\(rel.path)/spacebar.zip' && cd '\(rel.path)' && shasum -a 256 spacebar.zip > spacebar.zip.sha256")
+    let stubs = dir.appendingPathComponent("stubs", isDirectory: true)
+    try! fm.createDirectory(at: stubs, withIntermediateDirectories: true)
+    let calls = dir.appendingPathComponent("launchctl-calls.txt")
+    try! "#!/bin/sh\necho \"$*\" >> '\(calls.path)'\n[ \"$1\" = print ] && [ \"${STUB_AGENT:-0}\" = 1 ]\n".write(to: stubs.appendingPathComponent("launchctl"), atomically: true, encoding: .utf8)
+    chmod(stubs.appendingPathComponent("launchctl").path, 0o755)
+    let home = dir.appendingPathComponent("dryhome", isDirectory: true)
+    func dry(agent: Bool) -> (Int32, String) {
+        sh("sh scripts/install.sh --dry-run --no-prompt", env: ["HOME": home.path, "PATH": "\(stubs.path):/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": dir.path + "/",
+                                                        "SPACEBAR_RELEASE_URL": "file://\(rel.path)", "STUB_AGENT": agent ? "1" : "0",
+                                                        "SPACEBAR_SYSTEM_APPLICATIONS": dir.appendingPathComponent("none").path])
+    }
+    let dest = home.appendingPathComponent("Applications/spacebar.app")
+    let fresh = dry(agent: true)
+    check("install.sh dry run: a made-up release reaches registration", fresh.0 == 0 && fresh.1.contains("Dry run: nothing was changed."))
+    check("install.sh dry run: with the agent loaded, registers the helper again in the background",
+          fresh.1.contains("would run in the background: \(dest.path)/Contents/MacOS/Spacebar --reregister >>\(home.path)/Library/Logs/spacebar-helper.log"))
+    let uid = String(getuid())
+    let asked = ((try? String(contentsOf: calls, encoding: .utf8)) ?? "").split(separator: "\n")
+    check("install.sh dry run: asks launchctl only to print the agent", !asked.isEmpty && asked.allSatisfy { $0 == "print gui/\(uid)/md.spacebar.helper" })
+    check("install.sh dry run: no agent, no reregister", !dry(agent: false).1.contains("--reregister"))
+    check("install.sh dry run: no copy installed, no viewer to quit", !fresh.1.contains("Space helper's viewer"))
+    try! fm.createDirectory(at: dest.appendingPathComponent("Contents/PlugIns"), withIntermediateDirectories: true)
+    let over = dry(agent: true)
+    check("install.sh dry run: over a copy, would quit its viewer after the swap, then register the helper again",
+          over.1.range(of: "after the swap, would quit the Space helper's viewer running from \(dest.path), its writer first")
+            .map { over.1[$0.upperBound...].contains("--reregister") } == true)
+    check("install.sh dry run: --no-register touches neither", {
+        let r = sh("sh scripts/install.sh --dry-run --no-prompt --no-register", env: ["HOME": home.path, "PATH": "\(stubs.path):/usr/bin:/bin:/usr/sbin:/sbin",
+                                                                               "TMPDIR": dir.path + "/", "SPACEBAR_RELEASE_URL": "file://\(rel.path)", "STUB_AGENT": "1"])
+        return r.0 == 0 && !r.1.contains("--reregister") && !r.1.contains("viewer")
+    }())
+    check("install.sh dry run: nothing written to the scratch home", !fm.fileExists(atPath: home.appendingPathComponent("Library").path)
+          && fm.fileExists(atPath: dest.path) && ((try? fm.contentsOfDirectory(atPath: home.appendingPathComponent("Applications").path)) ?? []) == ["spacebar.app"])
 }
 close(leaked)
 

@@ -44,7 +44,8 @@ Six features reach further than a rendered page, and are in scope:
   checked again just before the view is given the file; a file swapped between that check and Quick Look's read is not.
 - **Images and disk images parsed in the sandbox.** HEIC, AVIF, TIFF, camera RAW, PSD, OpenEXR, TGA, JPEG 2000 and icon
   files are decoded by ImageIO in the sandboxed extension or viewer, as a PDF is by PDFKit, rather than in WebKit's content
-  process; the decode is bounded to 8,192 pixels a side and to files of at most 50 MB. A `.dmg`'s format and encryption are
+  process; an image declaring more than 80 megapixels is refused before any decode, the decode is bounded to 8,192 pixels a
+  side and 40 megapixels, and files to at most 50 MB. A `.dmg`'s format and encryption are
   read from its trailer and block table in the same sandboxed process, with every offset checked against the file, the
   table at most 16 MB and 2 million entries; nothing is mounted or run.
 - **The one-click update** runs the app's own copy of `scripts/install.sh`, sealed by the app's signature, detached from Quick

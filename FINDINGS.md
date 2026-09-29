@@ -272,18 +272,47 @@ floating panel and never sees a key the helper did not send it. Rejected: one un
 get a keylogger) and hosting the Quick Look extension remotely (no public API). SECURITY.md has the privilege split.
 
 **P0, before building it.**
-- *Replacing the app in place breaks the agent.* After `spacebar.app` is swapped for a new copy, launchd refuses to start the
-  new helper (a launch constraint violation) while `SMAppService` still reports the agent enabled. Unregistering and
-  registering again fixes it, but only after 20 to 90 seconds; sooner than about 20 s it did not take. `Spacebar --reregister`
-  does that (unregister, wait, register, retry for about 3 minutes, then check the helper answers), and install.sh, and so
-  the one-click update, starts it in the background whenever the agent is loaded.
 - *The viewer reaches the helper from its sandbox* through `temporary-exception.mach-lookup.global-name` for the one Mach
   name, `md.spacebar.helper`; nothing else is added to the extension's entitlements.
-- *Each is its own responsible process* for privacy prompts: Accessibility is granted to "spacebar Helper", and the viewer,
-  launched by the helper without activating, asks for Files and Folders access itself, on first need.
-- *Handing a Space back to Finder* (`CGEventPostToPid`, tagged so the tap lets it through) was left open by P0: whether Finder
-  honours it is logged 600 ms later. It is used only when the viewer declines or does not answer within 150 ms, and not at
-  all for a Space more than a second old.
+- *Files and Folders prompts name the outer app.* P0's viewer, nested in `SpacebarP0.app` and launched by its helper, asked
+  for Documents and iCloud Drive under the outer app's name, "SpacebarP0", not its own. Accessibility, by contrast, is granted
+  to the nested helper ("spacebar Helper").
+- *Handing a Space back to Finder* (`CGEventPostToPid`, tagged so the tap lets it through) is still untested live: P0 did not
+  get to it. The helper logs whether Apple's Quick Look is open 600 ms later. It is used only when the viewer declines or does
+  not answer within 150 ms, and not at all for a Space more than a second old.
+- *Replacing the app in place stops the helper* (below).
+
+**Why the helper stays down after an update, and what brings it back.** The helper is signed without a Team ID (self-signed
+for development and for releases until there is a Developer ID). Background Task Management then ignores the plist's bundle
+identifiers ("Bundle identifiers from launchd plist ignored because the executable doesn't have a Team ID") and pins the
+agent's launch constraint (LWCR) to the helper's code, and it keeps that item across unregister and register: each
+`registerLaunchItem` logs "found existing item" with the old UUID. A new build has a new code hash (every change of source or
+CFBundleVersion does; an identical rebuild does not), so AMFI refuses it: "Launch Constraint Violation ... (Constraint not
+matched)", OS_REASON_CODESIGNING, and launchd reports `spawn failed`, `last exit code = 78: EX_CONFIG`, `needs LWCR update`.
+Meanwhile the old helper keeps running from the replaced bundle and answers nobody, since its code on disk changed. The item
+is rebuilt for the new binary (`invalidateLaunchItem`, a new UUID) only when an SMAppService status query arrives after launchd
+has refused a launch of the current submission, about 10 s after it was registered; the next unregister and register then
+launches the helper within 3 s. The old `--reregister` unregistered exactly 10 s after each register (its 10 s wait for an
+answer), just before any query could rebuild the item, so it failed for minutes until something else queried at the right
+moment. Measured on this Mac, each with a new build installed by build.sh, until `--helper-status` said trusted, tap and
+viewer:
+
+| Method | Result |
+|---|---|
+| nothing | still down after 421 s (old helper running, unreachable) |
+| `launchctl kickstart -k` only | still down after 302 s |
+| (a) old `--reregister`: unregister, 20 s, register, 10 s wait, 6 times | down after 400 s and 304 s; only a later run, started once the item had been rebuilt, worked (21-22 s) |
+| (b) unregister before the swap, register after | still down after 90 s; the item was rebuilt at +11 s, and an unregister and register then brought it up in 3 s |
+| (c) `launchctl bootout` after the swap, then register | still down after 241 s; rebuilt at +10 s by a status query, then up 3 s after an unregister and register |
+| (d) a new CFBundleVersion per build | no difference: every build here had one and each was refused; the constraint follows the code hash |
+| (e) `lsregister -f -R` before registering | no difference: build.sh runs it before every one of these |
+| new `--reregister`: register, wait for the refusal, query status at 11 s, unregister and register | helper answering in 11-17 s over 4 runs; the viewer followed within about 20 s when an old viewer was still running (install.sh quits it first) |
+
+A different label or path per build would start a fresh item each time, but it would leave one Login Items entry per update
+and move the helper's Mach name, so it was not tried. A Developer ID build should let the item use bundle identifiers and
+keep one constraint across updates; that is untested until there is one. install.sh (and so the one-click update) starts
+`--reregister` in the background whenever the agent is loaded, and it retries with backoff for up to 10 minutes. The settings
+app runs it too, at launch and after three polls in a row without an answer while the helper should be running.
 
 **Speed.** Space to decision (the AX reads of Finder and `Decision.space`), against a budget of 60 ms past which the key goes
 to Finder: in the spike's recording of 14 Finder contexts (list, icon, column and gallery views, the desktop, a rename, the

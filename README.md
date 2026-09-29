@@ -137,8 +137,8 @@ Read [`scripts/install.sh`](scripts/install.sh) before you run it. It:
    viewer the same way, and only then deletes the old one (it is put back if the move fails). Nothing else is deleted;
 5. registers it with `lsregister` and `pluginkit`, turns the preview on, turns folder previews on unless you turned them off,
    and resets Quick Look (`qlmanage -r`). If the Space helper is registered, it registers it again in the background, which
-   takes up to a minute and a half (macOS refuses a replaced helper until then), logged to
-   `~/Library/Logs/spacebar-helper.log`;
+   takes about 15 seconds (macOS refuses a replaced helper until then; it retries for up to 10 minutes), logged to
+   `~/Library/Logs/spacebar-helper.log`. Opening spacebar's settings does the same when the helper is not answering;
 6. lists other Quick Look extensions that are turned on and claim file types spacebar previews (QLMarkdown for Markdown,
    a syntax highlighter for code), with how many of spacebar's types each claims by kind, says how to turn them off, and warns
    if another copy of spacebar is in `/Applications`. It never turns off or deletes anything itself.

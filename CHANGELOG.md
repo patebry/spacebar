@@ -15,7 +15,7 @@ Waits for the Developer ID: the first release with the Space helper is notarized
   panel following. Several selected files open with a sidebar of just those files.
 - The panel hides while another app is in front and comes back with Finder, a PDF at its page and a video at its time.
 - A rename, the search field, ⌘Y, secure input and every other app keep their keys; a Space spacebar cannot answer in
-  150 ms goes to Quick Look.
+  150 ms is handed back to Finder.
 - It works through a small helper that needs Accessibility (listed as "spacebar Helper") and runs at login; it never opens a
   file, and a sandboxed viewer renders them. SECURITY.md has the threat model. Settings, General shows its state.
 - Installing, updating and uninstalling handle the helper: an update brings it back within about 20 seconds, and the

@@ -27,7 +27,7 @@ check "uninstall quits the extensions and their writers before it deletes anythi
   test "$(dry | grep -n -e 'would quit the Quick Look extensions' -e 'would run: rm -rf' | head -1 | cut -d: -f2-)" = "would quit the Quick Look extensions running from $app, their writers first"
 check "--no-register quits nothing" sh -c "! (HOME='$home' sh scripts/uninstall.sh --dry-run --no-register </dev/null 2>&1 | grep -q 'would quit')"
 helper_steps() { dry "$@" | grep -n -e 'launchctl' -e 'Helpers/' -e 'tccutil' -e 'Quick Look extensions' -e 'rm -rf' | cut -d: -f2-; }
-# The patterns pkill -f is given, as uninstall.sh escapes them: the bundle path, anchored, its space and dots escaped.
+# The patterns pkill -f is given, as uninstall.sh escapes them: the bundle path, anchored, its dots escaped.
 esc() { printf '^%s/' "$1" | sed 's/[][\.*$+?(){}|]/\\&/g'; }
 helpers="$app/Contents/Helpers"
 expected_helper="would run: launchctl bootout gui/$(id -u)/md.spacebar.helper

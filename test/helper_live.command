@@ -14,7 +14,7 @@ STATE=$HOME/Library/Logs/spacebar-live.restart
 tmp=${TMPDIR:-/tmp}
 work=$(mktemp -d "${tmp%/}/spacebar-live.XXXXXX")
 log=$work/log.txt
-passed=0 failed=0 skipped=0
+passed=0 failed=0 skipped=0 streamer=
 trap '{ kill "$streamer"; wait "$streamer"; } 2>/dev/null; rm -rf "$work"' EXIT
 
 bold() { printf '\n\033[1m%s\033[0m\n' "$*"; }
@@ -115,7 +115,7 @@ if want 7; then
   echo "  Press Space on a PDF of several pages and scroll to page 3. Switch to another app (⌘Tab), then back to Finder."
   mark; wait_done
   grade "suspended, then restored" "since | grep -q 'suspend (' && since | grep -q 'restore'"
-  grade "no restore failed" "! since | grep -q 'failed'"
+  grade "no restore failed" "! since | grep -qE 'show [0-9]+ failed'"
   if ask "Did the PDF come back at page 3?"; then pass "a PDF keeps its page"; else fail "a PDF keeps its page"; fi
   echo "  Now press Space on a video, play it for a few seconds, switch to another app, then back to Finder; then Esc."
   mark; wait_done
@@ -168,13 +168,15 @@ fi
 
 if want 12; then
   bold "12. After an update, the helper is back within about 20 s"
+  old=$(status | sed -nE 's/.*helper: pid ([0-9]+).*/\1/p')
   echo "  Update spacebar now: its Update button, the install command, or ./build.sh in another terminal. Press Return as it"
   echo "  finishes installing."
   wait_done
   swapped=$(stat -f %m "$APP"); t=0
-  until status | grep -q 'trusted=true tap=true' || [ $t -ge 90 ]; do sleep 1; t=$((t + 1)); done
+  fresh() { local s; s=$(status); grep -q 'trusted=true tap=true' <<<"$s" && ! grep -q "helper: pid ${old:-none} " <<<"$s"; }
+  until fresh || [ $t -ge 90 ]; do sleep 1; t=$((t + 1)); done
   back=$(( $(date +%s) - swapped ))
-  grade "trusted, with its tap, $back s after the app was replaced (target about 20 s)" "status | grep -q 'trusted=true tap=true' && [ $back -le 30 ]"
+  grade "a new helper, trusted, with its tap, $back s after the app was replaced (target about 20 s)" "fresh && [ $back -le 30 ]"
   tail -n 5 "$HOME/Library/Logs/spacebar-helper.log" 2>/dev/null | sed 's/^/    /'
 fi
 

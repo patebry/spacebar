@@ -559,6 +559,8 @@ class PreviewController: NSViewController {
     /// The view is on screen.
     func hostAppeared() {
         appeared = true
+        htmlPane?.view.setAllMediaPlaybackSuspended(false)
+        host.web.setAllMediaPlaybackSuspended(false)
         wantListKeys()
     }
 
@@ -569,6 +571,8 @@ class PreviewController: NSViewController {
         stopEdit(notifyWriter: true)
         stopFilter(notifyWriter: true)
         mediaPane?.pause()
+        htmlPane?.view.setAllMediaPlaybackSuspended(true)
+        host.web.setAllMediaPlaybackSuspended(true)
     }
 
     /// The host is taking the view away.

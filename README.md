@@ -78,7 +78,7 @@ With it on:
 - Like Apple's Quick Look, it hides while another app is in front and comes back when you return to Finder, a PDF at its page
   and a video at its time.
 - Space in a rename or the search field, with Apple's Quick Look already open, or in any other app is left alone. ⌘Y still
-  opens Apple's Quick Look. A Space spacebar cannot answer within 150 ms goes back to Finder, so Quick Look opens as usual.
+  opens Apple's Quick Look. A Space spacebar cannot answer within 150 ms is handed back to Finder.
 - While a password field or another app has secure input on, macOS gives spacebar no keys, so Space opens Apple's Quick Look;
   Settings, General says so.
 

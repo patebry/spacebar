@@ -29,12 +29,12 @@ ROUTES = '''net.daringfireball.markdown public.markdown md.spacebar.qlmanage
   com.microsoft.typescript public.css public.make-source public.patch-file public.protobuf-source com.apple.applescript.text com.apple.rez-source
   public.json public.geojson public.yaml public.xml com.apple.property-list public.tab-separated-values-text com.apple.log org.w3.webvtt
   public.zip-archive public.tar-archive org.gnu.gnu-zip-archive org.gnu.gnu-zip-tar-archive public.bzip2-archive org.tukaani.xz-archive
-  public.tar-bzip2-archive org.tukaani.tar-xz-archive org.7-zip.7-zip-archive public.data'''.split()
+  public.tar-bzip2-archive org.tukaani.tar-xz-archive org.7-zip.7-zip-archive com.apple.disk-image-udif public.data'''.split()
 # Apple previews these itself (or nothing routes them); a claim would be dead weight or, for a parent, meaningless.
 APPLE = '''public.plain-text public.text public.html public.xhtml public.comma-separated-values-text public.x509-certificate com.adobe.pdf
   public.image public.png public.jpeg public.movie public.mpeg-4 com.apple.quicktime-movie public.mp3 public.mpeg-4-audio com.apple.m4a-audio
   com.microsoft.waveform-audio public.avi org.xiph.flac org.xiph.ogg-vorbis public.rtf com.microsoft.word.doc org.openxmlformats.wordprocessingml.document
-  public.mpeg-2-transport-stream public.avchd-mpeg-2-transport-stream com.apple.disk-image-udif public.disk-image org.matroska.mkv com.adobe.flash.video
+  public.mpeg-2-transport-stream public.avchd-mpeg-2-transport-stream public.disk-image org.matroska.mkv com.adobe.flash.video
   org.webmproject.webm public.source-code public.script public.archive public.content public.item com.apple.logic.exs'''.split()
 UNDECLARED = '''adoc asciidoc bat bib cfg cjs clj cmake conf cs csr cts dart diz dockerignore editorconfig env erl err ex example fish gitattributes
   gitignore gitmodules go gql gradle graphql groovy har hcl hs ini ipynb json5 jsonc jsx kt kts less lock lua nfo nim npmrc nvmrc org
@@ -104,6 +104,10 @@ check(sorted(os.listdir(H)) == ['spacebar Helper.app', 'spacebar Viewer.app'], '
 for path in [f'{helper}/Contents/MacOS/SpacebarHelper', f'{viewer}/Contents/MacOS/SpacebarViewer', f'{writer}/Contents/MacOS/SpacebarWriter',
              f'{viewer}/Contents/Resources/web/index.html', agent]:
     check(os.path.isfile(path), 'bundle has ' + path[len(app) + 1:])
+types = open('scripts/quicklook-types.txt', 'rb').read()
+copies = [f'{viewer}/Contents/Resources/quicklook-types.txt', f'{appex}/Contents/Resources/quicklook-types.txt']
+check(all(os.path.isfile(c) and open(c, 'rb').read() == types for c in copies),
+      "the viewer and the extension carry quicklook-types.txt (Apple's previews in the panel are never asked for a claimed type)")
 hi, vi, wi = info(helper), info(viewer), info(writer)
 check(hi['CFBundleIdentifier'] == 'md.spacebar.helper' and hi.get('LSUIElement') is True and hi.get('CFBundleDisplayName') == 'spacebar',
       'helper: md.spacebar.helper, LSUIElement, shown as "spacebar"', hi)

@@ -1075,6 +1075,7 @@ class PreviewController: NSViewController {
             var p = FileView.payload(path: url.path, kind: kind, root: root, reason: reason, canOpen: canOpen, quickLook: !noQuickLook)
             // Text opens in a text editor even where its default app is refused (a script): the writer names the app.
             if Self.textViews.contains(p["view"] as? String ?? ""), LinkPolicy.editorRefusal(url) == nil { p["canOpen"] = true }
+            if p["view"] as? String == "info", url.pathExtension.lowercased() == "dmg" { p["details"] = DiskImage.details(url.path) }
             var pdf: Result<PDFDocument, PDFPane.LoadError>?
             var rich: Result<NSAttributedString, RichTextPane.LoadError>?
             var image: Result<ImagePane.Loaded, ImagePane.LoadError>?

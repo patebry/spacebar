@@ -61,7 +61,7 @@ if ProcessInfo.processInfo.environment["QLPANE_SANDBOX"] != nil {
 FileTypes.quickLookClaims = FileTypes.claims(try! String(contentsOfFile: "scripts/quicklook-types.txt", encoding: .utf8))
 let claims = FileTypes.quickLookClaims!
 check("claims read from scripts/quicklook-types.txt", claims.contains("net.daringfireball.markdown") && claims.contains("public.zip-archive")
-      && claims.contains("md.spacebar.type.toml") && claims.count > 100, "\(claims.count)")
+      && claims.contains("com.apple.disk-image-udif") && claims.contains("md.spacebar.type.toml") && claims.count > 100, "\(claims.count)")
 func touch(_ name: String, _ data: Data = Data([0x7f, 0, 1, 2])) -> String {
     let u = dir.appendingPathComponent(name)
     try! data.write(to: u)

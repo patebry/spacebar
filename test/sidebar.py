@@ -1818,6 +1818,13 @@ def main():
         t = page.js(THUMB)
         check(t and t['thumb'] == [64, 48, True, True] and not t['icon'] and t['button'] == 'Open' and t['fits'],
               "info card: the file's thumbnail in the icon's place, above its details, the Open button kept", json.dumps(t))
+        dmg = dict(stub, path=T('disk.dmg'), name='disk.dmg', view='info', icon='app', kindName='Disk Image', canOpen=False, size=7892,
+                   details=[['Format', 'Compressed (zlib)'], ['Encrypted', 'No'], ['<b>x</b>', 5], 'bad'])
+        page.cmd('@eval:sb.render(' + json.dumps(dmg) + '); 0')
+        rows = page.js("return [...document.querySelectorAll('#doc .info-card dt')].map((d) => [d.textContent, d.nextElementSibling.textContent])")
+        check([r[0] for r in rows] == ['Size', 'Format', 'Encrypted', 'Where'] and rows[1][1] == 'Compressed (zlib)'
+              and not page.js("return !!document.querySelector('#doc .info-card b')"),
+              'disk image: its format and encryption on the card as text, malformed rows dropped', json.dumps(rows))
         page.cmd('@eval:sb.render(' + json.dumps(card) + '); 0')
         page.cmd('@eval:sb.setThumb(' + json.dumps({'path': T('other.key'), 'thumb': png}) + '); 0')
         page.cmd('@eval:sb.setThumb(' + json.dumps({'path': T('deck.key'), 'thumb': 'data:image/svg+xml;base64,' + base64.b64encode(b'<svg xmlns="http://www.w3.org/2000/svg"/>').decode()}) + '); 0')

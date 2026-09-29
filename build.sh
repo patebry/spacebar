@@ -117,7 +117,7 @@ PREVIEW_BIN=$OBJ/$APPEX_EXE
 PROBE_FLAGS=()
 [ "${PROBE:-0}" = 1 ] && PROBE_FLAGS=(-D PROBE)
 # The preview's sources, less its Quick Look entry point: a second host can compile them with its own.
-PREVIEW_SRC=(Preview/PreviewController.swift Preview/PDFPane.swift Preview/HTMLPane.swift Preview/MediaPane.swift Preview/QLFallbackPane.swift Preview/RichTextPane.swift Preview/ImagePane.swift Preview/Thumbnail.swift Preview/SettingsStore.swift
+PREVIEW_SRC=(Preview/PreviewController.swift Preview/PDFPane.swift Preview/HTMLPane.swift Preview/MediaPane.swift Preview/QLFallbackPane.swift Preview/RichTextPane.swift Preview/ImagePane.swift Preview/DiskImage.swift Preview/Thumbnail.swift Preview/SettingsStore.swift
   Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/Updates.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift)
 compile "$PREVIEW_BIN" -application-extension -module-name "$APPEX_EXE" "${PREVIEW_SRC[@]}" Preview/PreviewViewController.swift Preview/Probe.swift \
   ${PROBE_FLAGS[@]+"${PROBE_FLAGS[@]}"} \

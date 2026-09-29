@@ -10,7 +10,7 @@
 #
 # Quick Look hands a third-party extension a file only when its exact type is claimed: a parent type (public.source-code,
 # public.text) never routes, and types Apple previews itself never do (plain text, HTML, CSV, PDF, images, movies, audio,
-# RTF, Word, .ts streams, certificates, disk images). Those are not listed. Neither are .mkv, .flv, .ogv, .opus and .webm:
+# RTF, Word, .ts streams, certificates, disk images other than .dmg). Those are not listed. Neither are .mkv, .flv, .ogv, .opus and .webm:
 # AVFoundation cannot play them, so spacebar would show no more than Finder does.
 
 # Markdown
@@ -64,6 +64,9 @@ claim public.tar-bzip2-archive
 claim org.tukaani.tar-xz-archive
 claim org.tukaani.xz-archive
 claim org.7-zip.7-zip-archive
+
+# Disk images: an info card with the format and whether it is encrypted, read from the image itself (nothing is mounted)
+claim com.apple.disk-image-udif
 
 # Files with no extension (Dockerfile, CHANGELOG, dotfiles) and unknown data: text is shown as text, anything else as an info card
 claim public.data

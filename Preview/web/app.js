@@ -1744,8 +1744,10 @@ function infoCard(p, why) {
   card.append(thumbNode(p) || icon(p.icon, 64), el('div', 'info-name', plainName(p.name)), el('div', 'info-kind', p.kindName || 'Document'));
   const dl = el('dl');
   const rel = typeof p.root === 'string' && p.path.startsWith(p.root + '/') ? p.path.slice(p.root.length + 1) : p.path;
+  // Rows the extension read from the file itself (a disk image's format and encryption), as text.
+  const details = Array.isArray(p.details) ? p.details.filter((r) => Array.isArray(r) && r.length === 2 && r.every((x) => typeof x === 'string')).slice(0, 8) : [];
   for (const [k, v] of [['Size', typeof p.size === 'number' ? `${fmtSize(p.size)}${p.size >= 1000 ? ` (${p.size.toLocaleString()} bytes)` : ''}` : ''],
-    ['Modified', fmtDate(p.modified)], ['Where', rel]]) {
+    ...details, ['Modified', fmtDate(p.modified)], ['Where', rel]]) {
     if (v) dl.append(el('dt', '', k), el('dd', '', v));
   }
   card.append(dl);

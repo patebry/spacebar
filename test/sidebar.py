@@ -1726,6 +1726,28 @@ def main():
         v, rect = media(T('movie.webm'))
         check(v['view'] == 'info' and v['area'] is None, 'WebM, which AVFoundation cannot play, keeps its info card', json.dumps(v))
 
+        # ---- images ImageIO decodes (HEIC, TIFF, RAW…): the page reserves the area the extension's image view is laid over ----
+        pics = os.path.join(page.out, 'pics')
+        os.makedirs(pics, exist_ok=True)
+        for fmt, ext in (('heic', 'heic'), ('tiff', 'tiff')):
+            subprocess.run(['sips', '-s', 'format', fmt, T('photo.png'), '--out', os.path.join(pics, 'photo.' + ext)], check=True, capture_output=True)
+        open(os.path.join(pics, 'shot.dng'), 'wb').write(b'\0' * 64)
+        shutil.copy(T('photo.png'), os.path.join(pics, 'plain.png'))
+        page.cmd('@root:' + pics)
+        for name in ('photo.heic', 'photo.tiff', 'shot.dng'):
+            v, rect = media(os.path.join(pics, name))
+            check(v['view'] == 'bitmap' and v['aa'] and v['frames'] == 0 and v['area'][1] > 60 and v['area'][1] + v['area'][3] == 800 - EDGE and v['fits']
+                  and not page.js("return !!document.querySelector('#doc img')") and rect and rect['path'] == os.path.join(pics, name)
+                  and near([float(rect[k]) for k in 'xywh'], v['area']) and rect['hide'] in ('0', 'false'),
+                  f'{name}: view bitmap, the area reserved and posted for the native image view, no <img>, Aa hidden', json.dumps([v, rect]))
+        page.cmd("@eval:sb.imageZoom({ path: '" + os.path.join(pics, 'shot.dng') + "', zoom: 37 }); sb.imageZoom({ path: '/elsewhere.dng', zoom: 99 }); 0")
+        cap = page.js("return document.querySelector('#doc .viewer-kind').textContent")
+        check(cap.endswith('37%') and '99' not in cap, 'bitmap: the native view\'s zoom shows in the caption, only for the file on screen', json.dumps(cap))
+        v, rect = media(os.path.join(pics, 'plain.png'))
+        check(v['view'] == 'image' and v['area'] is None and page.js("return !!document.querySelector('#doc .img-stage img')"),
+              'bitmap -> PNG: back to the page\'s own <img> viewer, no native area', json.dumps(v))
+        page.cmd('@root:' + tree)
+
         # ---- a file Apple's Quick Look previews (Office, iWork, fonts, 3D): the page reserves the area its QLPreviewView is laid over ----
         ql = os.path.join(page.out, 'ql')
         os.makedirs(ql, exist_ok=True)

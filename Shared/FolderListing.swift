@@ -25,8 +25,12 @@ enum FileTypes {
     /// Played by AVFoundation. WebM, Ogg and Matroska are not: AVFoundation cannot open them.
     static let videoExtensions: Set<String> = ["mp4", "m4v", "mov"]
     static let audioExtensions: Set<String> = ["mp3", "m4a", "aac", "wav", "aif", "aiff", "flac", "caf"]
-    /// Rendered as `<img>` only. SVG is here: as an image it runs no script.
-    static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "avif", "bmp", "tif", "tiff", "ico", "svg"]
+    /// Images. SVG is here: as an image (`<img>`) it runs no script.
+    static let imageExtensions = Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "svg"]).union(nativeImageExtensions)
+    /// Images the panel decodes with ImageIO (Preview/ImagePane.swift) rather than as `<img>`: WebKit's decoding of these is
+    /// missing (RAW, PSD, EXR, TGA, JPEG 2000, ICNS) or unreliable (HEIC, AVIF and TIFF, above all on macOS 13).
+    static let nativeImageExtensions: Set<String> = ["heic", "heif", "avif", "tif", "tiff", "dng", "cr2", "cr3", "nef", "arw", "orf", "raf", "rw2",
+                                                     "psd", "exr", "tga", "jp2", "icns"]
     static let jsonExtensions: Set<String> = ["json", "geojson", "jsonc", "json5", "webmanifest", "har", "ipynb"]
     static let csvExtensions: Set<String> = ["csv", "tsv"]
     /// Drawn natively from AppKit's RTF reader. `.rtfd` is a package (a folder) or, flattened, a single file.
@@ -461,6 +465,8 @@ enum FileView {
         var view = "info"
         let version = "\(st.st_mtimespec.tv_sec)\(st.st_mtimespec.tv_nsec)"
         switch kind {
+        case .image where regular && size <= FileTypes.maxImageBytes && FileTypes.nativeImageExtensions.contains(ext.lowercased()):
+            view = "bitmap"
         case .image where regular && size <= FileTypes.maxImageBytes:
             view = "image"
             p["src"] = FileTypes.fileURL(path, version: version)!.absoluteString

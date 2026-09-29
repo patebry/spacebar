@@ -1002,6 +1002,12 @@ window.sb = {
     const old = document.querySelector('#doc .info-card > svg.ic'), img = thumbNode(current);
     if (old && img) old.replaceWith(img);
   },
+  /** The zoom of the image the extension draws (a bitmap view), as a whole percentage, for the caption. */
+  imageZoom(z) {
+    if (!z || z.path !== current.path || current.view !== 'bitmap' || !Number.isInteger(z.zoom)) return;
+    const label = document.querySelector('#doc .img-zoom');
+    if (label) label.textContent = `${z.zoom}%`;
+  },
   /** An archive's contents, listed by the writer once its view is up, or why they could not be (then it is an info card). */
   setArchive(a) {
     if (!a || a.path !== current.path || current.view !== 'archive' || Array.isArray(current.entries)) return;
@@ -2004,14 +2010,24 @@ function archiveView(p) {
 }
 
 /** Views the extension draws natively over `.pdf-area`: a PDF (PDFKit), an HTML file (its own web view), video and audio (AVKit),
- *  RTF (AppKit's text view) and the files Apple's Quick Look previews (Office, iWork, fonts, 3D). */
-const NATIVE_VIEWS = new Set(['pdf', 'html', 'video', 'audio', 'rtf', 'quicklook']);
+ *  RTF (AppKit's text view), the files Apple's Quick Look previews (Office, iWork, fonts, 3D), and images ImageIO decodes (bitmap). */
+const NATIVE_VIEWS = new Set(['pdf', 'html', 'video', 'audio', 'rtf', 'quicklook', 'bitmap']);
 
 /** The PDF itself is drawn by a native PDFView the extension lays over `.pdf-area`; the page only reserves the space and
  *  reports where it is (syncPdf), so WebKit's PDF plugin, and its unlabelled buttons, never load. */
 function pdfView(p) {
-  const box = el('div', `viewer viewer-pdf${p.view === 'audio' ? ' viewer-audio' : ''}`);
-  box.append(viewHead(p));
+  const box = el('div', `viewer viewer-pdf${p.view === 'audio' ? ' viewer-audio' : ''}${p.view === 'bitmap' ? ' viewer-image' : ''}`);
+  if (p.view === 'bitmap') {
+    // The extension's image view reports its zoom (sb.imageZoom); the caption reads as the page's own image viewer's.
+    const dims = Number.isInteger(p.width) && Number.isInteger(p.height) ? `${p.width} × ${p.height}` : '';
+    const cap = el('span', 'viewer-kind');
+    cap.append(el('span', 'img-meta', [p.kindName, dims, fmtSize(p.size)].filter(Boolean).join(' · ')), el('span', 'img-zoom'));
+    const head = el('div', 'viewer-head');
+    head.append(cap, openButton(p));
+    box.append(head);
+  } else {
+    box.append(viewHead(p));
+  }
   const area = el('div', 'pdf-area');
   area.setAttribute('role', 'document');
   area.setAttribute('aria-label', plainName(p.name));
@@ -2062,7 +2078,7 @@ function syncPdf() {
 function viewNode(p) {
   switch (p.view) {
     case 'image': if (typeof p.src === 'string') return imageView(p); break;
-    case 'pdf': case 'html': case 'video': case 'audio': case 'rtf': case 'quicklook': return pdfView(p);
+    case 'pdf': case 'html': case 'video': case 'audio': case 'rtf': case 'quicklook': case 'bitmap': return pdfView(p);
     case 'loading': return loadingView(p);
     case 'overview': return overviewView(p);
     case 'json': if (typeof p.text === 'string') return jsonView(p); break;

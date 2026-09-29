@@ -281,6 +281,8 @@ class PreviewController: NSViewController {
     private var quickLookShown = false
     /// The RTF or RTFD document on screen, drawn natively over the same reserved area; nil for every other view.
     private var richPane: RichTextPane?
+    /// An image ImageIO decodes (HEIC, TIFF, RAW…), drawn natively over the same reserved area; nil for every other view.
+    private var imagePane: ImagePane?
     /// Bumped by every render, so a thumbnail made for an info card no longer on screen is dropped.
     private var renderGen = 0
     /// The file a thumbnail is being made for: a file changing on disk re-renders its card without starting another.
@@ -520,6 +522,7 @@ class PreviewController: NSViewController {
             // its completion would leave the page on "Loading…".
             || (fileKind == .other && qlPane == nil && (quickLookShown || fileURL.flatMap { FileTypes.appleQuickLookType($0.path) } != nil))
             || (fileKind == .rtf && richPane == nil)
+            || (fileKind == .image && imagePane == nil && fileURL.map { FileTypes.nativeImageExtensions.contains($0.pathExtension.lowercased()) } == true)
         if closed, let url = fileURL, host.controller === self {
             shownStamp = nil
             host.whenReady { [weak self] in self?.show(url, reason: "open") }
@@ -556,6 +559,9 @@ class PreviewController: NSViewController {
 
     /// The web view the page is in.
     var webView: WKWebView { host.web }
+
+    /// ⌘+, ⌘− or ⌘0 (`key` zoomIn, zoomOut, zoomReset) for a native view on screen that zooms; whether it took the key.
+    func zoomKey(_ key: String) -> Bool { fileKind == .image && imagePane?.key(key) == true }
 
     /// The Open button's action for the file on screen, for a host with a key for it (⌘O).
     func openOnScreen() {
@@ -936,6 +942,8 @@ class PreviewController: NSViewController {
             self.qlPane = nil
             self.richPane?.close()
             self.richPane = nil
+            self.imagePane?.close()
+            self.imagePane = nil
             var p = FileView.base(path: url.path, root: self.rootDir, reason: "open")
             p["view"] = "loading"
             p["cloud"] = cloud
@@ -1059,15 +1067,18 @@ class PreviewController: NSViewController {
         let cloud = FileTypes.isDataless(url.path)
         // Only a download times out: PDFKit rebuilding a large local PDF may take longer, and is still shown when done.
         let id = loader.load(timesOut: cloud, { () -> (payload: [String: Any], pdf: Result<PDFDocument, PDFPane.LoadError>?,
-                                                       rich: Result<NSAttributedString, RichTextPane.LoadError>?, stuck: Bool) in
+                                                       rich: Result<NSAttributedString, RichTextPane.LoadError>?,
+                                                       image: Result<ImagePane.Loaded, ImagePane.LoadError>?, stuck: Bool) in
             var p = FileView.payload(path: url.path, kind: kind, root: root, reason: reason, canOpen: canOpen)
             // Text opens in a text editor even where its default app is refused (a script): the writer names the app.
             if Self.textViews.contains(p["view"] as? String ?? ""), LinkPolicy.editorRefusal(url) == nil { p["canOpen"] = true }
             var pdf: Result<PDFDocument, PDFPane.LoadError>?
             var rich: Result<NSAttributedString, RichTextPane.LoadError>?
+            var image: Result<ImagePane.Loaded, ImagePane.LoadError>?
             switch p["view"] as? String {
             case "pdf": pdf = PDFPane.open(url)
             case "rtf": rich = RichTextPane.open(url)
+            case "bitmap": image = ImagePane.open(url)
             case "image" where cloud: _ = try? SchemeHandler.readImage(url)
             case "html" where cloud: _ = FileTypes.materializing { try? Data(contentsOf: url) }
             // One byte downloads the whole file; AVFoundation, reading it later on its own threads, could not.
@@ -1075,9 +1086,9 @@ class PreviewController: NSViewController {
             default: break
             }
             // Only what FileView downloads counts: an evicted archive is its info card without a download.
-            let fetched = ["pdf", "image", "html", "video", "audio", "rtf", "quicklook"].contains(p["view"] as? String)
+            let fetched = ["pdf", "image", "bitmap", "html", "video", "audio", "rtf", "quicklook"].contains(p["view"] as? String)
                 || ([.code, .json, .csv, .text].contains(kind) && (p["size"] as? Int64 ?? .max) <= FolderListing.maxDocumentBytes)
-            return (p, pdf, rich, cloud && fetched && FileTypes.isDataless(url.path))
+            return (p, pdf, rich, image, cloud && fetched && FileTypes.isDataless(url.path))
         }) { [weak self] outcome in
             guard let self, self.host.controller === self, self.fileURL == url, self.fileKind == kind else { return }
             guard case .done(let r) = outcome else {
@@ -1101,20 +1112,32 @@ class PreviewController: NSViewController {
                 p["note"] = e == .tooLarge ? "This document is too large to show here." : "This document can’t be shown here."
             case nil: break
             }
+            var picture: ImagePane.Loaded?
+            switch r.image {
+            case .success(let l)?:
+                picture = l
+                p["width"] = Int(l.size.width)
+                p["height"] = Int(l.size.height)
+            case .failure?:
+                p["view"] = "info"
+                p["note"] = "This image can’t be shown here."
+            case nil: break
+            }
             if r.stuck { return self.showUnavailable(url, reason: reason, cloud: true) }
             // The panel closed while a PDF or media opened: it is shown again when the panel reappears (viewWillAppear).
             if p["view"] as? String == "quicklook" { self.quickLookShown = true }
-            if doc != nil || text != nil || ["video", "audio", "html", "quicklook"].contains(p["view"] as? String), gen != self.pdfGen { return }
+            if doc != nil || text != nil || picture != nil || ["video", "audio", "html", "quicklook"].contains(p["view"] as? String), gen != self.pdfGen { return }
             self.shownCanOpen = p["canOpen"] as? Bool == true
             self.shownText = Self.textViews.contains(p["view"] as? String ?? "")
-            self.finishShow(url, p, pdf: doc, rich: text, reason: reason)
+            self.finishShow(url, p, pdf: doc, rich: text, image: picture, reason: reason)
             if p["view"] as? String == "info", !cloud, self.thumbPending != url.path { self.addThumbnail(url, icon: kind == .app) }
         }
         if cloud, let s = Self.stamp(url) { downloading = (url, id, s) }
         if reason != "change" { showLoading(url, load: id, cloud: cloud) }
     }
 
-    private func finishShow(_ url: URL, _ payload: [String: Any], pdf: PDFDocument?, rich: NSAttributedString? = nil, reason: String) {
+    private func finishShow(_ url: URL, _ payload: [String: Any], pdf: PDFDocument?, rich: NSAttributedString? = nil, image: ImagePane.Loaded? = nil,
+                            reason: String) {
         unavailablePath = nil
         var p = payload
         if let o = opener, o.path == url.path { p["app"] = o.app; p["editor"] = o.editor }
@@ -1143,6 +1166,12 @@ class PreviewController: NSViewController {
             pane.onLink = { [weak self] in self?.pdfLink($0) }
             pane.show(rich, path: url.path)
             richPane = pane
+        }
+        if let image {
+            let pane = imagePane ?? ImagePane()
+            pane.onZoom = { [weak self] path, zoom in self?.js("sb.imageZoom", ["path": path, "zoom": zoom]) }
+            pane.show(image, path: url.path)
+            imagePane = pane
         }
         if view == "video" || view == "audio" {
             let pane = mediaPane ?? MediaPane()
@@ -1236,6 +1265,10 @@ class PreviewController: NSViewController {
         if keep != "rtf" {
             richPane?.close()
             richPane = nil
+        }
+        if keep != "bitmap" {
+            imagePane?.close()
+            imagePane = nil
         }
     }
 
@@ -1496,6 +1529,7 @@ class PreviewController: NSViewController {
             if [.video, .audio].contains(fileKind) { mediaPane?.place(message: body, in: host.web) }
             qlPane?.place(message: body, in: host.web)
             if fileKind == .rtf { richPane?.place(message: body, in: host.web) }
+            if fileKind == .image { imagePane?.place(message: body, in: host.web) }
         case "copyInstall":
             helper { $0.copyInstallCommand { ok in DispatchQueue.main.async { self.js("sb.installCopied", ["ok": ok]) } } }
         case "installUpdate":

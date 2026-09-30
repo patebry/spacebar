@@ -14,6 +14,7 @@ Waits for the Developer ID: the first release with the Space helper is notarized
 - Space, Esc, ⌘W and ⌘. close the panel in one press; the arrow keys drive the sidebar, or Finder's selection with the
   panel following. Several selected files open with a sidebar of just those files.
 - The panel hides while another app is in front and comes back with Finder, a PDF at its page and a video at its time.
+- The panel remembers its size and place on each display.
 - A rename, the search field, ⌘Y, secure input and every other app keep their keys; a Space spacebar cannot answer in
   150 ms is handed back to Finder.
 - It works through a small helper that needs Accessibility (listed as "spacebar Helper") and runs at login; it never opens a
@@ -29,8 +30,10 @@ Waits for the Developer ID: the first release with the Space helper is notarized
 
 ### Copy, Find and Raw
 
-- **Copy**, a quiet button at the bottom right of the content, puts a text file's contents on the clipboard (a Markdown file's source); ⌘C copies the selection,
-  or the whole file when nothing is selected.
+- **Copy**, a button at the bottom right of the content, puts a text file's contents on the clipboard (a Markdown file's source); ⌘C copies the selection,
+  or the whole file when nothing is selected. In the Space panel, ⌘C with nothing selected copies the file as well, as
+  Finder's does: paste in Finder for the file, in an editor for the text. The page keeps clear of the button, and "Copied" is
+  announced to VoiceOver.
 - **Find** (⌘F) searches Markdown, code, text, JSON and CSV, with highlighted matches, a count, ↵ and ⇧↵ for the next and
   previous, and Esc to close. Long tables and JSON trees are searched whole. The sidebar's filter moves to ⌥⌘F.
 - **Raw** shows a formatted view's file as it is: Markdown source, JSON, notebooks, CSV, XML and property lists (now indented)
@@ -52,5 +55,7 @@ Waits for the Developer ID: the first release with the Space helper is notarized
 ### Sidebar and settings
 
 - Big folders stay fast (the sidebar draws only the rows in view), and it takes the arrow keys as soon as the preview opens.
+- The toolbar holds still while the arrows move from file to file: its buttons keep their places, Open is one word with the
+  app in its tooltip, and tooltips give each button's key.
 - Settings, General lists other Quick Look extensions that claim spacebar's types, with a Turn Off button.
 - A welcome window on first launch, and a new app icon.

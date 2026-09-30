@@ -650,6 +650,10 @@ class PreviewController: NSViewController {
         handle("openFile", ["path": url.path])
     }
 
+    /// ⌘C with nothing selected, in a host that writes the pasteboard itself: the file and its text as one item, so Finder
+    /// pastes the file and an editor the text. False leaves the copy to the writer, as text.
+    func copyFileAndText(_ url: URL, _ text: String) -> Bool { false }
+
     deinit {
         if let id = edit?.id { (helperConnection?.remoteObjectProxy as? SpacebarWriterProtocol)?.endEdit(id) }
         if let f = filter {
@@ -1737,6 +1741,9 @@ class PreviewController: NSViewController {
             let whole: (text: String, truncated: Bool)? = fileKind == .markdown || textSource != nil ? docText.map { ($0, false) } : shownBody
             guard let text = selection ?? whole?.text, !text.isEmpty else { return failed("nothing to copy") }
             let cut = selection == nil && whole?.truncated == true
+            if selection == nil, asked, m.bool("withFile") == true, copyFileAndText(url, text) {
+                return js("sb.copied", ["ok": true, "truncated": cut])
+            }
             helper(onError: { failed("writer unavailable") }) {
                 $0.copyText(text) { ok in DispatchQueue.main.async { self.js("sb.copied", ["ok": ok, "truncated": cut]) } }
             }

@@ -43,7 +43,7 @@
     font-family: var(--font-body); font-size: var(--font-size); line-height: var(--line-height);
     -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; font-kerning: normal;
   }
-  [hidden] { display: none !important; }
+  [hidden]:not(.tb-slot) { display: none !important; }
 
   /* The sidebar keeps its full width inside and is clipped as it collapses, so its text never reflows mid-animation.
      Transitions start only after the first paint (sb-anim), so a collapsed sidebar never shows open first. */

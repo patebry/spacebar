@@ -1327,7 +1327,9 @@ window.sb = {
     if (!o || o.path !== current.path || typeof o.app !== 'string') return;
     current.app = o.app;
     current.editor = o.editor === true;
-    document.querySelectorAll('#doc .viewer-open[data-action=openFile], #edit[data-action=openFile]').forEach((b) => { b.textContent = openLabel(current); });
+    document.querySelectorAll('#doc .viewer-open[data-action=openFile]').forEach((b) => { b.textContent = openLabel(current); });
+    const b = $('edit');
+    if (b.dataset.action === 'openFile') b.title = openTitle(current, 'openFile');
   },
   /** A newer release than this one: a dot on the Aa button and a row at the top of its popover. `state` is available,
    *  elsewhere (this copy is not the one the installer replaces), started, inProgress (still running after a while), done, or
@@ -1962,6 +1964,7 @@ function csvView(p) {
   box.append(head);
   const t = truncNote(p);
   if (t) box.append(t);
+  else if (p.editable !== true && settings.inlineEditing && p.size > 2 << 20) box.append(note('Too large to edit here.'));
   if (m.total - 1 > CSV_ROWS) box.append(note(`Showing the first ${CSV_ROWS.toLocaleString()} of ${(m.total - 1).toLocaleString()} rows.`));
   if (m.wide) box.append(note(`Showing the first ${CSV_COLS} columns.`));
   const scroll = el('div', 'csv-scroll');
@@ -2589,16 +2592,24 @@ function overviewView(p) {
   return box;
 }
 
-/** The toolbar's Open button: the editor for Markdown, else what the viewer offers (Open with, or Reveal in Finder). */
+/** The toolbar's Open button: the editor for Markdown, else what the viewer offers (Open with, or Reveal in Finder). Its label
+ *  is one short word whatever the app, so the toolbar keeps its place from file to file; the tooltip names the app. */
 function syncOpen(p) {
   const b = $('edit');
   const doc = isMarkdown(p);
   b.hidden = !doc && (p.view === 'overview' || p.view === 'loading' || !p.path);
   b.dataset.kind = doc ? 'doc' : 'file';
-  if (doc) { b.dataset.action = 'edit'; b.textContent = 'Open in editor'; b.title = 'Open this file in your editor'; return; }
-  b.dataset.action = p.canOpen === true ? 'openFile' : 'reveal';
-  b.textContent = p.canOpen === true ? openLabel(p) : 'Reveal in Finder';
-  b.title = p.canOpen !== true ? 'Show this file in Finder' : p.editor === true ? 'Open this file in your editor' : 'Open this file in its default app';
+  b.dataset.action = doc ? 'edit' : p.canOpen === true ? 'openFile' : 'reveal';
+  b.textContent = b.dataset.action === 'reveal' ? 'Reveal' : 'Open';
+  b.title = openTitle(p, b.dataset.action);
+}
+
+/** ⌘O opens the file only in the Space helper's panel; Quick Look never passes it on. */
+function openTitle(p, action) {
+  if (action === 'reveal') return 'Reveal in Finder';
+  const key = window.__sbHost === 'panel' ? ' (⌘O)' : '';
+  if (action === 'edit') return `Open in your editor${key}`;
+  return `${p.app ? openLabel(p) : p.editor === true ? 'Open in your editor' : 'Open in its default app'}${key}`;
 }
 
 // ---------- the sidebar: the previewed folder as a tree, for a file and a folder alike (outside #doc, text only) ----------
@@ -2853,8 +2864,6 @@ function renderSidebar() {
     list.scrollTop = Math.max(0, y - list.clientHeight / 3);
     drawSideWindow(false);
   }
-  const shown = list.querySelector('a.active');
-  if (shown && moved) shown.classList.add('arrive');
 }
 
 /** The file on screen, as a path from the root: the panel's title stays the file Quick Look opened. */
@@ -3583,20 +3592,21 @@ $('find-next').addEventListener('click', () => findStep(1));
 $('find-prev').addEventListener('click', () => findStep(-1));
 $('find-close').addEventListener('click', () => closeFind());
 
-// ---------- copy: the file's text (a Markdown file's source) or the selection, put on the clipboard by the writer ----------
+// ---------- copy: the file's text (a Markdown file's source) or the selection; in the panel ⌘C adds the file itself ----------
 
 let copyTimer = 0;
-function copyFile() {
+/** `withFile`: the file goes on the clipboard beside its text, as Finder's ⌘C, where the host can (the Space panel). */
+function copyFile(withFile = false) {
   if (!hasText(current)) return false;
-  post({ type: 'copy', path: current.path });
+  post(withFile ? { type: 'copy', path: current.path, withFile: true } : { type: 'copy', path: current.path });
   return true;
 }
 
-/** ⌘C: the selection when there is one, else the whole file. */
+/** ⌘C: the selection when there is one, else the file and its text. */
 function copyNow() {
   const sel = getSelection().toString();
   if (sel && current.path) { post({ type: 'copy', path: current.path, text: sel }); return true; }
-  return copyFile();
+  return copyFile(true);
 }
 
 $('copy').addEventListener('click', (e) => { if (e.isTrusted) copyFile(); });

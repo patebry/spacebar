@@ -755,6 +755,60 @@ if flows.contains("8") {
     close()
 }
 
+// ================= 9. screenshots of the top-left controls (FLOWS=9 SCEN_SHOTS=<dir>) =================
+if flows.contains("9"), let dir = env["SCEN_SHOTS"] {
+    print("\n== 9. the panel's top-left controls, light and dark, to \(dir)")
+    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    func shot(_ name: String) {
+        spin(0.4)
+        guard let img = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(viewer.panel.windowNumber), [.boundsIgnoreFraming]) else { return info("no image for \(name)") }
+        let rep = NSBitmapImageRep(cgImage: img)
+        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/\(name).png"))
+    }
+    let reset = "document.getElementById('side-pop').hidden || document.getElementById('side-menu').click(); window.getSelection().removeAllRanges(); document.activeElement && document.activeElement.blur(); 0"
+    for mode in ["light", "dark"] {
+        NSApp.appearance = NSAppearance(named: mode == "dark" ? .darkAqua : .aqua)
+        _ = space([corpus.appendingPathComponent("front-matter.md")], settle: 0.6)
+        shot("panel-\(mode)-1-markdown")
+        _ = js("document.getElementById('side-menu').click(); 0")
+        shot("panel-\(mode)-2-sort-menu")
+        _ = js(reset)
+        _ = js("{ const q = document.getElementById('side-q'); q.focus(); q.value = 'no'; q.dispatchEvent(new Event('input')); } 0")
+        shot("panel-\(mode)-3-filter")
+        _ = js("{ const q = document.getElementById('side-q'); q.value = ''; q.dispatchEvent(new Event('input')); q.blur(); } 0")
+        _ = js("window.getSelection().selectAllChildren(document.body); 0")
+        shot("panel-\(mode)-4-select-all")
+        _ = js(reset)
+        _ = js("document.getElementById('find-btn').click(); 0")
+        shot("panel-\(mode)-5-find")
+        _ = js("document.getElementById('find-close').click(); 0")
+        _ = js("document.getElementById('side-toggle').click(); 0")
+        shot("panel-\(mode)-6-sidebar-hidden")
+        _ = js("document.getElementById('side-toggle').click(); 0")
+        close()
+        _ = space([corpus.appendingPathComponent("anchors.yaml").deletingLastPathComponent().appendingPathComponent("analysis.ipynb")], settle: 0.6)
+        shot("panel-\(mode)-7-notebook-seg")
+        close()
+        _ = space([corpus.appendingPathComponent("big-50k.csv")], settle: 0.6)
+        shot("panel-\(mode)-11-csv-copy")
+        close()
+        _ = space([corpus.appendingPathComponent("big.swift")], settle: 0.6)
+        _ = js("document.getElementById('copy').classList.add('done'); 0")
+        shot("panel-\(mode)-12-code-copy")
+        close()
+        _ = space([corpus.appendingPathComponent("pages-500.pdf")], settle: 1.0)
+        shot("panel-\(mode)-8-pdf")
+        _ = js("document.getElementById('side-menu').click(); 0")
+        shot("panel-\(mode)-9-pdf-sort-menu")
+        _ = js(reset)
+        _ = js("document.getElementById('aa').click(); 0")
+        shot("panel-\(mode)-10-pdf-aa")
+        _ = js("document.getElementById('aa').click(); 0")
+        close()
+    }
+    NSApp.appearance = nil
+}
+
 if let e = js("(() => { const e = window.__errs || []; window.__errs = []; return e; })()") as? [String] { closingErrors += e }
 check("no page errors while panels closed and reopened", closingErrors.isEmpty, closingErrors.joined(separator: " | "))
 print("\n" + (failures == 0 ? "scenarios: all passed" : "scenarios: \(failures) failed") + (knownBugs.isEmpty ? "" : "; known bugs seen: \(Set(knownBugs).sorted().joined(separator: ", "))"))

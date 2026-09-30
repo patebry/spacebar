@@ -29,7 +29,7 @@ Waits for the Developer ID: the first release with the Space helper is notarized
 
 ### Copy, Find and Raw
 
-- **Copy** in the toolbar puts a text file's contents on the clipboard (a Markdown file's source); ⌘C copies the selection,
+- **Copy**, a quiet button at the bottom right of the content, puts a text file's contents on the clipboard (a Markdown file's source); ⌘C copies the selection,
   or the whole file when nothing is selected.
 - **Find** (⌘F) searches Markdown, code, text, JSON and CSV, with highlighted matches, a count, ↵ and ⇧↵ for the next and
   previous, and Esc to close. Long tables and JSON trees are searched whole. The sidebar's filter moves to ⌥⌘F.

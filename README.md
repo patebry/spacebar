@@ -8,7 +8,7 @@ HTML, video, code, JSON, CSV and archives beside a document without leaving Quic
 move through the tree and open each file in spacebar; type in its filter to narrow it by name. Drag its edge to resize it; its button collapses it, and every
 preview remembers both. Click a block of Markdown to edit it in place, or tick a task box, and the file is saved; code, text,
 JSON, CSV and config files edit in place the same way. Obsidian
-vaults read as they do in Obsidian: `[[wikilinks]]`, `![[embeds]]`, callouts and tags. The toolbar copies a file's text,
+vaults read as they do in Obsidian: `[[wikilinks]]`, `![[embeds]]`, callouts and tags. A quiet button at the bottom right copies a file's text; the toolbar
 finds in it (⌘F) and switches a formatted view (Markdown, JSON, a notebook, CSV, XML) to the file as it is. When a new version is out, the
 preview's Aa button shows a dot and one click on Update installs it. Free and open source, for macOS 13 and later (Apple
 silicon and Intel).

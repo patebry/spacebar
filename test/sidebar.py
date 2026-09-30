@@ -837,6 +837,27 @@ def tools(page, check, out):
     st = page.js("return [document.getElementById('status').textContent, document.getElementById('copy').classList.contains('done')]")
     check(len(msgs(r, 'copy')) == 1 and len(c) == 1 and c[0]['text'] == open(D('notes.md')).read() and st == ['Copied', True],
           'copy: the button copies the Markdown source, and says so', json.dumps([c, st])[:300])
+    page.cmd("@eval:document.getElementById('copy').classList.remove('done'); 0")
+    page.cmd('@wait:0.3')
+    place = page.js(""" const b = document.getElementById('copy').getBoundingClientRect(), f = document.getElementById('find');
+      const style = getComputedStyle(document.getElementById('copy'));
+      return [!document.getElementById('copy').closest('#toolbar, #doc'), style.position, Math.round(innerWidth - b.right), Math.round(innerHeight - b.bottom),
+        document.getElementById('copy').matches(':hover') || +style.opacity < 1];""")
+    check(place[:2] == [True, 'fixed'] and 16 <= place[2] <= 40 and 8 <= place[3] <= 40 and place[4],
+          'copy: a quiet floating button at the bottom right, outside the toolbar and the document, clear of the scrollbar', json.dumps(place))
+    page.cmd("@eval:document.getElementById('find-btn').click(); 0")
+    apart = page.js("""const a = document.getElementById('copy').getBoundingClientRect(), b = document.getElementById('find').getBoundingClientRect();
+      return a.top >= b.bottom || a.bottom <= b.top || a.left >= b.right || a.right <= b.left;""")
+    page.cmd("@eval:document.getElementById('find-close').click(); 0")
+    check(apart, 'copy: never over the find bar')
+    chrome = page.js("return ['toolbar', 'side-toggle', 'frame', 'toc', 'sidebar', 'copy'].map((id) => getComputedStyle(document.getElementById(id)).webkitUserSelect)")
+    check(all(x == 'none' for x in chrome), 'top left: only the document is selectable, so a selection never paints the chrome or the empty page', json.dumps(chrome))
+    page.cmd("@eval:document.getElementById('side-menu').click(); 0")
+    menu = page.js("""const m = document.getElementById('side-pop').getBoundingClientRect(), s = document.getElementById('sidebar').getBoundingClientRect();
+      const bg = getComputedStyle(document.getElementById('side-pop')).backgroundImage;
+      return [Math.round(m.left - s.left), Math.round(s.right - m.right), m.top > document.getElementById('side-q').getBoundingClientRect().bottom, bg.split('gradient').length];""")
+    page.cmd("@eval:document.getElementById('side-menu').click(); 0")
+    check(menu[0] == 8 and menu[1] == 8 and menu[2] and menu[3] == 3, 'top left: the sort menu spans the sidebar under the filter on an opaque ground, never half over its rows', json.dumps(menu))
     view('rows.csv')
     r = page.cmd('@nativeclick:#copy')
     c = msgs(r, '_copied')

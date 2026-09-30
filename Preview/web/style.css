@@ -142,6 +142,8 @@
   @keyframes blink { 50% { border-color: transparent; } }
 
   /* ---------- sidebar and table of contents ---------- */
+  /* Only the document is selectable: a selection that runs past it must not paint the empty page, the frame or the chrome. */
+  #toc, #frame, #toolbar, #side-toggle { -webkit-user-select: none; user-select: none; }
   #sidebar { font: 13px/1.35 -apple-system, BlinkMacSystemFont, sans-serif; -webkit-user-select: none; user-select: none; }
   #side-head { padding: 44px 16px 6px; font-size: 11px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #side-list { padding: 0 8px 12px; }
@@ -169,8 +171,10 @@
   #side-menu { flex: none; width: 24px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; cursor: default;
     color: var(--muted); background: transparent; }
   #side-menu:hover, #side-menu[aria-expanded=true] { color: var(--fg); background: color-mix(in srgb, var(--fg) 7%, transparent); }
-  #sidebar > #side-pop { position: absolute; z-index: 3; top: 0; right: 8px; width: auto; min-width: 190px; padding: 5px; display: grid;
-    border-radius: 8px; background: var(--bg); box-shadow: 0 0 0 .5px var(--frame-line, var(--border)), 0 8px 24px rgba(0, 0, 0, .18); }
+  #sidebar > #side-pop { position: absolute; z-index: 3; top: 0; left: 8px; right: 8px; width: auto; padding: 5px; display: grid;
+    border-radius: 8px;
+    background: linear-gradient(color-mix(in srgb, var(--fg) 5%, transparent), color-mix(in srgb, var(--fg) 5%, transparent)), linear-gradient(var(--bg), var(--bg)), Canvas;
+    box-shadow: 0 0 0 .5px color-mix(in srgb, var(--fg) 22%, transparent), 0 8px 24px rgba(0, 0, 0, .28); }
   #side-pop[hidden] { display: none; }
   #side-pop button { font: inherit; text-align: left; color: var(--fg); background: none; border: 0; border-radius: 5px; padding: 4px 8px 4px 24px;
     position: relative; cursor: default; white-space: nowrap; }
@@ -426,8 +430,17 @@
   #toolbar > .tb-ic { width: 28px; padding: 0; display: inline-grid; place-items: center; }
   #toolbar > .tb-ic[hidden] { display: none; }
   #toolbar > #raw[aria-pressed=true], #toolbar > #find-btn[aria-expanded=true] { background: color-mix(in srgb, var(--ui-bg) 70%, var(--ui-fg) 16%); }
+  /* Copy: a quiet button at the bottom right of the content, as on a code block, clear of the window's scrollbar. */
+  #copy { position: fixed; z-index: 9; right: 26px; bottom: 18px; width: 30px; height: 30px; padding: 0; display: grid; place-items: center;
+    border: 0; border-radius: 7px; color: var(--muted); cursor: default; opacity: .55;
+    background: color-mix(in srgb, var(--bg) 90%, var(--fg) 10%); box-shadow: 0 0 0 .5px var(--border), 0 2px 8px rgba(0, 0, 0, .12);
+    transition: opacity .15s, color .15s; -webkit-user-select: none; user-select: none; }
+  #copy[hidden] { display: none; }
+  #copy:hover, #copy:focus-visible, #copy.done { opacity: 1; color: var(--fg); }
+  #copy:active { transform: scale(.96); }
+  :root.sb-embedded #copy { display: none; }
   #copy .done-ic, #copy.done .copy-ic { display: none; }
-  #copy.done .done-ic { display: block; color: var(--ui-accent); }
+  #copy.done .done-ic { display: block; color: var(--accent); }
 
   /* Find: a bar under the toolbar; the matches are drawn with the CSS Custom Highlight API, so the document is never changed. */
   #find {

@@ -500,6 +500,13 @@ func run(_ cmd: String) -> String {
         result = arg
     case "@shot":
         result = snapshot(arg)
+    case "@winshot":
+        // The whole window, native panes over the page included.
+        spin(0.2)
+        if let img = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming]),
+           let png = NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]), (try? png.write(to: URL(fileURLWithPath: arg))) != nil {
+            result = "\(img.width)x\(img.height)"
+        } else { result = "failed" }
     case "@pixel":
         let p = arg.split(separator: ",").compactMap { Double($0) }
         var rgb: [Int] = [], done = false

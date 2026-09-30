@@ -47,12 +47,6 @@ final class EditHost: NSObject, SpacebarEditHostProtocol {
     }
 }
 
-/// While an edit holds the keyboard the preview's window is not key, and WKWebView takes the first click into a non-key
-/// window only as window activation. Every click here edits, selects or follows a link, so it must land on the first try.
-final class PreviewWebView: WKWebView {
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-}
-
 /// One WKWebView per extension process, reused across previews so only the first preview pays WebKit start-up.
 final class WebHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     static let shared = WebHost()
@@ -508,6 +502,7 @@ class PreviewController: NSViewController {
     private var tornHalted = false
 
     override func loadView() {
+        GestureRouter.install()
         host.web.removeFromSuperview()
         host.web.autoresizingMask = [.width, .height]
         let container = makeRoot(frame: NSRect(x: 0, y: 0, width: 900, height: 700))

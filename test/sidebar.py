@@ -164,7 +164,8 @@ def sandboxed(tree, check, runtime=False):
     open(plist, 'w').write(f'<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>{SANDBOX_ID}</string></dict></plist>')
     subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-O', '-target', 'arm64-apple-macos13.0'] +
                    [os.path.join(ROOT, *p) for p in (('test', 'web', 'main.swift'), ('Shared', 'Settings.swift'), ('Shared', 'WebShell.swift'),
-                                                      ('Shared', 'FolderListing.swift'), ('Shared', 'FolderScan.swift'), ('Shared', 'LinkPolicy.swift'), ('Preview', 'PDFPane.swift'))] +
+                                                      ('Shared', 'FolderListing.swift'), ('Shared', 'FolderScan.swift'), ('Shared', 'LinkPolicy.swift'), ('Preview', 'PDFPane.swift'),
+                                                      ('Preview', 'Gestures.swift'), ('test', 'nsevents.swift'))] +
                    ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist', '-Xlinker', plist, '-o', exe], check=True)
     subprocess.run(['codesign', '--force', '--sign', '-', '-i', SANDBOX_ID] + (['--options', 'runtime'] if runtime else []) + ['--entitlements', ent, exe],
                    check=True, capture_output=True)
@@ -361,50 +362,91 @@ def viewers(page, check, out, st):
         fits: r.width <= document.getElementById('doc').clientWidth + 1 && r.height <= innerHeight };"""
     AT = """(dx, dy, detail) => { const s = document.querySelector('#doc .img-stage'), r = s.querySelector('img').getBoundingClientRect();
       const x = r.left + r.width * dx, y = r.top + r.height * dy;
-      for (const type of ['mousedown', 'mouseup', 'click']) s.querySelector('img').dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, detail }));
+      for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].concat(detail === 2 ? ['dblclick'] : [])) {
+        const E = type.startsWith('pointer') ? PointerEvent : MouseEvent;
+        s.querySelector('img').dispatchEvent(new E(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, detail, button: 0, isPrimary: true }));
+      }
       return 0; }"""
-    at = lambda dx, dy, detail=1: page.cmd(f'@eval:({AT})({dx}, {dy}, {detail})')
+    def at(dx, dy, detail=1):
+        page.cmd(f'@eval:({AT})({dx}, {dy}, {detail})')
+        page.cmd('@wait:0.35')
+    dbl = lambda dx, dy: (at(dx, dy, 1), at(dx, dy, 2))
     view('big.png')
     page.cmd('@wait:0.3')
     z = page.js(ZOOM)
     check(not z['zoomed'] and z['fits'] and z['label'].endswith('%') and int(z['label'][:-1]) < 100 and '2400 × 1600' in z['cap'] and z['aa'],
           'image: fitted to the panel, its zoom in the caption; no Aa popover for an image', json.dumps(z))
+    fit_label = z['label']
     shoot(page, 'image-fit')
     at(0.75, 0.5)
     z = page.js(ZOOM)
-    check(z['zoomed'] and z['label'] == '100%' and z['w'] == 2400 and z['left'] > 0, 'image: a click zooms to actual size about the point clicked', json.dumps(z))
+    check(not z['zoomed'] and z['label'] == fit_label, 'image: a single click leaves the zoom alone', json.dumps(z))
+    dbl(0.75, 0.5)
+    z = page.js(ZOOM)
+    check(z['zoomed'] and z['label'] == '100%' and z['w'] == 2400 and z['left'] > 0, 'image: a double-click zooms to actual size about the point, once', json.dumps(z))
     shoot(page, 'image-100')
     before = z['left']
     page.cmd('@nativedrag:#doc .img-stage,-150')
     z = page.js(ZOOM)
     check(z['zoomed'] and z['left'] >= before + 100, 'image: a drag moves the zoomed image and does not zoom back out', json.dumps([before, z]))
-    at(0.5, 0.5)
+    dbl(0.5, 0.5)
     z = page.js(ZOOM)
-    check(not z['zoomed'] and z['fits'], 'image: another click fits it again', json.dumps(z))
-    at(0.5, 0.5, 1)
-    at(0.5, 0.5, 2)
-    z = page.js(ZOOM)
-    check(z['zoomed'] and z['label'] == '100%', 'image: a double-click toggles once', json.dumps(z))
-    at(0.5, 0.5)
+    check(not z['zoomed'] and z['fits'], 'image: another double-click fits it again', json.dumps(z))
     page.cmd("""@eval:(() => { const s = document.querySelector('#doc .img-stage'), r = s.getBoundingClientRect();
       s.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, ctrlKey: true, deltaY: -40, clientX: r.left + 50, clientY: r.top + 50 })); return 0; })()""")
     z = page.js(ZOOM)
     fitted = page.js("return Math.round(document.querySelector('#doc .img-stage img').naturalWidth)")
-    check(z['zoomed'] and 100 > int(z['label'][:-1]) > 0 and z['w'] < fitted, 'image: a pinch (a wheel with ctrl) zooms by steps', json.dumps(z))
+    check(z['zoomed'] and 100 > int(z['label'][:-1]) > 0 and z['w'] < fitted, 'image: a wheel with ctrl zooms by steps', json.dumps(z))
     dispatch_key(page, '=', metaKey=True)
+    page.cmd('@wait:0.35')
     z2 = page.js(ZOOM)
     dispatch_key(page, '0', metaKey=True)
+    page.cmd('@wait:0.35')
     z3 = page.js(ZOOM)
     check(z2['w'] > z['w'] and not z3['zoomed'], 'image: ⌘+ zooms in and ⌘0 fits', json.dumps([z['w'], z2['w'], z3['zoomed']]))
+    dispatch_key(page, '=', metaKey=True)
+    dispatch_key(page, '=', metaKey=True)
+    page.cmd('@wait:0.35')
+    z4 = page.js(ZOOM)
+    want = round(int(fit_label[:-1]) * 1.5625)
+    check(z4['zoomed'] and abs(int(z4['label'][:-1]) - want) <= 2, 'image: ⌘+ twice during the animation steps twice (1.25²)', json.dumps([fit_label, z4['label']]))
+    dispatch_key(page, '0', metaKey=True)
+    page.cmd('@wait:0.35')
+
+    # The trackpad and the mouse as real input arrives (NSApp.sendEvent), in a window that is not key of an app that is not
+    # active, as in the Space viewer.
+    fit_pct = int(fit_label[:-1])
+    page.cmd('@nativepinch:#doc .img-stage,0.1')
+    z = page.js(ZOOM)
+    pinched = int(z['label'][:-1]) if z['label'] else 0
+    check(z['zoomed'] and abs(pinched - fit_pct * 1.1 ** 5) <= fit_pct * 0.12, 'image: a trackpad pinch zooms by the pinch alone (WebKit\'s ctrl wheels beside it ignored)',
+          json.dumps([fit_label, z['label']]))
+    top = z['top']
+    page.cmd('@nativescroll:#doc .img-stage,0,-200')
+    z = page.js(ZOOM)
+    check(z['zoomed'] and z['top'] > top + 50, 'image: two fingers move a zoomed image', json.dumps([top, z]))
+    page.cmd('@nativesmart:#doc .img-stage')
+    page.cmd('@wait:0.3')
+    z = page.js(ZOOM)
+    check(not z['zoomed'] and z['label'] == fit_label, 'image: a two-finger double tap on a zoomed image fits it', json.dumps(z))
+    page.cmd('@nativesmart:#doc .img-stage')
+    page.cmd('@wait:0.3')
+    z = page.js(ZOOM)
+    check(z['zoomed'] and z['label'] == '100%', 'image: a two-finger double tap on a fitted image zooms to 100%', json.dumps(z))
+    page.cmd('@nativedblclick:#doc .img-stage')
+    page.cmd('@wait:0.3')
+    z = page.js(ZOOM)
+    check(not z['zoomed'] and z['label'] == fit_label, 'image: a double-click through the window fits it', json.dumps(z))
+
     view('small.png')
     page.cmd('@wait:0.3')
-    at(0.5, 0.5)
+    dbl(0.5, 0.5)
     z = page.js(ZOOM)
     check(z['zoomed'] and z['label'] == '200%' and z['w'] == 320, 'image: a small image, already at 100%, zooms to 200%', json.dumps(z))
     rm = page.js("""const out = []; for (const sh of document.styleSheets) { let rules; try { rules = sh.cssRules; } catch (e) { continue; }
         const walk = (list) => { for (const r of list) { if (r.cssRules) walk(r.cssRules); if (/img-stage/.test(r.selectorText || '') && /transition|animation/.test(r.cssText)) out.push(r.cssText); } };
         walk(rules); } return out""")
-    check(rm == [], 'image: zooming never animates (nothing for reduced motion to turn off)', json.dumps(rm))
+    check(rm == [], 'image: no CSS transition on the image (its zoom animation is scripted, and off for reduced motion)', json.dumps(rm))
 
     # ---- the Aa popover per view, and the update's own button ----
     AA = """const p = document.getElementById('aa-pop'), vis = (id) => { const e = document.getElementById(id); return !!e && !e.hidden && getComputedStyle(e).display !== 'none'; };

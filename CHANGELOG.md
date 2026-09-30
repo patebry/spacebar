@@ -24,6 +24,8 @@ Waits for the Developer ID: the first release with the Space helper is notarized
 ### Viewers
 
 - HEIC, AVIF, TIFF, camera RAW, PSD, OpenEXR, TGA, JPEG 2000 and icons are decoded natively, with fit, zoom and pan.
+- Images zoom as in Preview, in Quick Look and in the Space panel: pinch about the pointer, two fingers to pan, double-click
+  or a two-finger double tap for fit and actual size, ⌘+ ⌘− ⌘0. A single click no longer zooms.
 - Office, iWork, fonts, 3D, certificates, calendars and e-books show Apple's own preview inside the panel; files declared as
   text (`.strings`, `.pbxproj`, playlists, crash reports) stay in spacebar's text view.
 - `.dmg` files are claimed; their card shows the format and whether the image is encrypted, without mounting it.

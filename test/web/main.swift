@@ -19,6 +19,11 @@
 //   @pixel:<x>,<y>     the snapshot's colour at that point of the view, as [r, g, b]
 //   @nativeclick:<selector>   a real mouse click (NSEvent down/up sent to the harness's own window) at the element's corner
 //   @nativedrag:<selector>,<dx>   a real mouse drag in the harness's own window: down in the element, moves in steps, up
+//   @nativepinch:<selector>,<by>  a trackpad pinch at the element's middle, five steps of <by> (0.1: a tenth larger), and
+//   @nativesmart:<selector>, @nativescroll:<selector>,<dx>,<dy>, @nativedblclick:<selector>: a two-finger double tap, a
+//                      two-finger scroll and a double-click there. These go through NSApp.sendEvent, as real input does, to a
+//                      window that is not key of an app that is not active, as in the Space viewer; GestureRouter is installed
+//                      and the web view is the extension's PreviewWebView.
 //   @remotereset       RemoteImageGate.reset(), as a new preview or another document does
 //   @loaddisk          reload the page with settings.json from the scratch folder, as the next preview would
 //   @relist            list the root and every folder the page expanded again and send them, as the folder watches do
@@ -106,7 +111,8 @@ config.setURLSchemeHandler(scheme, forURLScheme: "spacebar")
 config.userContentController.add(rec, name: "sb")
 let gate = RemoteImageGate(config.userContentController)
 var currentFile: String?
-let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 2000), configuration: config)
+GestureRouter.install()
+let web = PreviewWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 2000), configuration: config)
 web.navigationDelegate = rec
 // With the screen locked the window counts as occluded, and WebKit then stops requestAnimationFrame; the test view should
 // behave like a visible one either way (WKWebView SPI, test harness only).
@@ -515,6 +521,22 @@ func run(_ cmd: String) -> String {
             for i in 1...10 { send(.leftMouseDragged, p[0] + dx * Double(i) / 10) }
             send(.leftMouseUp, p[0] + dx)
             spin(0.4)
+            result = true
+        } else { result = false }
+    case "@nativepinch", "@nativesmart", "@nativescroll", "@nativedblclick":
+        let numbers = ["@nativepinch": 1, "@nativescroll": 2][name] ?? 0
+        let parts = arg.split(separator: ",", omittingEmptySubsequences: false)
+        let sel = parts.dropLast(numbers).joined(separator: ","), n = parts.suffix(numbers).map { Double($0) ?? 0 }
+        let js = "(() => { const t = document.querySelector(\(jsonString(sel))); if (!t) return null; const r = t.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()"
+        if let p = eval(web, js) as? [Double], p.count == 2 {
+            let at = NSPoint(x: p[0], y: web.frame.height - p[1])
+            switch name {
+            case "@nativepinch": Synth.send(Synth.pinch(window, at: at, by: n[0]), pause: 0.03)
+            case "@nativesmart": Synth.send([Synth.smartMagnify(window, at: at)])
+            case "@nativescroll": Synth.send(Synth.scroll(window, at: at, dx: n[0], dy: n[1]), pause: 0.03)
+            default: Synth.send(Synth.click(window, at: at, 1) + Synth.click(window, at: at, 2), pause: 0.03)
+            }
+            spin(0.5)
             result = true
         } else { result = false }
     case "@pdf":

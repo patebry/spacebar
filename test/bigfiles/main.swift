@@ -212,7 +212,7 @@ func show(_ c: Case) -> Sample {
         }
         return upAt != nil
     }
-    // The writer's listing sometimes comes back empty under this harness (seen before this change too): the archive's card.
+    // The writer's listing failed: the archive's card.
     let unlisted = upAt == nil && (js("document.getElementById('doc').textContent.includes('contents can’t be listed')") as? Bool ?? false)
     if upAt == nil, env["DEBUG"] != nil {
         print("  not up: painted \(rec.painted != nil) asking \(asking) page:", js("JSON.stringify([current.path, current.view, document.querySelectorAll('#doc [data-path]').length, document.getElementById('doc').textContent.slice(0, 60), document.getElementById('status').textContent])") ?? "nil")
@@ -259,9 +259,11 @@ for c in cases where env["ONLY"].map({ c.name.contains($0) }) ?? true {
     print(String(format: "%-26@ %9@ %9@ %9@ %10.1f %10.1f %9.1f", c.name as NSString, med(\.painted) as NSString, med(\.rendered) as NSString,
                  med(\.up) as NSString, stall, peak, growth))
     results.append((c, samples))
-    let shown = !samples.isEmpty && samples.allSatisfy { $0.up != nil } && (got == c.expect || unlisted > 0)
+    let shown = !samples.isEmpty && samples.allSatisfy { $0.up != nil } && got == c.expect
     check("\(c.name): shown (\(got))", shown, "expected \(c.expect), content up \(samples.map { $0.up != nil })")
-    if unlisted > 0 { print("KNOWN \(c.name): the writer's listing failed in \(unlisted) of \(runs) shows (the archive's card instead)") }
+    if c.file.hasSuffix(".zip") {
+        check("\(c.name): the writer listed it in \(runs - unlisted) of \(runs) shows", unlisted == 0, "the archive's card instead in \(unlisted)")
+    }
     target(String(format: "\(c.name): main thread never stalls over %.0f ms (%.1f)", c.stallTarget, stall), stall <= c.stallTarget)
     target(String(format: "\(c.name): footprint grows at most %.0f MB (%.1f)", c.growthTarget, growth), growth <= c.growthTarget)
 }

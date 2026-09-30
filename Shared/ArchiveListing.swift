@@ -101,6 +101,10 @@ enum ArchiveListing {
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice
         p.standardInput = input
+        // Not waitUntilExit: on a dispatch thread it can miss the exit and block past the deadline below, and the listing
+        // comes back as a failure. The termination handler always runs.
+        let exited = DispatchSemaphore(value: 0)
+        p.terminationHandler = { _ in exited.signal() }
         do { try p.run() } catch { return nil }
         let pid = p.processIdentifier
         let term = DispatchWorkItem { if p.isRunning { p.terminate() } }
@@ -129,7 +133,7 @@ enum ArchiveListing {
                     break
                 }
             }
-            p.waitUntilExit()
+            exited.wait()
             finished.signal()
         }
         guard finished.wait(timeout: .now() + timeout + 2) == .success else { return nil }

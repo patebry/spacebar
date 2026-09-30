@@ -13,7 +13,7 @@ PDF area, following the sidebar and the panel, and torn down cleanly. A sandboxe
 extension's entitlements, shows that a PDF and an image render under the extension's sandbox."""
 import base64, json, os, random, shutil, struct, subprocess, sys, tempfile, wave, zlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from webthemes import Page, ROOT, THEMES, HELPERS, click
+from webthemes import Page, ROOT, THEMES, HELPERS, TASK_NAMES, click
 import hostile
 
 # The outlined page's edge: a PDF sits inside it, the gap and the hairline in from the panel's edges.
@@ -1724,6 +1724,13 @@ def missing_images(page, check, out):
           json.dumps(b))
     check(b[3:] == [['Bad', 'bad.png', ['Unsupported format', 'Reveal folder'], True], ['Text', 'notes.txt', ['Unsupported format', 'Reveal folder'], True]],
           'an image that is there but cannot be shown, or is not an image: "Unsupported format"', json.dumps(b[3:]))
+    reveal = HELPERS + """const b = document.querySelector('#doc p .img-missing .img-reveal'), box = b.closest('.img-missing');
+      return measure(root, getComputedStyle(b).color, ['var(--bg)', getComputedStyle(box).backgroundColor]);"""
+    for mode in ('light', 'dark'):
+        page.cmd('@appearance:' + mode)
+        rv = page.js(reveal)
+        check(rv['ratio'] >= 4.5, f'missing image ({mode}): Reveal folder reaches 4.5:1 on the placeholder as drawn', json.dumps(rv))
+    page.cmd('@appearance:light')
     check(page.js(natural) == [['here.png', 40]] and len([t for t in types(r) + types(w) if t == 'imageStatus']) == 1,
           'an image that is there still renders, and the page asks about the failed ones once', json.dumps([page.js(natural), types(r) + types(w)]))
     check(page.js("return [...document.querySelectorAll('#doc .img-blocked')].map((n) => n.querySelector('.img-alt').textContent)") == ['Remote'],
@@ -1939,6 +1946,8 @@ def main():
               and not {'editStop', 'editCancel', 'editBlock'} & set(types(r)), 'collapsing keeps the edit open', json.dumps(types(r)))
         page.cmd('@eval:sb.editEnd({}); 0')
         click(page, '#side-toggle')
+        tn = page.js(TASK_NAMES)
+        check(tn['unique'] and tn['names'] == [['one', 'one'], ['two', 'two']], 'task checkboxes are named by their items with the sidebar open', json.dumps(tn))
         r = page.cmd("@eval:(() => { const b = document.querySelector('#doc input[type=checkbox]'); b.click(); return 0; })()")
         tg = [m for m in r['messages'] if m.get('type') == 'toggle']
         check(tg and tg[0].get('line') == '4' and tg[0].get('checked') in ('1', 'true'), 'a task toggle posts with the sidebar open', json.dumps(tg))

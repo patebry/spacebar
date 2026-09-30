@@ -73,8 +73,11 @@ function markdown(html) {
       li.attrJoin('class', 'task');
       inline.children[0].content = inline.children[0].content.slice(m[0].length);
       const box = new state.Token('html_inline', '', 0);
-      box.content = `<input type="checkbox" data-line="${li.map[0]}"${m[1] === ' ' ? '' : ' checked'}>`;
+      box.content = `<input type="checkbox" data-line="${li.map[0]}"${m[1] === ' ' ? '' : ' checked'}><span class="task-text">`;
+      const close = new state.Token('html_inline', '', 0);
+      close.content = '</span>';
       inline.children.unshift(box);
+      inline.children.push(close);
     }
   });
 
@@ -307,12 +310,25 @@ function render(text, depth = 0) {
     catch (e) { n.textContent = n.dataset.tex; }
   });
   obsidian(frag, depth);
+  labelTasks(frag);
   if (!settings.taskToggles) frag.querySelectorAll('input[type=checkbox]').forEach((n) => { n.disabled = true; });
   if (settings.remoteImages !== true && current.remoteImagesOnce !== true) blockRemoteImages(frag);
   if (depth === 0) frag.querySelectorAll('img').forEach(watchImage);
   const head = fm && frontMatterNode(fm);
   if (head) frag.prepend(head);
   return frag;
+}
+
+/** Names each task checkbox by its item's text. The sanitizer drops <label> and prefixes the document's ids, so the ids are
+ *  given here, after it, from a counter no document id can take. */
+let taskLabels = 0;
+function labelTasks(frag) {
+  for (const t of frag.querySelectorAll('li.task span.task-text:not([id])')) {
+    const box = t.previousElementSibling;
+    if (!box || !box.matches('input[type=checkbox]')) continue;
+    t.id = `sb-task-${++taskLabels}`;
+    box.setAttribute('aria-labelledby', t.id);
+  }
 }
 
 // Swift's content rule list is what blocks remote images; this shows where they are and offers the one-shot load. The load

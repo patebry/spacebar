@@ -124,6 +124,32 @@ ACCENT_LINKS = HELPERS + """
   return out;
 """
 
+# A missing image's Reveal folder button, in the placeholder as imageFailed draws it, over the page (WCAG 1.4.3: 4.5:1). With
+# ACCENTS, the Apple theme's link colour under every system accent colour.
+REVEAL_CONTRAST = HELPERS + """
+  const p = document.getElementById('doc').appendChild(el('p')), box = p.appendChild(el('span', 'img-missing'));
+  const b = box.appendChild(el('span', 'img-missing-text')).appendChild(el('span', 'img-missing-why')).appendChild(el('button', 'img-reveal', 'Reveal folder'));
+  const one = () => measure(root, getComputedStyle(b).color, ['var(--bg)', getComputedStyle(box).backgroundColor]);
+  const out = { base: one() };
+  for (const a of ACCENTS) { root.style.setProperty('--sys-accent', a); out[a] = one().ratio; }
+  root.style.removeProperty('--sys-accent');
+  p.remove();
+  return out;
+"""
+
+# Links in running text: underlined (WCAG 1.4.1, not colour alone), with an underline that stands out from the page.
+LINK_CUE = HELPERS + """
+  return [...document.querySelectorAll('#doc :is(p, li) a[href]:not(.unresolved)')].map((a) => { const cs = getComputedStyle(a);
+    return [a.textContent, cs.textDecorationLine, measure(a, cs.textDecorationColor, ['var(--bg)']).ratio]; })
+    .filter(([, line, r]) => !line.includes('underline') || r < 1.5);
+"""
+
+# Each task checkbox's accessible name: the text its aria-labelledby points at, which must be its item's text.
+TASK_NAMES = """const boxes = [...document.querySelectorAll('#doc li.task input[type=checkbox]')];
+  const ids = boxes.map((b) => b.getAttribute('aria-labelledby'));
+  return { n: boxes.length, unique: new Set(ids).size === ids.length && !ids.includes(null),
+    names: boxes.map((b, i) => [(document.getElementById(ids[i]) || {}).textContent || '', b.closest('li').textContent.trim()]) };"""
+
 
 MERMAID_FILL = """
   const n = document.querySelector('#doc pre.mermaid svg .node rect, #doc pre.mermaid svg .node polygon, #doc pre.mermaid svg .node path');
@@ -210,6 +236,13 @@ def main():
                       '; '.join(f"{p['name']} {p['ratio']} ({p['text']} on {p['bg']})" for p in low))
                 cp = page.js(COPY_CONTRAST)
                 check(cp['ratio'] >= 3, f'theme {t} {mode}: the Copy button\'s icon reaches 3:1 on the button', json.dumps(cp))
+                rv = page.js(REVEAL_CONTRAST.replace('ACCENTS', json.dumps(ACCENTS if t == 'apple' else [])))
+                check(rv['base']['ratio'] >= 4.5 and all(r >= 4.5 for k, r in rv.items() if k != 'base'),
+                      f'theme {t} {mode}: a missing image\'s Reveal folder reaches 4.5:1 on its placeholder' + (' with every system accent colour' if t == 'apple' else ''),
+                      json.dumps(rv))
+                bare = page.js(LINK_CUE)
+                check(not bare and page.js("return document.querySelectorAll('#doc p a[href]').length") >= 3,
+                      f'theme {t} {mode}: links in running text are underlined, not told by colour alone', json.dumps(bare))
                 if t == 'apple':
                     ratios = page.js(ACCENT_LINKS.replace('ACCENTS', json.dumps(ACCENTS)))
                     low = {a: r for a, r in ratios.items() if r < 4.5}
@@ -373,6 +406,9 @@ def main():
         page.apply(toc='auto', fontSize=15, theme='apple')
 
         # ---- settings that change what is rendered ----
+        tn = page.js(TASK_NAMES)
+        check(tn['n'] == 3 and tn['unique'] and all(a == b and a for a, b in tn['names']),
+              'each task checkbox is named by its item\'s text (aria-labelledby)', json.dumps(tn))
         page.apply(math=False, mermaid=False, taskToggles=False)
         off = page.js("""return { katex: document.querySelectorAll('#doc .katex').length, tex: document.querySelectorAll('#doc .tex-src').length,
           mermaid: document.querySelectorAll('#doc pre.mermaid').length, code: [...document.querySelectorAll('#doc pre code')].some((c) => /graph LR/.test(c.textContent)),
@@ -391,6 +427,9 @@ def main():
         page.render(raw)
         h = page.js("return [document.querySelectorAll('#doc b').length, document.querySelector('#doc p').textContent]")
         check(h[0] == 0 and '<b>bold</b>' in h[1], "rawHTML off renders the document's HTML as text", json.dumps(h))
+        page.render(demo)
+        tn = page.js(TASK_NAMES)
+        check(tn['n'] == 3 and tn['unique'] and all(a == b and a for a, b in tn['names']), 'rawHTML off: task checkboxes still named by their text', json.dumps(tn))
         page.apply(rawHTML='sanitized')
 
         # ---- stats ----

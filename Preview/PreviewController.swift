@@ -295,6 +295,18 @@ class PreviewController: NSViewController {
     private var imagePane: ImagePane?
     /// The view the last finished show put up for the file on screen (a fallback's "info" or "text" included); nil while it loads.
     private var shownView: String?
+    /// The archive on screen as last listed: its view with the listing in it, and each file's size and date by name, the only
+    /// names an entry may be read by. Nil for anything else.
+    private var archive: (path: String, payload: [String: Any], files: [String: (size: Int64?, modified: Double?)])?
+    /// The file inside `archive` on screen (ArchiveEntryView), while one is: read-only, never opened, never edited.
+    private var entryShown: String?
+    /// Bumped by every entry asked for and every show, so a read that lands late is dropped.
+    private var entryGen = 0
+    /// The image the next render hands the `entry` host, and only that render.
+    private var pendingEntryImage: EntryImage?
+    /// One read of an entry at a time: a key held down asks for many, and only the last one asked for is read next.
+    private var entryBusy = false
+    private var entryNext: (() -> Void)?
     /// The `pdfGen` of the show still loading, which puts its own view up unless a close has since made it stale.
     private var loadingGen: Int?
     /// Bumped by every render, so a thumbnail made for an info card no longer on screen is dropped.
@@ -989,6 +1001,10 @@ class PreviewController: NSViewController {
         fileURL = url
         fileKind = kind
         quickLookShown = false
+        archive = nil
+        entryShown = nil
+        entryNext = nil
+        entryGen += 1
         shownView = nil
         shownStamp = nil
         shownCanOpen = false
@@ -1152,6 +1168,9 @@ class PreviewController: NSViewController {
         renderGen += 1
         var payload = payload
         host.scheme.body = PageBody.take(&payload)
+        host.scheme.entryImage = pendingEntryImage
+        pendingEntryImage = nil
+        host.scheme.filesBlocked = payload["entry"] != nil
         host.scheme.bodyCurrent = { [weak self] path in
             guard let self, self.host.controller === self else { return false }
             return self.fileURL?.path == path
@@ -1383,6 +1402,10 @@ class PreviewController: NSViewController {
 
     private func finishShow(_ url: URL, _ payload: [String: Any], pdf: PDFDocument?, rich: NSAttributedString? = nil, reason: String) {
         unavailablePath = nil
+        archive = nil
+        entryShown = nil
+        entryNext = nil
+        entryGen += 1
         var p = payload
         if let o = opener, o.path == url.path { p["app"] = o.app; p["editor"] = o.editor }
         let canOpen = p["canOpen"] as? Bool == true
@@ -1438,7 +1461,7 @@ class PreviewController: NSViewController {
         log.info("show \(view, privacy: .public) (\(self.fileKind.rawValue, privacy: .public))")
         render(p)
         if noPane { addThumbnail(url) }
-        if view == "archive" { listArchive(url) }
+        if view == "archive" { listArchive(url, p) }
         // The button names the app the writer would open it with; an app, a script or an executable gets Reveal in Finder only.
         if canOpen, reason == "open" {
             let path = url.path, gen = renderGen
@@ -1468,13 +1491,22 @@ class PreviewController: NSViewController {
 
     /// Asks the writer for the archive's contents (the extension cannot run bsdtar) and sends them to the page; an archive it
     /// cannot list turns into its info card.
-    private func listArchive(_ url: URL) {
+    private func listArchive(_ url: URL, _ shown: [String: Any]) {
         let path = url.path, gen = renderGen
         let done: (Data?) -> Void = { [weak self] data in
             DispatchQueue.main.async {
                 guard let self, self.renderGen == gen, self.fileURL?.path == path else { return }
                 if let data, let list = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let entries = list["entries"] as? [[String: Any]] {
-                    self.js("sb.setArchive", ["path": path, "entries": entries, "truncated": list["truncated"] as? Bool ?? false])
+                    let truncated = list["truncated"] as? Bool ?? false
+                    var files: [String: (size: Int64?, modified: Double?)] = [:]
+                    for e in entries where e["isDir"] as? Bool == false {
+                        if let n = e["name"] as? String, files[n] == nil { files[n] = ((e["size"] as? NSNumber)?.int64Value, (e["modified"] as? NSNumber)?.doubleValue) }
+                    }
+                    var p = shown
+                    p["entries"] = entries
+                    p["truncated"] = truncated
+                    self.archive = (path, p, files)
+                    self.js("sb.setArchive", ["path": path, "entries": entries, "truncated": truncated])
                 } else {
                     self.js("sb.setArchive", ["path": path, "error": "This archive’s contents can’t be listed."])
                     self.addThumbnail(url)
@@ -1482,6 +1514,101 @@ class PreviewController: NSViewController {
             }
         }
         helper(onError: { done(nil) }) { $0.listArchive(path, reply: done) }
+    }
+
+    /// A file inside the archive on screen, read by the writer's sandboxed bsdtar into memory (never extracted) and shown
+    /// read-only, as its text or image view or its info card. `info` is what the listing said of it.
+    private func showEntry(_ url: URL, _ name: String, _ info: (size: Int64?, modified: Double?)) {
+        entryGen += 1
+        let gen = entryGen, path = url.path
+        let done = { [weak self] (data: Data?, why: String?) in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let next = self.entryNext, gen != self.entryGen {
+                    self.entryNext = nil
+                    return next()
+                }
+                guard gen == self.entryGen, self.fileURL?.path == path, self.archive?.path == path else { return }
+                self.putEntry(path, name, ArchiveEntryView.payload(archive: path, root: self.rootDir, entry: name, size: info.size,
+                                                                   modified: info.modified, data: data, failure: why), data)
+            }
+        }
+        // Not read at all: a kind shown only as its info card, or a size past the cap before a byte is streamed.
+        guard let cap = ArchiveEntryView.cap(for: name) else { return done(nil, nil) }
+        if let size = info.size, size > Int64(cap) { return done(nil, "tooLarge") }
+        if entryBusy {
+            entryNext = { [weak self] in self?.showEntry(url, name, info) }
+            return
+        }
+        entryBusy = true
+        let read = { [weak self] (data: Data?, why: String?) in
+            DispatchQueue.main.async { self?.entryBusy = false }
+            done(data, why)
+        }
+        helper(onError: { read(nil, "unreadable") }) { $0.readArchiveEntry(path, entry: name, reply: read) }
+    }
+
+    private func putEntry(_ path: String, _ name: String, _ payload: [String: Any], _ data: Data?) {
+        var p = payload
+        closePDF()
+        entryShown = name
+        shownCanOpen = false
+        shownText = false
+        if let t = p["text"] as? String { p["text"] = TextDecoding.nativeUTF8(t) }
+        shownBody = (p["text"] as? String).map { ($0, false) }
+        // WebKit decodes it, so it is held to the pixel bound ImageIO's images have before any decode.
+        if p["view"] as? String == "image", data.flatMap({ ImagePane.pixelSize(.data($0)) }) == nil {
+            p["view"] = "info"
+            p["note"] = "This image can’t be shown here."
+        }
+        if p["view"] as? String == "image", let data {
+            let image = EntryImage(path: path, name: name, data: data)
+            pendingEntryImage = image
+            p["src"] = image.url
+        }
+        if p["view"] as? String == "bitmap" {
+            if let data, let size = ImagePane.pixelSize(.data(data)) {
+                p["width"] = Int(size.width)
+                p["height"] = Int(size.height)
+            } else {
+                p["view"] = "info"
+                p["note"] = "This image can’t be shown here."
+            }
+        }
+        shownView = p["view"] as? String
+        log.info("show archive entry \(self.shownView ?? "", privacy: .public)")
+        render(p)
+        if p["view"] as? String == "bitmap", let data {
+            let pane = ImagePane()
+            pane.onZoom = { [weak self] _, zoom in self?.js("sb.imageZoom", ["path": path, "zoom": zoom]) }
+            pane.onFailed = { [weak self] _ in
+                guard let self, self.entryShown == name, self.fileURL?.path == path else { return }
+                self.closePDF()
+                var card = p
+                card["view"] = "info"
+                card["note"] = "This image can’t be shown here."
+                self.shownView = "info"
+                self.render(card)
+            }
+            pane.load(.data(data), path: path)
+            imagePane = pane
+        }
+    }
+
+    /// The archive's listing again, as it was last listed: no second read of the archive.
+    private func backToArchive() {
+        guard var p = archive?.payload else { return }
+        entryGen += 1
+        entryShown = nil
+        entryNext = nil
+        closePDF()
+        shownView = "archive"
+        shownBody = nil
+        shownText = false
+        shownCanOpen = p["canOpen"] as? Bool == true
+        if let o = opener, o.path == archive?.path { p["app"] = o.app; p["editor"] = o.editor }
+        p["reason"] = "back"
+        render(p)
     }
 
     fileprivate func stopNativeViews() { closePDF() }
@@ -1852,7 +1979,20 @@ class PreviewController: NSViewController {
             if [.video, .audio].contains(fileKind) { mediaPane?.place(message: body, in: host.web) }
             qlPane?.place(message: body, in: host.web)
             if fileKind == .rtf { richPane?.place(message: body, in: host.web) }
-            if fileKind == .image { imagePane?.place(message: body, in: host.web) }
+            if fileKind == .image || (fileKind == .archive && entryShown != nil) { imagePane?.place(message: body, in: host.web) }
+        case "archiveEntry":
+            // A file of the archive on screen, by a name its listing gave: nothing else is ever asked of bsdtar.
+            guard let url = fileURL, fileKind == .archive, let a = archive, a.path == url.path, m.string("path", max: 4096) == url.path,
+                  let asked = m.string("entry", max: 4096), let i = a.files.index(forKey: asked) else {
+                return refuse("archiveEntry", "not a file listed in the archive on screen")
+            }
+            // The name exactly as listed, not the page's copy of it (Swift's == would also match another normalization).
+            showEntry(url, a.files[i].key, a.files[i].value)
+        case "archiveBack":
+            guard let url = fileURL, fileKind == .archive, archive?.path == url.path, m.string("path", max: 4096) == url.path else {
+                return refuse("archiveBack", "not the archive on screen")
+            }
+            backToArchive()
         case "copy":
             // The Copy button (the file on screen, as shown) or ⌘C (the page's selection, when there is one). Text from the page
             // is taken only just after this controller handed it a ⌘C.
@@ -1865,7 +2005,8 @@ class PreviewController: NSViewController {
             let whole: (text: String, truncated: Bool)? = fileKind == .markdown || textSource != nil ? docText.map { ($0, false) } : shownBody
             guard let text = selection ?? whole?.text, !text.isEmpty else { return failed("nothing to copy") }
             let cut = selection == nil && whole?.truncated == true
-            if selection == nil, asked, m.bool("withFile") == true, copyFileAndText(url, text) {
+            // A file inside an archive is not a file of its own: its text alone is copied.
+            if selection == nil, asked, entryShown == nil, m.bool("withFile") == true, copyFileAndText(url, text) {
                 return js("sb.copied", ["ok": true, "truncated": cut])
             }
             helper(onError: { failed("writer unavailable") }) {
@@ -1909,6 +2050,8 @@ class PreviewController: NSViewController {
     private func followLink(_ url: URL) {
         let target: URL
         switch url.scheme?.lowercased() {
+        case "spacebar" where url.host == "file" && entryShown != nil:
+            return refuse("link", "a file on disk from inside an archive")
         case "spacebar" where url.host == "file":
             target = URL(fileURLWithPath: url.path).standardizedFileURL
             let inside = (target.resolvingSymlinksInPath().path + "/").hasPrefix(rootDir + "/")

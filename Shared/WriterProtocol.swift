@@ -24,6 +24,9 @@ protocol SpacebarWriterProtocol {
     func defaultApp(_ url: URL, reply: @escaping (String?) -> Void)
     /// The contents of an archive LinkPolicy allows, as ArchiveListing's JSON, or nil when it cannot be listed.
     func listArchive(_ path: String, reply: @escaping (Data?) -> Void)
+    /// One file of an archive listArchive allows, read without extracting it (ArchiveEntry): its bytes, at most
+    /// ArchiveEntryView.cap(for: entry), or nil and why (ArchiveEntryView.notes' keys). Never written anywhere.
+    func readArchiveEntry(_ path: String, entry: String, reply: @escaping (Data?, String?) -> Void)
     /// Creates the support folder, themes/ and a default settings.json if missing.
     func ensureSupportDir(reply: @escaping (Bool) -> Void)
     /// Merges a JSON object of settings into settings.json atomically. Only Settings.panelKeys are taken, each sanitized.

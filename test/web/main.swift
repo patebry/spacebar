@@ -1,6 +1,6 @@
 // Loads Preview/web in an offscreen WKWebView set up like the extension: the real SchemeHandler (spacebar://bundle, file and
-// user) and the real document-start settings script (PageSettings.userScript). Built with Shared/Settings.swift and
-// Shared/WebShell.swift, Shared/FolderListing.swift, Shared/LinkPolicy.swift and Preview/PDFPane.swift; run with SPACEBAR_SUPPORT_DIR set to a scratch folder.
+// user) and the real document-start settings script (PageSettings.userScript). Built with Shared/Settings.swift,
+// Shared/WebShell.swift, Shared/FolderListing.swift, Shared/ArchiveListing.swift, Shared/LinkPolicy.swift and Preview/PDFPane.swift; run with SPACEBAR_SUPPORT_DIR set to a scratch folder.
 // SPACEBAR_PAGE_HOST=panel loads the page as the Space helper's panel shows it (the default is Quick Look's).
 //   webcheck <web dir> <cmd>...   runs each command, prints one JSON line per command
 //   webcheck <web dir>            reads commands from stdin, one JSON-encoded string per line, and answers each with a line
@@ -119,6 +119,10 @@ config.setURLSchemeHandler(scheme, forURLScheme: "spacebar")
 config.userContentController.add(rec, name: "sb")
 let gate = RemoteImageGate(config.userContentController)
 var currentFile: String?
+scheme.bodyCurrent = { $0 == currentFile }
+/// As the extension: the archive on screen as listed, and the file of it on screen.
+var archiveState: (path: String, payload: [String: Any], files: [String: (size: Int64?, modified: Double?)])?
+var entryShown: String?
 GestureRouter.install()
 let web = PreviewWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 2000), configuration: config)
 web.navigationDelegate = rec
@@ -317,9 +321,67 @@ func renderFile(_ file: String, listFirst: Bool = true) {
             pdfPane = nil
         }
     }
+    archiveState = nil
+    entryShown = nil
+    scheme.entryImage = nil
+    scheme.filesBlocked = false
     _ = eval(web, "sb.render(\(jsonString(payload))); 0")
     if !listFirst { sendFolder(root) }
     spin(8) { rec.messages.contains { $0["type"] as? String == "rendered" } }
+    // As the extension's listArchive: the writer's listing (ArchiveListing, run here unsandboxed but for bsdtar's own sandbox).
+    if payload["view"] as? String == "archive", let data = ArchiveListing.list(url.path),
+       let list = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let entries = list["entries"] as? [[String: Any]] {
+        var files: [String: (size: Int64?, modified: Double?)] = [:]
+        for e in entries where e["isDir"] as? Bool == false {
+            if let n = e["name"] as? String, files[n] == nil { files[n] = ((e["size"] as? NSNumber)?.int64Value, (e["modified"] as? NSNumber)?.doubleValue) }
+        }
+        var p = payload
+        p["entries"] = entries
+        p["truncated"] = list["truncated"] as? Bool ?? false
+        archiveState = (url.path, p, files)
+        _ = eval(web, "sb.setArchive(\(jsonString(["path": url.path, "entries": entries, "truncated": p["truncated"]!]))); 0")
+    }
+}
+
+/// As the extension's showEntry and putEntry: a listed file of the archive on screen, read through ArchiveEntry.
+func renderEntry(_ name: String, _ info: (size: Int64?, modified: Double?)) {
+    guard let a = archiveState else { return }
+    var data: Data?, why: String?
+    if let cap = ArchiveEntryView.cap(for: name) {
+        if let size = info.size, size > Int64(cap) { why = "tooLarge" } else {
+            let r = ArchiveEntry.read(a.path, name: name, cap: cap)
+            if case .data(let d) = r { data = d } else { why = r.reason }
+        }
+    }
+    var p = ArchiveEntryView.payload(archive: a.path, root: root, entry: name, size: info.size, modified: info.modified, data: data, failure: why)
+    entryShown = name
+    currentBody = (p["text"] as? String).map { ($0, false) }
+    scheme.entryImage = nil
+    scheme.filesBlocked = true
+    // As putEntry: an image WebKit decodes is held to ImagePane's pixel bound first.
+    let area = data.flatMap { CGImageSourceCreateWithData($0 as CFData, nil) }.flatMap { CGImageSourceCopyPropertiesAtIndex($0, 0, nil) as? [CFString: Any] }
+        .map { ($0[kCGImagePropertyPixelWidth] as? Int ?? 0) * ($0[kCGImagePropertyPixelHeight] as? Int ?? 0) }
+    if p["view"] as? String == "image", !(1...80_000_000).contains(area ?? 0) {
+        p["view"] = "info"
+        p["note"] = "This image can’t be shown here."
+    }
+    if p["view"] as? String == "image", let data {
+        let image = EntryImage(path: a.path, name: name, data: data)
+        scheme.entryImage = image
+        p["src"] = image.url
+    }
+    if p["view"] as? String == "bitmap" {
+        if let data, let src = CGImageSourceCreateWithData(data as CFData, nil), let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+           let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int {
+            p["width"] = w
+            p["height"] = h
+        } else {
+            p["view"] = "info"
+            p["note"] = "This image can’t be shown here."
+        }
+    }
+    rec.messages.append(["type": "_entry", "view": p["view"] ?? "", "name": name])
+    _ = eval(web, "sb.render(\(jsonString(p))); 0")
 }
 
 /// As the extension: a path the page names is taken only when plain, inside the root, and a file a listing named or the
@@ -414,6 +476,21 @@ rec.onMessage = { type, body in
             rec.messages.append(["type": "_editTextRefused"]); return
         }
         textEdit = (seq, f, o.source, o.text, o.bytes)
+    case "archiveEntry":
+        guard let f = currentFile, path == f, currentKind == .archive, let a = archiveState, a.path == f, let asked = body["entry"] as? String,
+              let i = a.files.index(forKey: asked) else {
+            rec.messages.append(["type": "_entryRefused", "entry": body["entry"] ?? ""]); return
+        }
+        let (name, info) = (a.files[i].key, a.files[i].value)
+        DispatchQueue.main.async { renderEntry(name, info) }
+    case "archiveBack":
+        guard let f = currentFile, path == f, let a = archiveState, a.path == f else { rec.messages.append(["type": "_backRefused"]); return }
+        entryShown = nil
+        currentBody = nil
+        scheme.filesBlocked = false
+        var p = a.payload
+        p["reason"] = "back"
+        DispatchQueue.main.async { _ = eval(web, "sb.render(\(jsonString(p))); 0") }
     case "pdfRect":
         if currentKind == .pdf { pdfPane?.place(message: body, in: web) }
     case "search":

@@ -956,3 +956,117 @@ final class FolderWatch {
 
     deinit { source?.cancel() }
 }
+
+/// One file inside an archive, previewed without extracting it (ArchiveEntry streams it through the writer's sandboxed bsdtar):
+/// what may be read, how much, and the read-only payload the page shows it with. The payload names the archive as its `path`,
+/// so every check of "the file on screen" still means the archive; `entry` names the file inside it.
+enum ArchiveEntryView {
+    static let maxTextBytes = 2 << 20
+    static let maxImageBytes = 20 << 20
+    /// Decoded by WebKit as `<img>`, from a blob the page makes of one read of `spacebar://entry/<token>`. No SVG.
+    static let webImages: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]
+    /// Decoded by ImageIO in the extension (ImagePane), from the bytes the writer sent.
+    static let nativeImages: Set<String> = ["heic", "heif", "avif", "tif", "tiff"]
+
+    enum Kind: Equatable { case markdown, code, json, csv, text, image, bitmap, archive, other }
+
+    static func kind(_ entry: String) -> Kind {
+        let name = displayName(entry)
+        let ext = (name as NSString).pathExtension.lowercased()
+        if webImages.contains(ext) { return .image }
+        if nativeImages.contains(ext) { return .bitmap }
+        switch FileTypes.kind(name: name) {
+        case .markdown: return .markdown
+        case .code: return .code
+        case .json: return .json
+        case .csv: return .csv
+        case .text: return .text
+        case .archive: return .archive
+        default: return .other
+        }
+    }
+
+    /// How many bytes of the entry may be read, or nil when it is not read at all (shown as its info card).
+    static func cap(for entry: String) -> Int? {
+        switch kind(entry) {
+        case .markdown, .code, .json, .csv, .text: return maxTextBytes
+        case .image, .bitmap: return maxImageBytes
+        case .archive, .other: return nil
+        }
+    }
+
+    /// The entry's own name: its last path component (a folder's trailing slash and a leading `./` do not count).
+    static func displayName(_ entry: String) -> String {
+        entry.split(separator: "/", omittingEmptySubsequences: true).last.map(String.init) ?? entry
+    }
+
+    /// The entry's path as the breadcrumb shows it, without a leading `./`.
+    static func shownPath(_ entry: String) -> String {
+        var s = Substring(entry)
+        while s.hasPrefix("./") { s = s.dropFirst(2) }
+        return String(s)
+    }
+
+    static let notes: [String: String] = [
+        "tooLarge": "This file is too large to preview inside the archive.",
+        "bomb": "This file expands far more than its archive could hold, so it wasn’t read.",
+        "timedOut": "Reading this file from the archive took too long.",
+        "archive": "An archive inside an archive isn’t opened.",
+        "other": "Only text, code, Markdown, data and images are shown from inside an archive.",
+        "unreadable": "This file couldn’t be read from the archive.",
+        "binary": "This file isn’t text, so it can’t be shown here.",
+    ]
+
+    /// What the page is sent for `entry` of the archive at `archive`: its text or image view when `data` was read, else its info
+    /// card saying why (`failure`, one of `notes`' keys, or a reason the writer gave). Never editable, never opened.
+    static func payload(archive: String, root: String, entry: String, size: Int64?, modified: Double?, data: Data?, failure: String?) -> [String: Any] {
+        var p = FileView.base(path: archive, root: root, reason: "entry")
+        let name = displayName(entry), shown = shownPath(entry)
+        let archiveName = (archive as NSString).lastPathComponent
+        let k = kind(entry)
+        p["name"] = name
+        // Relative links and images in an entry resolve to nothing: never to files beside the archive.
+        p["base"] = "spacebar://entry/"
+        p["entry"] = ["name": entry, "path": shown, "archive": archiveName]
+        let inner = (shown as NSString).deletingLastPathComponent
+        p["folder"] = inner.isEmpty ? archiveName : "\(archiveName) › \(inner)"
+        p["size"] = size.map { NSNumber(value: $0) } ?? NSNull()
+        p["modified"] = modified.map { NSNumber(value: $0) } ?? NSNull()
+        p["kindName"] = UTType(filenameExtension: (name as NSString).pathExtension).flatMap(\.localizedDescription) ?? "Document"
+        let fk: FileKind = k == .bitmap || k == .image ? .image : FileTypes.kind(name: name)
+        p["icon"] = FileTypes.glyph(name: name, kind: fk)
+        p["canOpen"] = false
+        p["view"] = "info"
+        func info(_ why: String) -> [String: Any] {
+            p["note"] = notes[why] ?? notes["unreadable"]!
+            return p
+        }
+        switch k {
+        case .archive: return info("archive")
+        case .other: return info("other")
+        default: break
+        }
+        if let failure { return info(failure) }
+        guard let data else { return info("unreadable") }
+        switch k {
+        case .image, .bitmap:
+            p["view"] = k == .image ? "image" : "bitmap"
+            p["size"] = NSNumber(value: data.count)
+            return p
+        case .markdown, .code, .json, .csv, .text:
+            guard let decoded = data.isEmpty ? TextDecoding.Decoded(text: "", name: "UTF-8") : TextDecoding.decode(data) else { return info("binary") }
+            p["view"] = k == .markdown ? "markdown" : k == .code ? "code" : k == .json ? "json" : k == .csv ? "csv" : "text"
+            p["text"] = decoded.text
+            p["size"] = NSNumber(value: data.count)
+            if [.code, .json, .csv, .text].contains(k), UTType(filenameExtension: (name as NSString).pathExtension)?.conforms(to: .text) != true {
+                p["kindName"] = k == .code ? "Source code" : "Plain text"
+            }
+            if !decoded.isUTF8 { p["kindName"] = "\(p["kindName"] as? String ?? "Plain text") (\(decoded.name))" }
+            if k == .code { p["lang"] = FileTypes.language(name: name) ?? NSNull() }
+            if (name as NSString).pathExtension.lowercased() == "tsv" { p["tsv"] = true }
+            return p
+        default:
+            return info("unreadable")
+        }
+    }
+}

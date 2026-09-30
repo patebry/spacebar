@@ -106,12 +106,30 @@ final class ImagePane: NSObject {
         return nil
     }
 
+    /// Where an image's bytes are: a file, or the bytes of a file inside an archive (ArchiveEntryView), already in memory.
+    enum Source {
+        case file(URL)
+        case data(Data)
+
+        func imageSource() -> CGImageSource? {
+            let opts = [kCGImageSourceShouldCache: false] as CFDictionary
+            switch self {
+            case .file(let url): return CGImageSourceCreateWithURL(url as CFURL, opts)
+            case .data(let d): return CGImageSourceCreateWithData(d as CFData, opts)
+            }
+        }
+    }
+    /// What the image at `sourcePath` was loaded from, for the whole-image decode a zoom asks for; any other path is a file.
+    private var source: Source?
+    private var sourcePath: String?
+
     /// The image at `url`, its primary picture (an icon file's largest), decoded off the main thread with EXIF orientation applied,
     /// its longest side at most `maxSide` pixels. Blocks: call it off the main thread.
-    static func open(_ url: URL, maxSide: Int = screenPixels) -> Result<Loaded, LoadError> {
+    static func open(_ url: URL, maxSide: Int = screenPixels) -> Result<Loaded, LoadError> { open(.file(url), maxSide: maxSide) }
+
+    static func open(_ source: Source, maxSide: Int = screenPixels) -> Result<Loaded, LoadError> {
         FileTypes.materializing {
-            guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
-                  CGImageSourceGetCount(src) > 0 else { return .failure(.unreadable) }
+            guard let src = source.imageSource(), CGImageSourceGetCount(src) > 0 else { return .failure(.unreadable) }
             let index = primaryIndex(src)
             guard let size = orientedSize(src, index), size.width >= 1, size.height >= 1 else { return .failure(.unreadable) }
             guard Int(size.width) * Int(size.height) <= maxArea else { return .failure(.unreadable) }
@@ -144,15 +162,19 @@ final class ImagePane: NSObject {
 
     /// Decodes `url` off the main thread, then shows it; the page lays out and paints meanwhile. The same file again (a change
     /// on disk) keeps the image on screen until the new one is decoded.
-    func load(_ url: URL) {
-        let path = url.path
+    func load(_ url: URL) { load(.file(url), path: url.path) }
+
+    /// The same for an image already in memory, shown as `path` (the pane shows one image per path).
+    func load(_ source: Source, path: String) {
         if path != shownPath { imageView.image = nil }
         self.path = path
+        self.source = source
+        sourcePath = path
         generation += 1
         lastPercent = -1
         let gen = generation
         DispatchQueue.global(qos: .userInitiated).async {
-            let r = Self.open(url)
+            let r = Self.open(source)
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.generation == gen, self.path == path else { return }
                 switch r {
@@ -164,10 +186,11 @@ final class ImagePane: NSObject {
     }
 
     /// Width and height as shown, from the file's properties alone (nothing decoded); nil when ImageIO cannot read them.
-    static func pixelSize(_ url: URL) -> CGSize? {
+    static func pixelSize(_ url: URL) -> CGSize? { pixelSize(.file(url)) }
+
+    static func pixelSize(_ source: Source) -> CGSize? {
         FileTypes.materializing {
-            guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary), CGImageSourceGetCount(src) > 0
-            else { return nil }
+            guard let src = source.imageSource(), CGImageSourceGetCount(src) > 0 else { return nil }
             guard let s = orientedSize(src, primaryIndex(src)), Int(s.width) * Int(s.height) <= maxArea else { return nil }
             return s
         }
@@ -285,12 +308,13 @@ final class ImagePane: NSObject {
     /// Decodes the whole image once a zoom shows the first decode's pixels larger than the screen's.
     private func needsPixels() {
         guard reduced, !upgrading, let path else { return }
+        let source = sourcePath == path ? self.source ?? .file(URL(fileURLWithPath: path)) : .file(URL(fileURLWithPath: path))
         let scale = view.window?.backingScaleFactor ?? 2
         guard view.magnification * scale * size.width > CGFloat(decodedWidth) * 1.05 else { return }
         upgrading = true
         let gen = generation
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let r = Self.open(URL(fileURLWithPath: path), maxSide: Self.maxPixels)
+            let r = Self.open(source, maxSide: Self.maxPixels)
             DispatchQueue.main.async {
                 guard let self, self.generation == gen, self.path == path, case .success(let full) = r, full.size == self.size else { return }
                 self.reduced = false
@@ -341,6 +365,8 @@ final class ImagePane: NSObject {
         view.removeFromSuperview()
         view.isHidden = true
         path = nil
+        source = nil
+        sourcePath = nil
         shownPath = nil
         placed = false
         size = .zero

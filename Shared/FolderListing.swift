@@ -864,8 +864,7 @@ enum FolderListing {
                 guard let real = realPath(path) else {
                     let e = errno
                     if e == ELOOP || e == ENOENT {
-                        let modified = Double(st.st_mtimespec.tv_sec) + Double(st.st_mtimespec.tv_nsec) / 1e9
-                        found.append(Entry(name: name, path: path, isDirectory: false, kind: .other, size: -1, modified: modified, broken: true))
+                        found.append(Entry(name: name, path: path, isDirectory: false, kind: .other, size: -1, modified: 0, broken: true))
                     }
                     continue
                 }

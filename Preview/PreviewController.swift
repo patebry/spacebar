@@ -645,7 +645,7 @@ class PreviewController: NSViewController {
 
     /// The Open button's action for the file on screen, for a host with a key for it (⌘O).
     func openOnScreen() {
-        guard let url = fileURL else { return }
+        guard let url = fileURL, shownView != "info" || shownCanOpen else { return }
         if fileKind == .markdown { return openExternally(url) }
         handle("openFile", ["path": url.path])
     }
@@ -965,6 +965,11 @@ class PreviewController: NSViewController {
     /// The info card for an item that cannot be opened at all (a link that loops or leads nowhere, a FIFO): never a blank panel.
     private func showUnopenable(_ url: URL, note: String) {
         guard fileURL == url else { return }
+        stopEdit(notifyWriter: true)
+        docText = nil
+        diskText = nil
+        textSource = nil
+        textPayload = nil
         closePDF()
         shownView = "info"
         shownStamp = nil
@@ -987,7 +992,11 @@ class PreviewController: NSViewController {
     private func reload(reason: String) {
         guard let url = fileURL, !writing, !torn else { return }
         guard fileKind == .markdown else { return show(url, reason: reason) }
-        if let why = Self.unreadable(url) { log.error("read refused: \(why, privacy: .private)"); return showUnopenable(url, note: FileView.openRefusal(url.path)) }
+        if let why = Self.unreadable(url) {
+            log.error("read refused: \(why, privacy: .private)")
+            // A save that replaces the file (rename, then write) leaves it missing for a moment: what is on screen stays.
+            return reason == "change" ? status(why) : showUnopenable(url, note: FileView.openRefusal(url.path))
+        }
         if reason == "change", awaitingDownload(url) { return }
         let epoch = writeEpoch, cloud = FileTypes.isDataless(url.path)
         // A conflict keeps the rejected text on screen until the file's own text arrives: it may be the only copy left to copy.
@@ -1164,7 +1173,9 @@ class PreviewController: NSViewController {
     /// here (the first 2 MB), anything else as an info card. Nothing here is ever rendered as HTML.
     private func show(_ url: URL, reason: String) {
         var st = stat()
-        guard stat(url.path, &st) == 0 else { return showUnopenable(url, note: FileView.openRefusal(url.path)) }
+        guard stat(url.path, &st) == 0 else {
+            return reason == "change" ? status("cannot read \(url.lastPathComponent)") : showUnopenable(url, note: FileView.openRefusal(url.path))
+        }
         let stamp = "\(st.st_size)-\(st.st_mtimespec.tv_sec).\(st.st_mtimespec.tv_nsec)-\(st.st_ino)"
         if reason == "change", stamp == shownStamp || awaitingDownload(url) { return }
         shownStamp = stamp
@@ -1723,7 +1734,7 @@ class PreviewController: NSViewController {
             copyAsked = nil
             let selection = m.string("text")
             guard body["text"] == nil || (selection != nil && asked) else { return failed("selection not asked for, or too large") }
-            let whole: (text: String, truncated: Bool)? = fileKind == .markdown ? docText.map { ($0, false) } : shownBody
+            let whole: (text: String, truncated: Bool)? = fileKind == .markdown || textSource != nil ? docText.map { ($0, false) } : shownBody
             guard let text = selection ?? whole?.text, !text.isEmpty else { return failed("nothing to copy") }
             let cut = selection == nil && whole?.truncated == true
             helper(onError: { failed("writer unavailable") }) {

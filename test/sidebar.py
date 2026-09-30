@@ -1892,9 +1892,15 @@ def main():
                       'movie.mp4': 'ic-video', 'song.wav': 'ic-audio', 'movie.webm': 'ic-video'}
         check(all(icons.get(k) == v for k, v in want_icons.items()), 'tree: every row has its type icon',
               json.dumps({k: icons.get(k) for k in want_icons}))
-        check(not {'etc', 'up', 'hosts.txt', '.secret.md', 'dangling.md', '...', '..txt'} & set(names) and 'notes..v2.txt' in names,
+        check(not {'etc', 'up', 'hosts.txt', '.secret.md', '...', '..txt'} & set(names) and 'notes..v2.txt' in names,
               'tree: links to /etc, to the parent and to /etc/hosts, hidden files and dot names are left out',
               json.dumps(names))
+        dangling = page.js("""const r = [...document.querySelectorAll('#side-list a.row')].find((a) => a.dataset.path.endsWith('/dangling.md'));
+          return r && [r.classList.contains('broken'), r.title, r.getAttribute('aria-disabled'), getComputedStyle(r).opacity];""")
+        r = click(page, '#side-list a.row.broken')
+        check(dangling and dangling[:3] == [True, 'dangling.md\nBroken link', 'true'] and float(dangling[3]) < 1
+              and not [m for m in r['messages'] if m.get('type') == 'open'],
+              'tree: a dangling link is listed greyed, as a broken link, and a click opens nothing', json.dumps(dangling))
         check(page.js("return document.querySelectorAll('#sidebar svg.ic').length === document.querySelectorAll('#side-list a.row').length"
                       " && !document.querySelector('#sidebar img, #sidebar use, #sidebar image')"), 'tree: icons are inline SVG drawn by the page')
 

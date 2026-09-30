@@ -789,6 +789,8 @@ const afterPaint = (f) => requestAnimationFrame(() => setTimeout(f, 0));
 /** Shows the editor with its caret at once; the native side is told in parallel and ends the edit if it cannot take the keyboard. */
 function beginEdit(block, e, tClick) {
   if (updateBusy) { window.sb.status('Updating…'); return; }
+  // Find's index holds the text nodes the editor is about to change.
+  closeFind();
   let [start, end] = blockRange(block);
   const all = current.text.split('\n');
   // A list's source range can take in the blank line after it; the editor shows the block's own lines only.
@@ -956,6 +958,7 @@ function beginTextEdit(pre, e, tClick) {
   const text = current.text;
   const at = textOffset(pre.querySelector('code') || pre, e.clientX, e.clientY);
   const caret = Math.min(at === null ? text.length : at, text.length);
+  closeFind();
   const r = pre.getBoundingClientRect();
   editing = { seq: ++editSeq, whole: true, start: 0, lines: 0, text, selStart: caret, selLen: 0, tag: 'PRE' };
   const tMapped = now();
@@ -1511,7 +1514,7 @@ function codeBlock(text, lang, file = false) {
     pre.dataset.lang = lang;
     // A long file is painted plain first: highlighting it would hold the first paint.
     if (text.length <= HIGHLIGHT_NOW) highlight();
-    else afterPaint(() => { if (code.isConnected) highlight(); });
+    else afterPaint(() => { if (code.isConnected && !pre.classList.contains('text-editing')) highlight(); });
   }
   pre.append(code);
   wrap.append(pre);
@@ -1549,31 +1552,34 @@ function jsonModel(p) {
 /** JSONC and JSON5 text as JSON: comments and trailing commas out, strings untouched. Offsets are not kept; editing is on
  *  the file's own text. */
 function jsonLoose(t) {
-  let out = '', last = -1;
+  const out = [];
+  let last = -1, from = 0;
+  const keep = (to) => { if (to > from) out.push(t.slice(from, to)); };
   for (let i = 0; i < t.length; i++) {
     const c = t[i];
     if (c === '"' || c === "'") {
       let j = i + 1;
       while (j < t.length && t[j] !== c && t[j] !== '\n') j += t[j] === '\\' ? 2 : 1;
-      out += t.slice(i, j + 1);
-      last = out.length - 1;
       i = j;
-    } else if (c === '/' && t[i + 1] === '/') {
-      const j = t.indexOf('\n', i);
-      i = j < 0 ? t.length : j - 1;
-    } else if (c === '/' && t[i + 1] === '*') {
-      const j = t.indexOf('*/', i + 2);
-      i = j < 0 ? t.length : j + 1;
-      out += ' ';
-    } else if ((c === '}' || c === ']') && last >= 0 && out[last] === ',') {
-      out = out.slice(0, last) + out.slice(last + 1) + c;
+      last = -1;
+    } else if (c === '/' && (t[i + 1] === '/' || t[i + 1] === '*')) {
+      keep(i);
+      const j = t[i + 1] === '/' ? t.indexOf('\n', i) : t.indexOf('*/', i + 2);
+      i = j < 0 ? t.length : t[i + 1] === '/' ? j - 1 : j + 1;
+      from = i + 1;
+      out.push(' ');
+    } else if (c === ',') {
+      keep(i);
+      out.push(',');
       last = out.length - 1;
-    } else {
-      out += c;
-      if (!/\s/.test(c)) last = out.length - 1;
-    }
+      from = i + 1;
+    } else if ((c === '}' || c === ']') && last >= 0) {
+      out[last] = '';
+      last = -1;
+    } else if (c !== ' ' && c !== '\t' && c !== '\n' && c !== '\r') last = -1;
   }
-  return out;
+  keep(t.length);
+  return out.join('');
 }
 
 /** Opens the tree level by level, breadth first, while the rows shown stay within `budget`. */

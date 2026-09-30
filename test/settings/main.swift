@@ -234,13 +234,16 @@ mkfifo(ld.appendingPathComponent("pipe.md").path, 0o600)
 let names = { (l: FolderListing.Listing) in l.entries.map(\.name) }
 let byName = FolderListing.list(ld.path, sort: "name", readmeFirst: true)
 check("tree: folders first, then README, then files in Finder order",
-      names(byName) == ["alpha", "inside-dir", "sub.md", "Zeta", "README.md", "a.markdown", "b.md", "c9.MD", "c10.md", "data.csv", "inside-link.md",
+      names(byName) == ["alpha", "inside-dir", "sub.md", "Zeta", "README.md", "a.markdown", "b.md", "c9.MD", "c10.md", "dangling.md", "data.csv", "inside-link.md",
                         "main.ts", "notes.txt", "paper.pdf", "photo.png", "run.sh", "Tool.app"])
 check("tree: folders are marked, a package is one item", byName.folders.map(\.name) == ["alpha", "inside-dir", "sub.md", "Zeta"]
       && byName.entries.first { $0.name == "Tool.app" }.map { !$0.isDirectory && $0.kind == .app } == true)
 check("tree: hidden, flagged hidden, FIFOs skipped", !names(byName).contains { [".hidden.md", ".hiddendir", "flagged.md", "pipe.md"].contains($0) })
-check("tree: links out of the root, to /etc, to the parent, or dangling are skipped",
-      !names(byName).contains { ["outside-link.md", "outside-dir", "etc", "up", "dangling.md"].contains($0) })
+check("tree: links out of the root, to /etc or to the parent are skipped",
+      !names(byName).contains { ["outside-link.md", "outside-dir", "etc", "up"].contains($0) })
+check("tree: a dangling link is listed as broken, a file, never a folder",
+      byName.entries.first { $0.name == "dangling.md" }.map { $0.broken && !$0.isDirectory && $0.kind == .other } == true
+      && byName.entries.filter(\.broken).count == 1)
 let hidden = FolderListing.list(ld.path, sort: "name", readmeFirst: true, showHidden: true)
 check("tree: showHidden lists dot files, flagged files and hidden folders", [".hidden.md", ".hiddendir", "flagged.md"].allSatisfy(names(hidden).contains)
       && !names(hidden).contains("pipe.md") && !names(hidden).contains("outside-link.md"))
@@ -255,9 +258,9 @@ check("tree: a folder outside the root lists nothing", FolderListing.list(outsid
       && FolderListing.list("/etc", root: ld.path, sort: "name", readmeFirst: true).entries.isEmpty)
 check("tree: a link to a folder inside the root lists it", names(FolderListing.list(ld.path + "/inside-dir", root: ld.path, sort: "name", readmeFirst: true)) == ["deep", "inner.md"])
 let capped = FolderListing.list(ld.path, sort: "name", readmeFirst: true, cap: 2)
-check("tree: capped, with a count of the rest", names(capped) == ["alpha", "inside-dir"] && capped.more == 15)
+check("tree: capped, with a count of the rest", names(capped) == ["alpha", "inside-dir"] && capped.more == 16)
 let pinned = FolderListing.list(ld.path, sort: "name", readmeFirst: true, cap: 2, pinned: ld.path + "/c10.md")
-check("tree: the document on screen is listed past the cap", names(pinned) == ["alpha", "inside-dir", "c10.md"] && pinned.more == 14)
+check("tree: the document on screen is listed past the cap", names(pinned) == ["alpha", "inside-dir", "c10.md"] && pinned.more == 15)
 let payload = byName.payload(root: ld.path)
 let pe = payload["entries"] as? [[String: Any]] ?? []
 check("tree: payload names the root, the folder and each entry's icon", payload["rootName"] as? String == "listing" && payload["dir"] as? String == ld.path

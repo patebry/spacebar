@@ -2,6 +2,15 @@
 
 Each release's notes on GitHub also list its commits. This file keeps what changed for someone using spacebar.
 
+## Unreleased (0.4)
+
+- **Search the text of the files** from the sidebar's filter: its new **Names / Contents** button switches it to the text of
+  the Markdown, code, JSON, CSV and text files the sidebar lists, in every folder under it. Each result shows its folder, its
+  match count and the matching line; opening one runs Find on it for the same text. Plain, case-insensitive text; binary,
+  hidden files (unless shown) and dependency folders are skipped; each file is read to 2 MB and a search to 64 MB and
+  2 seconds, and one cut short says "Searched N of M files". The search runs off the main thread and each keystroke cancels
+  the last.
+
 ## 0.3.0 (unreleased)
 
 Waits for the Developer ID: the first release with the Space helper is notarized.

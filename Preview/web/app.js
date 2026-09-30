@@ -1210,6 +1210,7 @@ window.sb = {
     draw();
     window.scrollTo(0, y);
     if (typeof p.anchor === 'string' && p.anchor) scrollToHeading(p.anchor, false);
+    if (findOnOpen) { const f = findOnOpen; findOnOpen = null; if (f.path === p.path) findFor(f.q); }
     const t1 = performance.now();
     const nodes = document.querySelectorAll('#doc pre.mermaid');
     post({ type: 'painted', parseMs: t1 - t0, reason: p.reason || '' });
@@ -2677,6 +2678,20 @@ let treeVersion = 0;
 // The filter's text, lower-cased, and the row the arrow keys move from (a file or a folder, by path).
 let sideQuery = '';
 let cursor = '';
+// The filter's mode, Names or Contents, for as long as the page lives (never saved).
+let sideMode = 'names';
+// The search on screen: its sequence number and query, the files found so far ({ path, name, icon, count, line, snippet }),
+// how far it got, and whether it is done (with why it stopped short, if it did). `version` redraws the list.
+let hits = { seq: 0, q: '', list: [], searched: 0, total: 0, done: true, stopped: '', listedOnly: false, fresh: false, version: 0 };
+let searchSeq = 0;
+// A search result being opened: once it renders, find in the file runs for the same query.
+let findOnOpen = null;
+const SEARCH_MIN = 2, SEARCH_MAX_BYTES = 256;
+
+const showingHits = () => sideMode === 'contents' && hits.q.length >= SEARCH_MIN && !!sideQuery;
+/** The list shows the filter's matches rather than the tree. */
+const filtered = () => (sideMode === 'names' ? !!sideQuery : showingHits());
+
 // The filter field holding the writer's key panel ({ seq }), and the last sequence number used.
 let filterSession = null;
 let filterSeq = 0;
@@ -2702,6 +2717,8 @@ function resetTree(rootPath, name) {
   if (filterSession && !filterSession.find) endFilter();
   sideQuery = '';
   $('side-q').value = '';
+  if (hits.q) searchContents('');
+  findOnOpen = null;
 }
 
 const inTree = (p) => typeof p === 'string' && p.startsWith(tree.root === '/' ? '/' : tree.root + '/');
@@ -2800,12 +2817,15 @@ function treeRow(r) {
 }
 
 // The tree as rows ({ e, depth, open, pos, size } or a { note }), every one of them; only those in view (and a margin) are in
-// the DOM, between two spacers, once there are more than SIDE_VIRTUAL. Every row is SIDE_ROW_H tall (style.css).
+// the DOM, between two spacers, once there are more than SIDE_VIRTUAL. Every row is SIDE_ROW_H tall, or SIDE_HIT_H while the
+// list shows a Contents search's results (style.css).
 let sideRows = [];
 let sideWin = '';
-const SIDE_ROW_H = 24, SIDE_VIRTUAL = 300, SIDE_OVERSCAN = 30;
+const SIDE_ROW_H = 24, SIDE_HIT_H = 40, SIDE_VIRTUAL = 300, SIDE_OVERSCAN = 30;
+const sideRowH = () => (showingHits() ? SIDE_HIT_H : SIDE_ROW_H);
 
 function sideNode(r) {
+  if (r.hit) return hitRow(r);
   if (r.e) return treeRow(r);
   const n = el('div', 'row-note', r.note);
   n.style.setProperty('--depth', r.depth);
@@ -2821,20 +2841,20 @@ function sidePad(h) {
 
 /** Puts the rows in view into the list; with `force`, even when the same rows are already there. */
 function drawSideWindow(force) {
-  const list = $('side-list'), n = sideRows.length;
+  const list = $('side-list'), n = sideRows.length, rh = sideRowH();
   let a = 0, b = n;
   if (n > SIDE_VIRTUAL) {
-    const h = list.clientHeight || window.innerHeight, top = Math.min(list.scrollTop, Math.max(0, n * SIDE_ROW_H - h));
-    a = Math.max(0, Math.floor(top / SIDE_ROW_H) - SIDE_OVERSCAN);
-    b = Math.min(n, Math.ceil((top + h) / SIDE_ROW_H) + SIDE_OVERSCAN);
+    const h = list.clientHeight || window.innerHeight, top = Math.min(list.scrollTop, Math.max(0, n * rh - h));
+    a = Math.max(0, Math.floor(top / rh) - SIDE_OVERSCAN);
+    b = Math.min(n, Math.ceil((top + h) / rh) + SIDE_OVERSCAN);
   }
   const key = `${a},${b}`;
   if (!force && key === sideWin) return;
   sideWin = key;
   const nodes = [];
-  if (a > 0) nodes.push(sidePad(a * SIDE_ROW_H));
+  if (a > 0) nodes.push(sidePad(a * rh));
   for (let i = a; i < b; i++) nodes.push(sideNode(sideRows[i]));
-  if (b < n) nodes.push(sidePad((n - b) * SIDE_ROW_H));
+  if (b < n) nodes.push(sidePad((n - b) * rh));
   list.replaceChildren(...nodes);
   markCursor();
 }
@@ -2851,7 +2871,7 @@ function renderSidebar() {
   $('side-toggle').hidden = !on;
   syncToggle();
   syncSideMenu();
-  const key = `${treeVersion}\n${current.path}\n${sideQuery}`;
+  const key = `${treeVersion}\n${current.path}\n${sideQuery}\n${sideMode}\n${hits.version}`;
   if (!on || key === sideDrawn) return;
   const moved = sideDrawn.split('\n')[1] !== current.path, refiltered = sideDrawn.split('\n')[2] !== sideQuery;
   sideDrawn = key;
@@ -2885,7 +2905,9 @@ function renderSidebar() {
     }
     return out;
   };
-  if (sideQuery) {
+  if (showingHits()) {
+    rows.push(...hits.list.map((h, i) => ({ e: { name: h.name, path: h.path, dir: false, icon: h.icon }, hit: h, depth: 0, pos: i + 1, size: hits.list.length })));
+  } else if (sideQuery && sideMode === 'names') {
     rows.push(...find(tree.root, 0));
     // Filtered rows are numbered among the rows shown at their level under the same parent.
     const seen = new Map();
@@ -2897,8 +2919,9 @@ function renderSidebar() {
   const hadActive = sideRows.some((r) => r.e && r.e.path === current.path);
   sideRows = rows;
   const top = tree.dirs.get(tree.root);
-  $('side-more').hidden = !(top && top.more) || !!sideQuery;
-  $('side-more').textContent = top && top.more ? `${top.more.toLocaleString()} more not listed` : '';
+  const status = sideMode === 'contents' && sideQuery ? searchStatus() : '';
+  $('side-more').hidden = !status && (!(top && top.more) || !!sideQuery);
+  $('side-more').textContent = status || (top && top.more ? `${top.more.toLocaleString()} more not listed` : '');
   // Keep the document on screen in view; the list scrolls on its own, never the page.
   const at = sideRows.findIndex((r) => r.e && !r.e.dir && r.e.path === current.path);
   for (const [p, t] of keyed) if (performance.now() - t > 2000) keyed.delete(p);
@@ -2906,8 +2929,8 @@ function renderSidebar() {
   // The list is drawn at its new height first: a scrollTop set while it still holds fewer rows would be clamped. A folder
   // opened or closed above the document leaves the list where it is.
   drawSideWindow(true);
-  const y = at * SIDE_ROW_H;
-  const off = y < list.scrollTop || y + SIDE_ROW_H > list.scrollTop + list.clientHeight;
+  const rh = sideRowH(), y = at * rh;
+  const off = y < list.scrollTop || y + rh > list.scrollTop + list.clientHeight;
   if (at >= 0 && (moved || ((refiltered || !hadActive) && off))) {
     list.scrollTop = Math.max(0, y - list.clientHeight / 3);
     drawSideWindow(false);
@@ -3004,9 +3027,141 @@ function matches(name, q) {
 }
 
 const filterField = $('side-q');
-filterField.addEventListener('input', () => {
-  sideQuery = filterField.value.trim().toLowerCase();
+filterField.addEventListener('input', () => setSideQuery(filterField.value));
+
+/** The filter's text changed (typed, sent by the key panel, or cleared): Names filters the tree at once; Contents searches. */
+function setSideQuery(text) {
+  sideQuery = text.trim().toLowerCase();
+  if (sideMode === 'contents') searchContents(text.trim());
   renderSidebar();
+}
+
+// ---------- the filter's Contents mode: the text of the listed files, searched natively (ContentSearch) ----------
+
+/** Every keystroke starts a new search, and the native side cancels the one before. The last results stay on screen until the
+ *  new search's first report replaces them. */
+function searchContents(q) {
+  if (q === hits.q && hits.seq === searchSeq) return;
+  if (q.length < SEARCH_MIN || !tree.root || new TextEncoder().encode(q).length > SEARCH_MAX_BYTES) {
+    if (hits.q) post({ type: 'searchStop' });
+    hits = { ...hits, q: '', list: [], done: true, tooLong: q.length >= SEARCH_MIN && !!tree.root, version: hits.version + 1 };
+    return;
+  }
+  searchSeq++;
+  hits = { ...hits, seq: searchSeq, q, searched: 0, total: 0, done: false, stopped: '', listedOnly: false, fresh: true, version: hits.version + 1 };
+  post({ type: 'search', q, seq: searchSeq });
+}
+
+function searchStatus() {
+  if (sideQuery.length < SEARCH_MIN) return `Type ${SEARCH_MIN} or more characters to search contents`;
+  if (!hits.q) return hits.tooLong ? 'Too long to search for' : '';
+  const h = hits, n = (x) => x.toLocaleString(), files = (x) => `${n(x)} ${x === 1 ? 'file' : 'files'}`;
+  let s;
+  if (!h.done) s = h.total ? `Searching… ${n(h.searched)} of ${files(h.total)}` : 'Searching…';
+  else if (h.stopped === 'files') s = `Searched the first ${files(h.total)}`;
+  else if (h.stopped) s = `Searched ${n(h.searched)} of ${files(h.total)}`;
+  else s = h.list.length ? `Found in ${n(h.list.length)} of ${files(h.total)}` : 'No matches';
+  return h.listedOnly && h.done ? `${s} · only listed files` : s;
+}
+
+function setSideMode(mode) {
+  if (mode === sideMode) return;
+  sideMode = mode;
+  findOnOpen = null;
+  const b = $('side-mode'), contents = mode === 'contents';
+  b.textContent = contents ? 'Contents' : 'Names';
+  b.setAttribute('aria-pressed', String(contents));
+  filterField.placeholder = contents ? 'Search contents' : 'Filter';
+  filterField.setAttribute('aria-label', contents ? 'Search the text of the files' : 'Filter files');
+  if (contents) searchContents(filterField.value.trim());
+  else searchContents('');
+  renderSidebar();
+}
+$('side-mode').addEventListener('click', (e) => { e.preventDefault(); setSideMode(sideMode === 'names' ? 'contents' : 'names'); });
+
+/** The query's matches in `text` as text and <mark> nodes. */
+function marked(text, q) {
+  const out = [], re = new RegExp(reEscape(q), 'gi');
+  let at = 0;
+  for (let m; (m = re.exec(text)) && out.length < 40;) {
+    if (!m[0]) break;
+    if (m.index > at) out.push(document.createTextNode(text.slice(at, m.index)));
+    out.push(el('mark', '', m[0]));
+    at = m.index + m[0].length;
+  }
+  if (at < text.length) out.push(document.createTextNode(text.slice(at)));
+  return out;
+}
+
+function hitRow(r) {
+  const { e, hit } = r;
+  const a = el('a', 'row file hit');
+  a.href = '#';
+  a.dataset.path = e.path;
+  const rel = e.path.slice(tree.root.length + (tree.root === '/' ? 0 : 1));
+  const dir = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+  a.title = `${plainName(rel)}\nLine ${hit.line.toLocaleString()}${hit.count > 1 ? ` · ${hit.count.toLocaleString()} matches` : ''}`;
+  a.setAttribute('role', 'treeitem');
+  a.setAttribute('aria-level', 1);
+  a.setAttribute('aria-setsize', r.size);
+  a.setAttribute('aria-posinset', r.pos);
+  const top = el('span', 'hit-top');
+  top.append(el('span', 'nm', plainName(e.name)));
+  if (dir) top.append(el('span', 'hit-dir', plainName(dir)));
+  top.append(el('span', 'hit-n', hit.count >= 9999 ? '9999+' : String(hit.count)));
+  const snip = el('span', 'hit-snip');
+  snip.append(...marked(hit.snippet, hits.q));
+  const body = el('span', 'hit-body');
+  body.append(top, snip);
+  a.append(icon(e.icon), body);
+  if (e.path === current.path) { a.classList.add('active'); a.setAttribute('aria-current', 'page'); }
+  return a;
+}
+
+/** Opens a result, then finds the query in it; one already on screen is searched at once. */
+function openHit(path) {
+  if (!showingHits() || !hits.list.some((h) => h.path === path)) return false;
+  if (path === current.path) { findFor(hits.q); return false; }
+  findOnOpen = { path, q: hits.q };
+  return true;
+}
+
+/** Find in the file for `q`, its first match current and in view. The keys stay where they are (the sidebar's). */
+function findFor(q) {
+  if (!hasText(current)) return;
+  if (!findOpen()) {
+    findBar.hidden = false;
+    $('find-btn').setAttribute('aria-expanded', 'true');
+    if (!pop.hidden) showPopover(false);
+  }
+  finder.q = q;
+  findField.value = q;
+  findSearch(false);
+  if (finder.hits.length) findGo(0);
+  else { paintFind(); findLabel(); }
+}
+
+Object.assign(window.sb, {
+  /** A new preview took over from the one that ran the search on screen: the search runs again, for it. */
+  searchAgain() {
+    if (sideMode !== 'contents' || !hits.q) return;
+    hits.seq = -1;
+    hits.list = [];
+    searchContents(filterField.value.trim());
+    renderSidebar();
+  },
+  /** A report of the Contents search: the files found since the last one, and how far it got. */
+  searchResults(m) {
+    if (!m || m.seq !== searchSeq || hits.seq !== searchSeq || sideMode !== 'contents') return;
+    const num = (v) => (typeof v === 'number' && isFinite(v) && v >= 0 ? Math.floor(v) : 0);
+    const found = (Array.isArray(m.hits) ? m.hits : []).filter((h) => h && typeof h.path === 'string' && inTree(h.path) && typeof h.name === 'string'
+      && typeof h.snippet === 'string').map((h) => ({ path: h.path, name: h.name, icon: typeof h.icon === 'string' ? h.icon : 'text',
+      count: Math.max(1, num(h.count)), line: Math.max(1, num(h.line)), snippet: h.snippet.slice(0, 400) }));
+    hits = { ...hits, list: (hits.fresh ? [] : hits.list).concat(found).slice(0, 5000), searched: num(m.searched), total: num(m.total),
+      done: m.done === true, stopped: typeof m.stopped === 'string' ? m.stopped : '', listedOnly: m.listedOnly === true, fresh: false,
+      version: hits.version + 1 };
+    renderSidebar();
+  },
 });
 
 function markCursor() {
@@ -3019,10 +3174,10 @@ function markCursor() {
 
 /** Scrolls the list, never the page, just enough to show the row, and draws the rows now in view. */
 function revealRow(r) {
-  const list = $('side-list'), y = sideRows.indexOf(r) * SIDE_ROW_H;
+  const list = $('side-list'), rh = sideRowH(), y = sideRows.indexOf(r) * rh;
   if (y < 0) return;
   if (y < list.scrollTop) list.scrollTop = y;
-  else if (y + SIDE_ROW_H > list.scrollTop + list.clientHeight) list.scrollTop = y + SIDE_ROW_H - list.clientHeight;
+  else if (y + rh > list.scrollTop + list.clientHeight) list.scrollTop = y + rh - list.clientHeight;
   drawSideWindow(false);
 }
 
@@ -3033,10 +3188,11 @@ function moveCursor(r, open, repeat) {
   revealRow(r);
   markCursor();
   clearTimeout(openTimer);
+  if (open && r.hit && cursor === current.path) openHit(cursor);
   if (!open || r.e.dir || r.e.broken || cursor === current.path) return;
   const path = cursor;
   keyed.set(path, performance.now());
-  const go = () => { peek(false); post({ type: 'open', path }); };
+  const go = () => { peek(false); openHit(path); post({ type: 'open', path }); };
   if (repeat) openTimer = setTimeout(go, 90); else go();
 }
 
@@ -3056,7 +3212,7 @@ function sideKey(key, inFilter, repeat) {
     case 'ArrowRight':
       if (!r || !r.e.dir) return false;
       // Filtered, a folder shows what matches whether or not it is open: the arrows only move, never open or close one.
-      if (sideQuery) {
+      if (filtered()) {
         if (rows[i + 1] && rows[i + 1].depth > r.depth) moveCursor(rows[i + 1], true, false);
         else return false;
         break;
@@ -3066,7 +3222,7 @@ function sideKey(key, inFilter, repeat) {
       break;
     case 'ArrowLeft': {
       if (!r) return false;
-      if (!sideQuery && r.e.dir && expanded().has(r.e.path) && r.open) { toggleFolder(r.e.path); break; }
+      if (!filtered() && r.e.dir && expanded().has(r.e.path) && r.open) { toggleFolder(r.e.path); break; }
       const up = rows.find((x) => x.e.path === parentOf(r.e.path));
       if (!up) return false;
       moveCursor(up, false, false);
@@ -3090,7 +3246,7 @@ document.addEventListener('keydown', (e) => {
   const inFilter = e.target === filterField;
   if (inFilter && e.key === 'Escape' && !editing) {
     e.preventDefault();
-    if (filterField.value) { filterField.value = ''; sideQuery = ''; renderSidebar(); } else filterField.blur();
+    if (filterField.value) { filterField.value = ''; setSideQuery(''); } else filterField.blur();
     return;
   }
   if (inFilter ? !['ArrowUp', 'ArrowDown', 'Enter'].includes(e.key) : e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable]')) return;
@@ -3163,8 +3319,7 @@ Object.assign(window.sb, {
     // The writer sends the text again before each ↵; only a change searches again.
     if (filterSession.find) { findField.value = m.text; if (m.text !== finder.q) findInput(m.text); return; }
     filterField.value = m.text;
-    sideQuery = m.text.trim().toLowerCase();
-    renderSidebar();
+    setSideQuery(m.text);
   },
   filterKey(m) {
     if (!ofFilter(m)) return;
@@ -3910,7 +4065,7 @@ document.addEventListener('click', (e) => {
     if (row.dataset.dir) toggleFolder(row.dataset.path);
     else if (!row.classList.contains('broken')) {
       peek(false);
-      if (row.dataset.path !== current.path) post({ type: 'open', path: row.dataset.path });
+      if (openHit(row.dataset.path) || row.dataset.path !== current.path) post({ type: 'open', path: row.dataset.path });
     }
     if (e.isTrusted) beginListKeys(e, at);
     return;

@@ -187,6 +187,17 @@ settings.json, the arrows stay with Finder and Space closes the preview at once.
 at the top and type to narrow the tree to names that match (letters in order, so `rdme` finds `README.md`); ↑, ↓, Home, End
 and Return still work while you type, and Esc clears the field, then goes back to the list.
 
+**Search the text of the files** (Unreleased, 0.4). The small **Names** button beside the filter switches it to
+**Contents**, for as long as spacebar stays open: type two or more characters and the list becomes the files whose text
+holds them, each with its folder, how many times it matches and the first matching line. Matching ignores case and is plain
+text, never a pattern. The files searched are the Markdown, code, JSON, CSV and text files the sidebar lists, in every
+folder under it (open or not), with hidden files only when the sidebar shows them; dependency and build folders
+(`node_modules`, `.build`, `Pods` and the like) are skipped, as are binary files and files iCloud has not downloaded. Each file
+is read to its first 2 MB, the whole search to 64 MB and 2 seconds, and at most 500 files are listed; a search cut short
+says how far it got ("Searched 300 of 900 files"). Every keystroke starts a new search. Opening a result, by a click or the
+arrows, runs Find (⌘F) in it for the same text, on its first match (in rendered Markdown, text that is only in the markup,
+such as a link's address, is not on screen to find; Raw shows it).
+
 In a vault (a folder with `.obsidian` in it), and in any other folder:
 
 - `[[Note]]`, `[[Note|alias]]`, `[[folder/Note]]` and `[[Note#Heading]]` open that note in the panel. A name is looked for

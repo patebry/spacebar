@@ -405,6 +405,185 @@ def big_folder(page, check, T):
     check(a == ['m-4999.txt'], 'the filter cleared: the file opened from it, far down the list, is scrolled to and drawn', json.dumps(a))
 
 
+def contents_search(page, check, out):
+    """The filter's Contents mode: the Names / Contents toggle and its placeholder, results with a match count, a folder and a
+    snippet, find in the file run for the same query when a result opens (by a click or the arrows), a new keystroke cancelling
+    the search before it, the caps with the "Searched N of M files" note, binary files skipped, and hidden files by the setting."""
+    d = os.path.join(out, 'contents')
+    for sub in ('src/lib', '.hid', 'node_modules/x'):
+        os.makedirs(os.path.join(d, sub))
+    put = lambda n, data: open(os.path.join(d, n), 'wb' if isinstance(data, bytes) else 'w').write(data)
+    put('README.md', '# Readme\n\nThe Quokka lives here.\n')
+    put('notes.txt', 'first line\n' + 'filler\n' * 400 + 'a quokka, far down, and QUOKKA again\n')
+    put('src/app.ts', 'export const quokka = 1;\n')
+    put('src/lib/util.py', 'def other():\n    return "no match"\n')
+    put('data.json', json.dumps({'animal': 'quokka', 'n': 1}))
+    put('pic.png', open(os.path.join(ROOT, 'test', 'fixtures', 'img.png'), 'rb').read() + b'quokka')
+    put('blob.txt', b'quokka\0\1\2binary')
+    put('.hidden.md', 'a hidden quokka\n')
+    put('.hid/deep.md', 'a quokka in a hidden folder\n')
+    put('node_modules/x/index.js', 'quokka in a dependency\n')
+    D = lambda n: os.path.join(d, n)
+    HITS = """const l = document.getElementById('side-list');
+      return { rows: [...l.querySelectorAll('a.row')].map((a) => [a.querySelector('.nm').textContent, (a.querySelector('.hit-dir') || {}).textContent || '',
+          (a.querySelector('.hit-n') || {}).textContent || '', (a.querySelector('.hit-snip') || {}).textContent || '', a.offsetHeight]),
+        marks: [...l.querySelectorAll('.hit-snip mark')].map((m) => m.textContent), status: document.getElementById('side-more').hidden ? '' : document.getElementById('side-more').textContent,
+        mode: document.getElementById('side-mode').textContent, pressed: document.getElementById('side-mode').getAttribute('aria-pressed'),
+        placeholder: document.getElementById('side-q').placeholder, cursor: (l.querySelector('a.cursor .nm') || {}).textContent || null };"""
+    FIND = """const c = CSS.highlights, cur = c.get('sb-find-cur');
+      return { open: !document.getElementById('find').hidden, q: document.getElementById('find-q').value, count: document.getElementById('find-count').textContent,
+        text: cur && cur.size ? [...cur][0].toString() : null, top: cur && cur.size ? Math.round([...cur][0].getBoundingClientRect().top) : null,
+        path: document.title, inner: innerHeight };"""
+    typed = lambda q: page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.value = " + json.dumps(q)
+                               + "; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
+    types_of = lambda r: [m.get('type') for m in r['messages']]
+
+    def settle(until_done=True):
+        for _ in range(40):
+            page.cmd('@wait:0.05')
+            h = page.js(HITS)
+            if not until_done or not h['status'].startswith('Searching'):
+                return h
+        return page.js(HITS)
+
+    page.cmd('@root:' + d)
+    page.render(D('README.md'))
+    page.cmd('@wait:0.3')
+    h = page.js(HITS)
+    check(h['mode'] == 'Names' and h['pressed'] == 'false' and h['placeholder'] == 'Filter', 'contents: the filter starts on Names', json.dumps(h))
+    r = click(page, '#side-mode')
+    h = page.js(HITS)
+    check(h['mode'] == 'Contents' and h['pressed'] == 'true' and h['placeholder'] == 'Search contents' and 'search' not in types_of(r),
+          'contents: the toggle switches to Contents, says so, and searches nothing while the field is empty', json.dumps(h))
+    typed('q')
+    h = page.js(HITS)
+    check(h['status'] == 'Type 2 or more characters to search contents' and any(x[0] == 'src' for x in h['rows']),
+          'contents: one character keeps the tree and asks for more', json.dumps(h))
+
+    # A keystroke cancels the search before it: the old one reports nothing more once the next is sent.
+    r1 = typed('qu')
+    r2 = typed('quo')
+    typed('quokka')
+    h = settle()
+    seqs = page.js('return searchSeq')
+    check(h['status'] == 'Found in 4 of 6 files', 'contents: the search finishes and counts the text files searched', json.dumps(h))
+    stale = page.js("""return (() => { const before = hits.version; sb.searchResults({ seq: searchSeq - 1, hits: [{ path: tree.root + '/notes.txt',
+      name: 'stale', snippet: 'x', count: 1, line: 1 }], searched: 1, total: 1, done: true }); return hits.version === before; })()""")
+    check(stale and 'search' in types_of(r1) and 'search' in types_of(r2) and seqs >= 3,
+          'contents: every keystroke sends a new search, and a report from an older one is dropped', json.dumps([stale, seqs]))
+
+    rows = {x[0]: x for x in h['rows']}
+    check(set(rows) == {'README.md', 'notes.txt', 'data.json', 'app.ts'},
+          'contents: the results are the text files that match (binary, the image, hidden files and dependencies skipped)', json.dumps(h['rows']))
+    check(rows['notes.txt'][2] == '2' and rows['notes.txt'][3] == 'a quokka, far down, and QUOKKA again' and rows['app.ts'][1] == 'src'
+          and rows['README.md'][1] == '' and all(x[4] == 40 for x in h['rows']) and 'Quokka' in h['marks'] and 'QUOKKA' in h['marks'],
+          'contents: each result has its match count, its folder, and the matching line with the matches marked', json.dumps(h))
+    check('blob.txt' not in rows and 'pic.png' not in rows, 'contents: binary files are skipped', json.dumps(list(rows)))
+    check('.hidden.md' not in rows and 'deep.md' not in rows, 'contents: hidden files are not searched while hidden', json.dumps(list(rows)))
+
+    # Cancellation, natively: two keystrokes at once over 2,000 files; the first search never reports once the second starts.
+    bulk = os.path.join(out, 'contents-bulk')
+    os.makedirs(bulk)
+    for i in range(2000):
+        open(os.path.join(bulk, f'f{i:04d}.txt'), 'w').write('quokka and more quokka\n' * 20)
+    page.cmd('@root:' + bulk)
+    page.render(os.path.join(bulk, 'f0000.txt'))
+    page.cmd('@wait:0.3')
+    r = page.cmd("@eval:(() => { const q = document.getElementById('side-q'); for (const t of ['qu', 'quokka']) { q.value = t; q.dispatchEvent(new Event('input', { bubbles: true })); } return searchSeq; })()")
+    seq = str(r['result'])
+    seen = [m for m in r['messages'] if m.get('type') == '_searchReport']
+    for _ in range(60):
+        seen += [m for m in page.cmd('@wait:0.05')['messages'] if m.get('type') == '_searchReport']
+        if any(m.get('seq') == seq and m.get('done') == 'true' for m in seen):
+            break
+    h = page.js(HITS)
+    n = page.js('return hits.list.length')
+    check(seen and all(m.get('seq') == seq for m in seen) and h['status'] == 'Searched 500 of 2,000 files' and n == 500,
+          'contents: a new keystroke cancels the search before it, which reports nothing more; results stop at 500 files',
+          json.dumps([seq, [m.get('seq') for m in seen][:10], h['status'], n]))
+    page.cmd('@root:' + d)
+    page.render(D('README.md'))
+    page.cmd('@wait:0.3')
+    typed('quokka')
+    settle()
+
+    # Opening a result runs find for the same query and scrolls to its first match.
+    page.cmd('@size:900x500')
+    r = click(page, '#side-list a.row[data-path$="/notes.txt"]')
+    page.cmd('@wait:0.5')
+    f = page.js(FIND)
+    check('open' in types_of(r) and f['open'] and f['q'] == 'quokka' and f['count'] == '1 of 2' and f['text'] == 'quokka'
+          and f['top'] is not None and 0 < f['top'] < f['inner'] and f['path'] == 'notes.txt',
+          'contents: a result opens its file with find run for the query, its first match current and scrolled into view', json.dumps(f))
+    check('filterBegin' not in types_of(r) or all(not m.get('find') for m in r['messages'] if m.get('type') == 'filterBegin'),
+          'contents: find opened by a result leaves the keys with the sidebar', json.dumps(types_of(r)))
+    order = [x[0] for x in page.js(HITS)['rows']]
+    at = order.index('notes.txt')
+    dispatch_key(page, 'ArrowDown')
+    page.cmd('@wait:0.4')
+    f = page.js(FIND)
+    h = page.js(HITS)
+    want = order[at + 1] if at + 1 < len(order) else order[at]
+    check(h['cursor'] == want and f['path'] == want and f['q'] == 'quokka' and f['text'] and f['text'].lower() == 'quokka',
+          'contents: the arrows move through the results, and each opens with find run', json.dumps([order, h['cursor'], f]))
+    page.cmd('@size:1100x760')
+
+    # A new preview of the same folder holds none of the last one's search: the page runs it again, and its results still open.
+    page.cmd('@session')
+    h = settle()
+    other = page.js("return document.querySelector('#side-list a.row.hit:not(.active) .nm').textContent")
+    r = click(page, '#side-list a.row.hit:not(.active)')
+    page.cmd('@wait:0.5')
+    f = page.js(FIND)
+    check(h['status'] == 'Found in 4 of 6 files' and 'open' in types_of(r) and '_openRefused' not in types_of(r) and f['path'] == other and f['q'] == 'quokka',
+          'contents: after a new preview of the same folder the search runs again and its results open', json.dumps([h['status'], types_of(r), f]))
+
+    # Hidden files: searched once they are shown.
+    page.apply(showHiddenFiles=True)
+    typed('quokk')
+    h = settle()
+    names = [x[0] for x in h['rows']]
+    check('.hidden.md' in names and 'deep.md' in names and 'index.js' not in names,
+          'contents: with hidden files shown, hidden files and folders are searched; dependency folders never are', json.dumps(names))
+    page.apply(showHiddenFiles=False)
+
+    # The caps: a bytes cap cuts the search short, and the note says how far it got.
+    page.cmd('@searchlimits:' + json.dumps({'maxTotalBytes': 60}))
+    typed('quokka')
+    h = settle()
+    m = h['status']
+    check(m.startswith('Searched ') and ' of 6 files' in m and not m.startswith('Searched 6 '), 'contents: a search cut short by a cap says "Searched N of M files"', m)
+    page.cmd('@searchlimits:' + json.dumps({'budget': 0}))
+    typed('quokk')
+    h = settle()
+    check(h['status'] in [f'Searched {i} of 6 files' for i in range(2)], 'contents: the time budget ends the search with the partial note', json.dumps(h))
+    page.cmd('@searchlimits:' + json.dumps({'maxFiles': 2}))
+    typed('quokka')
+    h = settle()
+    check(h['status'] == 'Searched the first 2 files', 'contents: the file cap says how many were searched', h['status'])
+    page.cmd('@searchlimits:')
+
+    # Esc clears the query and stops the search.
+    typed('quokka')
+    settle()
+    esc = page.cmd("@eval:(() => { const e = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }); document.getElementById('side-q').dispatchEvent(e); return 0; })()")
+    h = page.js(HITS)
+    check(any(x[0] == 'src' for x in h['rows']) and h['status'] == '' and page.js("return document.getElementById('side-q').value") == ''
+          and 'searchStop' in types_of(esc), 'contents: Esc clears the query, stops the search, and the tree comes back', json.dumps([h, types_of(esc)]))
+
+    # The mode is kept for the session, across previews; back on Names, the filter matches names only.
+    page.cmd('@root:')
+    page.render(D('src/app.ts'))
+    page.cmd('@wait:0.3')
+    check(page.js(HITS)['mode'] == 'Contents', 'contents: the mode is kept for the session, in the next preview too', json.dumps(page.js(HITS)))
+    typed('quokka')
+    settle()
+    r = click(page, '#side-mode')
+    h = page.js(HITS)
+    check(h['mode'] == 'Names' and h['placeholder'] == 'Filter' and 'searchStop' in types_of(r) and h['rows'] == [],
+          'contents: back to Names, the search stops and the filter matches names only', json.dumps([h, types_of(r)]))
+    typed('')
+
 def make_viewers(out):
     """Files for the viewers: a large and a small image, CSVs with other delimiters and past the row cap, nested and large JSON, a
     notebook, and one file of each kind with an icon of its own."""
@@ -2910,6 +3089,7 @@ def main():
         tools(page, check, page.out)
         steady_chrome(page, check, page.out)
         missing_images(page, check, page.out)
+        contents_search(page, check, page.out)
 
         csp = [l for l in page.logs if 'csp blocked' in l]
         errs = [l for l in page.logs if l.startswith(('rejection', 'mermaid')) or ' @' in l]

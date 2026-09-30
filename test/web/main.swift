@@ -25,13 +25,17 @@
 //                      window that is not key of an app that is not active, as in the Space viewer; GestureRouter is installed
 //                      and the web view is the extension's PreviewWebView.
 //   @remotereset       RemoteImageGate.reset(), as a new preview or another document does
+//   @searchlimits:<json>  ContentSearch.Limits for the searches that follow ({maxFiles, maxFileBytes, maxTotalBytes, maxResults,
+//                      budget}); empty: the defaults. "search" runs ContentSearch off the main thread as the extension does and
+//                      sends sb.searchResults; each file it finds may then be opened, and "searchStop" cancels it.
 //   @type:<json>       during a whole-file edit the page asked for ("editText"), stands in for the writer and the extension: {text,
 //                      selStart, selLen} goes to the page as the extension sends it (EditableText.change) and is saved in the file's
 //                      own encoding (EditableText.Source) under the writer's refusals; result "saved" or the refusal
 //   @loaddisk          reload the page with settings.json from the scratch folder, as the next preview would
 //   @relist            list the root and every folder the page expanded again and send them, as the folder watches do
 //   @root:<dir>        the sidebar's root for the renders that follow (a folder preview); empty: each file's own folder
-//   @session           a new preview of the same root: the next listings carry a new session number
+//   @session           a new preview of the same root: the next listings carry a new session number; the search on screen is
+//                      dropped and the page asked to run it again (sb.searchAgain), as the extension's start() does
 //   @folder:<dir>      a folder preview, as the extension starts one: declined (FolderRules), else its README or first Markdown
 //                      file, else the best Markdown FolderScan finds, else the overview; result "declined: …", "file:<path>" or
 //                      "overview". The overview's recent files and every wikilink target are "offered": the page may open them.
@@ -210,6 +214,9 @@ var currentText = false
 /// The text a copy of the whole file takes, as the extension keeps it (the Markdown source, or a text view's payload text).
 var currentBody: (text: String, truncated: Bool)?
 var offered: Set<String> = []
+var searchHits: (seq: Int, paths: Set<String>) = (0, [])
+var searchLimits = ContentSearch.Limits()
+var searchCancel: ContentSearch.Cancel?
 var linkIndex: LinkIndex?
 var pendingAnchor: String?
 /// The whole-file edit the page started: its session, and the file's text and bytes as last saved.
@@ -250,7 +257,7 @@ func renderFile(_ file: String, listFirst: Bool = true) {
     let newRoot = rootFor(url)
     // As the extension: a single file is named inside its resolved folder; in a vault, the vault is the root.
     if rootOverride == nil { url = URL(fileURLWithPath: url.deletingLastPathComponent().resolvingSymlinksInPath().path).appendingPathComponent(url.lastPathComponent) }
-    if newRoot != root { root = newRoot; listings = [:]; knownDirs = [root]; offered = []; linkIndex = nil }
+    if newRoot != root { root = newRoot; listings = [:]; knownDirs = [root]; offered = []; searchHits = (0, []); searchCancel?.cancel(); linkIndex = nil }
     scheme.fileRoot = root
     if url.path != currentFile { images.reset() }
     currentFile = url.path
@@ -319,7 +326,7 @@ func renderFile(_ file: String, listFirst: Bool = true) {
 /// overview or a wikilink offered.
 func listedFile(_ p: String?) -> String? {
     guard let p, FolderListing.isPlainPath(p, under: root),
-          listings.values.contains(where: { l in l.entries.contains { $0.path == p && !$0.isDirectory } }) || offered.contains(p),
+          listings.values.contains(where: { l in l.entries.contains { $0.path == p && !$0.isDirectory } }) || offered.contains(p) || searchHits.paths.contains(p),
           FolderListing.isInside(p, root: root) else { return nil }
     var st = stat()
     guard stat(p, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return nil }
@@ -409,6 +416,27 @@ rec.onMessage = { type, body in
         textEdit = (seq, f, o.source, o.text, o.bytes)
     case "pdfRect":
         if currentKind == .pdf { pdfPane?.place(message: body, in: web) }
+    case "search":
+        searchCancel?.cancel()
+        guard let q = body["q"] as? String, q.utf8.count <= ContentSearch.maxQueryBytes, let seq = body["seq"] as? Int else {
+            rec.messages.append(["type": "_searchRefused"]); return
+        }
+        let cancel = ContentSearch.Cancel(), r = root, s = Settings(dictionary: settingsDict), limits = searchLimits
+        searchCancel = cancel
+        ContentSearch.queue.async {
+            ContentSearch.run(query: q, root: r, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles,
+                              limits: limits, cancel: cancel) { p in
+                DispatchQueue.main.async {
+                    guard !cancel.isCancelled, r == root else { return }
+                    if searchHits.seq != seq { searchHits = (seq, []) }
+                    searchHits.paths.formUnion(p.hits.map(\.path))
+                    rec.messages.append(["type": "_searchReport", "seq": seq, "hits": p.hits.count, "done": p.done])
+                    web.evaluateJavaScript("sb.searchResults(\(jsonString(ContentSearch.payload(p, seq: seq)))); 0")
+                }
+            }
+        }
+    case "searchStop":
+        searchCancel?.cancel()
     case "overview":
         DispatchQueue.main.async { renderOverview(FolderScan.scan(root, showHidden: Settings(dictionary: settingsDict).showHiddenFiles), reason: "overview") }
     case "copy":
@@ -611,7 +639,11 @@ func run(_ cmd: String) -> String {
         rootOverride = arg.isEmpty ? nil : arg
         result = arg
     case "@session":
+        // As the extension's start(): the new preview holds no search, and the page asks again.
         session += 1
+        searchCancel?.cancel()
+        searchHits = (0, [])
+        _ = eval(web, "sb.searchAgain({}); 0")
         result = session
     case "@folder":
         result = startFolder(arg)
@@ -628,6 +660,16 @@ func run(_ cmd: String) -> String {
     case "@remotereset":
         gate.reset()
         result = gate.blocking
+    case "@searchlimits":
+        let o = arg.isEmpty ? [:] : object(arg)
+        var l = ContentSearch.Limits()
+        if let n = o["maxFiles"] as? Int { l.maxFiles = n }
+        if let n = o["maxFileBytes"] as? Int { l.maxFileBytes = n }
+        if let n = o["maxTotalBytes"] as? Int { l.maxTotalBytes = n }
+        if let n = o["maxResults"] as? Int { l.maxResults = n }
+        if let n = o["budget"] as? Double { l.budget = n }
+        searchLimits = l
+        result = "ok"
     default:
         result = "unknown command"
     }

@@ -356,6 +356,10 @@ class PreviewController: NSViewController {
     /// Files the page may open that no listing named: the overview's recent files and the targets of the document's wikilinks,
     /// each found by a bounded scan inside the root.
     private var offered: Set<String> = []
+    /// The sidebar's Contents search in flight, and the files the page's list of results holds (the last search to report),
+    /// which the page may open.
+    private var search: (seq: Int, cancel: ContentSearch.Cancel)?
+    private var searchHits: (seq: Int, paths: Set<String>) = (0, [])
     /// The folder overview is on screen (no file is).
     private var showingOverview = false
     /// A folder preview has not opened anything yet.
@@ -721,11 +725,15 @@ class PreviewController: NSViewController {
             if host.ready { js("sb.updateReset", [:]) }
         }
         stopFilter(notifyWriter: true)
+        host.controller?.stopSearch()
+        stopSearch()
         host.controller = self
         readyPending = true
         // The page outlives the controller that began a filter session; the new preview starts with none. A page still
         // loading has no session, and no `sb` to call.
         if host.ready { js("sb.filterEnd", ["all": true]) }
+        // Nor any search: a page still showing results asks again, of this preview.
+        if host.ready { js("sb.searchAgain", [:]) }
 
         var isDir: ObjCBool = false
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
@@ -736,6 +744,7 @@ class PreviewController: NSViewController {
         if !isDir.boolValue, only == nil, !FolderRules.isQuarantined(resolved.path) { rootDir = FolderRules.vaultRoot(containing: rootDir) ?? rootDir }
         host.scheme.fileRoot = rootDir
         knownDirs = [rootDir]
+        searchHits = (0, [])
         wantListKeys()
         listings = [:]
         offered = []
@@ -1613,6 +1622,43 @@ class PreviewController: NSViewController {
         return p
     }
 
+    /// A path the Contents search found: plain, inside the root (symlinks resolved), a regular file.
+    private func searchedFile(_ m: PageMessage) -> String? {
+        guard let p = m.string("path", max: 4096), searchHits.paths.contains(p), FolderListing.isPlainPath(p, under: rootDir),
+              FolderListing.isInside(p, root: rootDir) else { return nil }
+        var st = stat()
+        guard stat(p, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return nil }
+        return p
+    }
+
+    /// Searches the text of the files the sidebar lists for `query` off the main thread (ContentSearch), streaming what it finds
+    /// to the page as `sb.searchResults`. A new search, or `stopSearch`, cancels the one before.
+    private func startSearch(_ query: String, seq: Int) {
+        stopSearch()
+        guard !rootDir.isEmpty else { return js("sb.searchResults", ContentSearch.payload(.init(done: true), seq: seq)) }
+        let cancel = ContentSearch.Cancel()
+        search = (seq, cancel)
+        let root = rootDir, s = SettingsStore.shared.settings, only = selectionNames
+        ContentSearch.queue.async {
+            ContentSearch.run(query: query, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles,
+                              only: only, cancel: cancel) { p in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.search?.cancel === cancel, !cancel.isCancelled, root == self.rootDir else { return }
+                    // The page replaces its list with this search's at its first report.
+                    if self.searchHits.seq != seq { self.searchHits = (seq, []) }
+                    self.searchHits.paths.formUnion(p.hits.map(\.path))
+                    if p.done { self.search = nil }
+                    self.js("sb.searchResults", ContentSearch.payload(p, seq: seq))
+                }
+            }
+        }
+    }
+
+    fileprivate func stopSearch() {
+        search?.cancel.cancel()
+        search = nil
+    }
+
     func handle(_ type: String, _ body: [String: Any]) {
         let m = PageMessage(body: body)
         switch type {
@@ -1641,9 +1687,19 @@ class PreviewController: NSViewController {
         case "open":
             // Only a file the sidebar listed, or the overview or a wikilink offered, checked again now: a listed file may since
             // have been replaced by a link out of the root.
-            guard let p = listedFile(m) ?? offeredFile(m) else { return refuse("open", "not in the folder list") }
+            guard let p = listedFile(m) ?? offeredFile(m) ?? searchedFile(m) else { return refuse("open", "not in the folder list") }
             if p == fileURL?.path, let a = m.string("anchor", max: 256) { return js("sb.scrollToHeading", ["heading": a]) }
             open(URL(fileURLWithPath: p), anchor: m.string("anchor", max: 256))
+        case "search":
+            // The sidebar filter in Contents mode: every keystroke starts a search, cancelling the last.
+            guard let seq = m.int("seq") else { return refuse("search", "no sequence number") }
+            guard let q = m.string("q", max: ContentSearch.maxQueryBytes) else {
+                stopSearch()
+                return js("sb.searchResults", ContentSearch.payload(.init(done: true), seq: seq))
+            }
+            startSearch(q, seq: seq)
+        case "searchStop":
+            stopSearch()
         case "overview":
             // The sidebar's folder name: the overview of the root.
             guard !torn else { return }

@@ -15,7 +15,7 @@ const el = (tag, cls, text) => {
 // The defaults of Shared/Settings.swift, then the document-start payload, then each sb.applySettings. settings.js (the
 // document-start script) is absent in a plain browser, so the page falls back to a minimal apply of its own.
 const DEFAULTS = { theme: 'apple', appearance: 'auto', codeTheme: 'auto', bodyFont: 'system', monoFont: 'system', fontSize: 15,
-  lineHeight: 1.6, width: 'medium', frontMatter: 'table', toc: 'auto', stats: true, math: true, mermaid: true, rawHTML: 'sanitized',
+  lineHeight: 1.6, width: 'medium', frontMatter: 'table', toc: 'auto', stats: false, math: true, mermaid: true, rawHTML: 'sanitized',
   remoteImages: false, inlineEditing: true, taskToggles: true, sidebarCollapsed: false, sidebarWidth: 240, minimalChrome: false, customCSSURL: null,
   userThemeURL: null, rawMarkdown: false, rawJSON: false, rawNotebook: false, rawCSV: false, rawXML: false, rawCSS: false };
 let settings = { ...DEFAULTS, ...(window.__sbInitial || {}) };
@@ -684,9 +684,10 @@ function blockRange(b) {
 let drawnMermaid = Promise.resolve();
 function draw() {
   if (editing && !editing.whole && rawOn(current)) { stopEditing(); return; }
+  $('kind').replaceChildren();
   if (!isMarkdown(current) || rawOn(current)) {
     $('doc').replaceChildren(viewNode(current));
-    // The view no longer shows the file's text (Raw turned off, another JSON mode): the edit ends.
+    // The view no longer shows the file's text (Raw turned off): the edit ends.
     if (editing && editing.whole && !paintTextEditor()) {
       const seq = editing.seq;
       endTextEditing();
@@ -1152,6 +1153,7 @@ window.sb = {
     retired = null;
     docVer = p.ver ?? docVer;
     const y = samePath ? window.scrollY : 0;
+    if (!samePath && clearHint()) $('status').textContent = stickyStatus;
     // A re-render of the same file (a change on disk) keeps the app its Open button names; only a new file asks again.
     if (samePath && p.app === undefined && typeof current.app === 'string') p = { ...p, app: current.app };
     current = p;
@@ -1296,7 +1298,7 @@ window.sb = {
   /** A two-finger double tap at (x, y), in CSS pixels of the viewport: the image viewer toggles as on a double-click. */
   smartZoom(m) {
     if (current.view !== 'image' || !m || !Number.isFinite(m.x) || !Number.isFinite(m.y)) return false;
-    const stage = document.querySelector('#doc .img-stage'), img = stage && stage.querySelector('img'), label = document.querySelector('#doc .img-zoom');
+    const stage = document.querySelector('#doc .img-stage'), img = stage && stage.querySelector('img'), label = zoomLabel();
     if (!stage || !img || !img.naturalWidth || !stage.contains(document.elementFromPoint(m.x, m.y))) return false;
     animateZoom(stage, img, label, toggleTarget(stage, img), m.x, m.y);
     return true;
@@ -1304,7 +1306,7 @@ window.sb = {
   /** The zoom of the image the extension draws (a bitmap view), as a whole percentage, for the caption. */
   imageZoom(z) {
     if (!z || z.path !== current.path || current.view !== 'bitmap' || !Number.isInteger(z.zoom)) return;
-    const label = document.querySelector('#doc .img-zoom');
+    const label = zoomLabel();
     if (label) label.textContent = `${z.zoom}%`;
   },
   /** An archive's contents, listed by the writer once its view is up, or why they could not be (then it is an info card). */
@@ -1366,6 +1368,15 @@ window.sb = {
     clearTimeout(copyTimer);
     copyTimer = setTimeout(() => b.classList.remove('done'), 1500);
   },
+  /** The Space helper is on in the settings but did not take Space: one quiet line, which a click turns into Settings. */
+  helperHint() {
+    const s = $('status');
+    if (s.textContent) return false;
+    s.textContent = 'Space helper is off: open spacebar Settings';
+    s.dataset.hint = '';
+    s.title = 'Open spacebar Settings, General';
+    return true;
+  },
   installCopied(r) {
     const b = $('aa-copy');
     b.textContent = r && r.ok ? 'Copied' : 'Could not copy';
@@ -1373,10 +1384,22 @@ window.sb = {
   },
   status(s, sticky) {
     if (sticky) stickyStatus = s;
+    clearHint();
     $('status').textContent = s;
     if (!sticky) setTimeout(() => { if ($('status').textContent === s) $('status').textContent = stickyStatus; }, 2500);
   },
 };
+
+/** Takes the helper's hint down; whether it was up. */
+function clearHint() {
+  const s = $('status');
+  if (!('hint' in s.dataset)) return false;
+  delete s.dataset.hint;
+  s.removeAttribute('title');
+  s.textContent = '';
+  return true;
+}
+$('status').addEventListener('click', () => { if ('hint' in $('status').dataset && clearHint()) post({ type: 'openSettings', tab: 'general' }); });
 
 // ---------- file views: everything that is not Markdown, built from text nodes (never the file's own markup) ----------
 
@@ -1461,7 +1484,7 @@ function viewerAction(b, e) {
   const a = b.dataset.action;
   if ((a === 'openFile' || a === 'reveal') && e.isTrusted) post({ type: a, path: current.path });
   else if (a === 'csvSort') csvSortBy(+b.dataset.col);
-  else if (a === 'jsonMode' || a === 'jsonToggle' || a === 'jsonAll' || a === 'jsonMore') jsonAction(a, b);
+  else if (a === 'jsonToggle' || a === 'jsonAll' || a === 'jsonMore') jsonAction(a, b);
   else if (a === 'archiveDir' && archiveOpen) {
     const path = b.dataset.path;
     if (!archiveOpen.delete(path)) archiveOpen.add(path);
@@ -1473,11 +1496,24 @@ function viewerAction(b, e) {
   }
 }
 
+/** The row over a view: its own controls, and the Open button Minimal chrome shows here (the toolbar row has its own). */
 function viewHead(p, ...extra) {
   const head = el('div', 'viewer-head');
-  head.append(el('span', 'viewer-kind', [p.kindName, fmtSize(p.size)].filter(Boolean).join(' · ')), ...extra.filter(Boolean), openButton(p));
+  extra = extra.filter(Boolean);
+  if (!extra.length) head.classList.add('bare');
+  head.append(...extra, openButton(p));
   return head;
 }
+
+/** The file's kind and size (and whatever `more` adds) as quiet text in the toolbar. With `zoom`, the span an image's zoom is
+ *  written to follows it; returned with the text's own span. */
+function setKind(p, more = [], zoom = false) {
+  const text = el('span', 'kind-text', [p.kindName, ...more].filter(Boolean).join(' · '));
+  const z = zoom ? el('span', 'img-zoom') : null;
+  $('kind').replaceChildren(...[text, z].filter(Boolean));
+  return { text, zoom: z };
+}
+const zoomLabel = () => document.querySelector('#kind .img-zoom');
 
 function note(text) { return el('div', 'viewer-note', text); }
 
@@ -1523,9 +1559,9 @@ function codeBlock(text, lang, file = false) {
   return wrap;
 }
 
-// ---------- JSON: a tree of text nodes (or the text, formatted or as is), and a Jupyter notebook as its cells ----------
+// ---------- JSON: a tree of text nodes, and a Jupyter notebook as its cells; Raw shows either as its text ----------
 
-// The JSON on screen: parsed once per payload; the mode and the open nodes are kept while the same file is shown again.
+// The JSON on screen: parsed once per payload; the open nodes are kept while the same file is shown again.
 let jsonState = null;
 const JSON_CHUNK = 500;        // children of one node drawn before a "Show more" row
 const JSON_ALL_MAX = 5000;     // rows "Expand all" opens at most
@@ -1542,12 +1578,11 @@ function jsonModel(p) {
     try { value = JSON.parse(strictJSON(p) ? p.text : jsonLoose(p.text)); ok = true; } catch (e) { ok = false; }
   }
   const nb = ok && /\.ipynb$/i.test(p.name || '') && isBranch(value) && Array.isArray(value.cells);
-  // Raw is the toolbar's toggle (rawOn); these are the formatted views.
-  const modes = nb ? ['notebook', 'tree'] : ok && isBranch(value) ? ['tree', 'formatted'] : ['formatted'];
+  // One view: a notebook as its cells, an object or array as the tree; anything else is its text. Raw is the toolbar's toggle.
+  const mode = nb ? 'notebook' : ok && isBranch(value) ? 'tree' : 'text';
   const same = jsonState && jsonState.p.path === p.path;
-  const mode = same && modes.includes(jsonState.mode) ? jsonState.mode : modes[0];
-  jsonState = { p, value, ok, nb, modes, mode, open: same ? jsonState.open : new Set(), more: same ? jsonState.more : new Map(), pretty: null };
-  if (!same && ok && isBranch(value)) jsonOpenLevels(jsonState, JSON_AUTO_ROWS);
+  jsonState = { p, value, ok, nb, mode, open: same ? jsonState.open : new Set(), more: same ? jsonState.more : new Map() };
+  if (!same && mode === 'tree') jsonOpenLevels(jsonState, JSON_AUTO_ROWS);
   return jsonState;
 }
 
@@ -1603,7 +1638,7 @@ function jsonOpenLevels(m, budget) {
 
 function jsonView(p) {
   const m = jsonModel(p);
-  const raw = !m.ok || rawOn(p);
+  const raw = m.mode === 'text' || rawOn(p);
   const box = el('div', 'viewer viewer-code viewer-json');
   const extra = [];
   if (!raw && m.mode === 'tree') {
@@ -1614,20 +1649,7 @@ function jsonView(p) {
       extra.push(b);
     }
   }
-  if (!raw && m.modes.length > 1) {
-    const seg = el('span', 'viewer-seg');
-    seg.setAttribute('role', 'group');
-    seg.setAttribute('aria-label', 'View as');
-    const names = { notebook: 'Notebook', tree: 'Tree', formatted: 'Formatted' };
-    for (const mode of m.modes) {
-      const b = el('button', 'viewer-toggle', names[mode]);
-      b.type = 'button';
-      Object.assign(b.dataset, { action: 'jsonMode', mode });
-      b.setAttribute('aria-pressed', String(m.mode === mode));
-      seg.append(b);
-    }
-    extra.push(seg);
-  }
+  setKind(p, [fmtSize(p.size)]);
   box.append(viewHead(p, ...extra));
   const t = truncNote(p);
   if (t) box.append(t, note(/\.ipynb$/i.test(p.name || '') ? 'A notebook this large is shown as its text.' : 'A file this large is shown as its text, not as a tree.'));
@@ -1639,11 +1661,7 @@ function jsonView(p) {
   }
   if (raw) box.append(codeBlock(p.text, 'json', p.editable === true));
   else if (m.mode === 'tree') box.append(jsonTree(m));
-  else if (m.mode === 'notebook') box.append(notebookView(m.value));
-  else if (m.mode === 'formatted') {
-    if (m.pretty === null) m.pretty = JSON.stringify(m.value, null, 2);
-    box.append(codeBlock(m.pretty, 'json'));
-  }
+  else box.append(notebookView(m.value));
   return box;
 }
 
@@ -1725,8 +1743,7 @@ function jsonAction(a, b) {
   const m = jsonState;
   if (!m || m.p !== current) return;
   const y = window.scrollY;
-  if (a === 'jsonMode' && m.modes.includes(b.dataset.mode)) m.mode = b.dataset.mode;
-  else if (a === 'jsonToggle') { const p = b.dataset.ptr; if (!m.open.delete(p)) m.open.add(p); }
+  if (a === 'jsonToggle') { const p = b.dataset.ptr; if (!m.open.delete(p)) m.open.add(p); }
   else if (a === 'jsonMore') m.more.set(b.dataset.ptr, (m.more.get(b.dataset.ptr) || JSON_CHUNK) + JSON_CHUNK);
   else if (a === 'jsonAll') {
     m.open.clear();
@@ -1736,7 +1753,7 @@ function jsonAction(a, b) {
   draw();
   window.scrollTo(0, y);
   const again = a === 'jsonToggle' || a === 'jsonMore' ? [...document.querySelectorAll('#doc [data-action=jsonToggle]')].find((x) => x.dataset.ptr === b.dataset.ptr)
-    : [...document.querySelectorAll(`#doc [data-action=${a}]`)].find((x) => x.dataset.mode === b.dataset.mode && x.dataset.open === b.dataset.open);
+    : [...document.querySelectorAll(`#doc [data-action=${a}]`)].find((x) => x.dataset.open === b.dataset.open);
   if (again) again.focus({ preventScroll: true });
 }
 
@@ -1948,6 +1965,7 @@ function sortCsv(m) {
 function csvView(p) {
   if (rawOn(p)) {
     const box = el('div', 'viewer viewer-code viewer-csv-raw');
+    setKind(p, [fmtSize(p.size)]);
     box.append(viewHead(p));
     const t = truncNote(p);
     if (t) box.append(t);
@@ -1958,10 +1976,9 @@ function csvView(p) {
   const m = csvModel(p);
   const box = el('div', 'viewer viewer-csv');
   const shape = m.head.length ? `${Math.max(0, m.total - 1).toLocaleString()} ${m.total === 2 ? 'row' : 'rows'} × ${m.cols} ${m.cols === 1 ? 'column' : 'columns'}` : '';
-  const head = el('div', 'viewer-head');
   const sepName = m.sep === ',' || (m.sep === '\t' && p.tsv === true) ? '' : `${DELIMITER_NAMES[m.sep]}-separated`;
-  head.append(el('span', 'viewer-kind', [p.kindName, fmtSize(p.size), shape, sepName].filter(Boolean).join(' · ')), openButton(p));
-  box.append(head);
+  setKind(p, [fmtSize(p.size), shape, sepName]);
+  box.append(viewHead(p));
   const t = truncNote(p);
   if (t) box.append(t);
   else if (p.editable !== true && settings.inlineEditing && p.size > 2 << 20) box.append(note('Too large to edit here.'));
@@ -2130,15 +2147,15 @@ function infoCard(p, why) {
   const card = el('div', 'viewer info-card');
   card.append(thumbNode(p) || icon(p.icon, 64), el('div', 'info-name', plainName(p.name)), el('div', 'info-kind', p.kindName || 'Document'));
   const dl = el('dl');
-  const rel = typeof p.root === 'string' && p.path.startsWith(p.root + '/') ? p.path.slice(p.root.length + 1) : p.path;
   // Rows the extension read from the file itself (a disk image's format and encryption), as text.
   const details = Array.isArray(p.details) ? p.details.filter((r) => Array.isArray(r) && r.length === 2 && r.every((x) => typeof x === 'string')).slice(0, 8) : [];
   for (const [k, v] of [['Size', typeof p.size === 'number' ? `${fmtSize(p.size)}${p.size >= 1000 ? ` (${p.size.toLocaleString()} bytes)` : ''}` : ''],
-    ...details, ['Modified', fmtDate(p.modified)], ['Where', rel]]) {
+    ...details, ['Modified', fmtDate(p.modified)], ['Where', typeof p.folder === 'string' ? p.folder : '']]) {
     if (v) dl.append(el('dt', '', k), el('dd', '', v));
   }
   card.append(dl);
   if (why) card.append(note(why));
+  // Minimal chrome's Open; the toolbar row has its own.
   card.append(openButton(p));
   return card;
 }
@@ -2163,22 +2180,21 @@ function imageView(p) {
   const box = el('figure', 'viewer viewer-image');
   const stage = el('div', 'img-stage');
   const img = document.createElement('img');
-  const cap = el('figcaption', 'viewer-kind');
-  const meta = el('span', 'img-meta', [p.kindName, fmtSize(p.size)].filter(Boolean).join(' · '));
-  const zoom = el('span', 'img-zoom');
-  cap.append(meta, zoom);
+  const { text: meta, zoom } = setKind(p, [fmtSize(p.size)], true);
   img.alt = p.name;
   img.draggable = false;
   img.addEventListener('load', () => {
     meta.textContent = [p.kindName, `${img.naturalWidth} × ${img.naturalHeight}`, fmtSize(p.size)].filter(Boolean).join(' · ');
     applyZoom(stage, img, zoom, imgScale);
   });
-  img.addEventListener('error', () => { if (box.isConnected) box.replaceWith(infoCard(p, 'This image can’t be shown here.')); });
+  img.addEventListener('error', () => {
+    if (!box.isConnected) return;
+    $('kind').replaceChildren();
+    box.replaceWith(infoCard(p, 'This image can’t be shown here.'));
+  });
   img.src = p.src;
   stage.append(img);
-  const head = el('div', 'viewer-head');
-  head.append(cap, openButton(p));
-  box.append(head, stage);
+  box.append(viewHead(p), stage);
   imageControls(stage, img, zoom);
   return box;
 }
@@ -2186,7 +2202,8 @@ function imageView(p) {
 /** What the image is scaled to when fitted: never above its own size. */
 function fitScale(stage, img) {
   if (!img.naturalWidth || !img.naturalHeight) return 1;
-  const w = stage.clientWidth || $('doc').clientWidth, h = Math.max(120, window.innerHeight - 150);
+  const room = parseFloat(getComputedStyle(root).getPropertyValue('--img-room')) || 150;
+  const w = stage.clientWidth || $('doc').clientWidth, h = Math.max(120, window.innerHeight - room);
   return Math.min(1, w / img.naturalWidth, h / img.naturalHeight);
 }
 
@@ -2206,7 +2223,7 @@ function applyZoom(stage, img, label, scale, ax, ay) {
     img.style.height = Math.round(img.naturalHeight * scale) + 'px';
   }
   const shown = scale === null ? fit : scale;
-  label.textContent = img.naturalWidth ? `${Math.round(shown * 100)}%` : '';
+  if (label) label.textContent = img.naturalWidth ? `${Math.round(shown * 100)}%` : '';
   stage.title = scale === null ? 'Double-click to zoom to actual size' : 'Double-click to fit. Drag to move.';
   if (scale !== null && ax !== undefined && before.width > 0) {
     const fx = Math.min(1, Math.max(0, (ax - before.left) / before.width)), fy = Math.min(1, Math.max(0, (ay - before.top) / before.height));
@@ -2300,7 +2317,7 @@ function imageControls(stage, img, label) {
 /** ⌘+, ⌘− and ⌘0 (`key` '+', '-' or '0') on the image on screen, about the middle of what is shown. Whether it applied. */
 function zoomImage(key) {
   if (current.view !== 'image') return false;
-  const stage = document.querySelector('#doc .img-stage'), img = stage && stage.querySelector('img'), label = document.querySelector('#doc .img-zoom');
+  const stage = document.querySelector('#doc .img-stage'), img = stage && stage.querySelector('img'), label = zoomLabel();
   if (!stage || !img || !img.naturalWidth) return false;
   const r = stage.getBoundingClientRect(), from = zoomFrom(stage, img);
   const cx = r.left + Math.min(r.width, window.innerWidth) / 2, cy = r.top + Math.min(r.height, window.innerHeight - r.top) / 2;
@@ -2318,7 +2335,7 @@ document.addEventListener('keydown', (e) => {
 });
 window.addEventListener('resize', () => {
   const stage = document.querySelector('#doc .img-stage'), img = stage && stage.querySelector('img');
-  if (stage && img && img.naturalWidth) applyZoom(stage, img, document.querySelector('#doc .img-zoom'), imgScale);
+  if (stage && img && img.naturalWidth) applyZoom(stage, img, zoomLabel(), imgScale);
 });
 
 // An archive's listing (sent by the extension from the writer's bsdtar) as a tree of folders and files, built from text nodes.
@@ -2383,6 +2400,7 @@ function archiveInitialOpen(tree, count) {
 
 function archiveView(p) {
   const box = el('div', 'viewer viewer-archive');
+  setKind(p, [fmtSize(p.size)]);
   box.append(viewHead(p));
   if (!Array.isArray(p.entries)) {
     const wait = el('div', 'viewer-loading');
@@ -2443,17 +2461,10 @@ const NATIVE_VIEWS = new Set(['pdf', 'html', 'video', 'audio', 'rtf', 'quicklook
  *  reports where it is (syncPdf), so WebKit's PDF plugin, and its unlabelled buttons, never load. */
 function pdfView(p) {
   const box = el('div', `viewer viewer-pdf${p.view === 'audio' ? ' viewer-audio' : ''}${p.view === 'bitmap' ? ' viewer-image' : ''}`);
-  if (p.view === 'bitmap') {
-    // The extension's image view reports its zoom (sb.imageZoom); the caption reads as the page's own image viewer's.
-    const dims = Number.isInteger(p.width) && Number.isInteger(p.height) ? `${p.width} × ${p.height}` : '';
-    const cap = el('span', 'viewer-kind');
-    cap.append(el('span', 'img-meta', [p.kindName, dims, fmtSize(p.size)].filter(Boolean).join(' · ')), el('span', 'img-zoom'));
-    const head = el('div', 'viewer-head');
-    head.append(cap, openButton(p));
-    box.append(head);
-  } else {
-    box.append(viewHead(p));
-  }
+  // The extension's image view reports its zoom (sb.imageZoom) into the toolbar, as the page's own image viewer does.
+  const dims = p.view === 'bitmap' && Number.isInteger(p.width) && Number.isInteger(p.height) ? `${p.width} × ${p.height}` : '';
+  setKind(p, [dims, fmtSize(p.size)], p.view === 'bitmap');
+  box.append(viewHead(p));
   const area = el('div', 'pdf-area');
   area.setAttribute('role', 'document');
   area.setAttribute('aria-label', plainName(p.name));
@@ -2518,6 +2529,7 @@ function viewNode(p) {
     case 'code': case 'text':
       if (typeof p.text === 'string') {
         const box = el('div', 'viewer viewer-code');
+        setKind(p, [fmtSize(p.size)]);
         box.append(viewHead(p));
         const t = truncNote(p);
         if (t) box.append(t);
@@ -3178,7 +3190,7 @@ function rawKind(p) {
   if (!hasText(p)) return '';
   if (isMarkdown(p)) return 'markdown';
   if (p.view === 'csv') return 'csv';
-  if (p.view === 'json') { const m = jsonModel(p); return !m.ok ? '' : m.nb ? 'notebook' : 'json'; }
+  if (p.view === 'json') { const m = jsonModel(p); return m.mode === 'text' ? '' : m.nb ? 'notebook' : 'json'; }
   if (p.view !== 'code' || p.truncated) return '';
   if (p.lang === 'xml' && XML_FILES.test(p.name || '')) return 'xml';
   if (p.lang === 'css' && minified(p.text)) return 'css';
@@ -3291,7 +3303,7 @@ const jsonLeaf = (v) => (typeof v === 'string' ? JSON.stringify(v.length > JSON_
 
 function findHow() {
   if (current.view === 'csv' && !rawOn(current) && csvState && csvState.p === current && csvState.shown) return 'csv';
-  if (current.view === 'json' && !rawOn(current) && jsonState && jsonState.p === current && jsonState.ok && jsonState.mode === 'tree') return 'json';
+  if (current.view === 'json' && !rawOn(current) && jsonState && jsonState.p === current && jsonState.mode === 'tree') return 'json';
   return 'dom';
 }
 

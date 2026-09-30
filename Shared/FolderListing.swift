@@ -567,8 +567,14 @@ final class FileLoader {
 enum FileView {
     /// What every render names: the file, its folder as the page's base URL, and the sidebar's root.
     static func base(path: String, root: String, reason: String) -> [String: Any] {
-        ["path": path, "base": FileTypes.fileURL((path as NSString).deletingLastPathComponent + "/")!.absoluteString,
-         "name": (path as NSString).lastPathComponent, "reason": reason, "root": root, "rootName": (root as NSString).lastPathComponent]
+        let dir = (path as NSString).deletingLastPathComponent
+        return ["path": path, "base": FileTypes.fileURL(dir + "/")!.absoluteString, "folder": tildePath(dir),
+                "name": (path as NSString).lastPathComponent, "reason": reason, "root": root, "rootName": (root as NSString).lastPathComponent]
+    }
+
+    /// `path` with the user's home as `~`: the real home, since inside the sandbox NSHomeDirectory() is the container.
+    static func tildePath(_ path: String, home: String = getpwuid(getuid()).flatMap({ String(validatingUTF8: $0.pointee.pw_dir) }) ?? NSHomeDirectory()) -> String {
+        path == home ? "~" : path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
     }
 
     /// A Markdown document's text, downloaded first when iCloud has evicted it.

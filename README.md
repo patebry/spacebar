@@ -31,7 +31,7 @@ Space on in Finder:
 | File | Shown as |
 |---|---|
 | Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`, `.mkdn`) | rendered, with inline editing and task toggles; Raw shows its source, read only |
-| Images (`.png`, `.jpg`, `.gif`, `.webp`, `.bmp`, `.ico`, `.svg`) | fitted to the panel, with its dimensions and size; a double-click or a two-finger double tap toggles fitted and actual size, a pinch zooms about the pointer, two fingers or a drag move it, ⌘+ ⌘− ⌘0 zoom and fit; SVG as an image only |
+| Images (`.png`, `.jpg`, `.gif`, `.webp`, `.bmp`, `.ico`, `.svg`) | fitted to the panel, its dimensions and zoom in the toolbar; a double-click or a two-finger double tap toggles fitted and actual size, a pinch zooms about the pointer, two fingers or a drag move it, ⌘+ ⌘− ⌘0 zoom and fit; SVG as an image only |
 | HEIC, AVIF, TIFF, camera RAW (`.dng`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.orf`, `.raf`, `.rw2`), Photoshop (`.psd`), OpenEXR, TGA, JPEG 2000, icons (`.icns`) | decoded by macOS's own ImageIO and drawn natively in the panel, turned as the camera recorded it, with the same fit, zoom and pan |
 | PDF | drawn natively by PDFKit in the panel, fitted to its width, pages in one scroll |
 | HTML (`.html`, `.htm`) | rendered in its own web view: with its scripts and web content unless it was marked as downloaded, with neither when it was (see below) |
@@ -39,13 +39,13 @@ Space on in Finder:
 | Audio (`.mp3`, `.m4a`, `.m4b`, `.aac`, `.wav`, `.aif`, `.aiff`, `.flac`, `.caf`, `.amr`) | the same player, under the file's artwork or icon |
 | Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.xml`, `.yaml`, `.toml`, `.sql`, `.plist`, `Makefile` and more) | highlighted source with line numbers, edited in place with a click; a binary property list is shown as XML (not editable). XML and property lists are indented, and a minified stylesheet is laid out a declaration to a line, with Raw for the file as is, where a click edits it. A language with no bundled grammar (`Dockerfile`, `.ps1`, `.bat`, Dart, Scala, Elixir, Haskell, Zig and others) is plain text with line numbers |
 | Archives (`.zip`, `.tar`, `.tgz`, `.tar.gz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz`, `.7z`, `.rar`, `.zst`, `.tzst`) | its files and folders as a tree, with sizes and dates, listed without extracting anything; Open with its default app |
-| JSON (and `.jsonc`, `.json5`, comments and trailing commas allowed) | a tree, or pretty-printed and highlighted; a Jupyter notebook as its cells, or the tree. Raw shows the file as is, and a click edits it, with a quiet warning while it is not valid JSON |
+| JSON (and `.jsonc`, `.json5`, comments and trailing commas allowed) | a tree, with Expand All and Collapse All; a Jupyter notebook as its cells. Raw shows the file as is, and a click edits it, with a quiet warning while it is not valid JSON |
 | CSV and TSV | a table, first row as the header, up to 50,000 rows and 200 columns; Raw shows its text, and a click edits it |
 | Text (`.txt`, `.log`, `.conf`, `.env`, `LICENSE`, `.env.example`, `.strings`, `.pbxproj` and any other file macOS declares as text) | as is, with line numbers; text of a kind spacebar edits (not `.strings` or `.pbxproj`) is edited in place with a click. Text need not be UTF-8: a byte order mark (UTF-8, UTF-16, UTF-32), UTF-16 without one, and legacy encodings (Windows-1252, Latin-1, Shift JIS, GB 18030, EUC-KR, Big5, Windows-1251 and others) are detected, and the kind line names the encoding |
 | Rich text (`.rtf`, `.rtfd`) | drawn by AppKit's own text view, fonts, colours, tables and pictures as the document has them (mapped for a dark theme, as TextEdit does); never as RTF source |
 | Office, iWork, fonts, 3D, certificates, calendars, e-books and other files macOS previews (`.docx`, `.xlsx`, `.pptx`, `.pages`, `.numbers`, `.key`, `.ttf`, `.otf`, `.usdz`, `.obj`, `.stl`, `.glb`, `.cer`, `.crt`, `.p12`, `.ics`, `.epub` and any other type macOS declares, is not text, and spacebar has no view of its own for) | Apple's own Quick Look preview, inside the panel; the file's text, or the info card, when Quick Look cannot show it. A contact card (`.vcf`) is shown as its text: Apple's preview of it would read your Contacts |
 | Disk images (`.dmg`) | the info card, with the image's format and whether it is encrypted, read from the file without mounting it |
-| Anything else | an info card: Finder's large thumbnail when there is one, kind, size, date modified, and Open with its default app (Reveal in Finder for apps and executables) |
+| Anything else | an info card: Finder's large thumbnail when there is one, kind, size, date modified and the folder it is in; the toolbar's Open opens it in its default app (Reveal in Finder for apps and executables) |
 
 The Open button in the toolbar opens Markdown in your editor (Settings, General: **Open files in**). Code, JSON, CSV and text
 open there too. The button always says just "Open" (or "Reveal" where only Finder may show the file), so it stays in place as
@@ -69,7 +69,10 @@ such as `.zshrc`, `.gitconfig`, `.npmrc`, `.command` scripts, git hooks, LaunchA
 the edit, and the file's own text wins.
 
 The preview sits in a thin outlined page under a toolbar row: the sidebar button and the path on the left, Aa and Open on the
-right. **Minimal chrome** (Settings, Appearance) goes back to floating buttons over the page.
+right, and beside them, in quiet text, the file's kind and size (an image's zoom too), so a PDF or an image fills the page
+under the row. Word count and reading time (Settings, Advanced) are off unless you turn them on; with them on, a Markdown
+file shows its words and a code file its lines there too. **Minimal chrome** (Settings, Appearance) goes back to floating
+buttons over the page.
 
 ### Copy, Find and Raw
 
@@ -147,7 +150,9 @@ for two things:
 
 The helper never opens a file. A separate viewer does, sandboxed like the Quick Look extension, and the first time it shows a
 file in Documents, Desktop, Downloads or iCloud Drive macOS may ask whether **spacebar** may access that folder. Settings,
-General shows whether the helper is on, waiting for Accessibility, blocked in Login Items, or paused by secure input.
+General shows whether the helper is on, waiting for Accessibility, blocked in Login Items, or paused by secure input. While
+the setting is on but the helper is not taking Space (Accessibility off, or not running), the first Quick Look preview that spacebar draws says so in one quiet
+line, once: "Space helper is off: open spacebar Settings" (a click opens Settings).
 [SECURITY.md](SECURITY.md#the-space-helper) has how the privileges are split.
 
 #### Turning it off

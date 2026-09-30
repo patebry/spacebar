@@ -208,8 +208,7 @@
   #crumbs .here { color: var(--fg); font-weight: 600; }
 
   /* ---------- file views ---------- */
-  #doc .viewer-head { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font: 12px/1.3 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--muted); }
-  #doc .viewer-kind { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #doc .viewer-head { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin: 0 0 12px; font: 12px/1.3 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--muted); }
   #doc .viewer button { font: 500 12px/1 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--fg); background: var(--code-bg); border: 1px solid var(--border);
     border-radius: 6px; height: 24px; padding: 0 10px; cursor: default; flex: none; }
   #doc .viewer button:hover { background: color-mix(in srgb, var(--code-bg) 80%, var(--fg) 8%); }
@@ -223,15 +222,13 @@
     border-right: 1px solid var(--border); padding-right: 10px; -webkit-user-select: none; user-select: none; }
   #doc .code-view pre.code { flex: 1 1 auto; }
   #doc .viewer-image { margin: 0; }
-  #doc .viewer-image .viewer-kind { display: flex; gap: 8px; }
-  #doc .viewer-image .img-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  #doc .viewer-image .img-zoom { flex: none; font-variant-numeric: tabular-nums; }
-  #doc .viewer-image .img-zoom:empty { display: none; }
   #doc .img-stage { -webkit-user-select: none; user-select: none; }
   #doc .img-stage.zoomable { cursor: zoom-in; }
-  #doc .viewer-image img { display: block; margin: 0 auto; max-width: 100%; max-height: calc(100vh - 150px); object-fit: contain; }
+  /* The height around a fitted image: the page's padding, and the head where Minimal chrome keeps Open (fitScale reads it). */
+  :root { --img-room: 150px; }
+  #doc .viewer-image img { display: block; margin: 0 auto; max-width: 100%; max-height: calc(100vh - var(--img-room)); object-fit: contain; }
   /* Zoomed: the image at its size in a box the panel's height, scrolled by a drag, a trackpad or the scroll bars. */
-  #doc .img-stage.zoomed { display: flex; height: calc(100vh - 150px); overflow: auto; cursor: zoom-out; border-radius: 6px;
+  #doc .img-stage.zoomed { display: flex; height: calc(100vh - var(--img-room)); overflow: auto; cursor: zoom-out; border-radius: 6px;
     background: color-mix(in srgb, var(--fg) 4%, transparent); }
   #doc .img-stage.zoomed img { flex: none; margin: auto; max-width: none; max-height: none; border-radius: 0; }
   #doc .img-stage.panning { cursor: grabbing; }
@@ -271,11 +268,6 @@
   #doc .viewer-csv th.num button.csv-sort { justify-content: flex-end; }
   #doc .viewer-csv button.csv-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
   #doc .viewer-csv .csv-ind { font-size: .7em; color: var(--muted); }
-  #doc .viewer-seg { display: inline-flex; flex: none; }
-  #doc .viewer-seg > button { border-radius: 0; margin-left: -1px; }
-  #doc .viewer-seg > button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
-  #doc .viewer-seg > button:last-child { border-radius: 0 6px 6px 0; }
-  #doc .viewer-seg > button[aria-pressed=true] { background: color-mix(in srgb, var(--accent) 16%, var(--code-bg)); }
   /* JSON: one row per key or item, indented by depth; values in the code theme's colours. */
   #doc .json-tree { background: var(--hl-bg); color: var(--hl-fg); border-radius: 8px; padding: 10px 12px; overflow: auto;
     font: calc(var(--font-size, 15px) * .8333)/1.6 var(--font-mono); }
@@ -347,8 +339,16 @@
       --ui-hover: rgba(255, 255, 255, .08); --ui-seg: rgba(255, 255, 255, .08); --ui-seg-on: rgba(255, 255, 255, .2); --ui-accent: #0a84ff; }
   }
   @supports (color: -apple-system-control-accent) { #toolbar, #side-toggle { --ui-accent: -apple-system-control-accent; } }
-  #status:empty, #stats:empty { display: none; }
+  #status:empty, #kind:empty, #stats:empty { display: none; }
   #stats { font-variant-numeric: tabular-nums; margin-right: 2px; }
+  /* The file's kind and size (an image's zoom too): quiet text, cut before it crowds the path. */
+  #kind { display: flex; gap: 6px; min-width: 0; max-width: 34vw; white-space: nowrap; }
+  #kind .kind-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #kind .img-zoom { flex: none; font-variant-numeric: tabular-nums; }
+  #kind .img-zoom:empty { display: none; }
+  #kind:not(:empty) + #stats:not(:empty)::before { content: "· "; }
+  #status[data-hint] { cursor: pointer; }
+  #status[data-hint]:hover { color: var(--fg); text-decoration: underline; }
   #toolbar > button, #side-toggle {
     font: inherit; font-weight: 500; color: var(--ui-fg); height: 24px; padding: 0 10px; border-radius: 6px; cursor: default;
     background: var(--ui-bg); border: 0; box-shadow: 0 0 0 .5px var(--ui-edge), 0 1px 2px rgba(0, 0, 0, .06);
@@ -487,9 +487,11 @@
     :root:not([data-chrome=minimal]) #side-head { padding-top: calc(var(--bar-h) + 8px); }
     /* A PDF stays inside the page's outline; the extension rounds the native view's corners to match. */
     :root:not([data-chrome=minimal]):is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=quicklook], [data-view=rtf], [data-view=bitmap]) #main { height: calc(100vh - var(--gap) - 1px); }
-    :root:not([data-chrome=minimal]):is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=quicklook], [data-view=rtf], [data-view=bitmap]) #doc { padding-top: calc(var(--bar-h) + 12px); }
-    :root:not([data-chrome=minimal]) #doc .pdf-area { margin: 0 calc(var(--gap) + 1px) 0 calc(var(--frame-inset) + 1px); border-top-color: var(--frame-line); }
-    /* The viewer's Open button moves up into the toolbar row. */
-    :root:not([data-chrome=minimal]) #doc .viewer-head .viewer-open { display: none; }
+    :root:not([data-chrome=minimal]):is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=quicklook], [data-view=rtf], [data-view=bitmap]) #doc { padding-top: calc(var(--bar-h) + 1px); }
+    :root:not([data-chrome=minimal]) #doc .pdf-area { margin: 0 calc(var(--gap) + 1px) 0 calc(var(--frame-inset) + 1px); border-top: 0; }
+    /* The viewer's Open button moves up into the toolbar row, and a head with nothing else in it goes. */
+    :root:not([data-chrome=minimal]) #doc :is(.viewer-head, .info-card) > .viewer-open { display: none; }
+    :root:not([data-chrome=minimal]) #doc .viewer-head.bare { display: none; }
+    :root:not([data-chrome=minimal]) { --img-room: 114px; }
   }
 }

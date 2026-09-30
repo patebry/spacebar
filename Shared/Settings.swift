@@ -30,7 +30,7 @@ struct Settings: Codable, Equatable {
     var minimalChrome = false
     var frontMatter = "table"
     var toc = "auto"
-    var stats = true
+    var stats = false
     var mdLinks = "preview"
     var webLinks = "browser"
     var math = true
@@ -54,7 +54,8 @@ struct Settings: Codable, Equatable {
 
     /// 2: folder previews became on by default. A file written before that stores the old default, false, so it reads as on
     /// until SettingsFile.update rewrites it; a user who turns them off afterwards stays off.
-    static let currentVersion = 2
+    /// 3: reading stats became off by default. A file written before that without the key had them on, and keeps them on.
+    static let currentVersion = 3
     static func fileVersion(_ raw: [String: Any]) -> Int { (raw["version"] as? NSNumber)?.intValue ?? 1 }
 
     static let themes = ["apple", "github", "paper", "solarized", "nord", "contrast"]
@@ -143,6 +144,7 @@ struct Settings: Codable, Equatable {
             if let clean = Self.sanitize(k, v) { d[k] = clean }
         }
         if !raw.isEmpty, Self.fileVersion(raw) < 2 { d["folderMode"] = true }
+        if !raw.isEmpty, Self.fileVersion(raw) < 3, raw["stats"] == nil { d["stats"] = true }
         let data = try! JSONSerialization.data(withJSONObject: d)
         self = (try? JSONDecoder().decode(Settings.self, from: data)) ?? Settings()
     }
@@ -290,6 +292,8 @@ enum SettingsFile {
         var changed = false
         // Migrated before the patch, so a user's "off" in the same write is kept.
         if Settings.fileVersion(obj) < Settings.currentVersion {
+            // No file yet: nothing was written under an older default.
+            if !obj.isEmpty, Settings.fileVersion(obj) < 3, obj["stats"] == nil { obj["stats"] = true }
             if Settings.fileVersion(obj) < 2 { obj["folderMode"] = true }
             obj["version"] = Settings.currentVersion
             changed = true
@@ -304,8 +308,8 @@ enum SettingsFile {
     }
 
     /// Brings an existing settings.json up to Settings.currentVersion. Run by the app and the writer, never the sandboxed extension.
-    /// A symbolic link (a dotfiles setup) is never written, so it is not migrated: until its target gains "version": 2 it reads
-    /// as folder previews on whatever its folderMode says. The failure is returned for the caller's log.
+    /// A symbolic link (a dotfiles setup) is never written, so it is not migrated: until its target gains the current "version"
+    /// it reads as folder previews on whatever its folderMode says, and reading stats on unless it names them. The failure is returned for the caller's log.
     @discardableResult
     static func migrate(at url: URL = url) -> Failure? {
         var st = stat()

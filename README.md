@@ -6,7 +6,8 @@ and files with no extension. Press Space on a folder and browse it. The sidebar 
 subfolders open in place, and a click shows any file in the panel, so you can read the Markdown, images, PDFs, rich text,
 HTML, video, code, JSON, CSV and archives beside a document without leaving Quick Look. While it shows, the arrow keys
 move through the tree and open each file in spacebar; type in its filter to narrow it by name. Drag its edge to resize it; its button collapses it, and every
-preview remembers both. Click a block of Markdown to edit it in place, or tick a task box, and the file is saved. Obsidian
+preview remembers both. Click a block of Markdown to edit it in place, or tick a task box, and the file is saved; code, text,
+JSON, CSV and config files edit in place the same way. Obsidian
 vaults read as they do in Obsidian: `[[wikilinks]]`, `![[embeds]]`, callouts and tags. When a new version is out, the
 preview's Aa button shows a dot and one click on Update installs it. Free and open source, for macOS 13 and later (Apple
 silicon and Intel).
@@ -35,11 +36,11 @@ Space on in Finder:
 | HTML (`.html`, `.htm`) | rendered in its own web view: with its scripts and web content unless it was marked as downloaded, with neither when it was (see below) |
 | Video (`.mp4`, `.m4v`, `.mov`, `.3gp`, `.mpg`, `.mpeg`, `.m2v`) | played by AVKit in the panel, paused on its first frame until you press play |
 | Audio (`.mp3`, `.m4a`, `.m4b`, `.aac`, `.wav`, `.aif`, `.aiff`, `.flac`, `.caf`, `.amr`) | the same player, under the file's artwork or icon |
-| Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.xml`, `.yaml`, `.toml`, `.sql`, `.plist`, `Makefile` and more) | highlighted source with line numbers; a binary property list is shown as XML. A language with no bundled grammar (`Dockerfile`, `.ps1`, `.bat`, Dart, Scala, Elixir, Haskell, Zig and others) is plain text with line numbers |
+| Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.xml`, `.yaml`, `.toml`, `.sql`, `.plist`, `Makefile` and more) | highlighted source with line numbers, edited in place with a click; a binary property list is shown as XML (not editable). A language with no bundled grammar (`Dockerfile`, `.ps1`, `.bat`, Dart, Scala, Elixir, Haskell, Zig and others) is plain text with line numbers |
 | Archives (`.zip`, `.tar`, `.tgz`, `.tar.gz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz`, `.7z`, `.rar`, `.zst`, `.tzst`) | its files and folders as a tree, with sizes and dates, listed without extracting anything; Open with its default app |
-| JSON | pretty-printed and highlighted, with a Raw toggle |
-| CSV and TSV | a table, first row as the header, up to 50,000 rows and 200 columns |
-| Text (`.txt`, `.log`, `.conf`, `.env`, `LICENSE`, `.env.example`, `.strings`, `.pbxproj` and any other file macOS declares as text) | as is, with line numbers. Text need not be UTF-8: a byte order mark (UTF-8, UTF-16, UTF-32), UTF-16 without one, and legacy encodings (Windows-1252, Latin-1, Shift JIS, GB 18030, EUC-KR, Big5, Windows-1251 and others) are detected, and the kind line names the encoding |
+| JSON | pretty-printed and highlighted, with a Raw toggle; **Edit** flips it to its text to edit, with a quiet warning while it is not valid JSON |
+| CSV and TSV | a table, first row as the header, up to 50,000 rows and 200 columns; **Edit** flips it to its text to edit |
+| Text (`.txt`, `.log`, `.conf`, `.env`, `LICENSE`, `.env.example`, `.strings`, `.pbxproj` and any other file macOS declares as text) | as is, with line numbers; text of a kind spacebar edits (not `.strings` or `.pbxproj`) is edited in place with a click. Text need not be UTF-8: a byte order mark (UTF-8, UTF-16, UTF-32), UTF-16 without one, and legacy encodings (Windows-1252, Latin-1, Shift JIS, GB 18030, EUC-KR, Big5, Windows-1251 and others) are detected, and the kind line names the encoding |
 | Rich text (`.rtf`, `.rtfd`) | drawn by AppKit's own text view, fonts, colours, tables and pictures as the document has them (mapped for a dark theme, as TextEdit does); never as RTF source |
 | Office, iWork, fonts, 3D, certificates, calendars, e-books and other files macOS previews (`.docx`, `.xlsx`, `.pptx`, `.pages`, `.numbers`, `.key`, `.ttf`, `.otf`, `.usdz`, `.obj`, `.stl`, `.glb`, `.cer`, `.crt`, `.p12`, `.ics`, `.epub` and any other type macOS declares, is not text, and spacebar has no view of its own for) | Apple's own Quick Look preview, inside the panel; the file's text, or the info card, when Quick Look cannot show it. A contact card (`.vcf`) is shown as its text: Apple's preview of it would read your Contacts |
 | Disk images (`.dmg`) | the info card, with the image's format and whether it is encrypted, read from the file without mounting it |
@@ -48,9 +49,20 @@ Space on in Finder:
 The Open button in the toolbar opens Markdown in your editor (Settings, General: **Open files in**). Code, JSON, CSV and text
 open there too: "Open in <editor>". A script (`.sh`, `.py`, a `.command`) opens in the editor as text and is never run; with
 **Default App** chosen it opens in your default text editor, never in Terminal or an interpreter. Files that often hold
-secrets (`.env`, `.npmrc`) are shown but never offered to another app.
+secrets (`.env`, `.npmrc`) are shown but never offered to another app; a `.env` can be edited in place.
 
 Text over 2 MB shows its first 2 MB. An archive lists its first 5,000 entries. Images over 50 MB, and PDFs, video and audio over 512 MB, get the info card.
+
+**Editing.** With **Edit text in the preview** on (Settings, Editing; one setting for everything), a click on the text of
+Markdown, code, text, JSON, CSV or TSV, YAML, TOML, XML, an INI or `.conf` file, or dotfile config (`.env`, `.env.local`,
+`.gitignore`) puts the caret there, and every change is saved as you type. Markdown is edited a block at a time;
+other files as a whole, highlighted as you type (plain while you type in files over 24 KB, highlighted again when the edit
+ends). A file is saved in the encoding and with the byte order mark it was read with, and keeps its CRLF or LF line endings
+and its last newline; a character the encoding cannot hold is not saved (the preview says which), and nothing is ever
+converted to UTF-8. Files over 2 MB, shown cut, a binary property list, text read with invalid bytes, and anything spacebar
+does not show as text are never editable, and nor are files the shell, git, npm or launchd run on their own (shell profiles
+such as `.zshrc`, `.gitconfig`, `.npmrc`, `.command` scripts, git hooks, LaunchAgents). A change on disk while you edit ends
+the edit, and the file's own text wins.
 
 The preview sits in a thin outlined page under a toolbar row: the sidebar button and the path on the left, Aa and Open on the
 right. **Minimal chrome** (Settings, Appearance) goes back to floating buttons over the page.
@@ -261,8 +273,9 @@ spacebar.app                         settings window (SwiftUI)
 └─ Helpers/spacebar Viewer.app       the panel it opens: the same preview code, sandboxed like the extension, with its own writer
 ```
 
-Quick Look extensions never receive key events, so inline editing uses a click-through, non-activating panel owned by the
-writer service; Finder stays in front. Saves are compare-and-swap: if the file changed on disk, the external change wins.
+Quick Look extensions never receive key events, so inline editing (Markdown and text files alike) uses a click-through,
+non-activating panel owned by the writer service; Finder stays in front. Saves are compare-and-swap: if the file changed on
+disk, the external change wins.
 [FINDINGS.md](FINDINGS.md) has the details and measurements.
 
 ## Privacy and security
@@ -275,8 +288,10 @@ writer service; Finder stays in front. Saves are compare-and-swap: if the file c
   one-time load for that document.
 - A Markdown file is treated as hostile. The page runs under a strict Content Security Policy (bundled scripts only, no
   inline scripts, frames, forms or connections), and DOMPurify sanitizes everything before it reaches the page.
-- The writer only writes to the Markdown file on screen, only opens http(s) links or non-executable documents, and only
-  accepts messages from the extension's own page. Apps and executables in the sidebar can only be revealed in Finder; a script
+- The writer only writes to the file on screen, and only to a type spacebar edits (Markdown, code, text, JSON, CSV, dotfile
+  config), never to a binary, a binary property list, text over 2 MB or a file it shows cut, and into anything but Markdown
+  only what was typed in its own key panel; it only opens http(s) links or non-executable documents, and only accepts
+  messages from the extension's own page. Apps and executables in the sidebar can only be revealed in Finder; a script
   shown as text opens only in a text editor (an app that declares the Editor role for text, never a terminal, browser or script
   runner), where it is not run.
 - The file browser never leaves the previewed folder: links that lead out of it are not listed, a file or folder the page asks

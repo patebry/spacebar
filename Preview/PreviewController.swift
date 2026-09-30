@@ -374,6 +374,16 @@ class PreviewController: NSViewController {
     private var docText: String?
     /// Last content confirmed on disk, in its on-disk line endings; every write must name it as its base.
     private var diskText: String?
+    /// The file on screen when it is text spacebar edits as a whole (not Markdown): how its bytes read and are written back.
+    /// docText and diskText then hold the text as edited (LF), and the source gives the bytes.
+    private var textSource: EditableText.Source?
+    /// The last payload of that file's view, rendered again with docText once an edit ends.
+    private var textPayload: [String: Any]?
+    /// The sticky status says a save was refused for a character the encoding cannot hold.
+    private var encodeRefused = false
+    /// Unsaved text the writer will no longer take (it restarted and does not know it was typed): shown until the user leaves,
+    /// which is then allowed.
+    private var textStranded = false
     /// "\r\n" for a file whose every line ends in CRLF. docText and the page always use "\n"; writes convert back.
     private var lineEnding = "\n"
     private func onDisk(_ text: String) -> String { lineEnding == "\n" ? text : text.replacingOccurrences(of: "\n", with: lineEnding) }
@@ -444,7 +454,17 @@ class PreviewController: NSViewController {
     }
 
     /// Text on screen that is not on disk: a save failed, or a write was torn.
-    private var hasUnsavedText: Bool { torn || tornHalted || (docText.map { onDisk($0) != diskText } ?? false) }
+    private var hasUnsavedText: Bool { !textStranded && (torn || tornHalted || (docText.map { onDisk($0) != diskText } ?? false)) }
+
+    /// The writer refused unsaved text of the text file on screen: it can no longer be saved, so the user is told to copy it and
+    /// may leave. True when that is the case.
+    private func strandText() -> Bool {
+        guard textSource != nil, hasUnsavedText else { return false }
+        textStranded = true
+        encodeRefused = false
+        stickyStatus("NOT SAVED: this text can no longer be saved to the file; copy it now. The file on disk is unchanged.")
+        return true
+    }
 
     /// Clears the waiting action; an update it replaces goes back to being offered.
     private func dropPending() {
@@ -481,6 +501,8 @@ class PreviewController: NSViewController {
     private func runPending() {
         guard !writing, retired.isEmpty, let p = pending else { return }
         pending = nil
+        // Text that never reached the disk (a character the file's encoding cannot hold) keeps the panel on this document.
+        if case .update = p {} else if hasUnsavedText { return refuseToLeave(p, "unsaved text") }
         switch p {
         case .file(let url, let anchor): open(url, anchor: anchor)
         case .overview(let r, let reason): showOverview(r, reason: reason)
@@ -905,6 +927,10 @@ class PreviewController: NSViewController {
         shownText = false
         docText = nil
         diskText = nil
+        textSource = nil
+        textPayload = nil
+        lineEnding = "\n"
+        if encodeRefused || textStranded { encodeRefused = false; textStranded = false; stickyStatus("") }
         watcher = FileWatcher(path: url.path) { [weak self] in self?.fileChanged() }
         host.whenReady { self.reload(reason: "open") }
     }
@@ -1107,13 +1133,13 @@ class PreviewController: NSViewController {
         loadingGen = pdfGen
         // Read off the main thread: text is read, an image in iCloud is downloaded before the page loads it, and PDFKit may
         // scan a large or damaged file to rebuild it. A newer show or open supersedes this one.
-        let gen = pdfGen, kind = fileKind, root = rootDir, canOpen = LinkPolicy.fileRefusal(url, allowArchives: kind == .archive) == nil
+        let gen = pdfGen, kind = fileKind, root = rootDir, canOpen = LinkPolicy.fileRefusal(url, allowArchives: kind == .archive) == nil, epoch = writeEpoch
         let noQuickLook = quickLookFailed.map { $0.path == url.path && $0.stamp == Self.stamp(url) } ?? false
         let cloud = FileTypes.isDataless(url.path)
         // Only a download times out: PDFKit rebuilding a large local PDF may take longer, and is still shown when done.
         let id = loader.load(timesOut: cloud, { () -> (payload: [String: Any], pdf: Result<PDFDocument, PDFPane.LoadError>?,
-                                                       rich: Result<NSAttributedString, RichTextPane.LoadError>?, stuck: Bool) in
-            var p = FileView.payload(path: url.path, kind: kind, root: root, reason: reason, canOpen: canOpen, quickLook: !noQuickLook)
+                                                       rich: Result<NSAttributedString, RichTextPane.LoadError>?, stuck: Bool, edit: EditableText.Opened?) in
+            var (p, edit) = FileView.payloadAndText(path: url.path, kind: kind, root: root, reason: reason, canOpen: canOpen, quickLook: !noQuickLook)
             // Text opens in a text editor even where its default app is refused (a script): the writer names the app.
             if Self.textViews.contains(p["view"] as? String ?? ""), LinkPolicy.editorRefusal(url) == nil { p["canOpen"] = true }
             if p["view"] as? String == "info", url.pathExtension.lowercased() == "dmg" { p["details"] = DiskImage.details(url.path) }
@@ -1140,7 +1166,8 @@ class PreviewController: NSViewController {
             // Only what FileView downloads counts: an evicted archive is its info card without a download.
             let fetched = ["pdf", "image", "bitmap", "html", "video", "audio", "rtf", "quicklook"].contains(p["view"] as? String)
                 || ([.code, .json, .csv, .text].contains(kind) && (p["size"] as? Int64 ?? .max) <= FolderListing.maxDocumentBytes)
-            return (p, pdf, rich, cloud && fetched && FileTypes.isDataless(url.path))
+            if !Self.textViews.contains(p["view"] as? String ?? "") { edit = nil }
+            return (p, pdf, rich, cloud && fetched && FileTypes.isDataless(url.path), edit)
         }) { [weak self] outcome in
             guard let self else { return }
             if self.loadingGen == gen { self.loadingGen = nil }
@@ -1167,6 +1194,7 @@ class PreviewController: NSViewController {
             case nil: break
             }
             if r.stuck { return self.showUnavailable(url, reason: reason, cloud: true) }
+            guard self.takeText(url, &p, r.edit, epoch: epoch) else { return }
             // The panel closed while a PDF or media opened: it is shown again when the panel reappears (viewWillAppear).
             if p["view"] as? String == "quicklook" { self.quickLookShown = true }
             if doc != nil || text != nil || ["video", "audio", "html", "quicklook", "bitmap"].contains(p["view"] as? String), gen != self.pdfGen { return }
@@ -1177,6 +1205,50 @@ class PreviewController: NSViewController {
         }
         if cloud, let s = Self.stamp(url) { downloading = (url, id, s) }
         if reason != "change" { showLoading(url, load: id, cloud: cloud) }
+    }
+
+    /// Takes a read of a file shown as text. For the editable text on screen, a read that may predate a write still in flight is
+    /// dropped (that write reads again once it lands), and so is one that finds the bytes this preview last saved; anything else
+    /// is a change on disk, which ends an edit as it does for Markdown. False: nothing is rendered.
+    private func takeText(_ url: URL, _ p: inout [String: Any], _ opened: EditableText.Opened?, epoch: Int) -> Bool {
+        let same = textPayload?["path"] as? String == url.path
+        if same, writing || torn || epoch != writeEpoch {
+            shownView = textPayload?["view"] as? String
+            return false
+        }
+        if same, let o = opened, let src = textSource, let disk = diskText, src.bytes(disk) == o.bytes {
+            shownView = textPayload?["view"] as? String
+            return false
+        }
+        if same {
+            retired = []
+            if edit != nil {
+                log.info("file changed on disk during edit; stopping edit")
+                stopEdit(notifyWriter: true)
+                status("changed on disk: edit stopped")
+            } else if hasUnsavedText {
+                status("unsaved text replaced by the version on disk")
+            }
+        }
+        if encodeRefused || textStranded { encodeRefused = false; textStranded = false; stickyStatus("") }
+        textSource = opened?.source
+        docText = opened?.text
+        diskText = opened?.text
+        lineEnding = "\n"
+        if opened != nil { p["ver"] = nextVersion() }
+        textPayload = opened == nil ? nil : p
+        return true
+    }
+
+    /// The editable text file's view again, from docText: after an edit, highlighted and measured anew.
+    private func renderText(_ reason: String) {
+        guard var p = textPayload, let url = fileURL, p["path"] as? String == url.path, let text = docText else { return }
+        p["text"] = text
+        p["reason"] = reason
+        if let n = textSource?.bytes(text)?.count { p["size"] = n }
+        p["ver"] = nextVersion()
+        textPayload = p
+        render(p)
     }
 
     private func finishShow(_ url: URL, _ payload: [String: Any], pdf: PDFDocument?, rich: NSAttributedString? = nil, reason: String) {
@@ -1522,6 +1594,20 @@ class PreviewController: NSViewController {
                 return
             }
             beginEdit(m)
+        case "editText":
+            // A click on the text of a code, text, JSON or CSV view: the whole file, edited in the same key panel.
+            guard SettingsStore.shared.settings.inlineEditing, let url = fileURL, fileKind != .markdown, m.string("path", max: 4096) == url.path,
+                  textSource != nil, !torn, !tornHalted else {
+                refuse("editText", "not the editable file on screen")
+                if let seq = m.int("seq") { js("sb.editEnd", ["seq": seq]) }
+                return
+            }
+            guard !updateBusy else {
+                status("Updating…")
+                if let seq = m.int("seq") { js("sb.editEnd", ["seq": seq]) }
+                return
+            }
+            beginTextEdit(m)
         case "caretPainted":
             log.info("lat[\(self.edit?.id ?? -1)] caret-painted \(upMs(epochMs: m.double("t") ?? 0), format: .fixed(precision: 1))")
         case "editSelect":
@@ -1536,7 +1622,7 @@ class PreviewController: NSViewController {
             stopEdit(notifyWriter: true, keepRetired: true)
             // Keys the writer flushes as it ends still land; the block is dropped if it ends up empty (editEnded).
             retired.append(e)
-            if let url = fileURL, let text = docText { push(text: text, path: url.path, reason: "editEnd") }
+            if textSource != nil { renderText("editEnd") } else if let url = fileURL, let text = docText { push(text: text, path: url.path, reason: "editEnd") }
         case "filterBegin":
             // A click in the sidebar's filter field, or (`list`) on a row of the sidebar; an edit is ended by the page (editStop)
             // before it asks.
@@ -1833,18 +1919,28 @@ class PreviewController: NSViewController {
     private func send(_ url: URL, _ text: String, _ keyTime: Double?) {
         guard !tornHalted else { return stickyStatus("file changed on disk; your unsaved text is only in this preview: copy it now") }
         if torn && tornBase == nil { tornBase = FileManager.default.contents(atPath: url.path) }
-        guard let base = torn ? tornBase : diskText.map({ Data($0.utf8) }) else {
+        guard let base = torn ? tornBase : diskText.flatMap(bytes) else {
             if torn { retryTorn(url) }
             return
         }
+        // A character the file's encoding has no form for: nothing is written, and the file is never converted to UTF-8.
+        guard let data = bytes(onDisk(text)) else {
+            let c = textSource?.unencodable(text).map { "“\($0)”" } ?? "a character"
+            encodeRefused = true
+            return stickyStatus("NOT SAVED: \(c) can’t be written in \(textSource?.name ?? "this file’s encoding"); remove it to save")
+        }
+        if encodeRefused { encodeRefused = false; stickyStatus("") }
         writing = true
         writeEpoch += 1
         helper(onError: { [weak self] in self?.saved(url, text, keyTime: keyTime, error: "xpc") }) {
-            $0.write(Data(self.onDisk(text).utf8), toPath: url.path, expecting: base) { err in
+            $0.write(data, toPath: url.path, expecting: base) { err in
                 DispatchQueue.main.async { self.saved(url, text, keyTime: keyTime, error: err) }
             }
         }
     }
+
+    /// The bytes on disk for `text`: UTF-8 for Markdown, the file's own encoding and byte order mark for other text.
+    private func bytes(_ text: String) -> Data? { textSource.map { $0.bytes(text) } ?? Data(text.utf8) }
 
     private func saved(_ url: URL, _ text: String, keyTime: Double?, error: String?) {
         guard writing else { return }
@@ -1886,6 +1982,12 @@ class PreviewController: NSViewController {
             cancelPending("changed on disk, not saved")
             return
         }
+        if let error, error.contains("not a text typed"), strandText() {
+            queuedSave = nil
+            stopEdit(notifyWriter: true)
+            runPending()
+            return
+        }
         if let error {
             // Not a conflict (disk full, I/O error, helper lost): keep the unsaved text on screen and in docText so the next edit
             // retries it. When the writer could not put the old content back, the partial file becomes the base to overwrite.
@@ -1912,7 +2014,7 @@ class PreviewController: NSViewController {
             if q.url == url { send(q.url, q.text, q.keyTime) }
             return
         }
-        push(text: text, path: url.path, reason: edit != nil ? "edit" : "save", keyTime: keyTime)
+        if textSource == nil { push(text: text, path: url.path, reason: edit != nil ? "edit" : "save", keyTime: keyTime) }
         // Catch an external change that landed while writes were in flight (watcher reloads are skipped during a write).
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.reload(reason: "change") }
         runPending()
@@ -1972,6 +2074,7 @@ class PreviewController: NSViewController {
     }
 
     fileprivate func editChanged(_ id: Int, text raw: String, selStart: Int, selLen: Int, keyTime: Double) {
+        if textSource != nil { return textChanged(id, text: raw, selStart: selStart, selLen: selLen, keyTime: keyTime) }
         guard let text = docText else { return }
         let block = lineEnding == "\n" ? raw : raw.replacingOccurrences(of: "\r\n", with: "\n")
         var lines = text.components(separatedBy: "\n")
@@ -2007,6 +2110,7 @@ class PreviewController: NSViewController {
     /// The writer reports every session end after flushing its last text, so no more keys can arrive for `id`: an edit left
     /// with an empty block (Enter then click away, or all text deleted) takes its block out rather than leaving blank lines.
     fileprivate func editEnded(_ id: Int, reason: String) {
+        if textSource != nil { return textEditEnded(id, reason: reason) }
         if let i = retired.firstIndex(where: { $0.id == id }) {
             let r = retired.remove(at: i)
             dropIfEmpty(start: r.start, lines: r.lines)
@@ -2020,6 +2124,70 @@ class PreviewController: NSViewController {
         if reason == "not-key" { status("inline editing unavailable") }
         // Re-sync the page with docText, the authority, in case the two drifted while it owned the view.
         if let url = fileURL, let text = docText { push(text: text, path: url.path, reason: "editEnd") }
+        if FilterKeys.relists(afterEnding: reason, list: false) { wantListKeys() }
+    }
+
+    // MARK: editing a whole text file
+
+    /// A click on the text of the editable file on screen: the writer's panel takes the keys with the whole text in plain mode.
+    /// The page's copy must be docText; a click while the last edit's keys are still landing is refused (they would be lost).
+    private func beginTextEdit(_ m: PageMessage) {
+        guard let seq = m.int("seq") else { return }
+        let previousFilter = filter
+        stopFilter(notifyWriter: false)
+        let previous = edit
+        stopEdit(notifyWriter: false, keepRetired: true)
+        if let previous { retired.append(previous) }
+        let fail = { (why: String) in
+            log.error("editText: \(why, privacy: .public)")
+            if let p = previous { self.helper { $0.endEdit(p.id) } }
+            if let f = previousFilter, !self.heldLocally(f) { self.endKeys(f) }
+            self.js("sb.editEnd", ["seq": seq])
+        }
+        guard previous == nil, retired.isEmpty else { return fail("the last edit is still landing") }
+        guard let url = fileURL, let text = docText, let caret = m.int("caret"), m.int("len") == (text as NSString).length, caret <= (text as NSString).length else {
+            return fail("bad request, or the page is behind the text")
+        }
+        editCounter += 1
+        let id = editCounter
+        edit = (id, seq, 0, 0)
+        log.info("editText \(id) caret \(caret)\(self.writing ? " during a write" : "", privacy: .public)")
+        // Only the click's line matters for where the panel sits; a tall view would make a window taller than the screen.
+        let clamp = { (k: String, hi: Double) in min(max(m.double(k) ?? 0, 0), hi) }
+        let w = clamp("width", Double(host.web.bounds.width)), h = 40.0
+        let y = min(clamp("clickY", 1e7), 20)
+        helper(onError: { [weak self] in if self?.edit?.id == id { self?.stopEdit(notifyWriter: false) } }) {
+            $0.beginTextEdit(id, path: url.path, text: text, caret: caret, clickX: clamp("clickX", w), clickY: y, width: w, height: h) { ok in
+                DispatchQueue.main.async {
+                    guard self.edit?.id == id else { return }
+                    if !ok { self.stopEdit(notifyWriter: false); if !self.strandText() { self.status("inline editing unavailable") } }
+                }
+            }
+        }
+    }
+
+    /// The writer's buffer is the whole file: the page is sent only what changed (UTF-16 offsets), and the file is saved.
+    private func textChanged(_ id: Int, text: String, selStart: Int, selLen: Int, keyTime: Double) {
+        guard let old = docText else { return }
+        let seq: Int
+        if let e = edit, e.id == id { seq = e.seq } else if let r = retired.first(where: { $0.id == id }) { seq = r.seq } else { return }
+        let c = EditableText.change(from: old, to: text)
+        js("sb.textUpdate", ["seq": seq, "from": c?.from ?? 0, "to": c?.to ?? 0, "insert": c?.insert ?? "", "selStart": selStart, "selLen": selLen,
+                             "keyTime": keyTime])
+        if c != nil { save(text, keyTime: keyTime) }
+    }
+
+    private func textEditEnded(_ id: Int, reason: String) {
+        // An ended session's late keys reached the page with textUpdate, so its end needs no render.
+        if let i = retired.firstIndex(where: { $0.id == id }) {
+            retired.remove(at: i)
+            return runPending()
+        }
+        guard let e = edit, e.id == id else { return runPending() }
+        log.info("edit \(id) ended: \(reason, privacy: .public)")
+        stopEdit(notifyWriter: false)
+        if reason == "not-key" { status("inline editing unavailable") }
+        renderText("editEnd")
         if FilterKeys.relists(afterEnding: reason, list: false) { wantListKeys() }
     }
 

@@ -19,7 +19,7 @@ spacebar.app (md.spacebar)                        SwiftUI settings app; spacebar
    │  ImagePane            HEIC, AVIF, TIFF, RAW, PSD, EXR, TGA, JPEG 2000, ICNS decoded by ImageIO into an NSImageView, placed the same way
    │  RichTextPane         an RTF or RTFD document in a read-only NSTextView (AppKit's RTF reader only), placed the same way
    └─ XPCServices/md.spacebar.preview.writer.xpc   unsandboxed XPC service (SpacebarWriter)
-        write      compare-and-swap writes to the previewed Markdown file
+        write      compare-and-swap writes to the previewed file: Markdown, or text EditableText allows
         open       links, "Open in editor" and the viewer's "Open with" (NSWorkspace is a no-op inside the sandboxed extension)
         reveal / defaultApp   Reveal in Finder, and the name of the app `open` would use
         openText / textOpener   the Open button for a file shown as text: the chosen text editor, else its default app
@@ -63,6 +63,7 @@ Swift calls into the page through `window.sb`, and the page calls back through t
 | PDF in the panel | A PDFKit `PDFView` (Preview/PDFPane.swift) laid over the page's `.pdf-area`, under the breadcrumb and beside the sidebar: fitted, continuous pages, a backdrop from the theme. The page posts the area's rect whenever it moves (the sidebar's animation, a drag of its edge, the panel resizing); between posts the view keeps its margins. The iframe it replaced showed WebKit's PDF plugin and its unlabelled HUD buttons. Links in a PDF go through LinkPolicy and the writer. Anything else on screen closes the view and frees the document. Verified off screen, and in a copy of the harness signed with the extension's sandbox entitlements | `test/pdfpane/run.sh`, `test/sidebar.py` |
 | Task toggles | The checkbox sends its line and text; Swift re-locates the line and the writer saves it with compare-and-swap | 2338549; `test/corpus.py` |
 | Inline editing | See the next section | 068d11d, e1396e9, a742ad8, 4bfa7d6, f2c81fb, bbc51b2 |
+| Editing text files | Code, text, JSON, CSV and dotfile config, the whole file in the same key panel, saved in its own encoding; see "Editing text files" | `test/cas/run.sh`, `test/editkeys/run.sh`, `test/encoding/run.sh`, `test/sidebar.py` |
 | Double-click fix | See below | a742ad8; `test/dblclick.py` |
 | Themes and settings | Six built-in themes (light/dark), user themes and custom.css, live switching, Aa popover, front matter, TOC, stats | `docs/evidence/themes/`; `test/webthemes.py` (offscreen page); `test/settings_live.py` (Quick Look) |
 | Contrast | Every built-in theme, light and dark, is WCAG AA: text, `--muted`, quotes and links on the page, every code token on `--hl-bg` and `--code-bg` (diff lines on their tint), toolbar and popover grey text. Apple's link clamps the system accent's lightness (relative colour), so every accent colour passes | `test/webthemes.py` measures each pair from the page's resolved colours, composited on a canvas (bf9dc93) |
@@ -77,7 +78,7 @@ Swift calls into the page through `window.sb`, and the page calls back through t
 | Archives | The writer lists an archive with `bsdtar -tv` under `sandbox-exec` (see the security model); the page shows it as a tree of folders and files with sizes and dates, at most 5,000 entries, 2 MB of output and 5 s; a name is cut at 4 KB and 64 folders, and the page walks the tree without recursion. `.tbz`, `.txz` and `.tzst` list too. A lone `.gz`/`.bz2`/`.xz`/`.zst` is shown as the one file inside it | `test/archive/run.sh` (a fixture per format, the sandbox's denials) |
 | Sidebar keys and filter | ↑ ↓ Home End move a cursor through the tree and open files (a held key opens only the file it stops on), → ← open and close folders (filtered, they only move), Return opens. The filter narrows the tree by a fuzzy, case-insensitive match and searches every listed folder. In Quick Look the page gets no keys, so the sidebar borrows the writer's key panel while it shows, and a click in the filter does too (see the next section) | `test/sidebar.py`, `test/filterkeys/run.sh`, `test/editkeys/run.sh` |
 | Rich text | `.rtf` and `.rtfd` (a package or flattened) are read by AppKit's RTF reader only (`NSAttributedString(rtf:)`, `(rtfd:)`, `(rtfdFileWrapper:)`), never its HTML importer: a file that does not start `{\rtf` is refused. Chosen over exporting HTML into the page: no markup to sanitize, no remote load, and the document's own fonts, tables and pictures. Drawn in a read-only NSTextView over the page's area like a PDF; in a dark theme the text view maps the document's colours (`usesAdaptiveColorMappingForDarkAppearance`) while the scroll view draws the theme's background. Links go through the PDF link policy (http(s) only) | `test/richtext/run.sh` |
-| Text encodings | A byte order mark (UTF-8, UTF-16 LE/BE, UTF-32 LE/BE), then UTF-16 without one (zeros in one byte lane), then UTF-8, then Foundation's detector over a short list of legacy encodings, else Windows-1252 or Latin-1. Binary stays binary: a NUL outside UTF-16/32, or control characters in more than 2 in 100 characters of a non-UTF-8 decoding. A cut code unit or character at the 2 MB mark is dropped. Markdown is still read as UTF-8 only, since edits are written back as UTF-8 | `test/encoding/run.sh` |
+| Text encodings | A byte order mark (UTF-8, UTF-16 LE/BE, UTF-32 LE/BE), then UTF-16 without one (zeros in one byte lane), then UTF-8, then Foundation's detector over a short list of legacy encodings, else Windows-1252 or Latin-1. Binary stays binary: a NUL outside UTF-16/32, or control characters in more than 2 in 100 characters of a non-UTF-8 decoding. A cut code unit or character at the 2 MB mark is dropped. The decoding keeps its encoding and byte order mark, which an edit is saved in (next section). Markdown is still read as UTF-8 only, since its edits are written back as UTF-8 | `test/encoding/run.sh` |
 | Other previewers | Settings, General lists every other enabled Quick Look extension whose QLSupportedContentTypes share a type with spacebar's (the same identifier, a type for the same filename extension, dyn.* included, or any vendor's Markdown type; never a parent type, which Quick Look does not route by), grouped by the sections of `quicklook-types.txt`, with a confirmed Turn Off (`pluginkit -e ignore`). `install.sh` prints the same list by exact type and never turns anything off | `test/settings/run.sh`, `test/rivals/run.sh` |
 | One-click update | The writer checks GitHub's latest release at most once a day (`Updates`, cached in `update.json`); a newer version puts a dot on Aa. Update ends any edit and filter session, waits for the edit's saves, then starts the app's sealed `install.sh --version vX --no-prompt` detached, under a log lock that keeps a second run from starting. While it waits or runs no edit, task toggle or filter session starts. The installer quits the writers before their extensions, so Quick Look shows its "failed during preview" screen for a moment; the popover says so. The page asks after 10 s, 30 s, then every minute how the run ended (`update-status.json`) | `test/updates/run.sh`, `test/webthemes.py`, `test/sidebar.py` |
 
@@ -107,6 +108,56 @@ Typing (068d11d):
 
 `test/corpus.py` runs 55 scripted sessions over `test/corpus/` and generated 1k/3k/5k-line documents, comparing file bytes exactly. All 55 passed at bbc51b2.
 
+## Editing text files
+
+Code, text, JSON, CSV and config files are edited with the same key panel, in plain mode (`beginTextEdit`): the panel holds the
+whole file, Enter and Backspace edit it as they are (no split or merge), Enter keeps the line's indentation, Tab types a tab,
+and the text view is monospaced and unwrapped so ↑ and ↓ keep the column (`test/editkeys/run.sh`). The Space helper's viewer
+uses the same path: while the writer's panel has the keys, the helper passes every key, since none targets Finder or the viewer.
+
+- **What is editable** (`EditableText` in `Shared/FolderListing.swift`): by name, Markdown, the `code`, `json`, `csv` and `text`
+  kinds, and dotfile config (a dot and no extension, or `.env.<name>`), on both the named path and the resolved one, which
+  unless both are Markdown must have the same extension (the same name, without one); and by content, a file whose bytes are
+  at most 2 MB, not a converted binary property list, and come back byte for byte from its text (`EditableText.open`). A
+  UTF-8 file with a stray byte shown as U+FFFD, a file read cut at 2 MB, and a `.txt` link to `.zshrc` or `hosts` are shown
+  but not editable.
+- **Encoding.** The text is saved in the encoding and byte order mark TextDecoding read it with; CRLF when every line ended in
+  CRLF (edited as LF), mixed line endings as they are, and the last newline, or none, as it was. A character the encoding has
+  no form for is not saved: the preview says which and keeps it on screen until it is removed; the file is never converted.
+  Round trips for Windows-1252, Shift JIS, UTF-16 LE with a BOM, a UTF-8 BOM, CRLF and mixed endings are in `test/cas/run.sh`.
+- **Writer refusals** (`EditableText.writeRefusal`, every write): a path not `allowed`, not a regular file, over 2 MB on disk
+  or in either buffer (Markdown: 64 MB), what is on disk not text (TextDecoding's heuristic), a binary property list on either
+  side. With compare-and-swap on the exact bytes, a buffer that is not the whole file cannot be saved, and the resolved path
+  is opened with `O_NOFOLLOW`.
+- **Only what was typed** (`TypedTexts` in `Writer/FileWrite.swift`). Code and config can run, and until this change the writer
+  took any content for any `.md`: extended as it was, a compromised extension could have written a `~/.zshrc` or a LaunchAgent
+  plist (found in review). Now `beginTextEdit` names the file; the writer reads it itself and starts only from its text (or a
+  buffer its edits of that file sent, for a click while a save is still landing), `resetEdit` cannot replace a text file's
+  buffer, and a write to anything but Markdown must equal, byte for byte, one of the last 16 buffers the panel sent for that
+  file (the last 2 once its edit ends; four files at a time), in the file's encoding. Markdown is unchanged.
+- **The page** sends a click's offset (`editText`) and gets each change as UTF-16 offsets (`textUpdate`, computed by
+  `EditableText.change`). Files up to 24 KB stay highlighted: a change goes into the tokens around it and the file is
+  highlighted again 200 ms after typing pauses. Larger files are drawn plain in blocks of 200 lines while edited, so a keystroke
+  lays out only the block it touches, and are highlighted again when the edit ends. In the offscreen page harness, a
+  keystroke's paint and layout took 2–5 ms for a 20 KB file, highlighted, and 1–3 ms for a 2 MB file; drawing the 2 MB file as
+  one text node took about 100 ms.
+- **JSON and CSV** keep their tree and table; an **Edit** toggle flips them to the file's text to edit, and back. While JSON does
+  not parse, a note says where (line and column, found by a scan without recursion) and that it is saved as typed; `.jsonc`
+  and `.json5` get no warning.
+- **Live reload and conflicts** are as for Markdown: a read that finds the bytes this preview saved is dropped, one that may
+  predate a write in flight is dropped (the write reads again), anything else ends the edit ("changed on disk"), and a
+  conflicting save reloads the file's own text. `.env` is editable: the risk behind keeping it in the preview was handing it
+  to another app, which LinkPolicy still refuses. `.npmrc` is not: npm runs what its config names.
+- **Never editable: files that run on their own** (`EditableText.runsCode`, on the resolved path): shell startup files,
+  `.gitconfig`, `.npmrc`, `.yarnrc`, `.command` and `.tool`, `LaunchAgents` and `LaunchDaemons`, git hooks. The typed binding
+  stops the extension writing content of its own, but it can fill the pasteboard and open the invisible panel over another
+  file, so one ⌘V could land there (found in review).
+- **A writer that restarts** forgets what was typed, so unsaved text it did not see written (a refused character, a failed
+  save) can no longer be saved: the preview says so, keeps the text on screen to copy, and lets the user leave the file.
+
+Checked in `test/sidebar.py` (click-to-edit per type, the Edit toggles, the JSON warning, saving in the file's encoding through
+the harness's stand-in for the extension, 60 changes in a row kept exact in both drawings, and what is never editable).
+
 ## Double-click recognizer fix
 
 Quick Look's own view controller puts a two-click `NSClickGestureRecognizer` on an ancestor of the preview. On a double-click it opens the file in its default app. Because it has `delaysPrimaryMouseButtonEvents` set, it also holds every click for one double-click interval.
@@ -134,7 +185,8 @@ The threat is a downloaded Markdown file, and whatever sits beside it, driving t
    - `open` is limited to files the sidebar listed, or that the overview or a wikilink offered (each found by a bounded scan
      inside the root), `list` to the root and folders a listing named; both must be plain paths (no `.`, `..` or empty step)
      that still resolve inside the root when asked, so nothing above the root is reachable. `overview` takes no argument.
-   - Editing, task toggles and "Open in editor" apply only to Markdown. `openFile` and `reveal` apply only to the file on screen;
+   - Block editing, task toggles and "Open in editor" apply only to Markdown; a whole-file edit (`editText`) only to the text
+     file on screen when it was read as editable (EditableText). `openFile` and `reveal` apply only to the file on screen;
      `openFile` only when the viewer offered it and LinkPolicy allows it (a `.ts` is not handed to QuickTime), and the page posts
      either only for a trusted click.
 4. **Link policy** (`Shared/LinkPolicy.swift`, enforced in both the extension and the writer)
@@ -155,7 +207,9 @@ The threat is a downloaded Markdown file, and whatever sits beside it, driving t
    what is rendered can be set only in the app or settings.json. The `user` host serves only `custom.css` and
    `themes/<plain name>.css`, regular files, no symlinks. Click-safety CSS rules are `!important` inside cascade layers, so no
    unlayered CSS overrides them.
-7. **Writer:** writes only to existing Markdown regular files (checked on both the path and the symlink target), at most 64 MB.
+7. **Writer:** writes only to existing regular files of a type spacebar edits (checked on both the path and the symlink target;
+   `EditableText.writeRefusal`): Markdown at most 64 MB; other text at most 2 MB on disk and in both buffers, text on disk,
+   never a binary property list, and only a buffer the writer's own panel sent for that file (`TypedTexts`).
    `reveal` only selects an existing file in Finder; `defaultApp` names an app only for a file LinkPolicy allows.
 8. **File views:** a file is never rendered as a document. The `file` host serves only images (by an explicit content-type
    map, `nosniff`, a `default-src 'none'` CSP, at most 50 MB); it reads the path it checked, symlinks resolved, and serves no
@@ -163,7 +217,7 @@ The threat is a downloaded Markdown file, and whatever sits beside it, driving t
    JavaScript. This moves PDF parsing out of WebKit's WebContent process into the extension itself: a memory-safety bug in
    CoreGraphics' PDF parser would now run in the sandboxed extension, which holds the connection to the writer, rather than
    one process further away. Accepted for a native viewer without WebKit's unlabelled plugin controls; the writer's own checks
-   (Markdown files only, LinkPolicy) still bound what that connection can do. The same holds for the images ImagePane decodes
+   (EditableText's types and refusals, LinkPolicy) still bound what that connection can do. The same holds for the images ImagePane decodes
    with ImageIO (HEIC, RAW and the rest, which the `file` host never serves) and for a `.dmg`'s trailer and block table read by
    DiskImage. Text, code, JSON and CSV reach the page as
    strings and are put in with `textContent`; highlight.js output is sanitized to `<span class>` only. SVG is shown only as

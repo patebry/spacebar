@@ -227,6 +227,139 @@ def dispatch_key(page, key, **mods):
     return r
 
 
+EDITOR = """const p = document.querySelector('#doc pre.code.text-editing');
+  return p && { text: p.textContent, caret: !!p.querySelector('.caret'), sel: (p.querySelector('.sel') || {}).textContent || null,
+    spans: p.querySelectorAll('code span[class^=hljs-]').length, gutter: p.parentElement.querySelector('.gutter').textContent.split('\\n').length };"""
+
+
+def text_editing(page, check, out, view, T):
+    """Click-to-edit for every text-like file: a click on the text starts an edit of the whole file (the page asks with "editText"),
+    changes arrive as the extension sends them and are saved in the file's own encoding (the harness's @type stands in for the
+    writer and the extension), the JSON and CSV views' Edit toggle, the quiet invalid-JSON warning, and what is never editable."""
+    types = lambda r: [m.get('type') for m in r['messages']]
+    d = os.path.join(out, 'edit')
+    os.makedirs(d)
+    files = {'notes.txt': 'line one\nline two\n', 'conf.yaml': 'name: spacebar\nlist:\n  - 1\n', 'Cargo.toml': '[package]\nname = "x"\n',
+             'pom.xml': '<project>\n  <name>x</name>\n</project>\n', 'setup.ini': '[core]\nname = x\n', 'nginx.conf': 'server {\n  listen 80;\n}\n',
+             '.env': 'TOKEN=abc\n', 'Makefile': 'all:\n\techo hi\n', 'code.ts': 'const a: number = 1;\n', 'data.json': '{"a": [1, 2], "b": {"c": true}}\n',
+             'table.csv': 'name,qty\napple,3\npear,5\n', 'notes.tsv': 'a\tb\n1\t2\n'}
+    for n, t in files.items():
+        open(os.path.join(d, n), 'w').write(t)
+    open(os.path.join(d, 'latin.txt'), 'wb').write('Café — 25 €\n'.encode('cp1252'))
+    E = lambda n: os.path.join(d, n)
+    typ = lambda text, at: page.cmd('@type:' + json.dumps({'text': text, 'selStart': at, 'selLen': 0}))['result']
+    end = lambda: page.cmd('@eval:sb.editEnd({}); 0')
+    asked = lambda r, n: [m for m in r['messages'] if m.get('type') == 'editText' and m.get('path', '').endswith('/' + n)]
+
+    for n in ('notes.txt', 'conf.yaml', 'Cargo.toml', 'pom.xml', 'setup.ini', 'nginx.conf', '.env', 'Makefile', 'code.ts', 'notes.tsv'):
+        view(E(n), root=d)
+        if n == 'notes.tsv':
+            click(page, '#doc .viewer-edit')
+        r = click(page, '#doc pre.code')
+        e = page.js(EDITOR)
+        check(asked(r, n) and e and e['text'] == files[n] and e['caret'] and int(asked(r, n)[0]['len']) == len(files[n]),
+              f'click-to-edit: {n} is edited in place, the whole file', json.dumps([types(r), e])[:300])
+        end()
+
+    view(E('code.ts'), root=d)
+    click(page, '#doc pre.code')
+    res = typ('const a: number = 12;\nconst b = "two";\n', 36)
+    page.cmd('@wait:0.2')
+    e = page.js(EDITOR)
+    check(res == 'saved' and e and e['text'] == 'const a: number = 12;\nconst b = "two";\n' and e['caret'] and e['spans'] > 3 and e['gutter'] == 2
+          and open(E('code.ts')).read() == 'const a: number = 12;\nconst b = "two";\n',
+          'auto-save: each change is on screen, highlighted as typed, with its line numbers, and saved with no Save step', json.dumps([res, e]))
+    end()
+    page.cmd('@wait:0.2')
+    h = page.js("return [!!document.querySelector('#doc pre.text-editing'), document.querySelector('#doc pre.code').textContent, document.querySelectorAll('#doc .hljs-keyword').length]")
+    check(h[0] is False and h[1] == 'const a: number = 12;\nconst b = "two";\n' and h[2] >= 2, 'the edit ends into the highlighted view of the new text', json.dumps(h))
+
+    # Many changes in a row, as the extension sends them: the view must always hold the text, the caret where it is, and (in a
+    # long file, drawn in blocks) no block ending inside a line.
+    FUZZ = """let seed = 7; const rnd = (n) => { seed = (seed * 16807) % 2147483647; return seed % n; };
+      const bits = ['x', '\\n', 'ab\\ncd', '', '  ', 'é🚀'], bad = [];
+      for (let k = 0; k < 60; k++) {
+        const t = editing.text, from = rnd(t.length + 1), to = Math.min(t.length, from + (rnd(3) ? rnd(3) : rnd(400)));
+        const insert = bits[rnd(bits.length)], next = t.slice(0, from) + insert + t.slice(to), at = from + insert.length;
+        sb.textUpdate({ seq: editing.seq, from, to, insert, selStart: at, selLen: k % 7 ? 0 : Math.min(5, next.length - at), keyTime: 0 });
+        const pre = document.querySelector('#doc pre.text-editing'), code = pre.querySelector('code');
+        const r = document.createRange(); r.selectNodeContents(code); r.setEndBefore(code.querySelector('.caret, .sel'));
+        const blocks = [...code.querySelectorAll('.tchunk')].slice(0, -1).filter((b) => b.textContent && !b.textContent.endsWith('\\n'));
+        if (code.textContent !== next || r.toString().length !== at || blocks.length) bad.push(k);
+      }
+      return { bad, len: editing.text.length, chunks: document.querySelectorAll('#doc .tchunk').length };"""
+    for n, lines in (('fuzz-small.ts', 40), ('fuzz-long.ts', 3000)):
+        open(E(n), 'w').write(''.join(f'const v{i} = "value {i}"; // line {i}\n' for i in range(lines)))
+        view(E(n), root=d)
+        click(page, '#doc pre.code')
+        f = page.js(FUZZ)
+        page.cmd('@wait:0.4')
+        after = page.js("return document.querySelector('#doc pre.text-editing code').textContent === editing.text")
+        check(f and f['bad'] == [] and after and (f['chunks'] > 1) == (lines > 40),
+              f'60 changes in a row keep the view exact ({"in blocks" if lines > 40 else "highlighted, then highlighted again"})', json.dumps(f))
+        end()
+
+    view(E('latin.txt'), root=d)
+    click(page, '#doc pre.code')
+    res = typ('Café — 30 € “net”\n', 5)
+    check(res == 'saved' and open(E('latin.txt'), 'rb').read() == 'Café — 30 € “net”\n'.encode('cp1252'),
+          'auto-save: a Windows-1252 file is saved in Windows-1252', repr(open(E('latin.txt'), 'rb').read()))
+    res = typ('Café — 30 € ☃\n', 5)
+    check(res == 'unencodable' and open(E('latin.txt'), 'rb').read() == 'Café — 30 € “net”\n'.encode('cp1252'),
+          'a character Windows-1252 cannot hold is not saved, and the file is not converted', res)
+    end()
+
+    view(E('data.json'), root=d)
+    b = page.js("const b = document.querySelector('#doc .viewer-edit'); return b && [b.textContent, b.getAttribute('aria-pressed'), !!document.querySelector('#doc .json-tree')]")
+    click(page, '#doc .viewer-edit')
+    raw = page.js("return [!!document.querySelector('#doc pre.code[data-file-text]'), document.querySelector('#doc .viewer-edit').getAttribute('aria-pressed'), (document.querySelector('#doc pre.code') || {}).textContent]")
+    check(b == ['Edit', 'false', True] and raw == [True, 'true', files['data.json']], 'JSON: the Edit toggle flips the tree to the file\'s text', json.dumps([b, raw]))
+    r = click(page, '#doc pre.code')
+    bad = '{"a": [1, 2], "b": {"c": tru}}\n'
+    res = typ(bad, 25)
+    page.cmd('@wait:0.4')
+    warn = page.js("return [...document.querySelectorAll('#doc .json-warn')].map((n) => n.textContent)")
+    col = bad.index('tru}') + 1
+    check(asked(r, 'data.json') and res == 'saved' and open(E('data.json')).read() == bad and warn == [f'Invalid JSON at line 1, column {col}. It is saved as typed.'],
+          'JSON: invalid JSON gets a quiet warning with its line and column, and is still saved', json.dumps([res, warn]))
+    typ('{"a": [1, 2], "b": {"c": false}}\n', 30)
+    page.cmd('@wait:0.4')
+    check(page.js("return document.querySelectorAll('#doc .json-warn').length") == 0, 'JSON: the warning goes once the text is JSON again')
+    r = click(page, '#doc .viewer-edit')
+    page.cmd('@wait:0.2')
+    tr = page.js("return [...document.querySelectorAll('#doc .json-tree .jt-row')].map((r) => r.textContent)")
+    check('editStop' in types(r) and any('false' in x for x in tr) and not page.js("return document.querySelector('#doc pre.text-editing')"),
+          'JSON: the toggle again ends the edit and shows the tree of the edited text', json.dumps([types(r), tr])[:300])
+    click(page, '#doc .viewer-toggle[data-mode=formatted]')
+    r = click(page, '#doc pre.code')
+    check(not asked(r, 'data.json'), 'JSON: formatted text is not the file, and a click on it edits nothing')
+
+    view(E('table.csv'), root=d)
+    click(page, '#doc .viewer-edit')
+    r = click(page, '#doc pre.code')
+    res = typ('name,qty\napple,3\npear,5\nfig,7\n', 30)
+    click(page, '#doc .viewer-edit')
+    page.cmd('@wait:0.2')
+    rows = page.js("return [...document.querySelectorAll('#doc table.csv tbody tr')].map((r) => [...r.cells].map((c) => c.textContent))")
+    check(asked(r, 'table.csv') and res == 'saved' and rows == [['1', 'apple', '3'], ['2', 'pear', '5'], ['3', 'fig', '7']]
+          and open(E('table.csv')).read().endswith('fig,7\n'), 'CSV: the Edit toggle flips the table to its text to edit, and back to the edited table', json.dumps([res, rows]))
+
+    page.apply(inlineEditing=False)
+    view(E('code.ts'), root=d)
+    r = click(page, '#doc pre.code')
+    off = page.js("return [!!document.querySelector('#doc pre.text-editing'), getComputedStyle(document.querySelector('#doc pre.code')).cursor]")
+    view(E('data.json'), root=d)
+    check(not asked(r, 'code.ts') and off == [False, 'auto'] and not page.js("return document.querySelector('#doc .viewer-edit')"),
+          'inline editing off: no click-to-edit and no Edit toggle', json.dumps(off))
+    page.apply(inlineEditing=True)
+
+    for n, why in (('huge.log', 'over 2 MB, shown cut'), ('hosts.txt', 'a link to a file of another name'), ('blob.dat', 'binary')):
+        view(T(n))
+        r = click(page, '#doc pre.code') if page.js("return !!document.querySelector('#doc pre.code')") else {'messages': []}
+        check(not [m for m in r['messages'] if m.get('type') == 'editText'] and not page.js("return document.querySelector('#doc [data-file-text], #doc pre.text-editing')"),
+              f'not editable: {n} ({why})')
+
+
 def big_folder(page, check, T):
     """The tree's `many` folder, open: 5,050 files, 5,000 listed, drawn a window at a time, and reached by the keys and the filter."""
     ROWS = """const l = document.getElementById('side-list'), rows = [...l.querySelectorAll('a.row')];
@@ -1519,8 +1652,9 @@ def main():
               and c['stats'] == '6 lines',
               'code: highlighted, with line numbers; the toolbar offers the viewer\'s action (not "Open in editor"), the viewer\'s own button moves there', json.dumps({k: v for k, v in c.items() if k != 'text'}))
         r = click(page, '#doc pre.code')
-        check('editBlock' not in [m.get('type') for m in r['messages']] and not page.js("return document.querySelector('#doc .md-editing')"),
-              'code: a click edits nothing (editing is for Markdown only)')
+        check('editBlock' not in [m.get('type') for m in r['messages']] and 'editText' in [m.get('type') for m in r['messages']]
+              and not page.js("return document.querySelector('#doc .md-editing')"), 'code: a click edits the whole file, not a Markdown block')
+        page.cmd('@eval:sb.editEnd({}); 0')
         view(T('data.json'))
         tree_rows = page.js("return [...document.querySelectorAll('#doc .json-tree .jt-row')].map((r) => r.textContent)")
         mode = lambda m: click(page, f'#doc .viewer-toggle[data-mode={m}]')
@@ -1557,6 +1691,7 @@ def main():
         view(T('huge.log'))
         h = page.js("return [document.querySelector('#doc pre.code').textContent.length, [...document.querySelectorAll('#doc .viewer-note')].map((n) => n.textContent)]")
         check(h[0] == 2 * 1024 * 1024 and h[1] == ['Showing the first 2 MB of 3.1 MB.'], 'text over 2 MB: its first 2 MB, with a note', json.dumps(h))
+        text_editing(page, check, page.out, view, T)
         r = view(T('blob.dat'))
         card = page.js("""const c = document.querySelector('#doc .info-card'); return c && { name: c.querySelector('.info-name').textContent,
           dt: [...c.querySelectorAll('dt')].map((x) => x.textContent), size: c.querySelector('dd').textContent, icon: !!c.querySelector('svg.ic'),

@@ -134,8 +134,11 @@
   /* ---------- inline editing ---------- */
   :root:not([data-editing=off]) #doc > [data-src]:not(.md-editing):hover { background: color-mix(in srgb, var(--code-bg) 60%, transparent); border-radius: 4px; cursor: text; }
   .md-editing { white-space: pre-wrap; background: var(--code-bg); border-radius: 4px; outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent); outline-offset: 2px; }
-  .md-editing .caret { display: inline-block; width: 0; border-left: 2px solid var(--accent); margin-right: -2px; height: 1.15em; vertical-align: text-bottom; animation: blink 1s steps(1) infinite; }
-  .md-editing .sel { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+  :root:not([data-editing=off]) #doc .code-view pre.code[data-file-text]:not(.text-editing) { cursor: text; }
+  #doc .code-view pre.code.text-editing { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+  #doc pre.text-editing .tchunk { display: block; }
+  :is(.md-editing, .text-editing) .caret { display: inline-block; width: 0; border-left: 2px solid var(--accent); margin-right: -2px; height: 1.15em; vertical-align: text-bottom; animation: blink 1s steps(1) infinite; }
+  :is(.md-editing, .text-editing) .sel { background: color-mix(in srgb, var(--accent) 30%, transparent); }
   @keyframes blink { 50% { border-color: transparent; } }
 
   /* ---------- sidebar and table of contents ---------- */
@@ -271,7 +274,7 @@
   #doc .viewer-seg > button { border-radius: 0; margin-left: -1px; }
   #doc .viewer-seg > button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
   #doc .viewer-seg > button:last-child { border-radius: 0 6px 6px 0; }
-  #doc .viewer-seg > button[aria-pressed=true] { background: color-mix(in srgb, var(--accent) 16%, var(--code-bg)); }
+  #doc .viewer-seg > button[aria-pressed=true], #doc .viewer button.viewer-edit[aria-pressed=true] { background: color-mix(in srgb, var(--accent) 16%, var(--code-bg)); }
   /* JSON: one row per key or item, indented by depth; values in the code theme's colours. */
   #doc .json-tree { background: var(--hl-bg); color: var(--hl-fg); border-radius: 8px; padding: 10px 12px; overflow: auto;
     font: calc(var(--font-size, 15px) * .8333)/1.6 var(--font-mono); }

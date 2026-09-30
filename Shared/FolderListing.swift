@@ -244,7 +244,12 @@ enum TextDecoding {
         let text: String
         /// Shown beside the file's kind when it is not UTF-8.
         let name: String
+        /// What the text goes back to disk as (EditableText.Source): the encoding and the byte order mark it was read with.
+        var encoding: String.Encoding = .utf8
+        var bom = Data()
         var isUTF8: Bool { name == "UTF-8" }
+
+        static func == (a: Decoded, b: Decoded) -> Bool { a.text == b.text && a.name == b.name }
     }
 
     private static func cf(_ e: CFStringEncodings) -> String.Encoding {
@@ -262,11 +267,13 @@ enum TextDecoding {
 
     static func decode(_ data: Data, truncated: Bool = false) -> Decoded? {
         let d = Data(data)
-        if d.starts(with: [0xEF, 0xBB, 0xBF]) { return utf8(d.dropFirst(3)).flatMap { plausible($0) ? Decoded(text: $0, name: "UTF-8") : nil } }
-        if d.starts(with: [0xFF, 0xFE, 0, 0]) { return wide(d.dropFirst(4), unit: 4, .utf32LittleEndian, "UTF-32 LE") }
-        if d.starts(with: [0, 0, 0xFE, 0xFF]) { return wide(d.dropFirst(4), unit: 4, .utf32BigEndian, "UTF-32 BE") }
-        if d.starts(with: [0xFF, 0xFE]) { return wide(d.dropFirst(2), unit: 2, .utf16LittleEndian, "UTF-16 LE") }
-        if d.starts(with: [0xFE, 0xFF]) { return wide(d.dropFirst(2), unit: 2, .utf16BigEndian, "UTF-16 BE") }
+        if d.starts(with: [0xEF, 0xBB, 0xBF]) {
+            return utf8(d.dropFirst(3)).flatMap { plausible($0) ? Decoded(text: $0, name: "UTF-8", bom: d.prefix(3)) : nil }
+        }
+        if d.starts(with: [0xFF, 0xFE, 0, 0]) { return wide(d.dropFirst(4), unit: 4, .utf32LittleEndian, "UTF-32 LE", bom: d.prefix(4)) }
+        if d.starts(with: [0, 0, 0xFE, 0xFF]) { return wide(d.dropFirst(4), unit: 4, .utf32BigEndian, "UTF-32 BE", bom: d.prefix(4)) }
+        if d.starts(with: [0xFF, 0xFE]) { return wide(d.dropFirst(2), unit: 2, .utf16LittleEndian, "UTF-16 LE", bom: d.prefix(2)) }
+        if d.starts(with: [0xFE, 0xFF]) { return wide(d.dropFirst(2), unit: 2, .utf16BigEndian, "UTF-16 BE", bom: d.prefix(2)) }
         if let e = bomlessUTF16(d) { return wide(d, unit: 2, e, e == .utf16LittleEndian ? "UTF-16 LE" : "UTF-16 BE") }
         if d.contains(0) { return nil }
         if let s = utf8(d) ?? mostlyUTF8(d) { return plausible(s) ? Decoded(text: s, name: "UTF-8") : nil }
@@ -295,14 +302,14 @@ enum TextDecoding {
     }
 
     /// UTF-16 or UTF-32: whole code units only, a surrogate pair cut at the end dropped, and no NUL or run of controls.
-    private static func wide(_ body: Data, unit: Int, _ e: String.Encoding, _ name: String) -> Decoded? {
+    private static func wide(_ body: Data, unit: Int, _ e: String.Encoding, _ name: String, bom: Data = Data()) -> Decoded? {
         var d = Data(body.prefix(body.count - body.count % unit))
         if unit == 2, d.count >= 2 {
             let last = e == .utf16LittleEndian ? UInt16(d[d.count - 2]) | UInt16(d[d.count - 1]) << 8 : UInt16(d[d.count - 2]) << 8 | UInt16(d[d.count - 1])
             if (0xD800...0xDBFF).contains(last) { d.removeLast(2) }
         }
         guard let s = String(data: d, encoding: e), !s.unicodeScalars.contains("\u{0}"), plausible(s) else { return nil }
-        return Decoded(text: s, name: name)
+        return Decoded(text: s, name: name, encoding: e, bom: Data(bom))
     }
 
     /// UTF-16 with no byte order mark, as Windows tools write it: in the first 4 KB, zero in at least 40 in 100 of one lane of
@@ -330,10 +337,10 @@ enum TextDecoding {
         for drop in 0...(truncated ? 3 : 0) where d.count > drop {
             if let s = String(data: d.dropLast(drop), encoding: e) { text = s; break }
         }
-        if let text { return Decoded(text: text, name: names[e] ?? "\(e)") }
+        if let text { return Decoded(text: text, name: names[e] ?? "\(e)", encoding: e) }
         // Past the sample the bytes do not fit the encoding after all: Latin-1 reads any byte.
         guard let s = String(data: d, encoding: .isoLatin1), plausible(s) else { return nil }
-        return Decoded(text: s, name: names[.isoLatin1]!)
+        return Decoded(text: s, name: names[.isoLatin1]!, encoding: .isoLatin1)
     }
 
     /// The encoding the detector names for `head`, when that reads as text. With `cut`, up to 3 bytes at the end may belong to a
@@ -366,6 +373,138 @@ enum TextDecoding {
             if (u.value < 0x20 && ![0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x1B].contains(u.value)) || u.value == 0x7F || (0x80..<0xA0).contains(u.value) { bad += 1 }
         }
         return bad * 50 <= n
+    }
+}
+
+/// Which files spacebar edits in place and how their text goes back to disk. Markdown is edited block by block; code, JSON,
+/// CSV, text and dotfile config (`.env`, `.gitignore`) as a whole. The writer applies `writeRefusal` to every write.
+enum EditableText {
+    static let maxMarkdownBytes = 64 << 20
+
+    /// Markdown, the code, JSON, CSV and text kinds, and dotfile config: a name that is a dot and no extension, or `.env.<name>`.
+    /// Files that often hold secrets are edited like any other: an edit is written back to the same file and is never handed to
+    /// another app (LinkPolicy still keeps them from being opened elsewhere).
+    static func allowed(name: String) -> Bool {
+        switch FileTypes.kind(name: name) {
+        case .markdown, .code, .json, .csv, .text: return true
+        case .other:
+            let lower = name.lowercased()
+            return lower.count > 1 && lower.hasPrefix(".") && ((lower as NSString).pathExtension.isEmpty || lower.hasPrefix(".env."))
+        default: return false
+        }
+    }
+
+    static func isMarkdown(_ name: String) -> Bool { FileTypes.markdownExtensions.contains((name as NSString).pathExtension.lowercased()) }
+
+    /// Whether the file at `path` may be edited by its names: the named path and the file it resolves to are both of an allowed
+    /// name, and unless both are Markdown they have the same extension (the same name, for a name without one), so a
+    /// `notes.txt` that links to `~/.zshrc` is not editable.
+    static func allowed(path: String) -> Bool {
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+        let a = URL(fileURLWithPath: path).lastPathComponent, b = resolved.lastPathComponent
+        guard allowed(name: a), allowed(name: b), !runsCode(resolved) else { return false }
+        if isMarkdown(a), isMarkdown(b) { return true }
+        let ea = (a as NSString).pathExtension.lowercased(), eb = (b as NSString).pathExtension.lowercased()
+        return ea.isEmpty || eb.isEmpty ? a.lowercased() == b.lowercased() : ea == eb
+    }
+
+    /// Files the shell, git or launchd run or read as commands on their own: a paste into one (the extension can fill the
+    /// pasteboard) would run later, so they are never edited, whatever else allows them.
+    static let runsCodeNames: Set<String> = [".zshrc", ".zshenv", ".zprofile", ".zlogin", ".zlogout", ".bashrc", ".bash_profile", ".bash_login",
+                                             ".bash_logout", ".profile", ".kshrc", ".cshrc", ".tcshrc", ".inputrc", ".gitconfig", ".npmrc", ".yarnrc"]
+    static func runsCode(_ resolved: URL) -> Bool {
+        let name = resolved.lastPathComponent.lowercased(), ext = resolved.pathExtension.lowercased()
+        let parts = resolved.pathComponents.map { $0.lowercased() }
+        return runsCodeNames.contains(name) || ["command", "tool"].contains(ext) || parts.contains("launchagents") || parts.contains("launchdaemons")
+            || zip(parts, parts.dropFirst()).contains { $0 == ".git" && $1 == "hooks" }
+    }
+
+    /// Why the writer refuses to write `data` over `base` at `path`, or nil. The path must be `allowed`, and the file it resolves
+    /// to an existing regular file. Markdown is bounded at 64 MB. Anything else at the 2 MB spacebar reads of it, on disk and in
+    /// both buffers (so a buffer that is the start of a longer file is never saved), what is on disk must read as text
+    /// (TextDecoding, a heuristic: no NUL and few control characters in its first 64 K characters), and neither may be a binary
+    /// property list. What may be written into such a file is checked by the writer against what was typed (TypedTexts).
+    static func writeRefusal(path: String, data: Data, base: Data) -> String? {
+        guard path.hasPrefix("/") else { return "not an absolute path" }
+        guard allowed(path: path) else { return "not a file spacebar edits" }
+        let named = URL(fileURLWithPath: path), resolved = named.resolvingSymlinksInPath()
+        var st = stat()
+        guard stat(resolved.path, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return "not an existing regular file" }
+        if isMarkdown(named.lastPathComponent), isMarkdown(resolved.lastPathComponent) {
+            return data.count <= maxMarkdownBytes && base.count <= maxMarkdownBytes ? nil : "larger than 64 MB"
+        }
+        guard st.st_size <= FileTypes.maxTextBytes, data.count <= FileTypes.maxTextBytes, base.count <= FileTypes.maxTextBytes else {
+            return "larger than 2 MB"
+        }
+        let plist = Data("bplist".utf8)
+        guard !data.starts(with: plist), !base.starts(with: plist) else { return "a binary property list" }
+        guard base.isEmpty || TextDecoding.decode(base) != nil else { return "not text" }
+        return nil
+    }
+
+    /// How a text file's bytes become the text that is edited, and back: its encoding and byte order mark, and CRLF when every
+    /// line ends in one (the text is edited with LF). Only a file whose bytes come back exactly from its text is editable, so
+    /// nothing is converted behind the user's back: not a file with bytes read as U+FFFD, nor one cut at 2 MB.
+    struct Source: Equatable {
+        let encoding: String.Encoding
+        let bom: Data
+        let crlf: Bool
+        /// Named in a refusal: "UTF-8", "Windows-1252"…
+        let name: String
+
+        /// The file's bytes for `text`, or nil when a character in it has no form in the file's encoding.
+        func bytes(_ text: String) -> Data? {
+            (crlf ? text.replacingOccurrences(of: "\n", with: "\r\n") : text).data(using: encoding, allowLossyConversion: false).map { bom + $0 }
+        }
+
+        /// The first character of `text` the encoding cannot hold, for the refusal.
+        func unencodable(_ text: String) -> Character? {
+            text.first { String($0).data(using: encoding, allowLossyConversion: false) == nil }
+        }
+    }
+
+    /// What changed from `old` to `new`, in UTF-16 offsets as the page counts them: [from, to) of `old` became `insert`; nil when
+    /// nothing did. Never between the halves of a surrogate pair, so `insert` is whole characters.
+    static func change(from old: String, to new: String) -> (from: Int, to: Int, insert: String)? {
+        let a = Array(old.utf16), b = Array(new.utf16)
+        var from = 0
+        while from < a.count, from < b.count, a[from] == b[from] { from += 1 }
+        if from == a.count, from == b.count { return nil }
+        var tail = 0
+        while tail < a.count - from, tail < b.count - from, a[a.count - 1 - tail] == b[b.count - 1 - tail] { tail += 1 }
+        if from > 0, UTF16.isLeadSurrogate(a[from - 1]) { from -= 1 }
+        if tail > 0, UTF16.isTrailSurrogate(a[a.count - tail]) { tail -= 1 }
+        return (from, a.count - tail, String(decoding: b[from..<(b.count - tail)], as: UTF16.self))
+    }
+
+    struct Opened {
+        let source: Source
+        /// The text as edited: LF line breaks when the file's are all CRLF.
+        let text: String
+        let bytes: Data
+    }
+
+    /// The editable form of the file at `path` as it is on disk now, or nil: the writer's own read when an edit starts.
+    static func read(path: String) -> Opened? {
+        guard allowed(path: path) else { return nil }
+        let fd = Darwin.open(URL(fileURLWithPath: path).resolvingSymlinksInPath().path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG, st.st_size <= FileTypes.maxTextBytes,
+              let data = try? h.read(upToCount: FileTypes.maxTextBytes + 1) ?? Data(), data.count == st.st_size else { return nil }
+        let decoded = data.isEmpty ? TextDecoding.Decoded(text: "", name: "UTF-8") : TextDecoding.decode(data)
+        return decoded.flatMap { open(data, decoded: $0) }
+    }
+
+    /// The editable form of a whole file's `bytes`, read as `decoded`; nil when they would not come back byte for byte.
+    static func open(_ bytes: Data, decoded: TextDecoding.Decoded) -> Opened? {
+        let raw = decoded.text
+        let crlf = raw.contains("\r\n") && !raw.replacingOccurrences(of: "\r\n", with: "").utf8.contains(10)
+        let source = Source(encoding: decoded.encoding, bom: Data(decoded.bom), crlf: crlf, name: decoded.name)
+        let text = crlf ? raw.replacingOccurrences(of: "\r\n", with: "\n") : raw
+        guard source.bytes(text) == bytes else { return nil }
+        return Opened(source: source, text: text, bytes: bytes)
     }
 }
 
@@ -479,9 +618,17 @@ enum FileView {
     /// A file that is not Markdown. `canOpen`: whether the link policy lets the writer open it (else Reveal in Finder only).
     /// `quickLook`: false once Apple's preview of the file showed only an icon; it is then shown as text if it is text.
     static func payload(path: String, kind: FileKind, root: String, reason: String, canOpen: Bool, quickLook: Bool = true) -> [String: Any] {
+        payloadAndText(path: path, kind: kind, root: root, reason: reason, canOpen: canOpen, quickLook: quickLook).payload
+    }
+
+    /// The payload, and for a text view of a whole file that EditableText allows and can write back as it was read, that text's
+    /// editable form: the payload then carries `editable` and the text as edited.
+    static func payloadAndText(path: String, kind: FileKind, root: String, reason: String, canOpen: Bool,
+                               quickLook: Bool = true) -> (payload: [String: Any], edit: EditableText.Opened?) {
+        var opened: EditableText.Opened?
         var p = base(path: path, root: root, reason: reason)
         var st = stat()
-        guard stat(path, &st) == 0 else { p["view"] = "info"; return p }
+        guard stat(path, &st) == 0 else { p["view"] = "info"; return (p, nil) }
         let regular = st.st_mode & S_IFMT == S_IFREG
         let size = Int64(st.st_size)
         let ext = (path as NSString).pathExtension
@@ -531,13 +678,21 @@ enum FileView {
             // anything else only turns into its info card.
             let fetch = [.code, .json, .csv, .text].contains(kind) && size <= FolderListing.maxDocumentBytes
             guard var data = fetch ? FileTypes.materializing(read) : read() else { break }
+            var converted = false
             if ext.lowercased() == "plist", let xml = FileView.binaryPlistAsXML(data) {
                 data = xml
+                converted = true
                 p["kindName"] = "Binary property list, shown as XML"
             }
             guard let decoded = size == 0 ? TextDecoding.Decoded(text: "", name: "UTF-8") : TextDecoding.decode(data, truncated: size > FileTypes.maxTextBytes) else { break }
             view = kind == .code ? "code" : kind == .json ? "json" : kind == .csv ? "csv" : "text"
             p["text"] = decoded.text
+            if !converted, size <= FileTypes.maxTextBytes, Int64(data.count) == size, EditableText.allowed(path: path),
+               let o = EditableText.open(data, decoded: decoded) {
+                opened = o
+                p["text"] = o.text
+                p["editable"] = true
+            }
             if !decoded.isUTF8 {
                 p["encoding"] = decoded.name
                 p["kindName"] = "\(p["kindName"] as? String ?? "Plain text") (\(decoded.name))"
@@ -549,7 +704,7 @@ enum FileView {
             break
         }
         p["view"] = view
-        return p
+        return (p, opened)
     }
 }
 

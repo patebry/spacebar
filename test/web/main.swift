@@ -20,6 +20,9 @@
 //   @nativeclick:<selector>   a real mouse click (NSEvent down/up sent to the harness's own window) at the element's corner
 //   @nativedrag:<selector>,<dx>   a real mouse drag in the harness's own window: down in the element, moves in steps, up
 //   @remotereset       RemoteImageGate.reset(), as a new preview or another document does
+//   @type:<json>       during a whole-file edit the page asked for ("editText"), stands in for the writer and the extension: {text,
+//                      selStart, selLen} goes to the page as the extension sends it (EditableText.change) and is saved in the file's
+//                      own encoding (EditableText.Source) under the writer's refusals; result "saved" or the refusal
 //   @loaddisk          reload the page with settings.json from the scratch folder, as the next preview would
 //   @relist            list the root and every folder the page expanded again and send them, as the folder watches do
 //   @root:<dir>        the sidebar's root for the renders that follow (a folder preview); empty: each file's own folder
@@ -200,6 +203,8 @@ var currentText = false
 var offered: Set<String> = []
 var linkIndex: LinkIndex?
 var pendingAnchor: String?
+/// The whole-file edit the page started: its session, and the file's text and bytes as last saved.
+var textEdit: (seq: Int, path: String, source: EditableText.Source, text: String, bytes: Data)?
 let images = ImageCheck()
 
 func rootFor(_ url: URL) -> String {
@@ -385,6 +390,12 @@ rec.onMessage = { type, body in
             rec.messages.append(["type": "_revealRefused", "path": path ?? ""]); return
         }
         rec.messages.append(["type": "_revealFolder", "path": dir.path])
+    case "editText":
+        guard let f = currentFile, path == f, let seq = body["seq"] as? Int,
+              let o = FileView.payloadAndText(path: f, kind: currentKind, root: root, reason: "open", canOpen: true).edit else {
+            rec.messages.append(["type": "_editTextRefused"]); return
+        }
+        textEdit = (seq, f, o.source, o.text, o.bytes)
     case "pdfRect":
         if currentKind == .pdf { pdfPane?.place(message: body, in: web) }
     case "overview":
@@ -561,6 +572,16 @@ func run(_ cmd: String) -> String {
         result = session
     case "@folder":
         result = startFolder(arg)
+    case "@type":
+        let o = object(arg)
+        guard let t = textEdit, t.path == currentFile, let text = o["text"] as? String else { result = "no edit"; break }
+        let c = EditableText.change(from: t.text, to: text)
+        let update: [String: Any] = ["seq": t.seq, "from": c?.from ?? 0, "to": c?.to ?? 0, "insert": c?.insert ?? "",
+                                     "selStart": o["selStart"] as? Int ?? 0, "selLen": o["selLen"] as? Int ?? 0, "keyTime": 0]
+        _ = eval(web, "sb.textUpdate(\(jsonString(update))); 0")
+        guard let data = t.source.bytes(text) else { result = "unencodable"; break }
+        if let why = EditableText.writeRefusal(path: t.path, data: data, base: t.bytes) { result = why; break }
+        do { try data.write(to: URL(fileURLWithPath: t.path)); textEdit = (t.seq, t.path, t.source, text, data); result = "saved" } catch { result = "\(error)" }
     case "@remotereset":
         gate.reset()
         result = gate.blocking

@@ -589,7 +589,7 @@ struct EditingPane: View {
             Section {
                 Toggle(isOn: store.binding(\.inlineEditing, "inlineEditing")) {
                     Text("Edit text in the preview")
-                    Text("Click a paragraph, heading or list item to edit it in place. Changes are saved to the file as you type.")
+                    Text("Click a paragraph, heading or list item of Markdown, or the text of a code, text, JSON or CSV file, to edit it in place. Changes are saved to the file as you type.")
                 }
                 Toggle(isOn: store.binding(\.taskToggles, "taskToggles")) {
                     Text("Check off tasks")

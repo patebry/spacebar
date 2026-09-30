@@ -20,6 +20,8 @@ final class StubWriter: NSObject, SpacebarWriterProtocol, NSXPCListenerDelegate 
     func installUpdate(_ version: String, reply: @escaping (String?) -> Void) { reply("stub") }
     func prepare() {}
     func beginEdit(_ session: Int, text: String, caret: Int, clickX: Double, clickY: Double, blockWidth: Double, blockHeight: Double, reply: @escaping (Bool) -> Void) { reply(false) }
+    func beginTextEdit(_ session: Int, path: String, text: String, caret: Int, clickX: Double, clickY: Double, width: Double, height: Double,
+                       reply: @escaping (Bool) -> Void) { reply(false) }
     func setSelection(_ session: Int, start: Int, length: Int) {}
     func resetEdit(_ session: Int, text: String?, caret: Int) {}
     func endEdit(_ session: Int) {}

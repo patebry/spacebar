@@ -2,7 +2,8 @@ import Foundation
 
 @objc(SpacebarWriterProtocol)
 protocol SpacebarWriterProtocol {
-    /// Writes only while the file still holds `base`; replies "conflict" when it changed on disk.
+    /// Writes only while the file still holds `base`; replies "conflict" when it changed on disk. A file other than Markdown takes
+    /// only a text one of this connection's edits of it sent (beginTextEdit), in the file's own encoding.
     func write(_ data: Data, toPath path: String, expecting base: Data, reply: @escaping (String?) -> Void)
     func open(_ url: URL, reply: @escaping (Bool) -> Void)
     /// Opens a file (under the same LinkPolicy) in `appBundleID`, which is honoured only when it is the editor chosen in the
@@ -43,6 +44,12 @@ protocol SpacebarWriterProtocol {
     /// placed from the current mouse location. Replies as soon as the panel is ordered front; if it then fails to become
     /// key the host gets editEnded(session, "not-key").
     func beginEdit(_ session: Int, text: String, caret: Int, clickX: Double, clickY: Double, blockWidth: Double, blockHeight: Double, reply: @escaping (Bool) -> Void)
+    /// The same panel over the whole text file at `path` (code, JSON, CSV, text): Enter and Backspace edit the text as they are
+    /// (no split or merge), Enter keeps the line's indentation, Tab types a tab, and lines do not wrap, so ↑ and ↓ keep the
+    /// column. `text` must be the file as the writer reads it, or a text this connection's edits of it sent; only what is then
+    /// typed may be written to it (write).
+    func beginTextEdit(_ session: Int, path: String, text: String, caret: Int, clickX: Double, clickY: Double, width: Double, height: Double,
+                       reply: @escaping (Bool) -> Void)
     func setSelection(_ session: Int, start: Int, length: Int)
     /// Answers editMergeBackward and editSplit: replaces the buffer (nil keeps it), puts the caret at `caret` (negative keeps
     /// the selection) and releases the keys held since the request.

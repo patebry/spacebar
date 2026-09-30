@@ -976,6 +976,7 @@ class PreviewController: NSViewController {
         shownCanOpen = false
         shownText = false
         shownBody = nil
+        unavailablePath = url.path
         render(FileView.unopenable(path: url.path, root: rootDir, note: note))
     }
 
@@ -1602,8 +1603,10 @@ class PreviewController: NSViewController {
                 helper { $0.openFileOnScreen(url, reply: done) }
             }
         case "reveal":
+            // A broken link does not resolve: its card reveals the link itself, in a folder inside the root.
             guard let url = fileURL, fileKind != .markdown || unavailablePath == url.path, m.string("path", max: 4096) == url.path,
-                  FolderListing.isInside(url.path, root: rootDir) else {
+                  FolderListing.isInside(url.path, root: rootDir) || unavailablePath == url.path
+                    && FolderListing.isInside((url.path as NSString).deletingLastPathComponent, root: rootDir, allowRoot: true) else {
                 return refuse("reveal", "not the file on screen")
             }
             helper { $0.reveal(url) { ok in if !ok { DispatchQueue.main.async { self.status("could not show \(url.lastPathComponent) in Finder") } } } }

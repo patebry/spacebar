@@ -704,6 +704,10 @@ if flows.contains("7") {
         check("7: a symlink loop does not hang the viewer", elapsed < 6000 && (js("1") as? Int) == 1)
         known("BUG-loop", "7: a symlink loop says, visibly, that it cannot be opened", !p.blank && (said.lowercased().contains("can’t") || said.lowercased().contains("cannot")),
               p.blank ? "the panel is shown blank: the page is still hidden from the last close, the status '\(p.status)' with it" : "the panel shows '\(said.prefix(160))'")
+        // The stub writer answers every reveal with false, so the status says so only when the reveal reached it.
+        _ = js("post({ type: 'reveal', path: current.path }); 0")
+        spin(0.5)
+        check("7: the symlink loop's card can reveal the link in Finder", page().status.contains("could not show \(name) in Finder"), page().status)
         close()
     }
     let folder = space([corpus], any: true, settle: 0.8, timeout: 10)

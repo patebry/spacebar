@@ -778,6 +778,120 @@ def make_tools(out):
     return d, big
 
 
+def steady_chrome(page, check, out):
+    """The toolbar holds still while the arrows move from file to file: every button keeps its place whatever the view, Open is
+    one word with the app in its tooltip, the current row does not pulse, and the tooltips give the real keys. The Copy button
+    never covers the document's last line or table row, it is announced to VoiceOver, and the toolbar buttons show a focus
+    ring."""
+    d = os.path.join(out, 'steady')
+    os.makedirs(d)
+    put = lambda n, data: open(os.path.join(d, n), 'wb' if isinstance(data, bytes) else 'w').write(data)
+    put('notes.md', '# Notes\n\n' + ''.join(f'Paragraph {i} ' + 'word ' * 60 + '\n\n' for i in range(40)) + 'The last line.\n')
+    put('code.ts', ''.join(f'export const v{i} = "{"x" * (400 if i % 7 == 0 else 20)}";\n' for i in range(300)))
+    put('rows.csv', 'a,b,c,d,e,f\n' + ''.join(','.join(f'r{i}c{j} ' + 'wide ' * 6 for j in range(6)) + '\n' for i in range(200)))
+    put('data.json', json.dumps({'k': list(range(50))}))
+    put('large.csv', 'a,b\n' + ''.join(f'{i},' + 'x' * 60 + '\n' for i in range(40000)))
+    put('tool', b'\0' + bytes(range(1, 256)) * 8)
+    os.chmod(os.path.join(d, 'tool'), 0o755)
+    shutil.copy(os.path.join(ROOT, 'test', 'fixtures', 'img.png'), os.path.join(d, 'pic.png'))
+    D = lambda n: os.path.join(d, n)
+
+    def view(name):
+        page.cmd('@root:' + d)
+        page.render(D(name))
+        page.cmd('@wait:0.3')
+
+    PLACES = """const x = (id) => { const e = document.getElementById(id), r = e.getBoundingClientRect(), cs = getComputedStyle(e);
+        return [Math.round(r.left), Math.round(r.width), cs.display !== 'none' && cs.visibility === 'visible'] };
+      return { raw: x('raw'), find: x('find-btn'), aa: x('aa'), edit: x('edit'), label: document.getElementById('edit').textContent,
+        title: document.getElementById('edit').title, stats: document.getElementById('stats').textContent };"""
+    page.cmd('@size:1100x760')
+    places = {}
+    for n in ('notes.md', 'code.ts', 'rows.csv', 'data.json', 'pic.png', 'tool'):
+        view(n)
+        places[n] = page.js(PLACES)
+    slots = {k: {tuple(p[k][:2]) for p in places.values()} for k in ('raw', 'find', 'aa', 'edit')}
+    check(all(len(v) == 1 for v in slots.values()) and len({p['stats'] for p in places.values()}) > 2,
+          'toolbar: Raw, Find, Aa and Open keep the same place and width on every file, whatever the stats say', json.dumps(places))
+    check([places[n]['find'][2] for n in ('notes.md', 'pic.png')] == [True, False] and [places[n]['raw'][2] for n in ('data.json', 'code.ts')] == [True, False],
+          'toolbar: a tool that does not apply keeps its slot but is not shown', json.dumps({n: [p['raw'][2], p['find'][2]] for n, p in places.items()}))
+    view('pic.png')
+    hit = page.js("""const r = document.getElementById('find-btn').getBoundingClientRect(); const e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return !!e && !!e.closest('#find-btn');""")
+    check(hit is False, 'toolbar: a hidden tool in its slot takes no click')
+    labels = {n: [p['label'], p['title']] for n, p in places.items()}
+    check(all(p['label'] == 'Open' for n, p in places.items() if n != 'tool') and places['tool']['label'] == 'Reveal'
+          and places['tool']['title'] == 'Reveal in Finder' and places['notes.md']['title'] == 'Open in your editor'
+          and '⌘O' not in ''.join(p['title'] for p in places.values()),
+          'Open: one word on every file, "Reveal" where only Finder may show it; the tooltip says where it opens (no ⌘O in Quick Look)', json.dumps(labels))
+    view('code.ts')
+    page.cmd('@eval:sb.setOpener(' + json.dumps({'path': D('code.ts'), 'app': 'Visual Studio Code', 'editor': True}) + '); 0')
+    named = page.js("const e = document.getElementById('edit'); return [e.textContent, e.title, Math.round(e.getBoundingClientRect().left)]")
+    check(named == ['Open', 'Open in Visual Studio Code', places['code.ts']['edit'][0]],
+          'Open: the app named by the writer goes in the tooltip; the button stays one word, in place', json.dumps(named))
+
+    # ---- no pulse on the current row as the arrows move ----
+    view('notes.md')
+    page.render(D('rows.csv'))
+    anim = page.js("""const a = document.querySelector('#side-list a.row.active'); return a ? [a.textContent, getComputedStyle(a).animationName, a.className] : null""")
+    check(anim and anim[0] == 'rows.csv' and anim[1] == 'none' and 'arrive' not in anim[2], 'sidebar: the row moved to does not pulse', json.dumps(anim))
+
+    # ---- a table too large to edit says so, as its Raw text does ----
+    view('large.csv')
+    notes = page.js("return [...document.querySelectorAll('#doc .viewer-csv .viewer-note')].map((n) => n.textContent)")
+    view('rows.csv')
+    small = page.js("return [...document.querySelectorAll('#doc .viewer-csv .viewer-note')].map((n) => n.textContent)")
+    check('Too large to edit here.' in notes and 'Too large to edit here.' not in small, 'CSV: a table over 2 MB says it is too large to edit; a small one does not',
+          json.dumps([notes, small]))
+
+    # ---- tooltips with the real keys ----
+    tips = page.js("return ['find-btn', 'copy', 'raw', 'side-q', 'aa'].map((id) => document.getElementById(id).title)")
+    check(tips[0] == 'Find (⌘F)' and tips[1] == 'Copy text (⌘C)' and tips[3] == 'Filter (⌥⌘F)' and '⌘' not in tips[2] + tips[4],
+          'tooltips: Find, Copy and the filter give their keys; Raw and Aa, which have none, give none', json.dumps(tips))
+
+    # ---- focus rings ----
+    # WebKit gives a scripted focus() no :focus-visible, so the rules themselves are read.
+    ring = page.js("""const want = ['#toolbar > button:focus-visible', '#side-toggle:focus-visible', '#copy:focus-visible'], got = {};
+      const walk = (rules) => { for (const r of rules) { if (r.cssRules) walk(r.cssRules);
+        for (const w of want) if ((r.selectorText || '').split(',').map((s) => s.trim()).includes(w) && /outline: 2px solid/.test(r.cssText)) got[w] = true; } };
+      for (const sh of document.styleSheets) { try { walk(sh.cssRules); } catch (e) {} }
+      return want.map((w) => !!got[w]);""")
+    check(ring == [True, True, True],
+          'focus: the toolbar buttons, the sidebar button and Copy show a 2 px ring when focused from the keyboard', json.dumps(ring))
+
+    # ---- Copy: announced, and never over the last line or row ----
+    live = page.js("const s = document.getElementById('status'); return [s.getAttribute('role'), s.getAttribute('aria-live')]")
+    check(live == ['status', 'polite'], 'copy: the status line ("Copied") is a polite live region, so VoiceOver announces it', json.dumps(live))
+    CLEAR = """const c = document.getElementById('copy').getBoundingClientRect(), doc = document.getElementById('doc');
+      const apart = (r) => r.bottom <= c.top || r.top >= c.bottom || r.right <= c.left || r.left >= c.right;
+      const out = { shown: !document.getElementById('copy').hidden };
+      const pre = doc.querySelector('pre.code');
+      if (pre) { const cv0 = doc.querySelector('.code-view'); cv0.scrollLeft = cv0.scrollWidth;
+        window.scrollTo(0, (document.scrollingElement.scrollHeight - innerHeight) / 2);
+        const mid = document.createRange(); mid.selectNodeContents(pre); out.mid = [...mid.getClientRects()].every(apart);
+        window.scrollTo(0, document.scrollingElement.scrollHeight); const cv = doc.querySelector('.code-view'); cv.scrollLeft = cv.scrollWidth;
+        const rg = document.createRange(); rg.selectNodeContents(pre); const rs = [...rg.getClientRects()];
+        const line = rs.filter((r) => r.width > 0).sort((a, b) => b.bottom - a.bottom)[0]; out.last = !!line && apart(line); }
+      const box = doc.querySelector('.csv-scroll');
+      if (box) { window.scrollTo(0, document.scrollingElement.scrollHeight); box.scrollTop = box.scrollHeight; box.scrollLeft = box.scrollWidth;
+        const rows = [...box.querySelectorAll('tbody tr:not(.pad)')], last = rows[rows.length - 1];
+        out.last = !!last && [...last.children].every((td) => apart(td.getBoundingClientRect())); out.box = apart(box.getBoundingClientRect()); }
+      if (!pre && !box) { window.scrollTo(0, document.scrollingElement.scrollHeight); const ps = doc.querySelectorAll('p'); out.last = apart(ps[ps.length - 1].getBoundingClientRect()); }
+      const cs = getComputedStyle(doc); out.column = doc.getBoundingClientRect().right - parseFloat(cs.paddingRight) <= c.left;
+      return out;"""
+    clear = {}
+    for size in ('1100x760', '700x500', '520x420'):
+        page.cmd('@size:' + size)
+        for n in ('notes.md', 'code.ts', 'rows.csv'):
+            view(n)
+            page.cmd('@wait:0.2')
+            clear[f'{n} {size}'] = page.js(CLEAR)
+    page.cmd('@size:1100x760')
+    check(all(v['shown'] and v['last'] and v['column'] and v.get('mid', True) and v.get('box', True) for v in clear.values())
+          and all('mid' in v for k, v in clear.items() if k.startswith('code.ts')),
+          'copy: always shown on text, and clear of the last line, the last table row and the text column, at any panel size', json.dumps(clear))
+
+
 def tools(page, check, out):
     """The toolbar's Copy, Find and Formatted/Raw: which views show them, what Copy copies (the harness records it; the clipboard
     is never touched), find's matches, count and steps in the text on screen, a windowed table, a 2 MB script and a JSON tree,
@@ -1542,10 +1656,17 @@ def panel_host(check):
         r = page.cmd("@eval:sb.hostKey({ key: 'copy' })")
         c = msgs(r, '_copied')
         check(r['result'] in (True, 'true', 1) and len(c) == 1 and c[0]['text'] == long_doc, 'panel: ⌘C with nothing selected copies the whole file', json.dumps(r['result']))
+        check([str(m.get('withFile')).lower() for m in msgs(r, 'copy')] in (['true'], ['1']), 'panel: ⌘C with nothing selected asks for the file beside its text, as Finder\'s ⌘C',
+              json.dumps(msgs(r, 'copy'))[:200])
         page.cmd("@eval:(() => { const p = document.querySelector('#doc p'); getSelection().selectAllChildren(p); return 0; })()")
         r = page.cmd("@eval:sb.hostKey({ key: 'copy' })")
         c = msgs(r, '_copied')
-        check(len(c) == 1 and c[0]['text'] == 'Paragraph 0.', 'panel: ⌘C with a selection copies the selection', json.dumps(c)[:200])
+        check(len(c) == 1 and c[0]['text'] == 'Paragraph 0.' and 'withFile' not in msgs(r, 'copy')[0], 'panel: ⌘C with a selection copies the selection only', json.dumps(c)[:200])
+        page.cmd("@eval:getSelection().removeAllRanges(); 0")
+        r = page.cmd('@nativeclick:#copy')
+        check(len(msgs(r, 'copy')) == 1 and 'withFile' not in msgs(r, 'copy')[0], 'panel: the Copy button copies the text only, as it says', json.dumps(msgs(r, 'copy'))[:200])
+        tip = page.js("return document.getElementById('edit').title")
+        check(tip == 'Open in your editor (⌘O)', 'panel: the Open tooltip gives ⌘O, which the panel takes', tip)
         page.cmd("@eval:getSelection().removeAllRanges(); 0")
         page.cmd("@eval:document.getElementById('find-close').click(); 0")
     finally:
@@ -2099,19 +2220,19 @@ def main():
             view(T(f))
             b = page.js("return [document.querySelector('#doc button.viewer-open').textContent, document.getElementById('edit').textContent, document.getElementById('edit').dataset.action]")
             page.cmd('@eval:sb.setOpener(' + json.dumps({'path': T(f), 'app': 'TextEdit', 'editor': True}) + '); 0')
-            named = page.js("return [document.querySelector('#doc button.viewer-open').textContent, document.getElementById('edit').textContent]")
-            check(b == ['Open', 'Open', 'openFile'] and named == ['Open in TextEdit', 'Open in TextEdit'],
+            named = page.js("return [document.querySelector('#doc button.viewer-open').textContent, document.getElementById('edit').textContent, document.getElementById('edit').title]")
+            check(b == ['Open', 'Open', 'openFile'] and named == ['Open in TextEdit', 'Open', 'Open in TextEdit'],
                   f'{f}: an executable or a script opens as text in the editor ("Open in <editor>"), never in its default app', json.dumps([b, named]))
             r = page.cmd('@nativeclick:#edit')
             check('_openText' in [m.get('type') for m in r['messages']] and '_openFile' not in [m.get('type') for m in r['messages']],
                   f'{f}: the toolbar button posts openFile, which goes to the text opener', json.dumps(r['messages'])[:200])
         page.cmd('@eval:sb.setOpener(' + json.dumps({'path': T('run.sh'), 'app': 'Terminal'}) + '); 0')
-        check(page.js("return document.getElementById('edit').textContent") == 'Open with Terminal',
+        check(page.js("return [document.getElementById('edit').textContent, document.getElementById('edit').title]") == ['Open', 'Open with Terminal'],
               'an opener that is not an editor is named "Open with" (the writer never names Terminal for a script)')
         view(T('data.json'))
         page.cmd('@eval:sb.setOpener(' + json.dumps({'path': T('data.json'), 'app': 'Xcode', 'editor': False}) + '); 0')
-        check(page.js("return [document.getElementById('edit').textContent, document.getElementById('edit').title]") == ['Open with Xcode', 'Open this file in its default app'],
-              'JSON with no editor chosen: "Open with <default app>"')
+        check(page.js("return [document.getElementById('edit').textContent, document.getElementById('edit').title]") == ['Open', 'Open with Xcode'],
+              'JSON with no editor chosen: "Open", and "Open with <default app>" in its tooltip')
         # ---- PDF: a native PDFView over the page's PDF area; no WebKit plugin, no frame, no unlabelled buttons ----
         PDF_AREA = "const r = document.querySelector('#doc .pdf-area').getBoundingClientRect(); return [r.left, r.top, r.width, r.height]"
         near = lambda a, b: a and b and len(a) == len(b) and all(abs(x - y) <= 1 for x, y in zip(a, b))
@@ -2138,8 +2259,8 @@ def main():
         page.cmd('@eval:sb.setOpener(' + json.dumps({'path': T('doc.pdf'), 'app': 'Preview'}) + '); 0')
         page.cmd("@eval:(() => { const q = JSON.parse(JSON.stringify(current)); delete q.app; q.reason = 'change'; sb.render(q); })(); 0")
         page.cmd('@wait:0.3')
-        again = page.js("return [document.getElementById('edit').textContent, document.documentElement.dataset.view]")
-        check(again == ['Open with Preview', 'pdf'], 'PDF: rewritten on disk, the re-render keeps "Open with <app>"', json.dumps(again))
+        again = page.js("return [document.getElementById('edit').textContent, document.getElementById('edit').title, document.documentElement.dataset.view]")
+        check(again == ['Open', 'Open with Preview', 'pdf'], 'PDF: rewritten on disk, the re-render keeps "Open with <app>" in the tooltip', json.dumps(again))
         light = page.cmd('@appearance:light') and page.cmd('@wait:0.4') and page.cmd('@pdf')['result']
         dark = page.cmd('@appearance:dark') and page.cmd('@wait:0.4') and page.cmd('@pdf')['result']
         check(not light['dark'] and dark['dark'] and sum(light['bg']) > 600 and sum(dark['bg']) < 200,
@@ -2181,8 +2302,8 @@ def main():
         view(T('doc.pdf'))
         page.cmd('@eval:sb.setOpener(' + json.dumps({'path': T('doc.pdf'), 'app': 'Preview'}) + '); 0')
         view(T('photo.png'))
-        other = page.js("return document.getElementById('edit').textContent")
-        check(other == 'Open', 'another file does not inherit the last one\'s app', other)
+        other = page.js("return [document.getElementById('edit').textContent, document.getElementById('edit').title]")
+        check(other[0] == 'Open' and 'Preview' not in other[1], 'another file does not inherit the last one\'s app', json.dumps(other))
         gone = page.cmd('@pdf')['result']
         check(not gone['open'] and not gone['docAlive'] and gone['fds'] == 0, 'PDF -> image: the same clean teardown', json.dumps(gone))
         view(T('broken.pdf'))
@@ -2622,6 +2743,7 @@ def main():
         page.cmd('@root:')
         viewers(page, check, page.out, st)
         tools(page, check, page.out)
+        steady_chrome(page, check, page.out)
         missing_images(page, check, page.out)
 
         csp = [l for l in page.logs if 'csp blocked' in l]

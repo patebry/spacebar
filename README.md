@@ -8,7 +8,7 @@ HTML, video, code, JSON, CSV and archives beside a document without leaving Quic
 move through the tree and open each file in spacebar; type in its filter to narrow it by name. Drag its edge to resize it; its button collapses it, and every
 preview remembers both. Click a block of Markdown to edit it in place, or tick a task box, and the file is saved; code, text,
 JSON, CSV and config files edit in place the same way. Obsidian
-vaults read as they do in Obsidian: `[[wikilinks]]`, `![[embeds]]`, callouts and tags. A quiet button at the bottom right copies a file's text; the toolbar
+vaults read as they do in Obsidian: `[[wikilinks]]`, `![[embeds]]`, callouts and tags. A button at the bottom right copies a file's text; the toolbar
 finds in it (⌘F) and switches a formatted view (Markdown, JSON, a notebook, CSV, XML) to the file as it is. When a new version is out, the
 preview's Aa button shows a dot and one click on Update installs it. Free and open source, for macOS 13 and later (Apple
 silicon and Intel).
@@ -48,7 +48,8 @@ Space on in Finder:
 | Anything else | an info card: Finder's large thumbnail when there is one, kind, size, date modified, and Open with its default app (Reveal in Finder for apps and executables) |
 
 The Open button in the toolbar opens Markdown in your editor (Settings, General: **Open files in**). Code, JSON, CSV and text
-open there too: "Open in <editor>". A script (`.sh`, `.py`, a `.command`) opens in the editor as text and is never run; with
+open there too. The button always says just "Open" (or "Reveal" where only Finder may show the file), so it stays in place as
+you move from file to file; its tooltip names the app, such as "Open in Visual Studio Code". A script (`.sh`, `.py`, a `.command`) opens in the editor as text and is never run; with
 **Default App** chosen it opens in your default text editor, never in Terminal or an interpreter. Files that often hold
 secrets (`.env`, `.npmrc`) are shown but never offered to another app; a `.env` can be edited in place.
 
@@ -72,10 +73,12 @@ right. **Minimal chrome** (Settings, Appearance) goes back to floating buttons o
 
 ### Copy, Find and Raw
 
-Beside Aa, three icon buttons show where they apply:
+Copy sits at the bottom right of the page; Find and Raw are icon buttons beside Aa, each shown where it applies and keeping its
+place in the toolbar where it does not. Each button's tooltip gives its key.
 
 - **Copy** puts the file's text on the clipboard: a Markdown file's source, a table's CSV, JSON as it is on disk (the first
-  2 MB of a larger file, as shown). Not offered for images, PDFs, media or archives.
+  2 MB of a larger file, as shown). Not offered for images, PDFs, media or archives. The page keeps clear of it, so it never
+  covers a line, and "Copied" is announced to VoiceOver.
 - **Find** searches the file on screen: Markdown, code, text, JSON and CSV, as each is shown. Matches are highlighted and
   counted; ↵ and ⇧↵ (or ⌘G and ⇧⌘G) go to the next and previous, Esc closes the bar. A long table and a JSON tree are
   searched whole, not just the rows drawn: a match in a collapsed branch opens it. At most 10,000 matches are counted.
@@ -95,7 +98,7 @@ you type. In the Space helper's panel (**Use spacebar for every file**, below) t
 | ⌥⌘F | The sidebar's filter (a click in the field works too) |
 | ↵, ⇧↵, ⌘G, ⇧⌘G | In the find field: the next and previous match |
 | Esc | Closes the find bar, clears the filter, or gives the keys back |
-| ⌘C | Copies the selection, or with nothing selected the whole file |
+| ⌘C | Copies the selection, or with nothing selected the whole file's text. In the Space helper's panel it copies the file too, as Finder's ⌘C does: paste in Finder for the file, in an editor for the text (an image, a PDF or another file: the file) |
 | ↑ ↓ ← → Home End ↵ | Move through the sidebar |
 | ⌘O | Open, in the Space helper's panel |
 | ⌘+ ⌘− ⌘0 | Zoom |
@@ -119,6 +122,7 @@ sidebar:
 With it on:
 
 - Space, Esc, ⌘W or ⌘. close the panel in one press.
+- The panel opens where you last moved or resized it on that display, fitted to the screen if the display has changed.
 - While it is open the arrow keys move through spacebar's sidebar, or, with **Arrow keys move through the sidebar**
   (Settings, Sidebar) off, through Finder's selection, and the panel follows.
 - Like Apple's Quick Look, it hides while another app is in front and comes back when you return to Finder, a PDF at its page

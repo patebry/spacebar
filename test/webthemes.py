@@ -109,6 +109,12 @@ CONTRAST = HELPERS + """
   return out;
 """.replace('TOKENS', json.dumps(TOKENS))
 
+# The floating Copy button's icon on the button, as each is painted over the page (WCAG 1.4.11: 3:1 for a control).
+COPY_CONTRAST = HELPERS + """
+  const b = document.getElementById('copy'), cs = getComputedStyle(b);
+  return measure(root, cs.color, ['var(--bg)', cs.backgroundColor]);
+"""
+
 # The Apple link under other system accent colours (the macOS accent palette), through the same relative-colour clamp.
 ACCENTS = ['#007aff', '#953d96', '#f74f9e', '#e0383e', '#f7821b', '#ffc600', '#62ba46', '#8c8c8c']
 ACCENT_LINKS = HELPERS + """
@@ -202,6 +208,8 @@ def main():
                 low = [p for p in page.js(CONTRAST) if p['ratio'] < 4.5]
                 check(not low, f'theme {t} {mode}: text, code tokens, links and toolbar text reach 4.5:1',
                       '; '.join(f"{p['name']} {p['ratio']} ({p['text']} on {p['bg']})" for p in low))
+                cp = page.js(COPY_CONTRAST)
+                check(cp['ratio'] >= 3, f'theme {t} {mode}: the Copy button\'s icon reaches 3:1 on the button', json.dumps(cp))
                 if t == 'apple':
                     ratios = page.js(ACCENT_LINKS.replace('ACCENTS', json.dumps(ACCENTS)))
                     low = {a: r for a, r in ratios.items() if r < 4.5}
@@ -670,13 +678,12 @@ def main():
             const s = r.selectorText || ''; if (/#toolbar > button:active/.test(s) && /scale/.test(r.style.transform)) out.press = true;
             if (/#toolbar > button, #side-toggle\\)?:hover/.test(s.replace(/:is\\(/g, '')) || /#toolbar > button:hover/.test(s)) out.hover = true;
             if (/#side-list a\\.row\\.folder:hover/.test(s) || (/#side-list a\\.row:hover/.test(s))) out.rowHover = true;
-            if (/a\\.row\\.active\\.arrive/.test(s) && r.style.animationName === 'row-in') out.arrive = true;
-            if (media && /prefers-reduced-motion/.test(media) && /arrive/.test(s) && r.style.animationName === 'none') out.arriveReduced = true;
+            if ((/a\\.row\\.active/.test(s) && r.style.animationName && r.style.animationName !== 'none') || (r.type === CSSRule.KEYFRAMES_RULE && r.name === 'row-in')) out.pulse = true;
             if (media && /prefers-reduced-motion/.test(media) && /#toolbar > button/.test(s) && /none/.test(r.style.transform)) out.pressReduced = true;
             if (media && /prefers-reduced-motion/.test(media) && /#frame/.test(s)) out.frameReduced = true; } };
           for (const sh of document.styleSheets) { try { walk(sh.cssRules, ''); } catch (e) {} } return out""")
-        check(states == {'press': True, 'hover': True, 'rowHover': True, 'arrive': True, 'arriveReduced': True, 'pressReduced': True, 'frameReduced': True},
-              'buttons have hover and pressed states, rows highlight on hover, the current row settles in; all still under reduced motion', json.dumps(states))
+        check(states == {'press': True, 'hover': True, 'rowHover': True, 'pressReduced': True, 'frameReduced': True},
+              'buttons have hover and pressed states, rows highlight on hover, the current row does not pulse as the arrows move; all still under reduced motion', json.dumps(states))
         side_click = page.js("""const r = document.getElementById('frame').getBoundingClientRect();
           const e = document.elementFromPoint(r.left + 200, r.bottom + 2); return e ? e.id : null""")
         page.cmd('@eval:scrollTo(0, 300); 0')

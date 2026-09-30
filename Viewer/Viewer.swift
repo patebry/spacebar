@@ -40,6 +40,8 @@ final class PanelController: PreviewController {
     override func htmlScripts(for url: URL) -> String {
         spaced.contains(url.resolvingSymlinksInPath().path) ? "off" : super.htmlScripts(for: url)
     }
+
+    override func copyFileAndText(_ url: URL, _ text: String) -> Bool { FinderCopy.write(file: url, text: text) }
 }
 
 final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
@@ -73,6 +75,9 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
         panel.becomesKeyOnlyIfNeeded = true
         panel.minSize = NSSize(width: 480, height: 320)
         panel.delegate = self
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.screensChanged = Date()
+        }
         keys.controller = controller
         controller.keySource = keys
         panel.contentViewController = controller
@@ -297,14 +302,27 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
         }
     }
 
-    /// About 60% of the visible frame of the screen Finder's front window is on, between 640×480 and 1200×900, centred.
+    /// On the screen Finder's front window is on: where the panel last was on that screen, else `PanelFrame`'s default.
     private func place() {
         if let f = Self.parkedFrame { return panel.setFrame(f, display: false) }
-        let screen = Self.finderScreen() ?? NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
-        guard let vf = screen?.visibleFrame else { return }
-        let w = min(max(vf.width * 0.6, 640), 1200, vf.width), h = min(max(vf.height * 0.6, 480), 900, vf.height)
-        panel.setFrame(NSRect(x: vf.midX - w / 2, y: vf.midY - h / 2, width: w, height: h).integral, display: false)
+        guard let screen = Self.finderScreen() ?? NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main
+        else { return }
+        let saved = PanelFrame.key(for: screen).flatMap { PanelFrame.load($0) }.map { $0.offsetBy(dx: screen.frame.minX, dy: screen.frame.minY) }
+        panel.setFrame(PanelFrame.placement(saved: saved, visible: screen.visibleFrame, minSize: panel.minSize), display: false)
     }
+
+    /// A move or resize the user made while the panel is open, kept for the screen it ended on, relative to that screen so a
+    /// rearrangement of the displays does not strand it. AppKit moving the panel off a display that went away is not kept.
+    private func remember() {
+        guard open, Self.parkedFrame == nil, !panel.inLiveResize, -screensChanged.timeIntervalSinceNow > 2,
+              let screen = panel.screen, let key = PanelFrame.key(for: screen) else { return }
+        PanelFrame.save(panel.frame.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY), key)
+    }
+    private var screensChanged = Date.distantPast
+
+    func windowDidMove(_ notification: Notification) { remember() }
+    func windowDidResize(_ notification: Notification) { remember() }
+    func windowDidEndLiveResize(_ notification: Notification) { remember() }
 
     /// The screen of Finder's frontmost window; nil on the Desktop, which has none.
     static func finderScreen() -> NSScreen? {

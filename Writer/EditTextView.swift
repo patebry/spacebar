@@ -166,6 +166,7 @@ final class EditTextView: NSTextView {
     /// ends of the real line; a Markdown block: the proportional font, wrapped at the block's width.
     func setPlain(_ on: Bool) {
         plain = on
+        indentStep = nil
         font = on ? .monospacedSystemFont(ofSize: 13, weight: .regular) : .systemFont(ofSize: 15)
         layoutManager?.allowsNonContiguousLayout = on
         isHorizontallyResizable = on
@@ -175,18 +176,16 @@ final class EditTextView: NSTextView {
 
     /// Enter ends the block like a block editor: the text after the caret becomes a new paragraph below, shown as one new line
     /// (the blank line markdown needs between them is never part of an edited block). A list item or quote line continues with
-    /// its marker; Enter on an empty one leaves the list or quote. Code, math and HTML blocks take a plain line break, and so
-    /// does Shift+Enter anywhere.
+    /// its marker; Enter on an empty one leaves the list or quote. Code, math and HTML blocks take a line break that keeps the
+    /// indentation, as a text file does; elsewhere Shift+Enter, and Enter in a block with no text yet (so a second Enter shows a
+    /// blank line), take a plain line break.
     override func insertNewline(_ sender: Any?) {
         let ns = string as NSString
         let sel = selectedRange()
-        if plain {
-            let start = ns.lineRange(for: NSRange(location: sel.location, length: 0)).location
-            let head = ns.substring(with: NSRange(location: start, length: sel.location - start))
-            return insertText("\n" + head.prefix { $0 == " " || $0 == "\t" }, replacementRange: sel)
-        }
+        let literal = !plain && Self.matches(Self.literal, string) != nil
+        if plain || literal { return indentedNewline() }
         guard let split = onSplit, sel.length == 0, (replaying ?? NSApp.currentEvent)?.modifierFlags.contains(.shift) != true,
-              Self.matches(Self.literal, string) == nil else { return insertText("\n", replacementRange: sel) }
+              string.contains(where: { !$0.isWhitespace }) else { return insertText("\n", replacementRange: sel) }
         let lineRange = ns.lineRange(for: NSRange(location: sel.location, length: 0))
         var lineEnd = NSMaxRange(lineRange)
         if lineEnd > lineRange.location, ns.character(at: lineEnd - 1) == 10 { lineEnd -= 1 }
@@ -217,6 +216,76 @@ final class EditTextView: NSTextView {
         let before = Self.trimNewlines(ns.substring(to: sel.location), trailing: true)
         let after = Self.trimNewlines(ns.substring(from: NSMaxRange(sel)), trailing: false)
         holdKeys { split(before, after, "") }
+    }
+
+    /// The indentation one level adds in this text: the file's own step, else four spaces.
+    private var indentStep: String?
+
+    /// A line break that keeps the line's indentation, as a code editor does. After an opening bracket the new line is one step
+    /// deeper, and a closing bracket right after the caret goes to a line of its own at the old depth.
+    private func indentedNewline() {
+        let ns = string as NSString
+        let sel = selectedRange()
+        let start = ns.lineRange(for: NSRange(location: sel.location, length: 0)).location
+        let head = ns.substring(with: NSRange(location: start, length: sel.location - start))
+        let indent = String(head.prefix { $0 == " " || $0 == "\t" })
+        guard let open = head.last(where: { !$0.isWhitespace }), let close = Self.pairs[open] else {
+            return insertText("\n" + indent, replacementRange: sel)
+        }
+        let inner = "\n" + indent + step(for: indent)
+        let end = NSMaxRange(sel)
+        if end < ns.length, ns.substring(with: NSRange(location: end, length: 1)) == String(close) {
+            insertText(inner + "\n" + indent, replacementRange: sel)
+            return setSelectedRange(NSRange(location: sel.location + (inner as NSString).length, length: 0))
+        }
+        insertText(inner, replacementRange: sel)
+    }
+
+    private static let pairs: [Character: Character] = ["{": "}", "[": "]", "(": ")"]
+
+    /// One indentation step: a tab where the line, or most of the text, is indented with tabs; else the commonest step by which
+    /// one line's space indentation exceeds the line before it (2 to 8), else four spaces.
+    private func step(for indent: String) -> String {
+        if indent.hasPrefix("\t") { return "\t" }
+        if let s = indentStep { return s }
+        var tabs = 0, spaces = 0, prev = 0
+        var steps: [Int: Int] = [:]
+        (string as NSString).enumerateSubstrings(in: NSRange(location: 0, length: min((string as NSString).length, 1 << 16)), options: .byLines) { line, _, _, _ in
+            guard let line, line.contains(where: { !$0.isWhitespace }) else { return }
+            if line.hasPrefix("\t") { tabs += 1; return }
+            let n = line.prefix { $0 == " " }.count
+            if n > 0 { spaces += 1 }
+            if (2...8).contains(n - prev) { steps[n - prev, default: 0] += 1 }
+            prev = n
+        }
+        let s = tabs > spaces ? "\t" : String(repeating: " ", count: steps.max { ($0.value, -$0.key) < ($1.value, -$1.key) }?.key ?? 4)
+        if plain { indentStep = s }
+        return s
+    }
+
+    /// Shift-Tab takes one step of indentation off each line the selection touches, and never types anything.
+    override func insertBacktab(_ sender: Any?) {
+        let ns = string as NSString
+        let sel = selectedRange()
+        // A selection that ends at a line's start (⇧↓) does not take that line in.
+        let touched = sel.length > 0 && ns.character(at: NSMaxRange(sel) - 1) == 10 ? NSRange(location: sel.location, length: sel.length - 1) : sel
+        let lines = ns.lineRange(for: touched)
+        let unit = step(for: "").count
+        var out = "", removedBefore = 0, removedInside = 0
+        var at = lines.location
+        ns.substring(with: lines).split(separator: "\n", omittingEmptySubsequences: false).enumerated().forEach { i, line in
+            if i > 0 { out += "\n"; at += 1 }
+            let cut = line.hasPrefix("\t") ? 1 : min(line.prefix { $0 == " " }.count, unit)
+            out += line.dropFirst(cut)
+            if at < sel.location { removedBefore += min(cut, sel.location - at) }
+            removedInside += max(0, min(at + cut, NSMaxRange(sel)) - max(at, sel.location))
+            at += line.utf16.count
+        }
+        guard out != ns.substring(with: lines), shouldChangeText(in: lines, replacementString: out) else { return }
+        textStorage?.replaceCharacters(in: lines, with: out)
+        didChangeText()
+        let loc = sel.location - removedBefore
+        setSelectedRange(NSRange(location: loc, length: sel.length - removedInside))
     }
 
     private static func trimNewlines(_ s: String, trailing: Bool) -> String {

@@ -46,6 +46,11 @@ jobs:
           SCEN_TIMING: '0'
         run: test/scenarios/run.sh
 
+      # Whole editing sessions typed into the real writer in-process, in the panel's viewer and in Quick Look's controller, each
+      # saved file checked byte for byte.
+      - name: Editing
+        run: test/editflows/run.sh
+
       # One stable identity for every release keeps the designated requirement the same, so an update does not make macOS
       # ask again about the extension's sandbox container (FINDINGS.md). Forks without the secrets build ad-hoc.
       - name: Signing identity

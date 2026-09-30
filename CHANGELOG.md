@@ -29,6 +29,11 @@ Waits for the Developer ID: the first release with the Space helper is notarized
 - Click the text of a code, config, plain-text, JSON, CSV, YAML, TOML or XML file to edit it; each change is saved, in the
   file's own encoding. For JSON, CSV and XML, turn on **Raw** and click the text. Files over 2 MB, and files that run on their
   own (shell startup files, git hooks, LaunchAgents), are not editable.
+- Enter in code keeps the line's indentation and goes one step deeper after `{`, `[` or `(`; Enter between `{}` puts the
+  closing brace on a line of its own. Shift-Tab takes one step of indentation off. Typing past 2 MB says the text is not
+  saved and keeps the edit open.
+- In Markdown, pressing Enter again in the empty paragraph the last Enter opened adds a blank line instead of doing nothing,
+  and Enter in a code block keeps the line's indentation.
 
 ### Copy, Find and Raw
 

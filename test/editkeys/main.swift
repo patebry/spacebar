@@ -45,6 +45,7 @@ func letter(_ c: Character, _ flags: NSEvent.ModifierFlags = [.command]) -> Bool
     press(Int(c.unicodeScalars.first!.value), 0, flags, function: false)
 }
 func set(_ text: String, caret: Int, length: Int = 0) {
+    tv.setPlain(tv.plain)  // as a new session does: nothing learned from the last text
     tv.string = text
     tv.setSelectedRange(NSRange(location: caret, length: length))
     counter.changes = 0
@@ -183,6 +184,36 @@ set(longLine, caret: 0)
 tv.layoutManager!.ensureLayout(for: tv.textContainer!)
 _ = press(right, 124, .command)
 check("plain: Cmd+Right goes to the end of the whole line (no wrapping)", tv.selectedRange().location == longLine.count - 5)
+set("func f() {\n}\n", caret: 10)
+type("\r", 36)
+check("plain: Enter after { goes one step deeper (four spaces with no indentation to copy)", tv.string == "func f() {\n    \n}\n"
+      && tv.selectedRange().location == 15)
+set("{\n  \"a\": []\n}\n", caret: 10)
+type("\r", 36)
+check("plain: Enter between [ and ] puts ] on a line of its own, a step (the file's two spaces)",
+      tv.string == "{\n  \"a\": [\n    \n  ]\n}\n" && tv.selectedRange().location == 15)
+set("if x {\n\ty\n}\n", caret: 9)
+type("\r", 36)
+check("plain: Enter keeps a tab indentation", tv.string == "if x {\n\ty\n\t\n}\n")
+set("a\n    b\n        c\n", caret: 16)
+type("\u{19}", 48, [.shift])
+check("plain: Shift-Tab takes one step (the file's four spaces) off the line and types nothing", tv.string == "a\n    b\n    c\n"
+      && tv.selectedRange().location == 12)
+set("a\n    b", caret: 0, length: 4)
+type("\u{19}", 48, [.shift])
+check("plain: Shift-Tab keeps the selected text that was not indentation selected", tv.string == "a\nb" && tv.selectedRange() == NSRange(location: 0, length: 2))
+set("func main() {\n\tx()\n}\n\nfunc g() {\n}\n", caret: 32)
+type("\r", 36)
+check("plain: Enter after { in a tab-indented file indents with a tab", tv.string == "func main() {\n\tx()\n}\n\nfunc g() {\n\t\n}\n")
+set("class A:\n    def f(self):\n        return (1 +\n          2)\n    x = f(", caret: 69)
+type("\r", 36)
+check("plain: the step is the file's usual one, not a smaller continuation indent", tv.string.hasSuffix("    x = f(\n        "))
+set("\tx\n  y\nz\n", caret: 0, length: 9)
+type("\u{19}", 48, [.shift])
+check("plain: Shift-Tab over a selection outdents every line it touches", tv.string == "x\ny\nz\n")
+set("none\n", caret: 2)
+type("\u{19}", 48, [.shift])
+check("plain: Shift-Tab on a line with no indentation does nothing", tv.string == "none\n" && tv.selectedRange().location == 2)
 set("abc\nabcdef\nabcdef", caret: 5)
 type(arrow(down), 125, arrowFlags)
 check("plain: ↓ keeps the column", tv.selectedRange().location == 12)
@@ -192,6 +223,19 @@ ends = 0
 key("\u{1b}", 53)
 check("plain: Esc ends the edit", ends == 1)
 tv.setPlain(false)
+var splitAsked = 0
+tv.onSplit = { _, _, _ in splitAsked += 1 }
+set("", caret: 0)
+type("\r", 36)
+check("block: Enter in a block with no text yet is a line break, not a split", tv.string == "\n" && splitAsked == 0 && !tv.isHolding)
+set("```\n    y\n```", caret: 9)
+type("\r", 36)
+check("block: Enter in a code fence keeps the line's indentation", tv.string == "```\n    y\n    \n```" && splitAsked == 0)
+set("Para", caret: 4)
+type("\r", 36)
+check("block: Enter at the end of a paragraph asks for a split", splitAsked == 1 && tv.isHolding)
+tv.dropHeld()
+tv.onSplit = nil
 check("a Markdown block again: proportional and wrapped", !tv.plain && tv.font?.isFixedPitch == false && tv.textContainer?.widthTracksTextView == true)
 set(long, caret: 0)
 tv.layoutManager!.ensureLayout(for: tv.textContainer!)

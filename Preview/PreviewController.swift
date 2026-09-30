@@ -391,8 +391,8 @@ class PreviewController: NSViewController {
     private var textSource: EditableText.Source?
     /// The last payload of that file's view, rendered again with docText once an edit ends.
     private var textPayload: [String: Any]?
-    /// The sticky status says a save was refused for a character the encoding cannot hold.
-    private var encodeRefused = false
+    /// The sticky status says a save was refused: a character the encoding cannot hold, or a text file over FileTypes.maxTextBytes.
+    private var saveRefused = false
     /// Unsaved text the writer will no longer take (it restarted and does not know it was typed): shown until the user leaves,
     /// which is then allowed.
     private var textStranded = false
@@ -497,7 +497,7 @@ class PreviewController: NSViewController {
     private func strandText() -> Bool {
         guard textSource != nil, hasUnsavedText else { return false }
         textStranded = true
-        encodeRefused = false
+        saveRefused = false
         stickyStatus("NOT SAVED: this text can no longer be saved to the file; copy it now. The file on disk is unchanged.")
         return true
     }
@@ -990,7 +990,7 @@ class PreviewController: NSViewController {
         textSource = nil
         textPayload = nil
         lineEnding = "\n"
-        if encodeRefused || textStranded { encodeRefused = false; textStranded = false; stickyStatus("") }
+        if saveRefused || textStranded { saveRefused = false; textStranded = false; stickyStatus("") }
         if let refusal {
             watcher = nil
             return host.whenReady { self.showUnopenable(url, note: refusal) }
@@ -1350,7 +1350,7 @@ class PreviewController: NSViewController {
                 status("unsaved text replaced by the version on disk")
             }
         }
-        if encodeRefused || textStranded { encodeRefused = false; textStranded = false; stickyStatus("") }
+        if saveRefused || textStranded { saveRefused = false; textStranded = false; stickyStatus("") }
         textSource = opened?.source
         docText = opened?.text
         diskText = opened?.text
@@ -2089,10 +2089,15 @@ class PreviewController: NSViewController {
         // A character the file's encoding has no form for: nothing is written, and the file is never converted to UTF-8.
         guard let data = bytes(onDisk(text)) else {
             let c = textSource?.unencodable(text).map { "“\($0)”" } ?? "a character"
-            encodeRefused = true
+            saveRefused = true
             return stickyStatus("NOT SAVED: \(c) can’t be written in \(textSource?.name ?? "this file’s encoding"); remove it to save")
         }
-        if encodeRefused { encodeRefused = false; stickyStatus("") }
+        // The writer refuses a text file past the cap; asking would end the edit with a retry that can never work.
+        if textSource != nil, data.count > FileTypes.maxTextBytes {
+            saveRefused = true
+            return stickyStatus("NOT SAVED: text files over 2 MB aren’t saved; remove some text to save")
+        }
+        if saveRefused { saveRefused = false; stickyStatus("") }
         writing = true
         writeEpoch += 1
         helper(onError: { [weak self] in self?.saved(url, text, keyTime: keyTime, error: "xpc") }) {
@@ -2404,11 +2409,13 @@ class PreviewController: NSViewController {
         let trim = { (s: String) in
             (self.lineEnding == "\n" ? s : s.replacingOccurrences(of: "\r\n", with: "\n")).trimmingCharacters(in: CharacterSet(charactersIn: "\n"))
         }
-        let before = trim(rawBefore), after = trim(rawAfter), tail = trim(rawTail)
+        // The blank lines Enter typed at the top of a block stay: only the ends where blocks meet are trimmed.
+        let before = String(trim("x" + rawBefore).dropFirst()), after = trim(rawAfter), tail = trim(rawTail)
         guard let e = edit, e.id == id, let text = docText else { return helper { $0.resetEdit(id, text: nil, caret: -1) } }
         var lines = text.components(separatedBy: "\n")
         guard e.start + e.lines <= lines.count,
               !(before.isEmpty && after.isEmpty && tail.isEmpty && lines[e.start..<(e.start + e.lines)].allSatisfy(Self.blank)) else {
+            log.info("edit \(id) split refused: nothing to split")
             return helper { $0.resetEdit(id, text: nil, caret: -1) }
         }
         let end = e.start + e.lines

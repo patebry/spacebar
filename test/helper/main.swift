@@ -177,6 +177,63 @@ do {
 }
 check("text session: only the viewer may claim one", Link.permits(.viewer, .textSession) && !Link.permits(.app, .textSession))
 
+// A whole edit as the tap sees it, the session as it really evolves: Space opens the panel, a click starts the edit and the viewer
+// reports the session, every key of the typing passes (down, repeat and up), Esc ends the edit and the viewer reports it over,
+// then Return goes to the sidebar again and Space closes. Return is one of the keys the helper routes, so each press is checked.
+do {
+    var r = KeyRoute()
+    var t = TextSession()
+    var log: [String] = []
+    func ctx(open: Bool = true) -> PanelContext { PanelContext(open: open, finderPid: finder, viewerPid: viewer, textSession: t.active) }
+    func press(_ name: String, _ e: KeyEvent, repeats: Int = 0) -> Route {
+        let down = r.route(e, panel: ctx())
+        var reps: [Route] = []
+        for _ in 0..<repeats { var x = e; x.isRepeat = true; reps.append(r.route(x, panel: ctx())) }
+        var up = e; up.down = false
+        let u = r.route(up, panel: ctx())
+        if down != .pass || reps.contains(where: { $0 != .pass }) || u != .pass { log.append("\(name): \(down) \(reps) up \(u)") }
+        return down
+    }
+    check("edit: Space with the panel closed asks for the AX read", r.route(key(KeyCode.space), panel: ctx(open: false)) == .space)
+    r.hold(KeyCode.space)
+    check("edit: its key-up is swallowed while the show is on its way", r.route(key(KeyCode.space, down: false), panel: ctx()) == .swallow)
+    check("edit: the viewer's session is taken with the panel open", t.set(true, panelOpen: true))
+    let typing: [(String, KeyEvent, Int)] = [
+        ("H", key(4, mods: .shift), 0), ("i", key(34), 0), ("Space", key(KeyCode.space), 0), ("Return", key(KeyCode.returnKey), 0),
+        ("Return again", key(KeyCode.returnKey), 0), ("Return held down", key(KeyCode.returnKey), 3), ("Shift-Return", key(KeyCode.returnKey, mods: .shift), 0),
+        ("keypad Enter", key(KeyCode.enter), 0), ("Tab", key(48), 0), ("Shift-Tab", key(48, mods: .shift), 0),
+        ("←", key(KeyCode.left), 0), ("→", key(KeyCode.right), 0), ("↑", key(KeyCode.up), 0), ("↓ held", key(KeyCode.down), 2),
+        ("⌥←", key(KeyCode.left, mods: .option), 0), ("⌘←", key(KeyCode.left, mods: .command), 0), ("⌘→", key(KeyCode.right, mods: .command), 0),
+        ("⇧⌘→", key(KeyCode.right, mods: [.command, .shift]), 0), ("Home", key(KeyCode.home), 0), ("End", key(KeyCode.end), 0),
+        ("Page Down", key(KeyCode.pageDown), 0), ("⌘A", key(0, "a", mods: .command), 0), ("⌘C", key(8, "c", mods: .command), 0),
+        ("⌘X", key(7, "x", mods: .command), 0), ("⌘V", key(9, "v", mods: .command), 0), ("⌘Z", key(6, "z", mods: .command), 0),
+        ("⇧⌘Z", key(6, "z", mods: [.command, .shift]), 0), ("⌥⌫", key(51, mods: .option), 0), ("⌘⌫", key(51, mods: .command), 0),
+        ("Delete", key(117), 0), ("⌘F", key(3, "f", mods: .command), 0), ("⌘W", key(13, "w", mods: .command), 0),
+        ("⌘=", key(24, "=", mods: .command), 0), ("Space held", key(KeyCode.space), 2),
+    ]
+    for (name, e, n) in typing { _ = press(name, e, repeats: n) }
+    check("edit: every key of the typing passes, down, repeat and up", log.isEmpty, log.joined(separator: "; "))
+    check("edit: Esc passes to the edit, which ends itself", press("Esc", key(KeyCode.escape)) == .pass && r.held.isEmpty)
+    check("edit: the viewer reports the session over", t.set(false, panelOpen: true) && !t.active)
+    check("edit: after it, Return goes to the sidebar again", r.route(key(KeyCode.returnKey), panel: ctx()) == .forward("return")
+          && r.route(key(KeyCode.returnKey, down: false), panel: ctx()) == .swallow)
+    check("edit: and Space closes", r.route(key(KeyCode.space), panel: ctx()) == .close)
+}
+// The first key of a session, typed before the viewer's word arrives (the click and the report are a few ms apart): Return is
+// the sidebar's then; once the session is on, its repeats and its key-up are the typing's, and so is the next press.
+do {
+    var r = KeyRoute()
+    var t = TextSession()
+    let before = PanelContext(open: true, finderPid: finder, viewerPid: viewer, textSession: t.active)
+    check("first key: Return before the session is reported goes to the sidebar", r.route(key(KeyCode.returnKey), panel: before) == .forward("return"))
+    _ = t.set(true, panelOpen: true)
+    let during = PanelContext(open: true, finderPid: finder, viewerPid: viewer, textSession: t.active)
+    check("first key: its repeat once the session is on is the typing's", r.route(key(KeyCode.returnKey, rep: true), panel: during) == .pass)
+    check("first key: and so is its key-up", r.route(key(KeyCode.returnKey, down: false), panel: during) == .pass && r.held.isEmpty)
+    check("first key: the next Return is the typing's", r.route(key(KeyCode.returnKey), panel: during) == .pass
+          && r.route(key(KeyCode.returnKey, down: false), panel: during) == .pass)
+}
+
 // Finder's focus in a text field while the panel is open: a rename or the search field keeps its keys.
 let typing = PanelContext(open: true, finderPid: finder, viewerPid: viewer, textFocus: true)
 for (code, n) in [(KeyCode.space, "Space"), (KeyCode.escape, "Esc"), (KeyCode.down, "↓"), (KeyCode.returnKey, "Return")] {

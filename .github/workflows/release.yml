@@ -32,6 +32,13 @@ jobs:
           RUNS: '5'
         run: test/viewerlatency/run.sh
 
+      # Large files through the same off-screen viewer: each is shown whole; the main-thread stall and memory targets are
+      # printed, not graded.
+      - name: Large files
+        env:
+          PERF_TARGETS: '0'
+        run: test/bigfiles/run.sh
+
       # Day-in-the-life flows through the same off-screen viewer, over a corpus made at test time. Timings are printed, not
       # graded; without ffmpeg on the runner the video and audio flow is skipped.
       - name: Scenarios

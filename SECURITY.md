@@ -46,6 +46,10 @@ Nine features reach further than a rendered page, and are in scope:
   ftp load blocked. Resource hints such as preconnect are not governed by CSP or content rules, which is why no `<link>` is
   kept at all. A link
   leaves the view only within a second of the user's click in it, one per click, and through the link policy.
+- **Large text** (over 256 KB) reaches the preview page as a body the page reads once from `spacebar://body/<random token>`,
+  not inside its render script. The body is the text already read for that render, held in memory: the handler reads
+  nothing from disk, and serves it only at its exact URL, once, while its file is still the one on screen, as `text/plain`
+  with `nosniff`. The page's CSP allows connections to that host alone.
 - **Archives** are listed by the unsandboxed helper with `/usr/bin/bsdtar` run under `sandbox-exec`: a deny-by-default
   profile that allows only system reads and executing bsdtar, and denies every write and metadata reads under `/Users` and
   `/Volumes`, so no writes, no network and no reads of the user's files. The archive is passed as a descriptor the helper

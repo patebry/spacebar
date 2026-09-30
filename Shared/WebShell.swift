@@ -9,6 +9,8 @@ import WebKit
 ///                                  page, a script, a style or a frame
 ///   spacebar://user/custom.css     the user's CSS in the support folder
 ///   spacebar://user/themes/<f>.css a user theme; only a plain file name inside themes/
+///   spacebar://body/<token>        the text of the render in flight, too large to send as a script (PageBody): once, as
+///                                  plain text, and only while its file is the one on screen. Nothing is read from disk
 /// The app's live preview uses it with `fileHost: false`.
 final class SchemeHandler: NSObject, WKURLSchemeHandler {
     let webRoot: URL
@@ -35,6 +37,11 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
         q.qualityOfService = .userInitiated
         return q
     }()
+
+    /// The one text the `body` host may serve, set by each render (nil for one that sends its text inline).
+    var body: PageBody?
+    /// Whether `path` is still the file on screen: a body for any other file is dropped unserved.
+    var bodyCurrent: (String) -> Bool = { _ in false }
 
     init(webRoot: URL, supportDir: @escaping () -> URL = { SettingsFile.supportDir }, fileHost: Bool = true) {
         self.webRoot = webRoot.standardizedFileURL
@@ -102,6 +109,7 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
 
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
         guard let url = task.request.url else { return }
+        if url.host == "body" { return serveBody(task, url: url) }
         guard let fileURL = resolve(url) else {
             onRefused("refused load \(url.absoluteString)")
             return task.didFailWithError(URLError(.noPermissionsToReadFile))
@@ -154,9 +162,51 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
         task.didFinish()
     }
 
+    /// The pending body, if `url` names its token exactly and its file is still on screen; taken, so a token is good for one
+    /// request. A request for any other URL (a superseded render's) leaves it for the render it belongs to.
+    private func serveBody(_ task: WKURLSchemeTask, url: URL) {
+        guard let b = body, url.absoluteString == b.url, bodyCurrent(b.path) else {
+            onRefused("refused load \(url.absoluteString)")
+            return task.didFailWithError(URLError(.noPermissionsToReadFile))
+        }
+        body = nil
+        let headers = ["Content-Type": "text/plain; charset=utf-8", "Content-Length": String(b.data.count), "Cache-Control": "no-store",
+                       "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'",
+                       "Access-Control-Allow-Origin": PageBody.origin]
+        task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!)
+        task.didReceive(b.data)
+        task.didFinish()
+    }
+
     private func fail(_ task: WKURLSchemeTask, _ file: URL, _ error: Error) {
         onRefused("read failed \(file.path): \(error.localizedDescription)")
         task.didFailWithError(error)
+    }
+}
+
+/// A render's text sent apart from its script. JSON-escaping a large text into `sb.render(...)` holds the main thread (tens of
+/// ms for a 16 MB table, over 100 for one of accented or CJK text) and copies it several times; as a body it is one copy, and
+/// the page reads it with a synchronous request as its render starts, so renders still run one at a time, in order.
+struct PageBody {
+    static let threshold = 256 << 10
+    static let origin = "spacebar://bundle"
+    let url: String
+    /// The file the text is of: served only while it is on screen.
+    let path: String
+    let data: Data
+
+    /// Moves `payload`'s text into a body when it is past the threshold; the payload names the body's URL in its place.
+    static func take(_ payload: inout [String: Any]) -> PageBody? {
+        // Either count is constant-time for the string's own storage (native UTF-8, or a bridged UTF-16 NSString).
+        guard let text = payload["text"] as? String, let path = payload["path"] as? String,
+              (text.utf8.withContiguousStorageIfAvailable { $0.count } ?? text.utf16.count) > threshold else { return nil }
+        // A byte order mark first: the page's decoder takes exactly one off, so a text that starts with U+FEFF keeps it.
+        var data = Data([0xEF, 0xBB, 0xBF])
+        if text.utf8.withContiguousStorageIfAvailable({ data.append(contentsOf: $0) }) == nil { data.append(contentsOf: text.utf8) }
+        let body = PageBody(url: "spacebar://body/" + UUID().uuidString, path: path, data: data)
+        payload["text"] = nil
+        payload["textURL"] = body.url
+        return body
     }
 }
 

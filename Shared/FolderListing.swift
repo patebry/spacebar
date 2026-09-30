@@ -271,6 +271,12 @@ enum TextDecoding {
     /// How much of the text the legacy detector and the plausibility check look at.
     static let sampleBytes = 64 << 10
 
+    /// `s` in native UTF-8 storage, which a render copies its bytes out of at once (PageBody). makeContiguousUTF8 goes through a
+    /// bridged NSString a character at a time (0.3 s for 16 MB of Windows-1252); this is one transcoding and one validation.
+    static func nativeUTF8(_ s: String) -> String {
+        s.utf8.withContiguousStorageIfAvailable { _ in s } ?? String(decoding: Data(s.utf8), as: UTF8.self)
+    }
+
     static func decode(_ data: Data, truncated: Bool = false) -> Decoded? {
         let d = Data(data)
         if d.starts(with: [0xEF, 0xBB, 0xBF]) {

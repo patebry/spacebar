@@ -375,13 +375,17 @@ class PreviewController: NSViewController {
     private var indexStale = false
     /// The links of the last Markdown render, reused while its set of targets is unchanged (every keystroke saves and renders).
     private var linkMemo: (targets: [String], root: String, path: String, links: [String: Any], embeds: [String: Any])?
+    private var targetsMemo: (text: String, targets: [String])?
     private var linkGen = 0
     private static var sessions = 0
     private let session: Int = { PreviewController.sessions += 1; return PreviewController.sessions }()
     /// Latest document the preview intends to be on disk (includes queued edits).
     private var docText: String?
     /// Last content confirmed on disk, in its on-disk line endings; every write must name it as its base.
-    private var diskText: String?
+    private var diskText: String? { didSet { syncedText = nil } }
+    /// A text known to be diskText as shown (onDisk of it is diskText): docText is compared with it first, since comparing a
+    /// large document with its CRLF form, or two copies of it, costs the main thread tens of ms and more.
+    private var syncedText: String?
     /// The file on screen when it is text spacebar edits as a whole (not Markdown): how its bytes read and are written back.
     /// docText and diskText then hold the text as edited (LF), and the source gives the bytes.
     private var textSource: EditableText.Source?
@@ -393,8 +397,15 @@ class PreviewController: NSViewController {
     /// which is then allowed.
     private var textStranded = false
     /// "\r\n" for a file whose every line ends in CRLF. docText and the page always use "\n"; writes convert back.
-    private var lineEnding = "\n"
+    private var lineEnding = "\n" { didSet { syncedText = nil } }
     private func onDisk(_ text: String) -> String { lineEnding == "\n" ? text : text.replacingOccurrences(of: "\n", with: lineEnding) }
+    /// Whether `text` is what is on disk (onDisk(text) == diskText).
+    private func matchesDisk(_ text: String) -> Bool {
+        // Lengths first only where they are free (native storage): a bridged string counts them by reading it all.
+        let n = { (x: String) in x.utf8.withContiguousStorageIfAvailable { $0.count } }
+        if let s = syncedText, n(s).flatMap({ a in n(text).map { a == $0 } }) ?? true, s == text { return true }
+        return onDisk(text) == diskText
+    }
     private var prepareStart = Date()
     /// onReady is owed for the current start.
     private var readyPending = false
@@ -463,7 +474,7 @@ class PreviewController: NSViewController {
     }
 
     /// Text on screen that is not on disk: a save failed, or a write was torn.
-    private var hasUnsavedText: Bool { !textStranded && (torn || tornHalted || (docText.map { onDisk($0) != diskText } ?? false)) }
+    private var hasUnsavedText: Bool { !textStranded && (torn || tornHalted || (docText.map { !matchesDisk($0) } ?? false)) }
 
     /// The writer refused unsaved text of the text file on screen: it can no longer be saved, so the user is told to copy it and
     /// may leave. True when that is the case.
@@ -610,6 +621,7 @@ class PreviewController: NSViewController {
     /// The host is taking the view away.
     func hostDisappearing() {
         appeared = false
+        host.scheme.body = nil
         stopEdit(notifyWriter: true)
         stopFilter(notifyWriter: true)
         host.remoteImages.reset()
@@ -715,6 +727,7 @@ class PreviewController: NSViewController {
         scanGen += 1
         pendingAnchor = nil
         linkMemo = nil
+        targetsMemo = nil
         if isDir.boolValue {
             // Folder previews can be turned off; declining hands the folder back to Quick Look's own preview. Everything else a
             // folder preview declines (packages, volumes, system folders) is known here, before anything starts.
@@ -825,6 +838,7 @@ class PreviewController: NSViewController {
         loader.cancel()
         unavailablePath = nil
         offer(r.recent.map(\.path))
+        host.scheme.body = nil
         let json = String(data: try! JSONSerialization.data(withJSONObject: r.payload(reason: reason)), encoding: .utf8)!
         host.whenReady { [host] in
             host.remoteImages.whenInPlace {
@@ -1006,7 +1020,7 @@ class PreviewController: NSViewController {
         let epoch = writeEpoch, cloud = FileTypes.isDataless(url.path)
         // A conflict keeps the rejected text on screen until the file's own text arrives: it may be the only copy left to copy.
         let quiet = reason == "conflict"
-        let id = loader.load(timesOut: cloud, { Result { try FileView.readDocument(url) } }) { [weak self] outcome in
+        let id = loader.load(timesOut: cloud, { Result { () -> (String, Lines) in let raw = try FileView.readDocument(url); return (raw, Self.lines(raw)) } }) { [weak self] outcome in
             guard let self, self.host.controller === self, self.fileURL == url, self.fileKind == .markdown else { return }
             switch outcome {
             case .timedOut:
@@ -1017,23 +1031,42 @@ class PreviewController: NSViewController {
                 log.error("read failed \(url.path, privacy: .private): \(error.localizedDescription, privacy: .private)")
                 // A document already on screen stays (a save swapping the file can fail one read); a new one gets the card.
                 if self.docText == nil, !quiet { self.showUnavailable(url, reason: reason, cloud: cloud || FileTypes.isDataless(url.path)) }
-            case .done(.success(let raw)):
+            case .done(.success(let (raw, lines))):
                 // Bytes read before a write started may be what the write replaced: the write's own reload reads again.
                 guard !self.writing, !self.torn, epoch == self.writeEpoch else { return }
-                self.apply(raw, url: url, reason: reason)
+                self.apply(raw, lines, url: url, reason: reason)
             }
         }
         if cloud, let s = Self.stamp(url) { downloading = (url, id, s) }
         if docText == nil, !quiet { showLoading(url, load: id, cloud: cloud) }
     }
 
-    /// Takes a Markdown read that is still current: `raw` is the file's text as on disk.
-    private func apply(_ raw: String, url: URL, reason: String) {
-        if raw == diskText { return }
-        if edit == nil, let d = docText, onDisk(d) != diskText { status("unsaved text replaced by the version on disk") }
+    typealias Lines = (text: String, crlf: Bool, targets: [String]?)
+    /// A Markdown file's text with CRLF line ends made LF when every line ends so, in native UTF-8 (PageBody), and its link
+    /// targets. Off the main thread: each reads the whole file.
+    private static func lines(_ raw: String) -> Lines {
         let crlf = raw.contains("\r\n") && !raw.replacingOccurrences(of: "\r\n", with: "").utf8.contains(10)
-        lineEnding = crlf ? "\r\n" : "\n"
-        let text = crlf ? raw.replacingOccurrences(of: "\r\n", with: "\n") : raw
+        let text = crlf ? TextDecoding.nativeUTF8(raw.replacingOccurrences(of: "\r\n", with: "\n")) : raw
+        return (text, crlf, text.contains("[[") ? linkTargets(text) : nil)
+    }
+
+    private static func linkTargets(_ text: String) -> [String] { LinkIndex.links(in: text).map { ($0.embed ? "!" : "") + $0.target } }
+
+    /// The link targets of `text`: those the read found off the main thread while it is still the text.
+    private func linkTargets(_ text: String) -> [String] {
+        if let m = targetsMemo, m.text == text { return m.targets }
+        let t = Self.linkTargets(text)
+        targetsMemo = (text, t)
+        return t
+    }
+
+    /// Takes a Markdown read that is still current: `raw` is the file's text as on disk, `lines` its text as shown.
+    private func apply(_ raw: String, _ lines: Lines, url: URL, reason: String) {
+        if raw == diskText { return }
+        if edit == nil, let d = docText, !matchesDisk(d) { status("unsaved text replaced by the version on disk") }
+        lineEnding = lines.crlf ? "\r\n" : "\n"
+        let text = lines.text
+        if let t = lines.targets { targetsMemo = (text, t) }
         // Ranges of ended sessions refer to the old text; their late keys must not land in the new one.
         retired = []
         if edit != nil {
@@ -1043,7 +1076,10 @@ class PreviewController: NSViewController {
         }
         docText = text
         diskText = raw
-        log.info("read \(text.utf8.count) bytes, last line: \(text.split(separator: "\n").last.map(String.init) ?? "", privacy: .private)")
+        syncedText = text
+        let end = text.lastIndex { $0 != "\n" }.map { text.index(after: $0) } ?? text.startIndex
+        let last = text[..<end].lastIndex(of: "\n").map { text[text.index(after: $0)..<end] } ?? text[..<end]
+        log.info("read \(text.utf8.count) bytes, last line: \(String(last), privacy: .private)")
         push(text: text, path: url.path, reason: reason)
     }
 
@@ -1086,6 +1122,12 @@ class PreviewController: NSViewController {
 
     private func render(_ payload: [String: Any]) {
         renderGen += 1
+        var payload = payload
+        host.scheme.body = PageBody.take(&payload)
+        host.scheme.bodyCurrent = { [weak self] path in
+            guard let self, self.host.controller === self else { return false }
+            return self.fileURL?.path == path
+        }
         let json = String(data: try! JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!
         host.remoteImages.whenInPlace { [host] in
             host.web.evaluateJavaScript("sb.render(\(json)); 0") { _, err in
@@ -1115,7 +1157,7 @@ class PreviewController: NSViewController {
         let hidden = SettingsStore.shared.settings.showHiddenFiles
         let idx = Self.linkIndex.flatMap { $0.root == rootDir ? $0 : nil }
         if idx == nil || indexStale || Date().timeIntervalSince(idx!.built) > 30 { buildIndex(hidden: hidden) }
-        let targets = LinkIndex.links(in: text).map { ($0.embed ? "!" : "") + $0.target }
+        let targets = linkTargets(text)
         payload["linksComplete"] = idx?.complete ?? true
         if let m = linkMemo, m.root == rootDir, m.path == path {
             payload["links"] = m.links
@@ -1158,7 +1200,7 @@ class PreviewController: NSViewController {
         Self.indexWaiters[root, default: []].append { [weak self] idx in
             guard let self, root == self.rootDir, let url = self.fileURL, self.fileKind == .markdown, let text = self.docText,
                   text.contains("[[") else { return }
-            self.resolveLinks(idx, text: text, path: url.path, targets: LinkIndex.links(in: text).map { ($0.embed ? "!" : "") + $0.target })
+            self.resolveLinks(idx, text: text, path: url.path, targets: self.linkTargets(text))
         }
         guard Self.indexBuilding != root else { return }
         Self.indexBuilding = root
@@ -1196,6 +1238,8 @@ class PreviewController: NSViewController {
         let id = loader.load(timesOut: cloud, { () -> (payload: [String: Any], pdf: Result<PDFDocument, PDFPane.LoadError>?,
                                                        rich: Result<NSAttributedString, RichTextPane.LoadError>?, stuck: Bool, edit: EditableText.Opened?) in
             var (p, edit) = FileView.payloadAndText(path: url.path, kind: kind, root: root, reason: reason, canOpen: canOpen, quickLook: !noQuickLook)
+            // Native UTF-8 here, so the main thread's render takes its bytes with a copy (PageBody), not a transcoding.
+            if let t = p["text"] as? String { p["text"] = TextDecoding.nativeUTF8(t) }
             // Text opens in a text editor even where its default app is refused (a script): the writer names the app.
             if Self.textViews.contains(p["view"] as? String ?? ""), LinkPolicy.editorRefusal(url) == nil { p["canOpen"] = true }
             if p["view"] as? String == "info", url.pathExtension.lowercased() == "dmg" { p["details"] = DiskImage.details(url.path) }
@@ -1292,6 +1336,7 @@ class PreviewController: NSViewController {
         docText = opened?.text
         diskText = opened?.text
         lineEnding = "\n"
+        syncedText = opened?.text
         if opened != nil { p["ver"] = nextVersion() }
         textPayload = opened == nil ? nil : p
         return true
@@ -2107,6 +2152,7 @@ class PreviewController: NSViewController {
             return
         }
         diskText = onDisk(text)
+        syncedText = text
         if torn { torn = false; tornBase = nil; stickyStatus(""); status(tornStatus.isEmpty ? "saved" : "saved; \(tornStatus) can be deleted"); tornStatus = "" }
         if let q = queuedSave {
             queuedSave = nil

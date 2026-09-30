@@ -455,6 +455,58 @@ restore, a `.dmg`, camera RAW when there is a file, ⌘Y, secure input, the help
 Its step 14 turns Accessibility off and on: the helper removes its tap once the grant is gone (it re-enables a tap macOS disabled only while Accessibility is granted) and makes a new one when it is back, within its 2 s check; `--helper-status` reports whether the tap is enabled, not only whether it exists. It tails the helper's, viewer's and preview's logs (`log stream`, subsystem `md.spacebar`) and grades each step from them,
 asking you only what the logs cannot show. It sends no input itself.
 
+## Large files
+
+The page used to get every file's text inside its render script: `render()` escaped the payload with JSONSerialization and
+handed WebKit `sb.render(<json>)`, all on the main thread. `test/bigfiles/run.sh` measures that path off screen, through the
+real `Viewer` and `PreviewController` driven as the helper drives them: for each file, show to the page's DOM drawn (its
+`painted` message), show to the content up (a table row, a tree row, the PDF view, the listing), the longest the viewer's main
+thread went without running a block posted to it every millisecond, and the viewer process's peak footprint (sampled every
+0.5 ms; WebKit's content process is apart). Measured on this Mac with the screen locked, 3 shows of each from a closed panel,
+median times; stall and growth are the worst of the 3. With the screen locked no animation frame runs, so `rendered` and the
+PDF view's placement never come: every time here is to the DOM, not to pixels. The stall and memory numbers are unaffected.
+
+| File | Main stall before / after | Footprint growth before / after | DOM before / after | Content before / after |
+|---|---|---|---|---|
+| CSV 16 MB, ASCII | 43 / 8 ms | 29 / 13 MB | 460 / 386 ms | 478 / 404 ms |
+| CSV 16 MB, CJK and accents (UTF-8) | 148 / 7 ms | 51 / 31 MB | 393 / 246 ms | 411 / 263 ms |
+| CSV 16 MB, Windows-1252 | 131 / 8 ms | 36 / 18 MB | 670 / 575 ms | 686 / 592 ms |
+| Markdown 4 MB, BOM, CRLF, 80,000 `[[links]]` | 863 / 2 ms | 16 / 5 MB | 2,581 / 1,181 ms | 5,811 / 3,623 ms |
+| CSV 50,000 rows (2.4 MB) | 6 / 3 ms | 3 / 6 MB | 77 / 67 ms | 95 / 85 ms |
+| JSON 2 MB, minified | 5 / 2 ms | 3 / 4 MB | 92 / 80 ms | 95 / 85 ms |
+| JavaScript 2 MB (highlighted after paint) | 6 / 2 ms | 5 / 4 MB | 158 / 162 ms | 340 / 340 ms |
+| PDF, 500 pages | 8 / 9 ms | 1 / 1 MB | 12 / 13 ms | 14 / 14 ms |
+| PNG 12,000 × 12,000, `<img>` | 1 / 3 ms | 0 / 0 MB | 4 / 4 ms | 8 / 10 ms |
+| zip, 10,000 entries (5,000 listed) | 16 / 16 ms | 3 / 2 MB | 5 / 6 ms | 234 / 236 ms |
+| Folder of 5,000 files (overview) | 19 / 18 ms | 2 / 2 MB | 127 / 127 ms | 129 / 129 ms |
+| A file in that folder (sidebar of 5,000) | 17 / 18 ms | 1 / 2 MB | 7 / 6 ms | 12 / 12 ms |
+
+Where the time went, measured in process: escaping a 16 MB payload took 33 ms for ASCII and 95 ms for accented and CJK text,
+plus 10 ms for WebKit to take the script; a Windows-1252 file decodes to a bridged UTF-16 string, and getting its UTF-8 cost
+40 ms more on the main thread (`makeContiguousUTF8` on the same string: 317 ms). For Markdown, the wikilink scan ran
+NSRegularExpression over a native string through its bridge (400 ms for 3 MB; 20 ms over a UTF-16 copy), and the check for
+unsaved text on the next show compared the document with its CRLF form (400 ms and more).
+
+What changed:
+- A text over 256 KB leaves the payload: `PageBody` holds it as UTF-8 behind a random one-time URL, `spacebar://body/<UUID>`,
+  and the page reads it with a synchronous request as its render starts, so renders still run one at a time and in order. The
+  handler serves only that URL, once, while its file is still on screen, and reads nothing from disk. A request for any other
+  URL, a superseded render's, leaves the body for its own render: consuming it on a miss made the second of two queued renders
+  never draw. The body starts with a byte order mark, because the page's decoder removes exactly one, and a document that
+  starts with U+FEFF keeps it. The page's CSP gains `connect-src spacebar://body`, and `img-src` names its three hosts.
+- Text is made native UTF-8 off the main thread (`TextDecoding.nativeUTF8`), so the main thread only copies bytes.
+- The Markdown reader normalizes CRLF and finds link targets off the main thread; `links(in:)` scans a UTF-16 copy; the
+  targets are kept for the text they came from.
+- Unsaved-text checks compare with the text last known to match the disk before building the on-disk form.
+
+Not changed: a 5,000-file listing or overview holds the main thread about 18 ms and a 10,000-entry archive about 16 ms, both
+under the 50 ms line. The page itself still takes most of a second for a 16 MB table and over 3 s to lay out 4 MB of Markdown
+with 80,000 links; that is WebKit's content process, not the viewer, so the panel keeps answering keys meanwhile.
+
+Open: under the harness, the writer's archive listing sometimes comes back empty, and the page shows "This archive's contents
+can't be listed" (2 of 10 shows, before this change too). `ArchiveListing.list` on the same zip never failed in 40 direct or
+concurrent runs, so the loss is somewhere between the XPC call and the reply. bigfiles reports it as KNOWN.
+
 ## Open questions
 
 Folder previews and live settings ship. Folder previews were verified by hand in Finder; live settings are covered by

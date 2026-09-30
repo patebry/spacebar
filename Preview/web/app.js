@@ -1139,6 +1139,19 @@ const RENDER_KEYS = ['frontMatter', 'toc', 'stats', 'math', 'mermaid', 'rawHTML'
   'rawNotebook', 'rawCSV', 'rawXML', 'rawCSS'];
 const LOOK_KEYS = ['theme', 'codeTheme', 'appearance', 'bodyFont', 'userThemeURL', 'customCSSURL'];
 
+/** A large render's text, sent apart from its script (PageBody). Read synchronously, so this render finishes before the next
+ *  one starts, as when the text came inline. Null when the body is no longer offered. */
+function renderBody(url) {
+  try {
+    const x = new XMLHttpRequest();
+    x.open('GET', url, false);
+    x.send();
+    return x.status === 200 ? x.responseText : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 window.sb = {
   async render(p) {
     const t0 = performance.now();
@@ -1146,6 +1159,13 @@ window.sb = {
     if (editing && samePath && (p.reason === 'edit' || p.reason === 'save' || p.reason === 'editEnd')) {
       requestAnimationFrame(() => post({ type: 'rendered', parseMs: 0, totalMs: performance.now() - t0, mermaid: 0, reason: p.reason, keyTime: p.keyTime }));
       return;
+    }
+    if (typeof p.textURL === 'string') {
+      const text = renderBody(p.textURL);
+      // Superseded: a newer render took the body's place and follows this one; it ends any edit and posts the paint.
+      if (text === null) return;
+      p = { ...p, text };
+      delete p.textURL;
     }
     // The native side may not have started this edit yet; tell it the page dropped it so it never holds the keyboard for it.
     if (editing) post({ type: 'editCancel', seq: editing.seq });

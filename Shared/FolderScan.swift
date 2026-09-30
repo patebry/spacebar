@@ -283,9 +283,10 @@ final class LinkIndex {
     static func links(in text: String, max: Int = maxTargets) -> [(target: String, embed: Bool)] {
         var out: [(String, Bool)] = []
         var seen: Set<String> = []
-        let ns = text as NSString
+        // A UTF-16 copy: the expression reads a native (UTF-8) string through its bridge ten times slower than the copy costs.
+        let ns = NSMutableString(string: text) as String as NSString
         guard let re = try? NSRegularExpression(pattern: #"(!?)\[\[([^\[\]\n]{1,400})\]\]"#) else { return [] }
-        for m in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+        for m in re.matches(in: ns as String, range: NSRange(location: 0, length: ns.length)) {
             let embed = m.range(at: 1).length > 0
             let t = parse(ns.substring(with: m.range(at: 2))).target
             guard !t.isEmpty, seen.insert((embed ? "!" : "") + t).inserted else { continue }

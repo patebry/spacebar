@@ -148,6 +148,32 @@ try! fh.truncate(atOffset: UInt64(FileTypes.maxImageBytes) + 1)
 try! fh.close()
 check("file host: the image read is bounded", (try? SchemeHandler.readImage(big)) == nil && (try? SchemeHandler.readImage(tree.appendingPathComponent("a.png"))) == Data("x".utf8))
 
+// The body host: a large render's text, once, by its exact URL, while its file is on screen; nothing else, and never from disk.
+var p: [String: Any] = ["path": "/doc.csv", "text": "a,b\n"]
+check("body: a small text stays inline", PageBody.take(&p) == nil && p["text"] as? String == "a,b\n" && p["textURL"] == nil)
+let bigText = String(repeating: "é,名,x\n", count: PageBody.threshold / 4)
+p = ["path": "/doc.csv", "text": bigText, "view": "csv"]
+let body = PageBody.take(&p)!
+check("body: a large text moves out of the payload, named by an unguessable URL",
+      p["text"] == nil && p["textURL"] as? String == body.url && body.url.hasPrefix("spacebar://body/") && body.url.count > 40
+      && body.data == Data([0xEF, 0xBB, 0xBF]) + Data(bigText.utf8) && body.path == "/doc.csv")
+var bridged: [String: Any] = ["path": "/doc.csv", "text": NSString(string: bigText) as String]
+check("body: a bridged string's bytes are the same UTF-8", PageBody.take(&bridged)?.data == body.data
+      && TextDecoding.nativeUTF8(NSString(string: bigText) as String) == bigText)
+var onScreen = "/doc.csv"
+h.bodyCurrent = { $0 == onScreen }
+func fetchBody(_ url: String) -> FakeTask { let t = FakeTask(URL(string: url)!); h.webView(web, start: t); return t }
+h.body = body
+check("body: a wrong or stale token is refused, and leaves the body for its own render",
+      fetchBody("spacebar://body/" + UUID().uuidString).events == ["fail"] && fetchBody("spacebar://body/x").events == ["fail"]
+      && fetchBody(body.url + "/x").events == ["fail"] && fetchBody(body.url + "?x").events == ["fail"] && h.body?.url == body.url)
+check("body: served once, as plain text", fetchBody(body.url).events == ["response", "data", "finish"] && fetchBody(body.url).events == ["fail"])
+h.body = body
+onScreen = "/other.csv"
+check("body: refused once its file is no longer on screen", fetchBody(body.url).events == ["fail"])
+check("body: none offered, nothing served (the app's preview never offers one)", fetchBody(body.url).events == ["fail"]
+      && noFile.body == nil && fetchBody("spacebar://body/").events == ["fail"])
+
 // Why a document's image did not load: what the page's placeholder says, and the only folders it may reveal.
 let imgs = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("imgcheck-\(getpid())")
 try! fm.createDirectory(at: imgs.appendingPathComponent("media"), withIntermediateDirectories: true)

@@ -77,7 +77,7 @@ buttons over the page.
 ### Copy, Find and Raw
 
 Copy sits at the bottom right of the page; Find and Raw are icon buttons beside Aa, each shown where it applies and keeping its
-place in the toolbar where it does not. Each button's tooltip gives its key.
+place in the toolbar where it does not. A button with a key gives it in its tooltip.
 
 - **Copy** puts the file's text on the clipboard: a Markdown file's source, a table's CSV, JSON as it is on disk (the first
   2 MB of a larger file, as shown). Not offered for images, PDFs, media or archives. The page keeps clear of it, so it never
@@ -85,7 +85,7 @@ place in the toolbar where it does not. Each button's tooltip gives its key.
 - **Find** searches the file on screen: Markdown, code, text, JSON and CSV, as each is shown. Matches are highlighted and
   counted; ↵ and ⇧↵ (or ⌘G and ⇧⌘G) go to the next and previous, Esc closes the bar. A long table and a JSON tree are
   searched whole, not just the rows drawn: a match in a collapsed branch opens it. At most 10,000 matches are counted.
-- **Raw** switches a formatted view to the file as it is, read only: Markdown to its source, JSON and a notebook to their
+- **Raw** switches a formatted view to the file as it is: Markdown to its source (read only), JSON and a notebook to their
   text, a table to its CSV, XML and a minified stylesheet to the file unindented. Each kind remembers its choice.
   Minified JavaScript is shown as it is: there is no formatter for it.
 

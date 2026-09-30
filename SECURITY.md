@@ -75,11 +75,13 @@ Nine features reach further than a rendered page, and are in scope:
   running one, only into `~/Applications/spacebar.app`, and only after the downloaded zip's SHA-256 matches the release's.
   The version check reads just the version number of GitHub's latest release, at most once a day. The uninstaller, started
   from Settings, quits the extensions' helpers before it deletes anything and does not start while an update runs.
-- **Copy** puts plain text on the clipboard through the writer (the sandboxed extension and viewer never touch the
-  pasteboard). The Copy button, and ⌘C with nothing selected, copy the file on screen as the extension read it, never text
-  the page supplies; ⌘C with a selection copies the page's selection, taken only within a second of the host handing the page
-  that ⌘C. The extension takes a copy only for the path of the
-  file on screen, and only a text view or a Markdown file has a whole-file copy.
+- **Copy** puts plain text on the clipboard through the writer; the sandboxed extension never touches the pasteboard. The
+  Copy button, and ⌘C with nothing selected, copy the file on screen as the extension read it, never text the page supplies;
+  ⌘C with a selection copies the page's selection, taken only within a second of the host handing the page that ⌘C. The
+  extension takes a copy only for the path of the file on screen, and only a text view or a Markdown file has a whole-file
+  copy. In the Space panel the sandboxed viewer writes the pasteboard itself for ⌘C with nothing selected, as Finder's ⌘C
+  does: the file on screen's URL, with its text where it has a whole-file copy, and only within a second of a ⌘C the helper
+  forwarded; the Copy button stays text only, through the writer.
 - **The helper hint.** Whether the Space helper is taking Space comes from the Quick Look extension's writer, which reads
   the window server's list of event taps (each tap's owner, matched by its executable's path). Nothing connects to the
   helper, and no key is seen.

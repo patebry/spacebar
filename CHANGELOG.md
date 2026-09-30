@@ -56,11 +56,11 @@ Waits for the Developer ID: the first release with the Space helper is notarized
 
 - Big folders stay fast (the sidebar draws only the rows in view), and it takes the arrow keys as soon as the preview opens.
 - The toolbar holds still while the arrows move from file to file: its buttons keep their places, Open is one word with the
-  app in its tooltip, and tooltips give each button's key.
+  app in its tooltip, and a button with a key gives it in its tooltip.
 - The file's kind and size move from a caption row over the file into the toolbar, as quiet text; an image's zoom goes with
   them. A PDF, a video or an image gains the row's height.
-- JSON has one view, the tree, with Expand All and Collapse All; Raw shows its text. The Tree/Formatted switch is gone, and a
-  notebook shows as its cells (Raw for its JSON).
+- JSON has one view, the tree, with Expand All and Collapse All, in place of 0.2's pretty-printed text; Raw shows its text.
+  A notebook shows as its cells (Raw for its JSON).
 - The info card's Where names the folder the file is in, with `~` for your home, and its Open button gives way to the
   toolbar's (Minimal chrome keeps it).
 - Word count and reading time are off by default. A settings file that had them on keeps them on.

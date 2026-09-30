@@ -38,8 +38,8 @@ protocol SpacebarWriterProtocol {
     /// Whether the Space helper is on in the settings but not taking Space (not running, or without Accessibility), so Space
     /// falls back to Apple's Quick Look.
     func spaceHelperPaused(reply: @escaping (Bool) -> Void)
-    /// Puts `text` on the clipboard as plain text: the file on screen, or the page's selection. Neither sandbox the page lives in
-    /// is asked to touch the pasteboard.
+    /// Puts `text` on the clipboard as plain text: the file on screen, or the page's selection. The extension is never asked to
+    /// touch the pasteboard; only the Space panel's ⌘C with nothing selected is written by the viewer itself (FinderCopy).
     func copyText(_ text: String, reply: @escaping (Bool) -> Void)
     /// Starts the installer bundled in the app, detached, to update to `version`: only a release newer than this one, and only
     /// while the update check is on. Replies nil once it is running, or why it is not. It logs to ~/Library/Logs/spacebar-update.log.

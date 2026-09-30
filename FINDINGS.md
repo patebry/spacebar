@@ -114,7 +114,10 @@ Typing (068d11d):
 Code, text, JSON, CSV and config files are edited with the same key panel, in plain mode (`beginTextEdit`): the panel holds the
 whole file, Enter and Backspace edit it as they are (no split or merge), Enter keeps the line's indentation, Tab types a tab,
 and the text view is monospaced and unwrapped so ↑ and ↓ keep the column (`test/editkeys/run.sh`). The Space helper's viewer
-uses the same path: while the writer's panel has the keys, the helper passes every key, since none targets Finder or the viewer.
+uses the same path. Its keys reach the writer's panel, but the window server annotates them with the frontmost app's pid,
+Finder's, not the panel's (a live log showed typed letters painted, then the Space closing the panel as a key to Finder), so
+the viewer tells the helper when an edit, the filter or the find field holds the keys (`textSession`), and the helper passes
+every key until it ends (`test/helper/run.sh`, scenario flow 10).
 
 - **What is editable** (`EditableText` in `Shared/FolderListing.swift`): by name, Markdown, the `code`, `json`, `csv` and `text`
   kinds, and dotfile config (a dot and no extension, or `.env.<name>`), on both the named path and the resolved one, which

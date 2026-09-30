@@ -23,6 +23,10 @@ enum HelperIDs {
     func panelState(_ open: Bool, requestID: Int, windowNumber: Int)
     /// Viewer: it will not show request `requestID`; Apple's Quick Look gets the Space instead.
     func declined(_ requestID: Int)
+    /// Viewer: an edit, the filter or the find field in its writer's key panel took the keyboard (`active`) or let it go. While
+    /// one holds it the helper passes every key. Replies whether the helper holds what was said: a session starts only while the
+    /// panel is open or on its way.
+    func textSession(_ active: Bool, reply: @escaping (Bool) -> Void)
     /// Settings app: `HelperStatus` as JSON.
     func status(reply: @escaping (Data) -> Void)
     /// Settings app: asks macOS to show the Accessibility prompt; replies whether the helper is trusted now.

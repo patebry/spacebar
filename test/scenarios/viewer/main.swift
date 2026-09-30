@@ -1,6 +1,6 @@
 // Day-in-the-life scenarios, driven through the Space helper's viewer as the helper drives it over XPC (show, key, close):
-// the real Viewer, PreviewController, page and native panes, with the panel parked off screen. No key events, no mouse
-// events, no window on screen. Build and run with test/scenarios/run.sh.
+// the real Viewer, PreviewController, page and native panes, with the panel parked off screen. No key or mouse event reaches
+// the system (flow 10's keys are NSEvents inside the stub writer), no window on screen. Build and run with test/scenarios/run.sh.
 //   scenarios <out dir> [<video dir>]      <out dir>: what test/scenarios/corpus_real.py wrote
 //   FLOWS=1,2,...   the flows to run (default all)
 //   SCEN_TIMING=0   latency targets are printed, not graded (CI)
@@ -18,7 +18,7 @@ let out = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath
 let videoDir = CommandLine.arguments.count > 2 && !CommandLine.arguments[2].isEmpty
     ? URL(fileURLWithPath: CommandLine.arguments[2]).resolvingSymlinksInPath() : nil
 let env = ProcessInfo.processInfo.environment
-let flows = Set((env["FLOWS"] ?? "1,2,3,4,5,6,7,8").split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) })
+let flows = Set((env["FLOWS"] ?? "1,2,3,4,5,6,7,8,10").split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) })
 let timing = env["SCEN_TIMING"] != "0"
 let strict = env["SCEN_STRICT"] == "1"
 let corpus = out.appendingPathComponent("corpus")
@@ -791,6 +791,48 @@ if flows.contains("8") {
     check("8: the image that is there still renders", (box["present"] as? [Int] ?? []).contains(40), "\(box)")
     noErrors("8", s.page)
     close()
+}
+
+// ================= 10. typing a space in an edit keeps the panel open =================
+// The writer's panel gets the keys, but the window server annotates them with Finder's pid, so the helper decides by the text
+// session the viewer reports. The stub writer types "a b" in-process into the writer's edit text view, then Esc.
+if flows.contains("10") {
+    print("\n== 10. an edit in the panel: Space types a space and the panel stays open")
+    let dir = out.appendingPathComponent("typing")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let f = dir.appendingPathComponent("type-a-b.txt")
+    try! "hello\n".write(to: f, atomically: true, encoding: .utf8)
+    let finderPid: Int32 = 583
+    var route = KeyRoute()
+    func helperRoutes(_ code: Int64) -> Route {
+        let r = route.route(KeyEvent(code: code, targetPid: finderPid), panel: PanelContext(open: viewer.panel.isVisible, finderPid: finderPid,
+                                                                                               viewerPid: getpid(), textSession: viewer.textSession))
+        if r == .close { close() }
+        return r
+    }
+    let s = space([f], settle: 0.4)
+    check("10: the text file is shown", s.view == "text" && s.page.text.contains("hello"), "\(s.view) \(s.page.text.prefix(40))")
+    check("10: no text session before the click", !viewer.textSession)
+    _ = js("""
+      { const p = document.querySelector('#doc pre.code[data-file-text]'), r = p.getBoundingClientRect();
+        p.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, clientX: r.left + 2, clientY: r.top + 4 })); } 0
+      """)
+    spin(until: 3) { viewer.textSession }
+    check("10: the click starts an edit and the viewer reports a text session", viewer.textSession)
+    check("10: the helper passes the Space typed into the edit", helperRoutes(KeyCode.space) == .pass)
+    check("10: and passes Esc, ↓ and ⌘W to the edit too", helperRoutes(KeyCode.escape) == .pass && helperRoutes(KeyCode.down) == .pass
+          && route.route(KeyEvent(code: 13, chars: "w", mods: .command, targetPid: finderPid),
+                         panel: PanelContext(open: true, finderPid: finderPid, viewerPid: getpid(), textSession: viewer.textSession)) == .pass)
+    var saved = ""
+    spin(until: 5) { saved = (try? String(contentsOf: f, encoding: .utf8)) ?? ""; return saved.contains("a b") }
+    check("10: \"a b\" is typed and saved", saved.contains("a b") && saved.contains("hello"), saved)
+    check("10: the page shows it", page().text.contains("a b"), String(page().text.prefix(60)))
+    check("10: the panel stays open", viewer.panel.isVisible && viewer.panel.alphaValue > 0)
+    spin(until: 4) { !viewer.textSession }
+    check("10: Esc ends the edit, and the text session with it", !viewer.textSession)
+    check("10: the next Space closes the panel", helperRoutes(KeyCode.space) == .close)
+    spin(until: 2) { !viewer.panel.isVisible }
+    check("10: closed", !viewer.panel.isVisible)
 }
 
 // ================= 9. screenshots of the top-left controls (FLOWS=9 SCEN_SHOTS=<dir>) =================

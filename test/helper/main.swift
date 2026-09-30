@@ -1,6 +1,6 @@
 // Checks the Space helper's routing (Helper/Decision.swift): Decision.space over the contexts the spike recorded live in
 // Finder and other apps (contexts.json, from spike_contexts.py), and over made-up ones; then KeyRoute with the panel closed,
-// open, and open while another process (the writer's key panel) has the keyboard. Build and run with test/helper/run.sh.
+// open, and open while the viewer's writer panel holds the keyboard for a text session. Build and run with test/helper/run.sh.
 // Opens no window and posts no event.
 import Foundation
 
@@ -127,12 +127,55 @@ check("open: a letter passes", routeOnce(key(0, "a"), open) == .pass)
 check("open: Tab passes", routeOnce(key(48), open) == .pass)
 check("open: the helper's own event passes", routeOnce(key(KeyCode.space, tagged: true), open) == .pass)
 
-// Open, but another process has the keyboard: the writer's key panel during a filter or an edit.
+// Open, but a key annotated with another process's pid.
 for (code, n) in [(KeyCode.space, "Space"), (KeyCode.escape, "Esc"), (KeyCode.down, "↓"), (KeyCode.returnKey, "Return")] {
-    check("open, writer has the keys: \(n) passes", routeOnce(key(code, to: writer), open) == .pass)
+    check("open, a key to another pid: \(n) passes", routeOnce(key(code, to: writer), open) == .pass)
 }
-check("open, writer has the keys: ⌘W passes", routeOnce(key(13, "w", mods: .command, to: writer), open) == .pass)
+check("open, a key to another pid: ⌘W passes", routeOnce(key(13, "w", mods: .command, to: writer), open) == .pass)
 check("open, no viewer pid: a target of 0 is not the viewer", routeOnce(key(KeyCode.down, to: 0), PanelContext(open: true, finderPid: finder, viewerPid: 0)) == .pass)
+
+// The viewer's writer panel holds the keyboard (an edit, the filter or the find field). The window server annotates its keys
+// with the frontmost app's pid, Finder's, so the session, not the target, decides: every key passes, to Finder's pid or the
+// viewer's, Esc and the Command shortcuts too.
+let editing = PanelContext(open: true, finderPid: finder, viewerPid: viewer, textSession: true)
+for pid in [finder, viewer] {
+    let to = pid == finder ? "Finder" : "the viewer"
+    for (code, n) in [(KeyCode.space, "Space"), (KeyCode.escape, "Esc"), (KeyCode.down, "↓"), (KeyCode.up, "↑"), (KeyCode.left, "←"),
+                      (KeyCode.right, "→"), (KeyCode.home, "Home"), (KeyCode.returnKey, "Return"), (0, "a letter")] {
+        check("text session, a key to \(to): \(n) passes", routeOnce(key(code, to: pid), editing) == .pass)
+    }
+    let shortcuts = [key(13, "w", mods: .command, to: pid), key(47, ".", mods: .command, to: pid), key(8, "c", mods: .command, to: pid),
+                     key(3, "f", mods: .command, to: pid), key(3, "f", mods: [.command, .option], to: pid), key(31, "o", mods: .command, to: pid),
+                     key(24, "=", mods: .command, to: pid), key(29, "0", mods: .command, to: pid)]
+    check("text session, a key to \(to): ⌘W ⌘. ⌘C ⌘F ⌥⌘F ⌘O ⌘= ⌘0 pass", shortcuts.allSatisfy { routeOnce($0, editing) == .pass })
+    check("text session, a key to \(to): a held Space's repeat passes", routeOnce(key(KeyCode.space, rep: true, to: pid), editing) == .pass)
+}
+do {
+    var r = KeyRoute()
+    _ = r.route(key(KeyCode.down), panel: open)
+    check("text session: a key taken before it began still has its key-up swallowed", r.route(key(KeyCode.down, down: false), panel: editing) == .swallow)
+    _ = r.route(key(KeyCode.down), panel: open)
+    check("text session: a held key pressed again is the typing's, and so is its key-up",
+          r.route(key(KeyCode.down), panel: editing) == .pass && r.route(key(KeyCode.down, down: false), panel: editing) == .pass && r.held.isEmpty)
+    check("text session over: Space closes again", r.route(key(KeyCode.space), panel: open) == .close)
+}
+check("text session with the panel closed: Space still asks for the AX read",
+      routeOnce(key(KeyCode.space), PanelContext(open: false, finderPid: finder, viewerPid: viewer, textSession: true)) == .space)
+do {
+    var t = TextSession()
+    check("text session: starts off", !t.active)
+    check("text session: taken while the panel is open", t.set(true, panelOpen: true) && t.active)
+    check("text session: ended by the viewer", t.set(false, panelOpen: true) && !t.active)
+    check("text session: refused with no panel open or on its way", !t.set(true, panelOpen: false) && !t.active)
+    _ = t.set(true, panelOpen: true)
+    t.clear()
+    check("text session: cleared when the panel closes (or the viewer goes, or it suspends)", !t.active)
+    var r = KeyRoute()
+    let ctx = PanelContext(open: true, finderPid: finder, viewerPid: viewer, textSession: t.active)
+    check("text session cleared: Space and Esc close, ↓ is routed", r.route(key(KeyCode.space), panel: ctx) == .close
+          && routeOnce(key(KeyCode.escape), ctx) == .close && routeOnce(key(KeyCode.down), ctx) == .forward("down"))
+}
+check("text session: only the viewer may claim one", Link.permits(.viewer, .textSession) && !Link.permits(.app, .textSession))
 
 // Finder's focus in a text field while the panel is open: a rename or the search field keeps its keys.
 let typing = PanelContext(open: true, finderPid: finder, viewerPid: viewer, textFocus: true)

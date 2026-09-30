@@ -412,12 +412,28 @@ class PreviewController: NSViewController {
     private var reloadPending = false
     private var changeSeen = Date()
     /// The block being edited: writer session id, the page's click sequence number, and its line range in docText.
-    private var edit: (id: Int, seq: Int, start: Int, lines: Int)?
+    private var edit: (id: Int, seq: Int, start: Int, lines: Int)? { didSet { keysMoved() } }
     /// The session a click just replaced: keys typed into it before the writer switched arrive late and are still applied.
     private var retired: [(id: Int, seq: Int, start: Int, lines: Int)] = []
     /// The sidebar filter, the sidebar's list or the find field holding the keyboard: writer session id (from editCounter) and
     /// the page's sequence number.
-    private var filter: KeySession?
+    private var filter: KeySession? { didSet { keysMoved() } }
+    private var writerHasKeys = false
+    private var keysCheckQueued = false
+
+    /// Checked once the turn is over: a filter handing over to an edit keeps the keys throughout.
+    private func keysMoved() {
+        guard !keysCheckQueued else { return }
+        keysCheckQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.keysCheckQueued = false
+            let held = self.edit != nil || self.filter.map { !self.heldLocally($0) } == true
+            guard held != self.writerHasKeys else { return }
+            self.writerHasKeys = held
+            self.writerKeysChanged(held)
+        }
+    }
 
     /// Moves every retired range that starts at or below `line` by `delta` lines.
     private func shiftRetired(from line: Int, by delta: Int) {
@@ -637,6 +653,9 @@ class PreviewController: NSViewController {
     /// A list session ended without asking for another: `reason` is the key source's ("escape" gave the keys back to the host).
     /// The page says what the next key does, by its host.
     func listSessionEnded(reason: String) { js("sb.listEnded", ["reason": reason]) }
+
+    /// The writer's key panel took the keyboard for an edit, the filter or the find field, or let it go.
+    func writerKeysChanged(_ held: Bool) {}
 
     /// The htmlScripts setting that applies to `url`, an HTML file about to be shown.
     func htmlScripts(for url: URL) -> String { SettingsStore.shared.settings.htmlScripts }

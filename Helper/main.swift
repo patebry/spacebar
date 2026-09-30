@@ -11,23 +11,27 @@ final class Endpoint: NSObject, SpacebarHelperProtocol {
     init(role: Link.Role, conn: NSXPCConnection) { self.role = role; self.conn = conn }
 
     func hello(reply: @escaping (Bool) -> Void) {
-        guard role == .viewer, let conn else { return reply(false) }
+        guard Link.permits(role, .hello), let conn else { return reply(false) }
         DispatchQueue.main.async { Helper.shared.viewerHello(conn); reply(true) }
     }
     func panelState(_ open: Bool, requestID: Int, windowNumber: Int) {
-        guard role == .viewer, let conn else { return }
+        guard Link.permits(role, .panelState), let conn else { return }
         DispatchQueue.main.async { Helper.shared.panelState(open, requestID: requestID, windowNumber: windowNumber, from: conn) }
     }
     func declined(_ requestID: Int) {
-        guard role == .viewer else { return }
+        guard Link.permits(role, .declined) else { return }
         DispatchQueue.main.async { Helper.shared.declined(requestID) }
     }
+    func textSession(_ active: Bool, reply: @escaping (Bool) -> Void) {
+        guard Link.permits(role, .textSession), let conn else { return reply(false) }
+        DispatchQueue.main.async { reply(Helper.shared.textSession(active, from: conn)) }
+    }
     func status(reply: @escaping (Data) -> Void) {
-        guard role == .app else { return reply(Data()) }
+        guard Link.permits(role, .status) else { return reply(Data()) }
         DispatchQueue.main.async { reply((try? JSONEncoder().encode(Helper.shared.status())) ?? Data()) }
     }
     func promptAccessibility(reply: @escaping (Bool) -> Void) {
-        guard role == .app else { return reply(false) }
+        guard Link.permits(role, .promptAccessibility) else { return reply(false) }
         DispatchQueue.main.async {
             let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
             reply(AXIsProcessTrustedWithOptions(opts))
@@ -63,6 +67,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private var observedFocus: AXUIElement?
     private var followPending = false
     private var finderTextFocus = false
+    private var text = TextSession()
     /// The viewer's panel, as it reported it; checked on screen before its keys are taken, and again every 2 s.
     private var panelWindow = 0
     /// Checks in a row that found the panel's window off screen; one can be a frame the window server had not drawn yet.
@@ -160,6 +165,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         relaunchDelay = 1
         panelOpen = false
         suspendedAt = nil
+        text.clear()
     }
 
     private func lost(_ c: NSXPCConnection?, pid: pid_t) {
@@ -169,6 +175,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         viewerPid = 0
         panelOpen = false
         suspendedAt = nil
+        text.clear()
         if let p = pending { fail(p.id, "viewer gone") }
         // A viewer that keeps dying is relaunched less and less often.
         nextLaunch = Date(timeIntervalSinceNow: relaunchDelay)
@@ -208,6 +215,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
             panelOpen = false
             panelWindow = 0
             suspendedAt = nil
+            text.clear()
             if Decision.closeEndsPending(pendingID: pending?.id, requestID: requestID) { pending = nil }
             return
         }
@@ -233,6 +241,13 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     func declined(_ id: Int) {
         guard let p = pending, p.id == id else { return }
         fail(id, "declined")
+    }
+
+    func textSession(_ active: Bool, from c: NSXPCConnection) -> Bool {
+        guard c === viewer else { return false }
+        let held = text.set(active, panelOpen: panelOpen || pending != nil)
+        log.info("text session \(self.text.active ? "on" : "off", privacy: .public)\(held ? "" : " (refused: no panel)", privacy: .public)")
+        return held
     }
 
     // MARK: Tap
@@ -297,17 +312,17 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         let e = Self.keyEvent(event, down: type == .keyDown)
         // A rename or the search field can open without a focus notification arriving first: read the focus now, before a key
         // that the panel would take from it. Any AX error counts as a text field, so the key stays Finder's.
-        if panelOpen || pending != nil, e.down, !e.isRepeat, !e.tagged, e.targetPid == finderPid, finderPid > 0,
+        if panelOpen || pending != nil, !text.active, e.down, !e.isRepeat, !e.tagged, e.targetPid == finderPid, finderPid > 0,
            KeyRoute.closes(e) || KeyRoute.forwarded(e, sidebarKeys: settings.sidebarKeys) != nil {
             finderTextFocus = Self.textFocus(finderPid)
         }
         let ctx = PanelContext(open: panelOpen || pending != nil, finderPid: finderPid, viewerPid: viewerPid, sidebarKeys: settings.sidebarKeys,
-                               textFocus: finderTextFocus)
+                               textFocus: finderTextFocus, textSession: text.active)
         switch route.route(e, panel: ctx) {
         case .pass: return pass
         case .swallow: return nil
         case .close:
-            close("key")
+            close("key to pid \(e.targetPid)")
             return nil
         case .forward(let name):
             viewerProxy()?.key(name, isRepeat: e.isRepeat)
@@ -368,6 +383,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private func suspend(_ why: String) {
         viewerProxy()?.suspend()
         panelOpen = false
+        text.clear()
         panelWindow = 0
         offscreenMisses = 0
         suspendedAt = Date()
@@ -389,6 +405,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private func fail(_ id: Int, _ why: String) {
         guard let p = pending, p.id == id else { return }
         pending = nil
+        if !panelOpen { text.clear() }
         log.info("show \(id) failed: \(why, privacy: .public)")
         if id == restoring {
             viewerProxy()?.close()
@@ -406,6 +423,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private func close(_ why: String) {
         pending = nil
         suspendedAt = nil
+        text.clear()
         guard panelOpen || viewer != nil else { return }
         viewerProxy()?.close()
         panelOpen = false

@@ -54,8 +54,8 @@ expect() {
   local got; got=$("$out/client-$1" "$label")
   if [ "$got" = "$2" ]; then echo "PASS $3"; else echo "FAIL $3 (got: $got)"; failures=$((failures + 1)); fi
 }
-expect viewer "hello true, status none" "the viewer (same certificate, md.spacebar.viewer) is accepted, as the viewer"
-expect app "hello false, status app" "the settings app (same certificate, md.spacebar) is accepted, as the app"
+expect viewer "hello true, text true, status none" "the viewer (same certificate, md.spacebar.viewer) is accepted, as the viewer, and may claim a text session"
+expect app "hello false, text false, status app" "the settings app (same certificate, md.spacebar) is accepted, as the app, and may not claim a text session"
 expect adhoc "error 4097" "an ad-hoc client claiming md.spacebar.viewer is refused"
 expect other "error 4097" "a client with the same certificate and another identifier is refused"
 expect soft "error 4097" "the viewer's identity without the hardened runtime is refused"

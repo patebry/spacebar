@@ -17,6 +17,8 @@ Waits for the Developer ID: the first release with the Space helper is notarized
 - The panel remembers its size and place on each display.
 - A rename, the search field, ⌘Y, secure input and every other app keep their keys; a Space spacebar cannot answer in
   150 ms is handed back to Finder.
+- Typing in the panel (an edit, the sidebar filter, Find) keeps every key: a space types a space instead of closing the
+  panel. Esc ends the edit (in the filter, clears its text first); the next Esc or Space closes.
 - It works through a small helper that needs Accessibility (listed as "spacebar Helper") and runs at login; it never opens a
   file, and a sandboxed viewer renders them. SECURITY.md has the threat model. Settings shows its state.
 - Installing, updating and uninstalling handle the helper: an update brings it back within about 20 seconds, and the

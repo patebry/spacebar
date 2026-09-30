@@ -155,6 +155,23 @@ struct PanelContext: Equatable {
     var sidebarKeys = true
     /// Finder's focus is in a text field (a rename, the search field): its keys are the user's typing.
     var textFocus = false
+    /// The viewer's writer panel holds the keyboard for an edit, the filter or the find field (`TextSession`).
+    var textSession = false
+}
+
+/// The viewer's word that its writer's key panel holds the keyboard. Only the panel it is open for, or on its way, can have one,
+/// and every end of that panel ends it. The window server annotates keys with the frontmost app's pid, Finder's, not the pid of
+/// the non-activating panel that receives them, so without this the helper would take the typing's Space, Esc and arrows.
+struct TextSession {
+    private(set) var active = false
+
+    /// Returns whether the helper now holds what the viewer said.
+    mutating func set(_ on: Bool, panelOpen: Bool) -> Bool {
+        active = on && panelOpen
+        return active == on
+    }
+
+    mutating func clear() { active = false }
 }
 
 enum Route: Equatable {
@@ -179,6 +196,8 @@ struct KeyRoute {
     mutating func route(_ e: KeyEvent, panel: PanelContext) -> Route {
         if e.tagged { return .pass }
         if !e.down { return held.remove(e.code) != nil ? .swallow : .pass }
+        // Every key is the typing's, Esc too: the session ends itself, and the next Esc or Space closes.
+        if panel.open, panel.textSession { held.remove(e.code); return .pass }
         let mine = panel.open && (e.targetPid == panel.finderPid || (panel.viewerPid > 0 && e.targetPid == panel.viewerPid))
         // A fresh press of a held key means its key-up was missed: route it as new.
         if held.contains(e.code), !e.isRepeat { held.remove(e.code) }

@@ -1,10 +1,11 @@
 #!/bin/bash
 # Day-in-the-life scenarios through the Space helper's viewer, off screen (test/scenarios/viewer/main.swift): a repo folder
 # walked with ↓, a 50,000-row CSV sorted and scrolled, broken and 2 MB JSON, every file of a messy real-world corpus, video and
-# audio formats, a multi-file selection, hostile files, and missing images. The corpus is made at test time
-# (corpus_real.py) and the media with ffmpeg (make_media.sh); without ffmpeg the media flow is skipped. No key or mouse
-# events, no window on screen, nothing written outside a temporary folder.
-#   FLOWS=1,4 ...       only these flows (1-8)
+# audio formats, a multi-file selection, hostile files, missing images, and a space typed into an edit. The corpus is made at
+# test time (corpus_real.py) and the media with ffmpeg (make_media.sh); without ffmpeg the media flow is skipped. No key or
+# mouse event reaches the system (the edit's keys are NSEvents inside the stub writer), no window on screen, nothing written
+# outside a temporary folder.
+#   FLOWS=1,4 ...       only these flows (1-8, 10)
 #   SCEN_TIMING=0       latency targets printed, not graded (CI, a shared runner)
 #   SCEN_STRICT=1       a KNOWN line (a reported bug, not yet fixed) fails the run
 #   VIDEO_TESTS=<dir>   walk this folder of clips instead of making them (e.g. ~/Desktop/spacebar-film/video-tests)
@@ -19,10 +20,10 @@ id=md.spacebar.test.scenarios
 xpc=$app/Contents/XPCServices/$id.writer.xpc
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$xpc/Contents/MacOS" "$out/support"
 # shellcheck disable=SC2086
-xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/scenarios/viewer/main.swift Viewer/Viewer.swift Viewer/PanelFrame.swift Viewer/FinderCopy.swift Shared/HelperProtocol.swift $PREVIEW_SRC \
+xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/scenarios/viewer/main.swift Helper/Decision.swift Viewer/Viewer.swift Viewer/PanelFrame.swift Viewer/FinderCopy.swift Shared/HelperProtocol.swift $PREVIEW_SRC \
   -framework QuickLookUI -framework WebKit -framework PDFKit -framework AVKit -framework AVFoundation -framework QuickLookThumbnailing \
   -o "$app/Contents/MacOS/scenarios"
-xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/scenarios/writer/main.swift Shared/WriterProtocol.swift Shared/ArchiveListing.swift \
+xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/scenarios/writer/main.swift Writer/EditTextView.swift Shared/WriterProtocol.swift Shared/ArchiveListing.swift \
   -o "$xpc/Contents/MacOS/stubwriter"
 plist() { printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>%s</string><key>CFBundleExecutable</key><string>%s</string><key>CFBundlePackageType</key><string>%s</string>%s</dict></plist>' "$@"; }
 plist "$id" scenarios APPL '<key>LSUIElement</key><true/>' > "$app/Contents/Info.plist"

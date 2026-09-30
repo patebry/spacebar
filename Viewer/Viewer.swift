@@ -104,6 +104,8 @@ final class PanelController: PreviewController {
 
     override func copyFileAndText(_ url: URL, _ text: String) -> Bool { FinderCopy.write(file: url, text: text) }
 
+    override func writerKeysChanged(_ held: Bool) { Viewer.shared.tellTextSession(held) }
+
     override func handle(_ type: String, _ body: [String: Any]) {
         guard type == "dragZone" else { return super.handle(type, body) }
         (view.window as? ViewerPanel)?.dragZone = PageMessage(body: body).bool("on") == true
@@ -127,6 +129,8 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
     /// Ordered out while another app is in front, keeping what it shows until Finder comes back (`restore`).
     private var suspended = false
     private var idle: DispatchWorkItem?
+    /// The writer's key panel holds the keyboard; the helper is told, so it passes the typing's keys.
+    private(set) var textSession = false
 
     override init() {
         panel = ViewerPanel(contentRect: NSRect(x: 0, y: 0, width: 900, height: 640),
@@ -196,6 +200,13 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
 
     private func helper() -> SpacebarHelperProtocol? {
         conn?.remoteObjectProxyWithErrorHandler { err in vlog.error("helper call failed: \(err.localizedDescription, privacy: .public)") } as? SpacebarHelperProtocol
+    }
+
+    func tellTextSession(_ held: Bool) {
+        textSession = held
+        helper()?.textSession(held) { ok in
+            if !ok { vlog.error("helper refused text session \(held)") }
+        }
     }
 
     // MARK: SpacebarViewerProtocol

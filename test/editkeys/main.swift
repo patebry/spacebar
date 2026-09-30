@@ -231,6 +231,22 @@ tv.findKeys = false
 tv.onFilterKey = nil
 tv.onEscape = {}
 
+// An edit, of a Markdown block or a whole text file: Space is typing, in Quick Look (no helper) as in the Space panel. keyDown
+// leaves it to the text system, which types it.
+tv.onEscape = { ends += 1 }
+ends = 0
+for plain in [false, true] {
+    tv.setPlain(plain)
+    set("", caret: 0)
+    key(" ", 49)
+    check("\(plain ? "plain" : "block"): keyDown ends nothing on Space", ends == 0)
+    set("", caret: 0)
+    type("a", 0); type(" ", 49); type("b", 11)
+    check("\(plain ? "plain" : "block"): a, Space, b types \"a b\"", tv.string == "a b" && ends == 0)
+}
+tv.setPlain(false)
+tv.onEscape = {}
+
 privateBoard.releaseGlobally()
 print("\n\(failures == 0 ? "all" : "\(failures) FAILED of") edit key checks")
 exit(failures == 0 ? 0 : 1)

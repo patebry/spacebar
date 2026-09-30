@@ -142,8 +142,16 @@ refused.
 - When another app comes forward the panel is suspended and Finder has its keys back at once. Finder coming back restores it
   only as a new request through the same gate, and a restore that fails the gate closes the panel.
 - Every key passes while Finder's focus is in a text field (a rename, the search field; any Accessibility error counts as a
-  text field) or another process has the keyboard. A Space passes while Apple's Quick Look is open, and Apple's Quick Look
-  opening closes spacebar's panel.
+  text field), while a key is meant for a process other than Finder or the viewer, and while the viewer reports a text
+  session. A Space passes while Apple's Quick Look is open, and Apple's Quick Look opening closes spacebar's panel.
+- *The text session.* An edit, the sidebar filter and the find field type into the viewer's writer's key panel. The window
+  server annotates those keys with the frontmost app's pid, Finder's, not the panel's, so the helper cannot tell them from
+  Finder's keys; the viewer says when such a session starts and ends (`textSession`), and meanwhile every key passes, Space,
+  Esc, the arrows and ⌘ shortcuts included. The session handles Esc itself. The claim is the viewer's word and is not checked,
+  but a viewer that lies can only make the helper pass keys to where macOS would send them anyway: it fails open to normal
+  macOS behaviour and can never make the helper take or read a key. Only the viewer's connection may send it
+  (`Link.permits`, `test/helperlink`), only while a panel is open or on its way, and it is cleared when the panel closes or
+  suspends, the viewer disconnects or reconnects, and when the helper restarts.
 
 **No key characters leave the helper.** The tap reads a key's code and modifier flags. It reads the character only for a
 key pressed with ⌘, to tell ⌘W, ⌘., ⌘O, ⌘F, ⌥⌘F, ⌘C and the zoom keys apart, and keeps it in that one event. What crosses to

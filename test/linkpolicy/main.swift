@@ -114,5 +114,47 @@ check("textOpener: with no editor chosen, text opens in its default app", txt !=
 check("textOpener: nothing for HTML, a folder or a missing file", LinkPolicy.textOpener(for: file("p.html"), editor: "com.apple.TextEdit") == nil
       && LinkPolicy.textOpener(for: dir, editor: "com.apple.TextEdit") == nil && LinkPolicy.textOpener(for: dir.appendingPathComponent("none.py"), editor: nil) == nil)
 
+// Open With: the type's default app first, then the others that claim the type; never an app Open's refusals would not allow.
+let bid = { (u: URL) in Bundle(url: u)?.bundleIdentifier ?? "" }
+let txtApps = LinkPolicy.openWithApps(for: file("with.txt"))
+print("  Open With for a .txt: \(txtApps.map(\.lastPathComponent).joined(separator: ", "))")
+check("openWith: a .txt lists its default app first, at most 12", !txtApps.isEmpty && txtApps.first == LinkPolicy.opener(for: file("with.txt"))?.app
+      && txtApps.count <= LinkPolicy.maxOpenWith)
+check("openWith: no app twice, no terminal or script runner, no spacebar", Set(txtApps.map(bid)).count == txtApps.count
+      && !txtApps.contains { LinkPolicy.notEditors.contains(bid($0)) || bid($0).lowercased().hasPrefix("md.spacebar") })
+check("openWith: every app is in an Applications folder or the system's", txtApps.allSatisfy { u in
+    ["/Applications/", "/System/", FileManager.default.homeDirectoryForCurrentUser.path + "/Applications/"].contains { u.resolvingSymlinksInPath().path.hasPrefix($0) } })
+check("openWith: a per-file Open With binding (Calculator) adds nothing", !LinkPolicy.openWithApps(for: note).contains { $0.lastPathComponent == "Calculator.app" }
+      && LinkPolicy.openWith(note, app: "com.apple.calculator") == nil)
+let browsers = Set(NSWorkspace.shared.urlsForApplications(toOpen: URL(string: "https://example.com")!).compactMap { bid($0) })
+for name in ["with.txt", "with.ini", "with.log", "with.png", "with.pdf", "with.docx", "with.csv"] {
+    let apps = LinkPolicy.openWithApps(for: file(name))
+    check("openWith: \(name): no web browser or office suite beyond the default", apps.dropFirst().allSatisfy { u in
+        !browsers.contains(bid(u)) && !LinkPolicy.notEditorPrefixes.contains { bid(u).lowercased().hasPrefix($0.lowercased()) } })
+}
+check("openWith: a text type offers only text editors beyond the default", txtApps.dropFirst().allSatisfy(LinkPolicy.isTextEditor))
+let csvApps = LinkPolicy.openWithApps(for: file("with.csv"))
+check("openWith: no office suite for a text type (a CSV)", csvApps.dropFirst().allSatisfy { u in !LinkPolicy.notEditorPrefixes.contains { bid(u).lowercased().hasPrefix($0.lowercased()) } })
+for name in ["run.sh", "tool.py", "run.command", "page.html", "pic.svg", "go.webloc", "x.terminal", "x.mobileconfig", "x.ics", "x.pkg", "x.dmg", "x.jar", "x.scpt", "noextension"] {
+    check("openWith: nothing for \(name)", LinkPolicy.openWithApps(for: file(name)).isEmpty && LinkPolicy.openWith(file(name), app: "com.apple.TextEdit") == nil)
+}
+check("openWith: nothing for an executable .txt, a folder, a missing file, an app, a .txt link to an app",
+      LinkPolicy.openWithApps(for: file("exec2.txt", mode: 0o755)).isEmpty && LinkPolicy.openWithApps(for: dir).isEmpty
+      && LinkPolicy.openWithApps(for: dir.appendingPathComponent("gone.txt")).isEmpty && LinkPolicy.openWithApps(for: app("/System/Applications/Calculator.app")).isEmpty
+      && LinkPolicy.openWithApps(for: link).isEmpty)
+if UTType(filenameExtension: "env")?.identifier == "md.spacebar.type.env" {
+    check("openWith: nothing for .env, .npmrc or the dotfile .env (secret-bearing types stay in the preview)",
+          LinkPolicy.openWithApps(for: file("b.env")).isEmpty && LinkPolicy.openWithApps(for: file("b.npmrc")).isEmpty && LinkPolicy.openWithApps(for: file(".env")).isEmpty)
+} else {
+    print("SKIP openWith .env: md.spacebar.type.env is not registered on this Mac")
+}
+check("openWith: an archive only where archives are allowed", LinkPolicy.openWithApps(for: file("b.zip")).isEmpty && !LinkPolicy.openWithApps(for: file("b.zip"), allowArchives: true).isEmpty)
+if let first = txtApps.first {
+    let o = LinkPolicy.openWith(file("with.txt"), app: bid(first))
+    check("openWith: a listed app opens the resolved file", o?.app == first && o?.file.path == file("with.txt").resolvingSymlinksInPath().path)
+}
+check("openWith: an app not listed is refused (Terminal, Script Editor, an unknown ID)", ["com.apple.Terminal", "com.apple.ScriptEditor2", "md.spacebar.none"].allSatisfy {
+    LinkPolicy.openWith(file("with.txt"), app: $0) == nil })
+
 try? FileManager.default.removeItem(at: dir)
 exit(failures == 0 ? 0 : 1)

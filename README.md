@@ -53,6 +53,16 @@ you move from file to file; its tooltip names the app, such as "Open in Visual S
 **Default App** chosen it opens in your default text editor, never in Terminal or an interpreter. Files that often hold
 secrets (`.env`, `.npmrc`) are shown but never offered to another app; a `.env` can be edited in place.
 
+The chevron beside Open (Unreleased, 0.4) lists the other apps that open the file, its default app first, at most 12. It offers
+what Open allows and no more: nothing for a script, an app or an executable; beyond the default app, never a terminal or
+script runner, a web browser, an office suite or an app outside the Applications folders, and for a text file only text
+editors.
+
+In the Space panel (Unreleased, 0.4), drag a file's row in the sidebar or the overview, or its kind in the toolbar, into
+Finder, Mail, a chat or an editor to hand it the file, as a drag from Finder would; Finder copies it. Quick Look's own window
+does not offer this. `.diff` and `.patch` files and Markdown `diff` fences are
+tinted line by line: added lines green, removed lines red, hunk headers dimmed.
+
 Text over 2 MB shows its first 2 MB; a CSV or TSV table reads up to 16 MB, and one over 2 MB is shown but not edited. WebM,
 Matroska, Ogg, Opus and AVI files, which macOS cannot play, get the info card and a note saying so. A link that loops or leads
 nowhere is listed greyed in the sidebar, and Space on one says it can't be opened. An archive lists its first 5,000 entries. Images over 50 MB, and PDFs, video and audio over 512 MB, get the info card.
@@ -388,7 +398,10 @@ disk, the external change wins.
   followed only when you click it, through the same policy as everywhere else.
 - An archive is listed, never extracted, by `/usr/bin/bsdtar` under a `sandbox-exec` profile that lets it read only the
   archive (through a descriptor the helper opened) and system files, with no writes and no network, for at most 5 seconds.
-  Only the viewer's Open button hands an archive to its default app; a link never does.
+  Only the viewer's Open button (or its Open With menu) hands an archive to an app; a link never does.
+- Open With lists apps by the file's type, never by the file, so a per-file binding saved on a downloaded file cannot add an
+  app; the writer lists them again when one is chosen and opens only an app it offers. Dragging out hands another app only a
+  file the sidebar lists, the overview offers or the panel shows, and only while you hold the mouse button.
 - The preview extension has a read-only sandbox exception for the whole disk, so relative images beside a document load and
   the sidebar can show the folder's files.
 - The Space helper, when you turn it on, has Accessibility and sees every key event, so it is kept small: it acts only on

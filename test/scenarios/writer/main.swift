@@ -75,6 +75,8 @@ final class StubWriter: NSObject, SpacebarWriterProtocol, NSXPCListenerDelegate 
     func reveal(_ url: URL, reply: @escaping (Bool) -> Void) { reply(false) }
     func spaceHelperPaused(reply: @escaping (Bool) -> Void) { reply(false) }
     func defaultApp(_ url: URL, reply: @escaping (String?) -> Void) { reply("Preview") }
+    func openWithApps(_ url: URL, reply: @escaping (Data?) -> Void) { reply(nil) }
+    func openWith(_ url: URL, appBundleID: String, reply: @escaping (Bool) -> Void) { reply(false) }
     func listArchive(_ path: String, reply: @escaping (Data?) -> Void) { DispatchQueue.global().async { reply(ArchiveListing.list(path)) } }
     func ensureSupportDir(reply: @escaping (Bool) -> Void) { reply(true) }
     func updateSettings(_ patch: Data, reply: @escaping (Bool) -> Void) { reply(false) }

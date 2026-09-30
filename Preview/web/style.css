@@ -440,6 +440,23 @@
   #toolbar > .tb-ic { width: 28px; padding: 0; display: inline-grid; place-items: center; }
   #toolbar > .tb-slot[hidden] { display: none; }
   #toolbar > #edit { min-width: 60px; box-sizing: border-box; }
+  /* Open With: a chevron beside Open, and a menu of apps under it drawn as a native one. */
+  #toolbar > #open-with { width: 18px; margin-left: -3px; }
+  :root[data-chrome=minimal] #open-with { display: none !important; }
+  @media (max-width: 479px) { #open-with { display: none !important; } }
+  #ow-pop { position: absolute !important; z-index: 2 !important; top: calc(100% + 6px); right: 0; min-width: 200px; max-width: 320px; padding: 5px;
+    display: grid; font: 13px/1.35 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--ui-fg); border-radius: 8px; background: var(--ui-pop);
+    -webkit-backdrop-filter: saturate(180%) blur(30px); backdrop-filter: saturate(180%) blur(30px);
+    box-shadow: 0 0 0 .5px var(--ui-edge), 0 8px 24px rgba(0, 0, 0, .2); -webkit-user-select: none; user-select: none; }
+  #ow-pop[hidden] { display: none; }
+  #ow-pop button { display: flex; align-items: center; gap: 6px; font: inherit; text-align: left; color: inherit; background: none; border: 0;
+    border-radius: 5px; padding: 3px 8px; cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #ow-pop button:hover, #ow-pop button:focus-visible { background: var(--ui-accent); color: #fff; outline: 0; }
+  #ow-pop img { width: 16px; height: 16px; flex: none; }
+  #ow-pop .ow-default { color: var(--ui-muted); }
+  #ow-pop button:hover .ow-default { color: inherit; }
+  #ow-pop .ow-sep { height: 1px; margin: 4px 6px; background: var(--ui-edge); }
+  #ow-pop .ow-none { padding: 3px 8px; color: var(--ui-muted); }
   #toolbar > button:focus-visible, #side-toggle:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 1px; }
   #toolbar > #raw[aria-pressed=true], #toolbar > #find-btn[aria-expanded=true] { background: color-mix(in srgb, var(--ui-bg) 70%, var(--ui-fg) 16%); }
   /* Copy: a button at the bottom right of the content, as on a code block, clear of the window's scrollbar. The icon is the

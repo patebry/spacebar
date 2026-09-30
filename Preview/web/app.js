@@ -31,6 +31,21 @@ const theme = window.sbTheme && typeof window.sbTheme.apply === 'function' ? win
 };
 theme.apply(settings);
 
+// Diffs and patches, for .diff and .patch files and ```diff fences: the bundled grammar misses a hunk header without counts
+// (@@ -1 +1 @@) and the section text after one, and tints a removed "-- comment" as a file header. Each line is one token.
+if (window.hljs) hljs.registerLanguage('diff', () => ({
+  name: 'Diff', aliases: ['patch'],
+  contains: [
+    { className: 'meta', begin: /^@@ /, end: /$/ },
+    { className: 'meta', begin: /^(?:\*{3} +\d+(?:,\d+)? +\*{4}|-{3} +\d+(?:,\d+)? +-{4})$/, end: /$/ },
+    { className: 'comment', begin: /^(?:diff |index |Index: |={3,}$|---$|(?:-{3}|\+{3}) (?:[ab]\/|\/dev\/null|\S+\t)|\*{3} \S|\*{15}$|new file mode|deleted file mode|old mode|new mode|similarity index|rename (?:from|to) |Binary files |\\ )/, end: /$/ },
+    // A bare "--- name" is a file header only with its "+++ name" on the next line: alone it is a removed "-- name".
+    { className: 'comment', begin: /^--- \S.*\n\+\+\+ /, end: /$/ },
+    { className: 'addition', begin: /^[+>!]/, end: /$/ },
+    { className: 'deletion', begin: /^[-<]/, end: /$/ },
+  ],
+}));
+
 function markdown(html) {
   const md = window.markdownit({
     html,
@@ -2650,6 +2665,8 @@ function syncOpen(p) {
   b.dataset.action = doc ? 'edit' : p.canOpen === true ? 'openFile' : 'reveal';
   b.textContent = b.dataset.action === 'reveal' ? 'Reveal' : 'Open';
   b.title = openTitle(p, b.dataset.action);
+  $('open-with').hidden = b.hidden || b.dataset.action === 'reveal';
+  if (owPop.dataset.path !== p.path) showOpenWith(false);
 }
 
 /** ⌘O opens the file only in the Space helper's panel; Quick Look never passes it on. */
@@ -3224,7 +3241,7 @@ if (HOST === 'panel') {
   const check = () => {
     const t = at && document.elementFromPoint(at[0], at[1]);
     drag(!!t && (at[1] < barH || t === $('side-head')) && !t.closest(controls)
-      && $('aa-pop').hidden && $('side-pop').hidden && !editing);
+      && $('aa-pop').hidden && $('side-pop').hidden && $('ow-pop').hidden && !editing);
   };
   document.addEventListener('mousemove', (e) => { at = [e.clientX, e.clientY]; check(); }, { passive: true });
   root.addEventListener('mouseleave', () => { at = null; check(); });
@@ -3980,5 +3997,90 @@ $('edit').addEventListener('click', (e) => {
   const a = $('edit').dataset.action;
   if ((a === 'openFile' || a === 'reveal') && e.isTrusted && current.path) post({ type: a, path: current.path });
 });
+
+// ---------- Open With: the apps the writer offers for the file on screen, asked for when the chevron is clicked ----------
+
+const owPop = $('ow-pop');
+function showOpenWith(open) {
+  owPop.hidden = !open;
+  $('open-with').setAttribute('aria-expanded', String(open));
+  if (!open) { owPop.replaceChildren(); delete owPop.dataset.path; }
+}
+$('open-with').addEventListener('click', (e) => {
+  if (!owPop.hidden) return showOpenWith(false);
+  if (!e.isTrusted || !current.path) return;
+  owPop.dataset.path = current.path;
+  post({ type: 'openWithList', path: current.path });
+});
+Object.assign(window.sb, {
+  /** The writer's answer: [{ id, name, icon }], the default app first; empty when nothing but spacebar may open the file. */
+  openWithApps(m) {
+    if (!m || m.path !== current.path || owPop.dataset.path !== m.path) return;
+    const apps = Array.isArray(m.apps) ? m.apps.filter((a) => a && typeof a.id === 'string' && typeof a.name === 'string') : [];
+    const item = (a, i) => {
+      const b = el('button', null);
+      Object.assign(b, { type: 'button', title: a.name });
+      b.setAttribute('role', 'menuitem');
+      b.dataset.app = a.id;
+      if (typeof a.icon === 'string' && a.icon.startsWith('data:image/png;base64,')) { const img = el('img'); img.src = a.icon; img.alt = ''; b.append(img); }
+      b.append(el('span', null, a.name));
+      if (a.default === '1') b.append(el('span', 'ow-default', '(default)'));
+      return b;
+    };
+    const rows = apps.map(item);
+    if (rows.length > 1 && apps[0].default === '1') rows.splice(1, 0, el('div', 'ow-sep'));
+    owPop.replaceChildren(...(rows.length ? rows : [el('div', 'ow-none', 'No other app may open this file')]));
+    showOpenWith(true);
+  },
+});
+owPop.addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-app]');
+  if (!b || !e.isTrusted) return;
+  const path = owPop.dataset.path;
+  showOpenWith(false);
+  if (path && path === current.path) post({ type: 'openWith', path, app: b.dataset.app });
+});
+// While the menu is open, a click anywhere else only closes it.
+document.addEventListener('click', (e) => {
+  if (owPop.hidden || e.target.closest('#ow-pop, #open-with')) return;
+  showOpenWith(false);
+  e.preventDefault();
+  e.stopPropagation();
+}, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !owPop.hidden) { showOpenWith(false); e.preventDefault(); } });
+
+// ---------- dragging a file out of the Space panel: the page names the row, and the viewer starts a native file drag ----------
+
+// Rows are links: WebKit would drag their "#" as a URL. In the panel a press that moves on a file row, an overview row or the
+// toolbar's kind asks the viewer to drag that file out; the viewer checks the file and that the button is still down.
+document.addEventListener('dragstart', (e) => { if (e.target.closest && e.target.closest('#side-list a.row, #doc .overview a.ov-row, #kind')) e.preventDefault(); });
+if (HOST === 'panel') {
+  let press = null, dragged = 0;
+  const source = (t) => {
+    const row = t.closest('#side-list a.row.file:not(.broken), #doc .overview a.ov-row');
+    if (row) return row.dataset.path;
+    return t.closest('#kind') && current.path && !['overview', 'loading'].includes(current.view) ? current.path : null;
+  };
+  document.addEventListener('pointerdown', (e) => {
+    const path = e.button === 0 && e.isTrusted && !editing && e.target.closest ? source(e.target) : null;
+    press = path ? { path, x: e.clientX, y: e.clientY } : null;
+  }, true);
+  document.addEventListener('pointermove', (e) => {
+    if (!press || !e.isTrusted) return;
+    if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < 4) return;
+    post({ type: 'dragOut', path: press.path });
+    press = null;
+    dragged = performance.now();
+  }, true);
+  document.addEventListener('pointerup', () => { press = null; }, true);
+  // The press a drag began with ends in no click: the mouse-up WebKit is handed when the drag is over must not open the row.
+  document.addEventListener('click', (e) => {
+    if (dragged && (!ended || performance.now() - ended < 1000)) { e.preventDefault(); e.stopPropagation(); }
+    dragged = 0;
+    ended = 0;
+  }, true);
+  let ended = 0;
+  window.sb.dragOutEnded = () => { press = null; ended = performance.now(); };
+}
 
 post({ type: 'ready' });

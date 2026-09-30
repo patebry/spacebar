@@ -107,8 +107,29 @@ final class PanelController: PreviewController {
     override func writerKeysChanged(_ held: Bool) { Viewer.shared.tellTextSession(held) }
 
     override func handle(_ type: String, _ body: [String: Any]) {
-        guard type == "dragZone" else { return super.handle(type, body) }
-        (view.window as? ViewerPanel)?.dragZone = PageMessage(body: body).bool("on") == true
+        switch type {
+        case "dragZone":
+            (view.window as? ViewerPanel)?.dragZone = PageMessage(body: body).bool("on") == true
+        case "dragOut":
+            // A file dragged out of the panel: only one the page may open (dragOutFile), from a press the user is still making.
+            guard let url = dragOutFile(body), let web = webView as? PreviewWebView else {
+                return vlog.error("refused dragOut: not a listed file")
+            }
+            if let why = web.beginFileDrag(url, source: self) { vlog.error("refused dragOut: \(why, privacy: .public)") }
+        default:
+            super.handle(type, body)
+        }
+    }
+}
+
+extension PanelController: NSDraggingSource {
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
+        context == .outsideApplication ? .copy : []
+    }
+
+    func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        (webView as? PreviewWebView)?.fileDragEnded()
+        js("sb.dragOutEnded", [:])
     }
 }
 

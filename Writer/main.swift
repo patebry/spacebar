@@ -105,6 +105,45 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         reply(FileManager.default.displayName(atPath: app.path).replacingOccurrences(of: ".app", with: ""))
     }
 
+    func openWithApps(_ url: URL, reply: @escaping (Data?) -> Void) {
+        guard url.isFileURL, LinkPolicy.fileRefusal(url, allowArchives: true) == nil else {
+            log.error("refused openWithApps \(url.path, privacy: .private)")
+            return reply(nil)
+        }
+        let lead = LinkPolicy.opener(for: url, allowArchives: true)?.app
+        let apps = LinkPolicy.openWithApps(for: url, allowArchives: true).compactMap { app -> [String: String]? in
+            guard let id = Bundle(url: app)?.bundleIdentifier else { return nil }
+            var entry = ["id": id, "name": FileManager.default.displayName(atPath: app.path).replacingOccurrences(of: ".app", with: "")]
+            if app == lead { entry["default"] = "1" }
+            if let icon = Self.iconURL(app) { entry["icon"] = icon }
+            return entry
+        }
+        reply(try? JSONSerialization.data(withJSONObject: apps))
+    }
+
+    /// The app's icon as a 32-pixel PNG data URL, for a 16-point menu row.
+    private static func iconURL(_ app: URL) -> String? {
+        let icon = NSWorkspace.shared.icon(forFile: app.path)
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 32, pixelsHigh: 32, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                         isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        icon.draw(in: NSRect(x: 0, y: 0, width: 32, height: 32))
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.representation(using: .png, properties: [:]).map { "data:image/png;base64," + $0.base64EncodedString() }
+    }
+
+    func openWith(_ url: URL, appBundleID: String, reply: @escaping (Bool) -> Void) {
+        guard url.isFileURL, LinkPolicy.fileRefusal(url, allowArchives: true) == nil, let o = LinkPolicy.openWith(url, app: appBundleID, allowArchives: true) else {
+            log.error("refused openWith \(url.path, privacy: .private) in \(appBundleID, privacy: .private)")
+            return reply(false)
+        }
+        NSWorkspace.shared.open([o.file], withApplicationAt: o.app, configuration: NSWorkspace.OpenConfiguration()) { _, err in
+            log.info("openWith \(o.file.path, privacy: .private) with \(o.app.lastPathComponent, privacy: .public) -> \(err == nil)")
+            reply(err == nil)
+        }
+    }
+
     /// Lists an archive with a sandboxed bsdtar (ArchiveListing): only an archive, by name and by the exact type LinkPolicy lets
     /// the viewer open, so the extension cannot point libarchive at anything else. One listing at a time; the reply comes
     /// within a fixed time even if bsdtar never ends.

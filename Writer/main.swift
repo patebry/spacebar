@@ -130,6 +130,33 @@ final class Writer: NSObject, SpacebarWriterProtocol {
     }
     private static let listQueue = DispatchQueue(label: "md.spacebar.list-archive", qos: .userInitiated)
 
+    /// One file of an archive, under listArchive's checks, streamed by ArchiveEntry into memory: the cap is the writer's own for
+    /// the entry's type, not the caller's. Shares listArchive's queue, so one bsdtar runs at a time.
+    func readArchiveEntry(_ path: String, entry: String, reply: @escaping (Data?, String?) -> Void) {
+        let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
+        guard path.hasPrefix("/"), ArchiveListing.extensions.contains(url.pathExtension.lowercased()),
+              LinkPolicy.fileRefusal(url, allowArchives: true) == nil, LinkPolicy.fileRefusal(url) != nil,
+              let cap = ArchiveEntryView.cap(for: entry), ArchiveEntry.pattern(entry) != nil else {
+            log.error("refused readArchiveEntry \(path, privacy: .private)")
+            return reply(nil, "unreadable")
+        }
+        let lock = NSLock()
+        var replied = false
+        let once = { (d: Data?, why: String?) in
+            lock.lock(); defer { lock.unlock() }
+            if !replied { replied = true; reply(d, why) }
+        }
+        Self.listQueue.async {
+            lock.lock(); let late = replied; lock.unlock()
+            guard !late else { return }
+            let outcome = ArchiveEntry.read(url.path, name: entry, cap: cap)
+            if case .data(let d) = outcome { return once(d, nil) }
+            log.info("readArchiveEntry: \(outcome.reason ?? "", privacy: .public)")
+            once(nil, outcome.reason)
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + ArchiveEntry.timeout + 4) { once(nil, "timedOut") }
+    }
+
     func ensureSupportDir(reply: @escaping (Bool) -> Void) {
         let err = SettingsFile.ensure()
         if let err { log.error("support folder: \(String(describing: err), privacy: .public)") }

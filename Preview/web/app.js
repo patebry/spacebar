@@ -311,7 +311,7 @@ function render(text, depth = 0) {
   });
   obsidian(frag, depth);
   labelTasks(frag);
-  if (!settings.taskToggles) frag.querySelectorAll('input[type=checkbox]').forEach((n) => { n.disabled = true; });
+  if (!settings.taskToggles || current.entry) frag.querySelectorAll('input[type=checkbox]').forEach((n) => { n.disabled = true; });
   if (settings.remoteImages !== true && current.remoteImagesOnce !== true) blockRemoteImages(frag);
   if (depth === 0) frag.querySelectorAll('img').forEach(watchImage);
   const head = fm && frontMatterNode(fm);
@@ -1171,7 +1171,25 @@ function renderBody(url) {
 window.sb = {
   async render(p) {
     const t0 = performance.now();
-    const samePath = p.path === current.path;
+    const seq = ++renderSeq;
+    if (p.entry && typeof p.src === 'string' && p.view === 'image') {
+      // The entry's image is served once: it is read into a blob here, which every redraw of this view then shows.
+      let url = null;
+      try {
+        const r = await fetch(p.src);
+        if (r.ok) url = URL.createObjectURL(await r.blob());
+      } catch (e) { url = null; }
+      if (seq !== renderSeq) { if (url) URL.revokeObjectURL(url); return; }
+      p = url ? { ...p, src: url } : { ...p, view: 'info', note: 'This image can’t be shown here.' };
+    }
+    if (entryBlob && entryBlob !== p.src) { URL.revokeObjectURL(entryBlob); entryBlob = null; }
+    if (p.entry && p.view === 'image') entryBlob = p.src;
+    // A file of the archive and the archive itself share a path; each is a document of its own.
+    const samePath = p.path === current.path && (p.entry ? p.entry.name : null) === (current.entry ? current.entry.name : null);
+    if (p.path !== current.path) {
+      arcFocus = false;
+      if (filterSession && filterSession.arc) endFilter();
+    }
     if (editing && samePath && (p.reason === 'edit' || p.reason === 'save' || p.reason === 'editEnd')) {
       requestAnimationFrame(() => post({ type: 'rendered', parseMs: 0, totalMs: performance.now() - t0, mermaid: 0, reason: p.reason, keyTime: p.keyTime }));
       return;
@@ -1188,7 +1206,7 @@ window.sb = {
     editing = null;
     retired = null;
     docVer = p.ver ?? docVer;
-    const y = samePath ? window.scrollY : 0;
+    const y = samePath ? window.scrollY : p.reason === 'back' && p.path === current.path ? arcScroll : 0;
     if (!samePath && clearHint()) $('status').textContent = stickyStatus;
     // A re-render of the same file (a change on disk) keeps the app its Open button names; only a new file asks again.
     if (samePath && p.app === undefined && typeof current.app === 'string') p = { ...p, app: current.app };
@@ -1521,8 +1539,19 @@ function viewerAction(b, e) {
   if ((a === 'openFile' || a === 'reveal') && e.isTrusted) post({ type: a, path: current.path });
   else if (a === 'csvSort') csvSortBy(+b.dataset.col);
   else if (a === 'jsonToggle' || a === 'jsonAll' || a === 'jsonMore') jsonAction(a, b);
+  else if (a === 'archiveEntry') {
+    const row = b.closest('tr');
+    openEntry(b.dataset.entry, row && row.dataset.key);
+    if (e && e.isTrusted && row) beginArcKeys(e, row.getBoundingClientRect());
+  } else if (a === 'archiveBack') { if (e && e.isTrusted) archiveBack(); }
   else if (a === 'archiveDir' && archiveOpen) {
     const path = b.dataset.path;
+    const row = b.closest('tr');
+    if (row && e) {
+      arcSel = row.dataset.key;
+      arcSelPath = current.path;
+      if (e.isTrusted) beginArcKeys(e, row.getBoundingClientRect());
+    }
     if (!archiveOpen.delete(path)) archiveOpen.add(path);
     const y = window.scrollY;
     draw();
@@ -1536,6 +1565,16 @@ function viewerAction(b, e) {
 function viewHead(p, ...extra) {
   const head = el('div', 'viewer-head');
   extra = extra.filter(Boolean);
+  if (p.entry) {
+    // A file inside an archive is not a file of its own: nothing opens or reveals it, and Back returns to the listing.
+    const back = el('button', 'viewer-back', `‹ ${plainName(p.entry.archive || '')}`);
+    back.type = 'button';
+    back.dataset.action = 'archiveBack';
+    back.title = 'Back to the archive';
+    head.classList.add('entry-head');
+    head.append(back, ...extra);
+    return head;
+  }
   if (!extra.length) head.classList.add('bare');
   head.append(...extra, openButton(p));
   return head;
@@ -2191,8 +2230,8 @@ function infoCard(p, why) {
   }
   card.append(dl);
   if (why) card.append(note(why));
-  // Minimal chrome's Open; the toolbar row has its own.
-  card.append(openButton(p));
+  // Minimal chrome's Open; the toolbar row has its own. A file inside an archive has Back instead.
+  card.append(p.entry ? viewHead(p) : openButton(p));
   return card;
 }
 
@@ -2399,6 +2438,8 @@ function archiveTree(entries) {
         node.kids.set(part, k);
       }
       if (!last || e.isDir === true) k.dir = true;
+      // The name exactly as listed: the one the extension reads the file by (a name listed twice: its first).
+      if (last && e.isDir !== true && k.entry === undefined) k.entry = e.name;
       if (last) {
         if (typeof e.size === 'number' && isFinite(e.size)) k.size = e.size;
         if (typeof e.modified === 'number' && isFinite(e.modified)) k.modified = e.modified;
@@ -2434,6 +2475,124 @@ function archiveInitialOpen(tree, count) {
   return open;
 }
 
+// ---------- a file inside the archive, shown in place: the extension reads it through the writer's sandboxed bsdtar ----------
+
+/** The row selected in the archive on screen (a tree path) and which archive it is of; kept while one of its files is shown. */
+let arcSel = null;
+let arcSelPath = null;
+/** Whether the archive's rows, not the sidebar's, take the list keys: after a click in the listing or on one of its files. */
+let arcFocus = false;
+/** Where the listing was scrolled when a file of it opened, for Back. */
+let arcScroll = 0;
+/** The object URL of the entry image on screen, made from its one read; let go by the next render. */
+let entryBlob = null;
+let renderSeq = 0;
+
+const ARC_ICONS = [[/\.(md|markdown|mdown|mkd|mkdn)$/i, 'markdown'], [/\.(png|jpe?g|gif|webp|bmp|ico|heic|heif|avif|tiff?|svg)$/i, 'image'],
+  [/\.(json|geojson|csv|tsv|ipynb)$/i, 'data'], [/\.(zip|tar|gz|tgz|bz2|tbz2?|xz|txz|7z|rar|zst|tzst)$/i, 'archive'],
+  [/\.(txt|text|log|rst|adoc|org)$/i, 'text'], [/\.(js|mjs|ts|tsx|jsx|py|rb|go|rs|swift|sh|c|h|m|cpp|java|kt|cs|css|scss|html?|xml|ya?ml|toml|ini|sql|php|lua)$/i, 'code'],
+  [/\.pdf$/i, 'pdf']];
+const arcIcon = (name) => (ARC_ICONS.find(([re]) => re.test(name)) || [null, 'other'])[1];
+
+/** The rows of the archive on screen, top to bottom, as drawn. */
+const arcRows = () => [...document.querySelectorAll('#doc .viewer-archive tbody tr')];
+
+/** Every file of the archive last listed, in the listing's order whatever is folded: ↑ and ↓ over a file move through these. */
+let arcFiles = [];
+function arcFileOrder(tree) {
+  const out = [], stack = [...archiveKids(tree.top)].reverse();
+  while (stack.length) {
+    const k = stack.pop();
+    if (!k.dir && typeof k.entry === 'string') out.push({ key: k.path, entry: k.entry });
+    if (k.dir) stack.push(...[...archiveKids(k)].reverse());
+  }
+  return out;
+}
+
+function openEntry(entry, key) {
+  if (!current.path || typeof entry !== 'string') return;
+  if (current.view === 'archive') arcScroll = window.scrollY;
+  arcSel = key;
+  arcSelPath = current.path;
+  arcFocus = true;
+  document.querySelectorAll('#doc .arc-sel').forEach((r) => r.classList.remove('arc-sel'));
+  post({ type: 'archiveEntry', path: current.path, entry });
+}
+
+function archiveBack() {
+  if (!current.entry) return;
+  arcFocus = true;
+  post({ type: 'archiveBack', path: current.path });
+}
+
+/** The list keys over the archive: in its listing ↑ ↓ Home End move the selection, → and ← open and fold a folder (← from a
+ *  file goes to its folder), ↵ opens the file or folds the folder; over one of its files ↑ and ↓ show the file before or after it
+ *  and ← or ↵ go back to the listing. False when the key is not the archive's. */
+function arcKey(key) {
+  if (!arcFocus || editing || !pop.hidden) return false;
+  if (current.entry) {
+    const i = arcFiles.findIndex((f) => f.key === arcSel);
+    const to = { up: i - 1, down: i + 1, home: 0, end: arcFiles.length - 1 }[key];
+    if (to !== undefined) {
+      const f = arcFiles[Math.max(0, Math.min(arcFiles.length - 1, to))];
+      if (f && f.key !== arcSel) openEntry(f.entry, f.key);
+      return true;
+    }
+    if (key === 'left' || key === 'return') { archiveBack(); return true; }
+    return false;
+  }
+  if (current.view !== 'archive' || !Array.isArray(current.entries)) return false;
+  const rows = arcRows();
+  if (!rows.length) return false;
+  let i = rows.findIndex((r) => r.dataset.key === arcSel);
+  const row = rows[i];
+  const select = (r) => {
+    if (!r) return;
+    arcSel = r.dataset.key;
+    arcSelPath = current.path;
+    rows.forEach((x) => x.classList.toggle('arc-sel', x === r));
+    r.scrollIntoView({ block: 'nearest' });
+  };
+  const dir = row && row.querySelector('.arc-dir');
+  const toggle = (open) => {
+    if (!dir || archiveOpen.has(dir.dataset.path) === open) return false;
+    viewerAction(dir, null);
+    return true;
+  };
+  switch (key) {
+    case 'down': select(rows[i < 0 ? 0 : Math.min(rows.length - 1, i + 1)]); return true;
+    case 'up': select(rows[i < 0 ? rows.length - 1 : Math.max(0, i - 1)]); return true;
+    case 'home': select(rows[0]); return true;
+    case 'end': select(rows[rows.length - 1]); return true;
+    case 'right': if (!toggle(true) && dir) select(rows[i + 1]); return true;
+    case 'left': {
+      if (toggle(false)) return true;
+      const up = arcSel && arcSel.includes('/') ? arcSel.slice(0, arcSel.lastIndexOf('/')) : null;
+      if (up) select(rows.find((r) => r.dataset.key === up));
+      return true;
+    }
+    case 'return': {
+      if (!row) return true;
+      const f = row.querySelector('.arc-entry');
+      if (f) openEntry(f.dataset.entry, row.dataset.key);
+      else toggle(!archiveOpen.has(dir.dataset.path));
+      return true;
+    }
+    default: return false;
+  }
+}
+
+/** A click in the listing asks the writer's key panel for a list session that the archive's rows take. */
+function beginArcKeys(e, r) {
+  arcFocus = true;
+  if (filterSession && filterSession.arc) return;
+  if (filterSession && !filterSession.list) return;
+  if (editing || updateBusy) return;
+  endFilter();
+  filterSession = { seq: ++filterSeq, list: true, arc: true };
+  post({ type: 'filterBegin', list: true, seq: filterSession.seq, clickX: e.clientX - r.left, clickY: e.clientY - r.top, width: r.width, height: r.height });
+}
+
 function archiveView(p) {
   const box = el('div', 'viewer viewer-archive');
   setKind(p, [fmtSize(p.size)]);
@@ -2448,6 +2607,7 @@ function archiveView(p) {
     return box;
   }
   const tree = archiveTree(p.entries);
+  arcFiles = arcFileOrder(tree);
   // Folders kept open from an earlier listing of this archive count only while one of them is still in it.
   const dirs = new Set(archiveNodes(tree.top).filter((k) => k.dir).map((k) => k.path));
   if (archiveOpen && archiveOpen.size && ![...archiveOpen].some((d) => dirs.has(d))) archiveOpen = null;
@@ -2467,6 +2627,8 @@ function archiveView(p) {
   while (stack.length) {
     const [k, depth] = stack.pop();
     const tr = tb.appendChild(el('tr', k.dir ? 'arc-folder' : 'arc-file'));
+    tr.dataset.key = k.path;
+    if (arcSel === k.path && arcSelPath === p.path) tr.classList.add('arc-sel');
     const td = tr.appendChild(el('td', 'arc-name'));
     td.style.paddingLeft = `${8 + depth * 16}px`;
     const open = k.dir && archiveOpen.has(k.path);
@@ -2477,6 +2639,14 @@ function archiveView(p) {
       b.dataset.path = k.path;
       b.setAttribute('aria-expanded', String(open));
       b.append(el('span', 'arc-chevron', open ? '▾' : '▸'), icon('folder'), el('span', 'arc-label', plainName(k.name)));
+      td.append(b);
+    } else if (typeof k.entry === 'string') {
+      // A file opens in place, read by the extension from the archive; nothing is extracted.
+      const b = el('button', 'arc-entry');
+      b.type = 'button';
+      b.dataset.action = 'archiveEntry';
+      b.dataset.entry = k.entry;
+      b.append(el('span', 'arc-chevron', ''), icon(arcIcon(k.name)), el('span', 'arc-label', plainName(k.name)));
       td.append(b);
     } else {
       td.append(el('span', 'arc-chevron', ''), icon('other'), el('span', 'arc-label', plainName(k.name)));
@@ -2645,7 +2815,7 @@ function overviewView(p) {
 function syncOpen(p) {
   const b = $('edit');
   const doc = isMarkdown(p);
-  b.hidden = !doc && (p.view === 'overview' || p.view === 'loading' || !p.path);
+  b.hidden = !!p.entry || (!doc && (p.view === 'overview' || p.view === 'loading' || !p.path));
   b.dataset.kind = doc ? 'doc' : 'file';
   b.dataset.action = doc ? 'edit' : p.canOpen === true ? 'openFile' : 'reveal';
   b.textContent = b.dataset.action === 'reveal' ? 'Reveal' : 'Open';
@@ -2917,6 +3087,16 @@ function renderSidebar() {
 /** The file on screen, as a path from the root: the panel's title stays the file Quick Look opened. */
 function showCrumbs(p) {
   const c = $('crumbs');
+  if (p.entry && typeof p.entry.path === 'string') {
+    // archive.zip › folder/file.md: the archive's name goes back to its listing.
+    const back = el('button', 'crumb crumb-back', `‹ ${plainName(p.entry.archive || '')}`);
+    back.type = 'button';
+    back.title = 'Back to the archive';
+    c.replaceChildren(back, el('span', 'crumb-sep', '›'), el('span', 'crumb here', plainName(p.entry.path)));
+    c.title = `${p.path} › ${p.entry.path}`;
+    c.hidden = false;
+    return;
+  }
   const r = typeof p.root === 'string' ? p.root : '';
   const atRoot = !!r && p.path === r;
   if (!r || typeof p.path !== 'string' || (!atRoot && !p.path.startsWith(r === '/' ? '/' : r + '/'))) { c.hidden = true; c.replaceChildren(); return; }
@@ -3094,6 +3274,8 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (inFilter ? !['ArrowUp', 'ArrowDown', 'Enter'].includes(e.key) : e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable]')) return;
+  const arc = !inFilter && { ArrowUp: 'up', ArrowDown: 'down', Home: 'home', End: 'end', ArrowLeft: 'left', ArrowRight: 'right', Enter: 'return' }[e.key];
+  if (arc && arcKey(arc)) { e.preventDefault(); return; }
   if (sideKey(e.key, inFilter, e.repeat)) e.preventDefault();
 });
 
@@ -3105,6 +3287,7 @@ const FILTER_KEYS = { up: 'ArrowUp', down: 'ArrowDown', home: 'Home', end: 'End'
 const LIST_COMMANDS = new Set(['find', 'filter', 'copy']);
 
 function beginFilter(e) {
+  arcFocus = false;
   if (filterSession && (filterSession.list || filterSession.find)) endFilter();
   if (filterSession || editing || !tree.root) return;
   if (updateBusy) { window.sb.status('Updating…'); return; }
@@ -3119,6 +3302,7 @@ function beginFilter(e) {
 // tree. Esc, Space (Quick Look's key: the next Space closes the preview), a click outside the sidebar or anything that ends a
 // filter ends it. A filter session already holding the keys keeps them.
 function beginListKeys(e, r) {
+  arcFocus = false;
   if (filterSession && !filterSession.list) return;
   if (editing || !tree.root || updateBusy || !sidebarShown()) return;
   endFilter();
@@ -3170,6 +3354,7 @@ Object.assign(window.sb, {
     if (!ofFilter(m)) return;
     if (filterSession.find) { if (m.key === 'next' || m.key === 'prev') findStep(m.key === 'next' ? 1 : -1); return; }
     if (filterSession.list && LIST_COMMANDS.has(m.key)) { hostCommand(m.key); return; }
+    if (filterSession.arc) { arcKey(m.key); return; }
     if (!Object.hasOwn(FILTER_KEYS, m.key) || (!filterSession.list && (m.key === 'left' || m.key === 'right'))) return;
     sideKey(FILTER_KEYS[m.key], !filterSession.list, m.repeat === true);
   },
@@ -3186,7 +3371,12 @@ Object.assign(window.sb, {
     if (find && m.reason === 'escape') closeFind();
   },
 });
-document.addEventListener('click', (e) => { if (filterSession && !e.target.closest(filterSession.find ? '#find' : '#sidebar')) endFilter(); }, true);
+document.addEventListener('click', (e) => {
+  if (!filterSession) return;
+  // The archive's own session stays through clicks in the listing, on a file of it and on Back.
+  const inside = filterSession.find ? '#find' : filterSession.arc ? '#doc, #crumbs' : '#sidebar';
+  if (!e.target.closest(inside)) endFilter();
+}, true);
 
 // The Space helper's panel is never key either: the helper takes Finder's keys and the panel sends them here. The list keys
 // reach the sidebar through filterKey while a list session holds them (it starts on its own, as in Quick Look); these are the
@@ -3901,6 +4091,7 @@ document.addEventListener('click', (e) => {
   const row = e.target.closest('#side-list a.row');
   if (row) {
     e.preventDefault();
+    arcFocus = false;
     cursor = row.dataset.path;
     keyed.clear();
     markCursor();
@@ -3915,6 +4106,7 @@ document.addEventListener('click', (e) => {
     if (e.isTrusted) beginListKeys(e, at);
     return;
   }
+  if (e.target.closest('#crumbs .crumb-back')) { e.preventDefault(); if (e.isTrusted) archiveBack(); return; }
   if (e.target.closest('#sidebar, #crumbs')) return;
   const act = e.target.closest('#doc .viewer [data-action]');
   if (act) { e.preventDefault(); if (editing && editing.whole) stopEditing(); viewerAction(act, e); return; }
@@ -3933,7 +4125,7 @@ document.addEventListener('click', (e) => {
   const text = e.target.closest('#doc pre.code[data-file-text]');
   if (text && settings.inlineEditing && current.editable === true && !isMarkdown(current)) { beginTextEdit(text, e, tClick); return; }
   const block = e.target.closest('#doc > [data-src]');
-  if (block && settings.inlineEditing) beginEdit(block, e, tClick);
+  if (block && settings.inlineEditing && !current.entry) beginEdit(block, e, tClick);
   else if (editing) stopEditing();
 });
 
@@ -3947,7 +4139,7 @@ function stopEditing() {
 
 document.addEventListener('change', (e) => {
   const box = e.target;
-  if (!box.matches('input[type=checkbox][data-line]') || !settings.taskToggles) return;
+  if (!box.matches('input[type=checkbox][data-line]') || !settings.taskToggles || current.entry) return;
   if (updateBusy) { box.checked = !box.checked; window.sb.status('Updating…'); return; }
   // Keep the page's copy in step: a push of the saved text is skipped while a block is being edited.
   let line = +box.dataset.line;

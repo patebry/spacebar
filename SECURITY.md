@@ -55,6 +55,28 @@ Nine features reach further than a rendered page, and are in scope:
   `/Volumes`, so no writes, no network and no reads of the user's files. The archive is passed as a descriptor the helper
   opened after checking its name and type; output is capped at 2 MB and 5,000 entries, names at 4 KB and 64 folders deep,
   and the run at 5 seconds. Nothing is extracted. Only the viewer's Open button may hand an archive to its default app.
+  A file inside the archive is previewed by streaming that one member, never extracting it: the same helper runs
+  `bsdtar -x -O -q -n -f - -- <name>` under the same profile, on a fresh descriptor after the same checks, and keeps its
+  standard output in memory. The name is attacker-controlled: it must be one the listing gave (the extension checks it
+  against the listing on screen), it goes to bsdtar as a single argv element after `--` with no shell, a name starting with
+  `-` is refused, and `\`, `*`, `?`, `[`, `]` and a leading `^` are escaped so bsdtar's pattern matches that name alone
+  (libarchive still takes a leading `./` and doubled slashes as nothing, so such a name may read its twin from the same
+  archive); `-n` keeps a name from matching a folder's contents, `-q` stops at the first match, and `-O` means a `../` or
+  absolute name reaches no path. The writer trusts the extension's choice of archive, as it does for listing: it reads by
+  path, under the same checks, a member of any archive the extension names, which the extension, with its read-only access
+  to the disk, could read the bytes of itself. The extension asks for one entry at a time; a key held down reads only the
+  last file asked for.
+  The helper sets the cap, not the caller: 2 MB for text, code, Markdown, JSON and CSV, 20 MB for PNG, JPEG, GIF, WebP,
+  BMP, ICO, HEIC, HEIF, AVIF and TIFF, and nothing is read for any other type, or for an archive inside the archive. The cap
+  is counted while streaming and bsdtar is stopped one byte past it; output past 1,024 times the archive's size (at least
+  64 KB), more than DEFLATE can expand, stops it as a bomb; the run is stopped after 5 seconds. Text reaches the page as
+  any text does (inline, or once from `spacebar://body/`); an image is served once from `spacebar://entry/<random token>`,
+  typed by extension, while its archive is on screen, and the page keeps it as a blob; the extension first checks its
+  declared size against the 80-megapixel bound, before WebKit decodes it. HEIC, HEIF, AVIF and TIFF are decoded by ImageIO
+  in the sandboxed extension under the image bounds above. The view is read-only (no edit, task toggle, Open or Reveal of
+  the entry), and ⌘C copies only its text. A Markdown entry reaches no file on disk: relative links and images resolve to
+  `spacebar://entry/`, which serves nothing else, the `file` host serves nothing while an entry is on screen, and a link
+  to a file is refused.
 - **Apple's previews in the panel.** Office, iWork, font, 3D, certificate, calendar and other files macOS previews are shown
   by Apple's own Quick Look in a `QLPreviewView`, and Apple's generators run in Quick Look's daemons, not in spacebar. The sandboxed extensions can reach
   those daemons only through `com.apple.security.temporary-exception.mach-lookup.global-name` for `com.apple.quicklook` and

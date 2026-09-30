@@ -311,6 +311,14 @@
   #doc .viewer-archive td.arc-name > .ic { margin: 0 6px 0 0; vertical-align: -3px; }
   #doc .viewer-archive .arc-chevron { display: inline-block; width: 12px; color: var(--muted); }
   #doc .viewer-archive td.arc-name > .arc-chevron { margin-right: 6px; }
+  #doc .viewer-archive button.arc-entry { all: unset; display: inline-flex; align-items: center; gap: 6px; cursor: default; border-radius: 4px; }
+  #doc .viewer-archive button.arc-entry:hover .arc-label { text-decoration: underline; text-underline-offset: 2px; }
+  #doc .viewer-archive button.arc-entry:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #doc .viewer-archive tr.arc-sel td { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  #doc .viewer-head.entry-head { justify-content: flex-start; }
+  #crumbs button.crumb-back { all: unset; cursor: default; color: var(--fg); border-radius: 4px; padding: 0 2px; }
+  #crumbs button.crumb-back:hover { background: color-mix(in srgb, var(--fg) 7%, transparent); }
+  #crumbs button.crumb-back:focus-visible { outline: 2px solid var(--accent); }
   #doc .viewer-loading { display: grid; justify-items: center; gap: 10px; padding: 96px 0 24px; font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--muted); }
   #doc .viewer-loading .viewer-note { margin: 0; }
   #doc .viewer-loading .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--muted) 25%, transparent);

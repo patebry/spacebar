@@ -38,7 +38,7 @@ Space on in Finder:
 | Video (`.mp4`, `.m4v`, `.mov`, `.3gp`, `.mpg`, `.mpeg`, `.m2v`) | played by AVKit in the panel, paused on its first frame until you press play |
 | Audio (`.mp3`, `.m4a`, `.m4b`, `.aac`, `.wav`, `.aif`, `.aiff`, `.flac`, `.caf`, `.amr`) | the same player, under the file's artwork or icon |
 | Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.xml`, `.yaml`, `.toml`, `.sql`, `.plist`, `Makefile` and more) | highlighted source with line numbers, edited in place with a click; a binary property list is shown as XML (not editable). XML and property lists are indented, and a minified stylesheet is laid out a declaration to a line, with Raw for the file as is, where a click edits it. A language with no bundled grammar (`Dockerfile`, `.ps1`, `.bat`, Dart, Scala, Elixir, Haskell, Zig and others) is plain text with line numbers |
-| Archives (`.zip`, `.tar`, `.tgz`, `.tar.gz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz`, `.7z`, `.rar`, `.zst`, `.tzst`) | its files and folders as a tree, with sizes and dates, listed without extracting anything; Open with its default app |
+| Archives (`.zip`, `.tar`, `.tgz`, `.tar.gz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz`, `.7z`, `.rar`, `.zst`, `.tzst`) | its files and folders as a tree, with sizes and dates, listed without extracting anything; a click (or ↑ ↓ and Return) opens a text, code, Markdown, JSON, CSV or image file inside it in place, read-only, still without extracting it (0.4); Open with its default app |
 | JSON (and `.jsonc`, `.json5`, comments and trailing commas allowed) | a tree, with Expand All and Collapse All; a Jupyter notebook as its cells. Raw shows the file as is, and a click edits it, with a quiet warning while it is not valid JSON |
 | CSV and TSV | a table, first row as the header, up to 50,000 rows and 200 columns; Raw shows its text, and a click edits it |
 | Text (`.txt`, `.log`, `.conf`, `.env`, `LICENSE`, `.env.example`, `.strings`, `.pbxproj` and any other file macOS declares as text) | as is, with line numbers; text of a kind spacebar edits (not `.strings` or `.pbxproj`) is edited in place with a click. Text need not be UTF-8: a byte order mark (UTF-8, UTF-16, UTF-32), UTF-16 without one, and legacy encodings (Windows-1252, Latin-1, Shift JIS, GB 18030, EUC-KR, Big5, Windows-1251 and others) are detected, and the kind line names the encoding |
@@ -388,6 +388,8 @@ disk, the external change wins.
   followed only when you click it, through the same policy as everywhere else.
 - An archive is listed, never extracted, by `/usr/bin/bsdtar` under a `sandbox-exec` profile that lets it read only the
   archive (through a descriptor the helper opened) and system files, with no writes and no network, for at most 5 seconds.
+  A file opened inside it (0.4) is streamed by the same sandboxed bsdtar into memory, never to disk, with its name passed
+  as a single argument that can be neither an option nor a wildcard, and bounded in size, time and compression ratio.
   Only the viewer's Open button hands an archive to its default app; a link never does.
 - The preview extension has a read-only sandbox exception for the whole disk, so relative images beside a document load and
   the sidebar can show the folder's files.

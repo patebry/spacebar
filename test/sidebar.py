@@ -164,7 +164,7 @@ def sandboxed(tree, check, runtime=False):
     open(plist, 'w').write(f'<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>{SANDBOX_ID}</string></dict></plist>')
     subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-O', '-target', 'arm64-apple-macos13.0'] +
                    [os.path.join(ROOT, *p) for p in (('test', 'web', 'main.swift'), ('Shared', 'Settings.swift'), ('Shared', 'WebShell.swift'),
-                                                      ('Shared', 'FolderListing.swift'), ('Shared', 'FolderScan.swift'), ('Shared', 'LinkPolicy.swift'), ('Preview', 'PDFPane.swift'),
+                                                      ('Shared', 'FolderListing.swift'), ('Shared', 'ArchiveListing.swift'), ('Shared', 'FolderScan.swift'), ('Shared', 'LinkPolicy.swift'), ('Preview', 'PDFPane.swift'),
                                                       ('Preview', 'Gestures.swift'), ('test', 'nsevents.swift'))] +
                    ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist', '-Xlinker', plist, '-o', exe], check=True)
     subprocess.run(['codesign', '--force', '--sign', '-', '-i', SANDBOX_ID] + (['--options', 'runtime'] if runtime else []) + ['--entitlements', ent, exe],
@@ -1791,6 +1791,163 @@ def panel_host(check):
         shutil.rmtree(page.out, ignore_errors=True)
 
 
+def archive_entries(page, check, out):
+    """A file inside an archive, opened in place: the harness reads it as the extension does (ArchiveEntry: the writer's
+    sandboxed bsdtar streaming one member to memory) and renders ArchiveEntryView's payload. Text, Markdown and an image open,
+    read only; a binary and a nested archive get their info card; Back returns to the listing; names are hostile."""
+    import zipfile
+    d = os.path.join(out, 'arcs')
+    os.makedirs(d)
+    zpath = os.path.join(d, 'docs.zip')
+    beside = os.path.join(d, 'beside.png')
+    open(beside, 'wb').write(make_png(12, 12))
+    chunk = lambda t, b: struct.pack('>I', len(b)) + t + b + struct.pack('>I', zlib.crc32(t + b) & 0xffffffff)
+    huge = b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 100000, 100000, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(b'\0' * 64)) + chunk(b'IEND', b'')
+    with zipfile.ZipFile(zpath, 'w') as z:
+        z.writestr('docs/readme.md', '# Inside\n\nA paragraph.\n\n- [ ] a task\n\n![rel](pic.png) [next](notes.txt) ![abs](spacebar://file' + beside + ')\n')
+        z.writestr('img/huge.png', huge)
+        z.writestr('docs/notes.txt', 'line one\nline two\n')
+        z.writestr('docs/data.json', '{"k": [1, 2]}')
+        z.writestr('img/pic.png', make_png(30, 20, (10, 200, 60)))
+        z.writestr('bin/tool.bin', b'\0\1\2\3' * 100)
+        z.writestr('nested.zip', b'PK\5\6' + b'\0' * 18)
+        z.writestr('<img src=x onerror="window.__pwned=1">.txt', 'hostile name\n')
+        z.writestr('*.txt', 'only the star\n')
+        z.writestr('-rf.txt', 'dash\n')
+    msgs = lambda r, t: [m for m in r['messages'] if m.get('type') == t]
+    S = """const d = document.getElementById('doc'), c = document.getElementById('crumbs');
+      return { view: document.documentElement.dataset.view, crumbs: c.hidden ? null : c.textContent, back: !!d.querySelector('.viewer-back'),
+        code: (d.querySelector('pre.code') || {}).textContent || null, h1: (d.querySelector('h1') || {}).textContent || null,
+        note: (d.querySelector('.viewer-note') || {}).textContent || null, edit: document.getElementById('edit').hidden,
+        copy: !document.getElementById('copy').hidden, img: (d.querySelector('.img-stage img') || {}).src || null,
+        w: (d.querySelector('.img-stage img') || {}).naturalWidth || 0, sel: (d.querySelector('tr.arc-sel .arc-label') || {}).textContent || null,
+        rows: [...d.querySelectorAll('tbody tr')].map((r) => r.querySelector('.arc-label').textContent),
+        entries: [...d.querySelectorAll('.arc-entry')].length, base: document.getElementById('base').href,
+        boxes: [...d.querySelectorAll('input[type=checkbox]')].map((b) => b.disabled) };"""
+    st = lambda: page.js(S)
+
+    def entry(name, wait=0.6):
+        r = page.cmd("@eval:(() => { const b = [...document.querySelectorAll('#doc .arc-entry')].find((x) => x.dataset.entry === "
+                     + json.dumps(name) + "); if (b) b.click(); return !!b; })()")
+        w = page.cmd('@wait:' + str(wait))
+        return {'found': r['result'], 'messages': r['messages'] + w['messages']}
+
+    def back():
+        r = page.cmd('@nativeclick:#doc .viewer-back')
+        page.cmd('@wait:0.4')
+        return r
+
+    page.cmd('@root:' + d)
+    page.render(zpath)
+    page.cmd('@wait:0.4')
+    a = st()
+    check(a['view'] == 'archive' and a['entries'] == 10 and 'notes.txt' in a['rows'] and not page.js('return window.__pwned || null'),
+          'archive entry: every file of a real listing is a button that opens it, names only ever text', json.dumps(a))
+
+    r = entry('docs/notes.txt')
+    e = st()
+    check(msgs(r, 'archiveEntry') and e['view'] == 'text' and e['code'] and 'line one' in e['code'] and e['crumbs'] == '‹ docs.zip›docs/notes.txt'
+          and e['back'] and e['edit'] and e['copy'], 'archive entry: a text file opens read-only, "docs.zip › docs/notes.txt", with Back and Copy, no Open',
+          json.dumps([e, [m for m in r['messages'] if m['type'] != 'log']]))
+    r = page.cmd('@nativeclick:#copy')
+    cp = msgs(r, '_copied')
+    check(len(cp) == 1 and cp[0].get('text') == 'line one\nline two\n', 'archive entry: Copy copies the text of the file inside the archive',
+          json.dumps([m for m in r['messages'] if m['type'] != 'log']))
+    ed = page.cmd("@eval:(() => { const p = document.querySelector('#doc pre.code'); p.dispatchEvent(new MouseEvent('click', { bubbles: true })); return 0; })()")
+    check(not msgs(ed, 'editText') and not page.js("return !!document.querySelector('#doc .text-editing')"), 'archive entry: a click on its text starts no edit')
+
+    back()
+    b = st()
+    check(b['view'] == 'archive' and b['sel'] == 'notes.txt' and b['crumbs'] != None and '›' not in (b['crumbs'] or '')[:2],
+          'archive entry: Back returns to the listing, the file it came from selected', json.dumps(b))
+
+    entry('docs/readme.md')
+    m = st()
+    absimg = page.js("const i = [...document.querySelectorAll('#doc img')].find((x) => x.alt === 'abs'); return i ? i.naturalWidth : -1")
+    probe = "window.__probe = new Image(); window.__probe.src = " + json.dumps('spacebar://file' + beside) + "; 0"
+    page.cmd('@eval:' + probe)
+    page.cmd('@wait:0.3')
+    blocked = page.js('return window.__probe.naturalWidth')
+    check(m['view'] == 'markdown' and m['h1'] == 'Inside' and m['base'] == 'spacebar://entry/' and m['boxes'] == [True] and m['edit'] and absimg in (0, -1) and blocked == 0,
+          'archive entry: Markdown renders, its links and images reach no file on disk, its task box is inert', json.dumps([m, absimg, blocked]))
+    r = page.cmd("@eval:(() => { const p = [...document.querySelectorAll('#doc p')].find((x) => x.textContent === 'A paragraph.'); p.click(); return 0; })()")
+    page.cmd('@wait:0.2')
+    check(not msgs(r, 'editBlock') and not page.js("return !!document.querySelector('#doc > .md-editing')"), 'archive entry: a click on its Markdown starts no edit')
+    r = page.cmd("@eval:(() => { const a = [...document.querySelectorAll('#doc a')].find((x) => x.textContent === 'next'); a.click(); return 0; })()")
+    lk = msgs(r, 'link')
+    check(not lk or lk[0]['href'].startswith('spacebar://entry/'), 'archive entry: a relative link points inside the entry host, never at a file beside the archive',
+          json.dumps(lk))
+    crumb = page.cmd("@eval:(() => { document.querySelector('#crumbs .crumb-back').click(); return 0; })()")
+    page.cmd('@wait:0.3')
+    fake = st()['view']
+    real = page.cmd('@nativeclick:#crumbs .crumb-back')
+    page.cmd('@wait:0.4')
+    check(fake == 'markdown' and not msgs(crumb, 'archiveBack') and msgs(real, 'archiveBack') and st()['view'] == 'archive',
+          'archive entry: the "docs.zip" crumb goes back, on a real click only', json.dumps([fake, st()['view']]))
+    page.cmd('@eval:' + probe)
+    page.cmd('@wait:0.3')
+    check(page.js('return window.__probe.naturalWidth') == 12, 'archive entry: back at the listing, the file host serves images again')
+
+    page.render(zpath)
+    page.cmd('@wait:0.4')
+    r = entry('img/pic.png', wait=1.0)
+    i = st()
+    again = page.js("""const x = new XMLHttpRequest(); try { x.open('GET', 'spacebar://entry/x', false); x.send(); return x.status; } catch (e) { return 'refused'; }""")
+    check(i['view'] == 'image' and (i['img'] or '').startswith('blob:') and i['w'] == 30 and again == 'refused',
+          'archive entry: an image loads once from its one-time URL, into a blob; any other entry URL is refused', json.dumps([i, again]))
+    page.cmd("@apply:" + json.dumps({'theme': 'github'}))
+    page.cmd('@wait:0.3')
+    check(st()['w'] == 30, 'archive entry: a redraw keeps the image (the blob, not a second read)', json.dumps(st()['img']))
+
+    page.render(zpath)
+    page.cmd('@wait:0.4')
+    entry('img/huge.png')
+    hg = st()
+    check(hg['view'] == 'info' and 'can’t be shown' in (hg['note'] or ''), 'archive entry: a PNG declaring 10 gigapixels is refused before WebKit decodes it', json.dumps(hg))
+    back()
+    entry('bin/tool.bin')
+    t = st()
+    check(t['view'] == 'info' and 'Only text' in (t['note'] or '') and t['back'] and t['edit'], 'archive entry: a binary is its info card, with Back', json.dumps(t))
+    back()
+    entry('nested.zip')
+    n = st()
+    check(n['view'] == 'info' and 'inside an archive' in (n['note'] or ''), 'archive entry: an archive inside is not opened', json.dumps(n))
+    back()
+    entry('*.txt')
+    star = st()
+    check(star['view'] == 'text' and star['code'] and star['code'].startswith('only the star'), 'archive entry: a file named * reads itself, not every file', json.dumps(star))
+    back()
+    entry('-rf.txt')
+    dash = st()
+    check(dash['view'] == 'info' and 'couldn’t be read' in (dash['note'] or ''), 'archive entry: a name that is an option is never passed to bsdtar', json.dumps(dash))
+    back()
+    entry('<img src=x onerror="window.__pwned=1">.txt')
+    h = st()
+    check(h['view'] == 'text' and 'hostile name' in (h['code'] or '') and not page.js('return window.__pwned || null'), 'archive entry: a hostile name opens as text',
+          json.dumps(h))
+    back()
+    r = page.cmd("@eval:window.webkit.messageHandlers.sb.postMessage({ type: 'archiveEntry', path: " + json.dumps(page.js('return current.path')) + ", entry: '../../etc/passwd' }); 0")
+    page.cmd('@wait:0.2')
+    check(msgs(r, '_entryRefused'), 'archive entry: a name the listing did not give is refused', json.dumps(r['messages']))
+
+    # The keys: ↓ over a file shows the next file of the listing, ← goes back.
+    entry('docs/data.json')
+    k = dispatch_key(page, 'ArrowDown')
+    page.cmd('@wait:0.4')
+    nxt = st()
+    dispatch_key(page, 'ArrowLeft')
+    page.cmd('@wait:0.4')
+    lst = st()
+    dispatch_key(page, 'ArrowDown')
+    after = st()
+    check(nxt['crumbs'] == '‹ docs.zip›docs/notes.txt' and lst['view'] == 'archive' and lst['sel'] == 'notes.txt' and after['sel'] == 'readme.md',
+          'archive entry: ↓ shows the next file, ← goes back to the listing, ↓ there moves the selection', json.dumps([nxt['crumbs'], lst['sel'], after['sel']]))
+    k = dispatch_key(page, 'Enter')
+    page.cmd('@wait:0.4')
+    check(st()['view'] == 'markdown', 'archive entry: ↵ opens the selected file', json.dumps(st()['view']))
+    page.cmd('@root:')
+
+
 def missing_images(page, check, out):
     """Images that did not load: a placeholder with the alt text, the path as written and why (the extension's ImageCheck); its
     Reveal folder only for a real click on the page's own button; a remote image blocked or failing; a missing image that
@@ -2910,6 +3067,7 @@ def main():
         tools(page, check, page.out)
         steady_chrome(page, check, page.out)
         missing_images(page, check, page.out)
+        archive_entries(page, check, page.out)
 
         csp = [l for l in page.logs if 'csp blocked' in l]
         errs = [l for l in page.logs if l.startswith(('rejection', 'mermaid')) or ' @' in l]

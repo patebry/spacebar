@@ -2,6 +2,19 @@
 
 Each release's notes on GitHub also list its commits. This file keeps what changed for someone using spacebar.
 
+## Unreleased (0.4)
+
+### Files inside archives
+
+- **Open a file inside an archive without extracting it.** In a zip, tar, tgz, 7z or any archive spacebar lists, click a
+  file, or select it with the arrow keys and press Return: text, code, Markdown, JSON, CSV and images (PNG, JPEG, GIF,
+  WebP, and HEIC, AVIF and TIFF drawn natively) show in place, read-only. The breadcrumb reads `archive.zip › folder/file.md`;
+  Back, the archive's name in it, or ← returns to the listing, and ↑ and ↓ move to the file before or after. Other files,
+  and archives inside the archive, show their info card with size and path. Copy copies a text file's text.
+- Nothing is written to disk: the writer streams the one file out of bsdtar, sandboxed as the listing is, into memory, at
+  most 2 MB of text or 20 MB of an image, within 5 seconds, and stops an archive that expands more than 1,024 times its
+  size.
+
 ## 0.3.0 (unreleased)
 
 Waits for the Developer ID: the first release with the Space helper is notarized.

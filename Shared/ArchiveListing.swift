@@ -267,3 +267,147 @@ enum ArchiveListing {
         return (try? JSONSerialization.data(withJSONObject: ["entries": list, "truncated": truncated] as [String: Any])) ?? Data("{\"entries\":[]}".utf8)
     }
 }
+
+/// One file of an archive, read for the preview without extracting it: `bsdtar -xOqnf - -- <pattern>` under ArchiveListing's
+/// sandbox (no writes, no network, no reads of the user's files), the archive on stdin from the descriptor the writer opened,
+/// the file's bytes on stdout into memory. Nothing touches the disk.
+///
+/// The name comes from the archive, so it is hostile: it goes to bsdtar as one argv element after `--`, never through a shell;
+/// a name starting with `-` is refused outright; and since bsdtar takes a member name as a pattern, `\`, `*`, `?`, `[` and `]`
+/// are escaped, and a leading `^` (an anchor to libarchive), so the pattern matches only that name. libarchive still reads a
+/// leading `./` and repeated slashes as nothing, so `a` also matches `./a`: the first of those, from the same archive. `-n` stops a name from matching everything under a folder of that name,
+/// and `-q` stops at the first match, so a name listed twice yields one file, not both run together. `-O` writes to stdout
+/// only: a `../` or absolute name reaches no path.
+///
+/// Bounds: the entry's own cap (ArchiveEntryView.cap), counted while streaming, and bsdtar is stopped as soon as it is passed;
+/// a compression-ratio bound, `maxRatio` times the archive's size (at least `ratioFloor`), which DEFLATE cannot exceed, so an
+/// archive producing more is a bomb (bzip2 and xz can, but not for a file worth previewing); and `timeout`, then SIGKILL.
+enum ArchiveEntry {
+    enum Outcome: Equatable {
+        case data(Data)
+        /// Not asked for: not an archive by name, or a name that is not a plain member name.
+        case refused
+        case notFound
+        case tooLarge
+        case bomb
+        case timedOut
+        case failed
+
+        /// What the writer replies with in place of the bytes (ArchiveEntryView.notes' keys).
+        var reason: String? {
+            switch self {
+            case .data: return nil
+            case .tooLarge: return "tooLarge"
+            case .bomb: return "bomb"
+            case .timedOut: return "timedOut"
+            case .refused, .notFound, .failed: return "unreadable"
+            }
+        }
+    }
+
+    static let maxRatio = 1024
+    static let ratioFloor = 64 << 10
+    static let timeout: TimeInterval = 5
+
+    /// `name` as a bsdtar pattern that matches only itself, or nil when it may not be asked for: empty, a folder (a trailing
+    /// slash), longer than ArchiveListing.maxNameBytes, holding a NUL, or starting with `-` (an option however it is passed).
+    static func pattern(_ name: String) -> String? {
+        guard !name.isEmpty, !name.hasPrefix("-"), !name.hasSuffix("/"), name.utf8.count <= ArchiveListing.maxNameBytes,
+              !name.utf8.contains(0) else { return nil }
+        var out = String.UnicodeScalarView()
+        for u in name.unicodeScalars {
+            if u == "\\" || u == "*" || u == "?" || u == "[" || u == "]" || (u == "^" && out.isEmpty) { out.append("\\") }
+            out.append(u)
+        }
+        return String(out)
+    }
+
+    /// sandbox-exec's arguments for one entry: the lister's profile, bsdtar, and the pattern alone after `--`.
+    static func arguments(pattern: String) -> [String] {
+        ["-p", ArchiveListing.profile, ArchiveListing.tool, "-x", "-O", "-q", "-n", "-f", "-", "--", pattern]
+    }
+
+    /// How many bytes an archive of `archiveBytes` may produce before it counts as a bomb.
+    static func ratioLimit(archiveBytes: Int64) -> Int {
+        let (m, over) = Int(clamping: archiveBytes).multipliedReportingOverflow(by: maxRatio)
+        return over ? Int.max : max(ratioFloor, m)
+    }
+
+    /// Reads `name` from the archive at `path`, at most `cap` bytes. Blocks for up to `timeout` and a second; call it off the
+    /// main thread.
+    static func read(_ path: String, name: String, cap: Int) -> Outcome {
+        guard ArchiveListing.extensions.contains((path as NSString).pathExtension.lowercased()), let pattern = pattern(name) else { return .refused }
+        // As the listing: O_NONBLOCK so a FIFO swapped in cannot hang the open; fstat checks what was opened; an iCloud
+        // placeholder is not downloaded.
+        let fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { return .failed }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG, st.st_flags & 0x4000_0000 == 0 else { return .failed }
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK)
+        let ratio = ratioLimit(archiveBytes: Int64(st.st_size))
+        let limit = min(cap, ratio)
+        guard let r = stream(ArchiveListing.sandboxExec, arguments(pattern: pattern), input: handle, limit: limit, timeout: timeout) else { return .timedOut }
+        if r.over { return cap <= ratio ? .tooLarge : .bomb }
+        if r.timedOut { return .timedOut }
+        if r.status != 0 { return r.data.isEmpty ? .notFound : .failed }
+        return .data(r.data)
+    }
+
+    struct Stream { var data: Data; var status: Int32; var over: Bool; var timedOut: Bool }
+
+    /// Runs `executable` with `args` (argv only, no shell, stderr dropped, the system's PATH and a UTF-8 locale) on `input`,
+    /// keeping at most `limit` bytes of stdout: one byte more and it is stopped (`over`). SIGTERM after `timeout`, SIGKILL a
+    /// second later; nil when it had not ended a second after that.
+    static func stream(_ executable: String, _ args: [String], input: FileHandle, limit: Int, timeout: TimeInterval) -> Stream? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: executable)
+        p.arguments = args
+        p.environment = ["PATH": "/usr/bin:/bin", "LC_ALL": "en_US.UTF-8"]
+        p.currentDirectoryURL = URL(fileURLWithPath: "/")
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        p.standardInput = input
+        let exited = DispatchSemaphore(value: 0)
+        p.terminationHandler = { _ in exited.signal() }
+        do { try p.run() } catch { return nil }
+        let pid = p.processIdentifier
+        let lock = NSLock()
+        var timedOut = false
+        let term = DispatchWorkItem {
+            guard p.isRunning else { return }
+            lock.lock(); timedOut = true; lock.unlock()
+            p.terminate()
+        }
+        let kill9 = DispatchWorkItem { if p.isRunning { kill(pid, SIGKILL) } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: term)
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout + 1, execute: kill9)
+        defer { term.cancel(); kill9.cancel() }
+        var data = Data()
+        var over = false
+        let finished = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            let reader = out.fileHandleForReading
+            while true {
+                let chunk = reader.availableData
+                if chunk.isEmpty { break }
+                lock.lock()
+                if data.count + chunk.count > limit {
+                    data.append(chunk.prefix(limit - data.count))
+                    over = true
+                    lock.unlock()
+                    if p.isRunning { p.terminate() }
+                    break
+                }
+                data.append(chunk)
+                lock.unlock()
+            }
+            exited.wait()
+            finished.signal()
+        }
+        guard finished.wait(timeout: .now() + timeout + 2) == .success else { return nil }
+        lock.lock(); defer { lock.unlock() }
+        return Stream(data: data, status: p.terminationReason == .uncaughtSignal ? -1 : p.terminationStatus, over: over, timedOut: timedOut && !over)
+    }
+}

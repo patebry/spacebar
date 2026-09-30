@@ -11,6 +11,8 @@ import WebKit
 ///   spacebar://user/themes/<f>.css a user theme; only a plain file name inside themes/
 ///   spacebar://body/<token>        the text of the render in flight, too large to send as a script (PageBody): once, as
 ///                                  plain text, and only while its file is the one on screen. Nothing is read from disk
+///   spacebar://entry/<token>       the image of the archive entry on screen (ArchiveEntryView), as the writer read it: once,
+///                                  typed by FileTypes' map (raster images only), while its archive is the one on screen
 /// The app's live preview uses it with `fileHost: false`.
 final class SchemeHandler: NSObject, WKURLSchemeHandler {
     let webRoot: URL
@@ -42,6 +44,10 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
     var body: PageBody?
     /// Whether `path` is still the file on screen: a body for any other file is dropped unserved.
     var bodyCurrent: (String) -> Bool = { _ in false }
+    /// The one archive entry image the `entry` host may serve, set when that entry is shown and cleared by any other render.
+    var entryImage: EntryImage?
+    /// While a file inside an archive is on screen the `file` host serves nothing: its Markdown reaches no file on disk.
+    var filesBlocked = false
 
     init(webRoot: URL, supportDir: @escaping () -> URL = { SettingsFile.supportDir }, fileHost: Bool = true) {
         self.webRoot = webRoot.standardizedFileURL
@@ -66,7 +72,7 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
         case "bundle":
             let f = webRoot.appendingPathComponent(url.path).standardizedFileURL
             return f.path.hasPrefix(webRoot.path + "/") ? f : nil
-        case "file" where fileHost:
+        case "file" where fileHost && !filesBlocked:
             // Only what a viewer loads: an image (inside the root, or beside a Markdown document anywhere). A PDF is drawn
             // natively, never loaded by the page. The checked path, symlinks resolved, is what is read.
             let f = URL(fileURLWithPath: url.path).standardizedFileURL
@@ -110,6 +116,7 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
         guard let url = task.request.url else { return }
         if url.host == "body" { return serveBody(task, url: url) }
+        if url.host == "entry" { return serveEntry(task, url: url) }
         guard let fileURL = resolve(url) else {
             onRefused("refused load \(url.absoluteString)")
             return task.didFailWithError(URLError(.noPermissionsToReadFile))
@@ -178,6 +185,23 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
         task.didFinish()
     }
 
+    /// The pending entry image, under the body's rules: its exact URL, once, while its archive is on screen, and only a type
+    /// ArchiveEntryView sends to `<img>`.
+    private func serveEntry(_ task: WKURLSchemeTask, url: URL) {
+        guard let e = entryImage, url.absoluteString == e.url, bodyCurrent(e.path),
+              ArchiveEntryView.webImages.contains((e.name as NSString).pathExtension.lowercased()) else {
+            onRefused("refused load \(url.absoluteString)")
+            return task.didFailWithError(URLError(.noPermissionsToReadFile))
+        }
+        entryImage = nil
+        let headers = ["Content-Type": FileTypes.contentType(forPath: e.name), "Content-Length": String(e.data.count), "Cache-Control": "no-store",
+                       "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'",
+                       "Access-Control-Allow-Origin": PageBody.origin]
+        task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!)
+        task.didReceive(e.data)
+        task.didFinish()
+    }
+
     private func fail(_ task: WKURLSchemeTask, _ file: URL, _ error: Error) {
         onRefused("read failed \(file.path): \(error.localizedDescription)")
         task.didFailWithError(error)
@@ -207,6 +231,21 @@ struct PageBody {
         payload["text"] = nil
         payload["textURL"] = body.url
         return body
+    }
+}
+
+/// An image inside an archive, sent to the page as a one-time URL: `path` is the archive, `name` the entry.
+struct EntryImage {
+    let url: String
+    let path: String
+    let name: String
+    let data: Data
+
+    init(path: String, name: String, data: Data) {
+        url = "spacebar://entry/" + UUID().uuidString
+        self.path = path
+        self.name = name
+        self.data = data
     }
 }
 

@@ -522,6 +522,12 @@ enum FileView {
         case .code, .json, .csv, .text, .other, .app:
             // O_NONBLOCK and fstat: a file swapped for a FIFO since the stat can neither hang the open nor be read.
             let fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+            // No read permission: no app of the user's can read it either. (A sandbox's refusal is EPERM, and the writer may still open it.)
+            if fd < 0, regular, errno == EACCES {
+                p["note"] = "This file couldn’t be read."
+                p["canOpen"] = false
+                break
+            }
             guard regular, size > 0 || kind != .other, fd >= 0 else { if fd >= 0 { close(fd) }; break }
             var fst = stat()
             guard fstat(fd, &fst) == 0, fst.st_mode & S_IFMT == S_IFREG else { close(fd); break }

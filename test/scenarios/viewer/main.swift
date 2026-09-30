@@ -1,0 +1,756 @@
+// Day-in-the-life scenarios, driven through the Space helper's viewer as the helper drives it over XPC (show, key, close):
+// the real Viewer, PreviewController, page and native panes, with the panel parked off screen. No key events, no mouse
+// events, no window on screen. Build and run with test/scenarios/run.sh.
+//   scenarios <out dir> [<video dir>]      <out dir>: what test/scenarios/corpus_real.py wrote
+//   FLOWS=1,2,...   the flows to run (default all)
+//   SCEN_TIMING=0   latency targets are printed, not graded (CI)
+//   SCEN_STRICT=1   a KNOWN bug fails the run
+//   SCEN_DEBUG=1    print every script evaluated and every render
+import AppKit
+import AVFoundation
+import AVKit
+import PDFKit
+import Quartz
+import UniformTypeIdentifiers
+import WebKit
+
+let out = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath()
+let videoDir = CommandLine.arguments.count > 2 && !CommandLine.arguments[2].isEmpty
+    ? URL(fileURLWithPath: CommandLine.arguments[2]).resolvingSymlinksInPath() : nil
+let env = ProcessInfo.processInfo.environment
+let flows = Set((env["FLOWS"] ?? "1,2,3,4,5,6,7,8").split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) })
+let timing = env["SCEN_TIMING"] != "0"
+let strict = env["SCEN_STRICT"] == "1"
+let corpus = out.appendingPathComponent("corpus")
+let repo = out.appendingPathComponent("repo")
+let manifest = (try? JSONSerialization.jsonObject(with: Data(contentsOf: out.appendingPathComponent("manifest.json")))) as? [String: Any] ?? [:]
+
+func now() -> UInt64 { DispatchTime.now().uptimeNanoseconds }
+func ms(_ a: UInt64, _ b: UInt64) -> Double { Double(b &- a) / 1e6 }
+
+// ---- a watchdog: a main thread stuck for 30 s is a hang, reported with the step it was in ----
+let beatLock = NSLock()
+var beat = Date()
+var step = "start"
+func mark(_ s: String) { beatLock.lock(); step = s; beat = Date(); beatLock.unlock() }
+Thread.detachNewThread {
+    while true {
+        sleep(1)
+        beatLock.lock()
+        let stuck = Date().timeIntervalSince(beat), s = step
+        beatLock.unlock()
+        if stuck > 30 { print("FAIL the viewer's main thread hung for 30 s during: \(s)"); fflush(stdout); exit(1) }
+    }
+}
+func turn(_ until: Date) {
+    beatLock.lock(); beat = Date(); beatLock.unlock()
+    autoreleasepool { _ = RunLoop.main.run(mode: .default, before: until) }
+}
+func spin(_ s: Double) { let end = Date().addingTimeInterval(s); while Date() < end { turn(min(end, Date().addingTimeInterval(0.02))) } }
+func spin(until: Double, _ done: () -> Bool) { let end = Date().addingTimeInterval(until); while !done() && Date() < end { turn(Date().addingTimeInterval(0.002)) } }
+
+// ---- results ----
+var failures = 0, knownBugs: [String] = []
+func check(_ name: String, _ ok: Bool, _ detail: @autoclosure () -> String = "") {
+    if !ok { failures += 1 }
+    print("\(ok ? "PASS" : "FAIL") \(name)\(ok ? "" : ": \(detail())")")
+    fflush(stdout)
+}
+/// A check that fails today for a known, reported bug: printed, graded only with SCEN_STRICT=1.
+func known(_ bug: String, _ name: String, _ ok: Bool, _ detail: @autoclosure () -> String = "") {
+    if ok { print("PASS \(name) (\(bug) no longer reproduces)"); return }
+    knownBugs.append(bug)
+    if strict { failures += 1 }
+    print("\(strict ? "FAIL" : "KNOWN") \(bug) \(name): \(detail())")
+    fflush(stdout)
+}
+func target(_ name: String, _ ok: Bool, _ detail: @autoclosure () -> String = "") { timing ? check(name, ok, detail()) : print("INFO \(name)\(ok ? "" : ": \(detail())")") }
+func info(_ s: String) { print("  \(s)"); fflush(stdout) }
+func pct(_ xs: [Double], _ p: Double) -> Double {
+    let s = xs.sorted()
+    return s.isEmpty ? .nan : s[min(s.count - 1, Int((Double(s.count - 1) * p).rounded()))]
+}
+
+// ---- the viewer, as the viewer app starts it, parked off screen ----
+WebHost.pageHost = "panel"
+_ = NSApplication.shared
+NSApp.setActivationPolicy(.accessory)
+Viewer.parkedFrame = NSRect(x: -20000, y: -20000, width: 1100, height: 760)
+let viewer = Viewer.shared
+
+/// Stands between the page and WebHost on the "sb" handler: every message the page posts, and each render with its path and view.
+final class Recorder: NSObject, WKScriptMessageHandler {
+    var messages: [[String: Any]] = []
+    var renders: [(path: String, view: String, at: UInt64)] = []
+    var readies = 0
+    func userContentController(_ ucc: WKUserContentController, didReceive m: WKScriptMessage) {
+        WebHost.shared.userContentController(ucc, didReceive: m)
+        guard let b = m.body as? [String: Any] else { return }
+        messages.append(b)
+        if b["type"] as? String == "ready" { readies += 1 }
+        guard b["type"] as? String == "rendered" else { return }
+        let at = now()
+        m.webView?.evaluateJavaScript("[current.path, current.view || 'markdown']") { r, _ in
+            guard let pv = r as? [String], pv.count == 2 else { return }
+            self.renders.append((pv[0], pv[1], at))
+        }
+    }
+}
+let rec = Recorder()
+let web = WebHost.shared.web
+spin(until: 15) { WebHost.shared.ready }
+guard WebHost.shared.ready else { print("FAIL the page never became ready"); exit(1) }
+web.evaluateJavaScript("sb.warm && sb.warm(); 0")
+web.configuration.userContentController.removeScriptMessageHandler(forName: "sb")
+web.configuration.userContentController.add(rec, name: "sb")
+let errorHook = """
+  if (!window.__errs) { window.__errs = [];
+    addEventListener('error', (e) => window.__errs.push(String(e.message) + ' @' + (e.filename || '').split('/').pop() + ':' + e.lineno + (e.error && e.error.stack ? ' ' + e.error.stack.split('\\n').slice(0, 3).join(' < ') : '')));
+    addEventListener('unhandledrejection', (e) => window.__errs.push('rejection: ' + e.reason)); } 0
+  """
+web.evaluateJavaScript(errorHook)
+
+func js(_ src: String, timeout: Double = 10) -> Any? {
+    var out: Any?, done = false
+    web.evaluateJavaScript(src) { r, e in out = r ?? e.map { "ERR \($0)" }; done = true }
+    spin(until: timeout) { done }
+    if env["SCEN_DEBUG"] != nil, !src.contains("__errs") {
+        var n: Any?, d2 = false
+        web.evaluateJavaScript("(window.__errs || []).length") { r, _ in n = r; d2 = true }
+        spin(until: 2) { d2 }
+        print("    js[\(n ?? "?")] \(src.prefix(90).replacingOccurrences(of: "\n", with: " "))")
+    }
+    return done ? out : "TIMEOUT"
+}
+func jsJSON(_ body: String) -> [String: Any] {
+    guard let s = js("JSON.stringify((() => { \(body) })())") as? String, let d = s.data(using: .utf8),
+          let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return [:] }
+    return o
+}
+
+/// What the page shows: the file, its view, the document's text (its start), notes, the status line and the sidebar.
+struct PageState {
+    let raw: [String: Any]
+    var path: String { raw["path"] as? String ?? "" }
+    var view: String { raw["view"] as? String ?? "" }
+    var text: String { raw["text"] as? String ?? "" }
+    var kindName: String { raw["kindName"] as? String ?? "" }
+    var head: String { raw["head"] as? String ?? "" }
+    var notes: [String] { raw["notes"] as? [String] ?? [] }
+    var status: String { raw["status"] as? String ?? "" }
+    var rows: [String] { raw["rows"] as? [String] ?? [] }
+    var fileRows: [String] { raw["fileRows"] as? [String] ?? [] }
+    var active: String { raw["active"] as? String ?? "" }
+    var more: String { raw["more"] as? String ?? "" }
+    var errs: [String] { raw["errs"] as? [String] ?? [] }
+    var pwned: String? { raw["pwned"] as? String }
+    var blank: Bool { raw["blank"] as? Bool ?? false }
+}
+func page() -> PageState {
+    PageState(raw: jsJSON("""
+      const d = document.getElementById('doc'), q = (s) => [...d.querySelectorAll(s)];
+      const kind = d.querySelector('.viewer-kind, .viewer-head');
+      return { path: current.path || '', view: current.path ? (current.view || 'markdown') : '', kindName: current.kindName || '', encoding: current.encoding || '',
+        truncated: current.truncated === true, text: d.textContent.slice(0, 40000), head: kind ? kind.textContent : '',
+        notes: q('.viewer-note').map((n) => n.textContent), status: document.getElementById('status').textContent,
+        rows: [...document.querySelectorAll('#side-list a.row')].map((a) => a.dataset.path),
+        fileRows: [...document.querySelectorAll('#side-list a.row.file')].map((a) => a.dataset.path),
+        active: (document.querySelector('#side-list a.active') || { dataset: {} }).dataset.path || '',
+        more: document.getElementById('side-more').hidden ? '' : document.getElementById('side-more').textContent,
+        pwned: window.__pwned === undefined || window.__pwned === null ? null : String(window.__pwned), errs: window.__errs || [],
+        blank: document.documentElement.dataset.blank !== undefined };
+      """))
+}
+
+// ---- the native views over the page ----
+func visible(_ v: NSView) -> Bool {
+    var x: NSView? = v
+    while let y = x { if y.isHidden || y.alphaValue == 0 { return false }; x = y.superview }
+    return v.window != nil && v.frame.width > 1 && v.frame.height > 1
+}
+struct Natives {
+    var pdf: PDFView?, player: AVPlayerView?, image: ImageScrollView?, text: NSTextView?, ql: QLPreviewView?, html: WKWebView?
+    /// The kinds of native view on screen, as the page's view names them.
+    var shown: Set<String> {
+        var s: Set<String> = []
+        if pdf != nil { s.insert("pdf") }
+        if player != nil { s.insert("media") }
+        if image != nil { s.insert("bitmap") }
+        if text != nil { s.insert("rtf") }
+        if ql != nil { s.insert("quicklook") }
+        if html != nil { s.insert("html") }
+        return s
+    }
+}
+func natives() -> Natives {
+    var n = Natives()
+    var stack = viewer.panel.contentView.map { [$0] } ?? []
+    while let v = stack.popLast() {
+        // Apple's preview draws with views of its own (a web view for Office files): they are the preview, not another pane.
+        if !(v is QLPreviewView) { stack += v.subviews }
+        guard visible(v) else { continue }
+        if let p = v as? PDFView, p.document != nil { n.pdf = p }
+        if let p = v as? AVPlayerView, p.player?.currentItem != nil { n.player = p }
+        if let s = v as? ImageScrollView, (s.documentView as? NSImageView)?.image != nil { n.image = s }
+        if let t = v as? NSTextView, !(t.enclosingScrollView is ImageScrollView), t.string.count > 0 { n.text = t }
+        if let q = v as? QLPreviewView { n.ql = q }
+        if let w = v as? WKWebView, w !== web { n.html = w }
+    }
+    return n
+}
+/// The native view a page view is drawn by, if any.
+func nativeFor(_ view: String) -> String? {
+    switch view {
+    case "pdf", "bitmap", "rtf", "quicklook", "html": return view
+    case "video", "audio": return "media"
+    default: return nil
+    }
+}
+
+// ---- Space, arrows and close, as the helper sends them ----
+var request = 0
+var lastMarker: String?
+
+/// The first render of `path` since render index `from` in a view other than "loading", with its time.
+func firstRender(_ path: String, from: Int) -> (view: String, at: UInt64)? {
+    rec.renders.dropFirst(from).first { $0.path == path && $0.view != "loading" }.map { ($0.view, $0.at) }
+}
+/// Waits for `path` to be shown: rendered, then its content up: the native view for a native one, an <img> decoded.
+func waitShown(_ path: String, from: Int, t0: UInt64, timeout: Double = 8) -> (view: String, rendered: Double?, painted: Double?) {
+    var r: (view: String, at: UInt64)?
+    spin(until: timeout) { r = firstRender(path, from: from); return r != nil }
+    guard let r else { return ("", nil, nil) }
+    let rendered = ms(t0, r.at)
+    var painted: Double?
+    if let want = nativeFor(r.view) {
+        spin(until: 5) { natives().shown.contains(want) || rec.renders.last?.view == "info" }
+        painted = natives().shown.contains(want) ? ms(t0, now()) : nil
+    } else if r.view == "image" {
+        var done = false
+        web.callAsyncJavaScript("const i = document.querySelector('#doc .img-stage img'); const frame = () => new Promise((r) => requestAnimationFrame(r)); for (let n = 0; i && !(i.complete && i.naturalWidth) && n < 600; n++) await frame(); await frame(); return 1;",
+                                arguments: [:], in: nil, in: .page) { _ in done = true }
+        spin(until: 10) { done }
+        painted = ms(t0, now())
+    } else {
+        painted = rendered
+    }
+    return (r.view, rendered, painted)
+}
+struct Shown { let view: String; let rendered: Double?; let painted: Double?; let page: PageState; let natives: Natives }
+/// One Space on `paths`, from a closed panel: shown and read back; `settle` more seconds for late changes (a media file that
+/// fails, a thumbnail). The caller closes.
+var closingErrors: [String] = []
+func space(_ paths: [URL], expect: URL? = nil, any: Bool = false, settle: Double = 0.3, timeout: Double = 8) -> Shown {
+    // Errors since the last read (a close, a hide) are kept apart; each show starts with none.
+    if let e = js("(() => { const e = window.__errs || []; window.__errs = []; return e; })()") as? [String] { closingErrors += e }
+    request += 1
+    let id = request, from = rec.renders.count, t0 = now()
+    mark("show \(paths.map(\.lastPathComponent).joined(separator: ", "))")
+    DispatchQueue.global(qos: .userInteractive).async { viewer.show(paths.map(\.path), requestID: id) { _ in } }
+    var target = (expect ?? paths[0]).path
+    if any {
+        spin(until: timeout) { rec.renders.dropFirst(from).contains { $0.view != "loading" } }
+        target = rec.renders.dropFirst(from).first { $0.view != "loading" }?.path ?? target
+    }
+    let w = waitShown(target, from: from, t0: t0, timeout: timeout)
+    spin(settle)
+    if env["SCEN_DEBUG"] != nil { info("renders: " + rec.renders.dropFirst(from).map { String(format: "%@ %@ @%.0f", ($0.path as NSString).lastPathComponent, $0.view, ms(t0, $0.at)) }.joined(separator: ", ")) }
+    // The view is the page's own, read now: a render's message is labelled when its reply comes back, which under load can be
+    // after the next render.
+    let p = page()
+    return Shown(view: p.path == target ? p.view : w.view, rendered: w.rendered, painted: w.painted, page: p, natives: natives())
+}
+func close() {
+    mark("close")
+    viewer.close()
+    spin(0.3)
+}
+
+// ---- manifest helpers ----
+let corpusSpec = manifest["corpus"] as? [String: [String: Any]] ?? [:]
+func marker(of url: URL) -> String? {
+    guard let d = try? Data(contentsOf: url, options: .alwaysMapped).prefix(4096), let s = String(data: d, encoding: .utf8),
+          let r = s.range(of: #"MARK-[A-Za-z0-9]+"#, options: .regularExpression) else { return nil }
+    return String(s[r])
+}
+func noErrors(_ name: String, _ p: PageState) {
+    check("\(name): no page errors", p.errs.isEmpty, p.errs.joined(separator: " | "))
+}
+func readyCount() -> Int { rec.readies }
+
+print("scenarios: \(out.path)\(videoDir.map { ", videos \($0.path)" } ?? "")")
+
+// ================= 1. a repo folder: README first, then ↓ through 30 files =================
+if flows.contains("1") {
+    print("\n== 1. open a repo folder, arrow through 30 files of mixed types")
+    let s = space([repo], expect: repo.appendingPathComponent("README.md"), settle: 0.5)
+    check("1: the folder opens on its README", s.page.path.hasSuffix("/README.md") && s.view == "markdown", "\(s.page.path) \(s.view)")
+    info(String(format: "the folder opened on its README in %.0f ms", s.painted ?? .nan))
+    spin(until: 5) { viewer.keys.session != nil }
+    check("1: the sidebar holds the arrow keys", viewer.keys.session != nil)
+    let rows = page().fileRows
+    check("1: the sidebar lists README first and every file", rows.first?.hasSuffix("/README.md") == true && rows.count == (manifest["repo"] as? [String])?.count,
+          "\(rows.count) rows, first \(rows.first ?? "-")")
+    var passes: [[Double]] = []
+    var worst: [(String, Double)] = []
+    var idx = 0
+    for pass in 0..<3 {
+        var times: [Double] = []
+        let down = pass != 1
+        for _ in 0..<30 {
+            let next = idx + (down ? 1 : -1)
+            guard next >= 0, next < rows.count else { break }
+            let want = rows[next], prevMarker = marker(of: URL(fileURLWithPath: rows[idx]))
+            let from = rec.renders.count, t0 = now()
+            mark("arrow to \(want)")
+            DispatchQueue.global(qos: .userInteractive).async { viewer.key(down ? "down" : "up", isRepeat: false) }
+            let w = waitShown(want, from: from, t0: t0, timeout: 5)
+            let p = page(), n = natives()
+            let name = (want as NSString).lastPathComponent
+            if w.painted == nil {
+                check("1: ↓ shows \(name)", false, "never painted (last render \(rec.renders.last.map { "\($0.path) \($0.view)" } ?? "none"))")
+            } else if pass == 0 {
+                // What a person sees the moment it is painted: this file, highlighted in the sidebar, nothing of the last one.
+                let own = marker(of: URL(fileURLWithPath: want))
+                let textual = ["markdown", "code", "text", "json", "csv"].contains(w.view)
+                let stray = n.shown.subtracting([nativeFor(w.view)].compactMap { $0 })
+                var problems: [String] = []
+                if p.path != want { problems.append("page shows \(p.path)") }
+                if p.active != want { problems.append("sidebar highlights \((p.active as NSString).lastPathComponent)") }
+                if let m = prevMarker, m != own, p.text.contains(m) { problems.append("still shows \(m) from the last file") }
+                if textual, let m = own, !p.text.contains(m) { problems.append("its text (\(m)) is not on the page") }
+                if !stray.isEmpty { problems.append("a stale native view is up: \(stray.sorted())") }
+                if w.view == "pdf", let t = n.pdf?.document?.page(at: 0)?.string, let m = own, !t.contains(m) { problems.append("the PDF is another file's") }
+                if w.view == "rtf", let t = n.text?.string, let m = own, !t.contains(m) { problems.append("the rich text is another file's") }
+                check("1: ↓ \(name) (\(w.view)) painted in \(String(format: "%.0f", w.painted!)) ms, no stale frame", problems.isEmpty, problems.joined(separator: "; "))
+            }
+            times.append(w.painted ?? 9999)
+            if pass == 2 { worst.append((name + " " + w.view, w.painted ?? 9999)) }
+            idx = next
+            spin(0.1)
+        }
+        passes.append(times)
+    }
+    let warm = passes.last ?? []
+    info(String(format: "↓ painted, cold pass p50 %.0f max %.0f ms; warm pass p50 %.0f p95 %.0f max %.0f ms", pct(passes[0], 0.5), passes[0].max() ?? .nan,
+                pct(warm, 0.5), pct(warm, 0.95), warm.max() ?? .nan))
+    let slow = worst.filter { $0.1 > 100 }.map { "\($0.0) \(Int($0.1)) ms" }
+    target("1: every file in the warm walk is painted within 100 ms", slow.isEmpty, slow.joined(separator: ", "))
+    // ↓ held down: key repeats every 30 ms through PDFs, media, rich text and HTML; where it stops is what shows, alone.
+    for (key, count) in [("home", 1), ("down", 23), ("up", 9), ("down", 14)] {
+        for i in 0..<count {
+            DispatchQueue.global(qos: .userInteractive).async { viewer.key(key, isRepeat: i > 0) }
+            spin(0.03)
+        }
+        idx = key == "home" ? 0 : max(0, min(rows.count - 1, idx + (key == "down" ? count : -count)))
+        spin(1.5)
+        let want = rows[idx], p = page(), n = natives()
+        let wantNative = nativeFor(p.view)
+        var problems: [String] = []
+        if p.path != want { problems.append("shows \((p.path as NSString).lastPathComponent)") }
+        if p.active != want { problems.append("highlights \((p.active as NSString).lastPathComponent)") }
+        if let w = wantNative, !n.shown.contains(w) { problems.append("its \(w) view is not up") }
+        let stray = n.shown.subtracting([wantNative].compactMap { $0 })
+        if !stray.isEmpty { problems.append("a stale native view is up: \(stray.sorted())") }
+        if let pl = n.player?.player, pl.rate != 0 { problems.append("a player is playing") }
+        check("1: \(key) held \(count)× stops on \((want as NSString).lastPathComponent), shown alone", problems.isEmpty, problems.joined(separator: "; "))
+    }
+    noErrors("1", page())
+    close()
+}
+
+// ================= 2. the 50k-row CSV: sort, scroll to the bottom, the header stays =================
+if flows.contains("2") {
+    print("\n== 2. a 50,000-row CSV: sort by a column, scroll to the bottom, the header stays in place")
+    let url = corpus.appendingPathComponent("big-50k.csv")
+    let s = space([url], settle: 0.3)
+    let shownRows = Int(s.page.head.components(separatedBy: " rows ×").first?.components(separatedBy: " · ").last?.replacingOccurrences(of: ",", with: "") ?? "") ?? 0
+    check("2: the CSV opens as a table", s.view == "csv" && shownRows > 40000, "\(s.view) \(s.page.head)")
+    known("BUG-csv-cap", "2: a 50,000-row CSV (2.4 MB) shows its 50,000 rows, as the README's CSV limit says", shownRows == 50000,
+          "\(shownRows) rows, then '\(s.page.notes.joined(separator: " | "))'")
+    info(String(format: "opened in %.0f ms", s.painted ?? .nan))
+    let t0 = now()
+    _ = js("document.querySelector('#doc .csv-sort[data-col=\"3\"]').click(); 0")
+    var sorted = [String: Any]()
+    spin(until: 5) {
+        sorted = jsJSON("""
+          const th = document.querySelectorAll('#doc table.csv thead th')[4];
+          const vals = [...document.querySelectorAll('#doc table.csv tbody tr:not(.pad)')].slice(0, 30).map((tr) => +tr.children[4].textContent);
+          return { sort: th.getAttribute('aria-sort'), vals };
+          """)
+        return sorted["sort"] as? String == "ascending"
+    }
+    let sortMs = ms(t0, now())
+    let vals = sorted["vals"] as? [Double] ?? []
+    check("2: a click on 'amount' sorts ascending, numbers as numbers", sorted["sort"] as? String == "ascending" && vals.count >= 20 && vals == vals.sorted(),
+          "\(sorted)")
+    target(String(format: "2: the sort redraws within 500 ms (%.0f ms)", sortMs), sortMs <= 500)
+    _ = js("(() => { const s = document.querySelector('#doc .csv-scroll'); s.scrollTop = s.scrollHeight; return 0; })()")
+    spin(0.4)
+    _ = js("(() => { const s = document.querySelector('#doc .csv-scroll'); s.scrollTop = s.scrollHeight; return 0; })()")
+    spin(0.4)
+    let bottom = jsJSON("""
+      const s = document.querySelector('#doc .csv-scroll'), sr = s.getBoundingClientRect();
+      const head = document.querySelector('#doc table.csv thead th:nth-child(5)'), hr = head.getBoundingClientRect();
+      const rows = [...document.querySelectorAll('#doc table.csv tbody tr:not(.pad)')];
+      const seen = rows.filter((tr) => { const r = tr.getBoundingClientRect(); return r.bottom > hr.bottom + 2 && r.top < sr.bottom - 2; });
+      const last = seen[seen.length - 1];
+      const hit = document.elementFromPoint(hr.left + hr.width / 2, hr.top + hr.height / 2);
+      return { atBottom: Math.abs(s.scrollTop + s.clientHeight - s.scrollHeight) < 2, headTop: hr.top - sr.top, headVisible: !!(hit && hit.closest('thead')),
+        headText: head.textContent, lastIndex: last ? +last.getAttribute('aria-rowindex') : -1, lastAmount: last ? +last.children[4].textContent : null,
+        seen: seen.length };
+      """)
+    check("2: scrolled to the bottom, the last row shown is on screen", bottom["atBottom"] as? Bool == true && bottom["lastIndex"] as? Int == shownRows + 1, "\(bottom)")
+    let headTop = bottom["headTop"] as? Double ?? 99
+    check("2: the header row stays at the top of the table and is not covered", abs(headTop) <= 2 && bottom["headVisible"] as? Bool == true
+          && (bottom["headText"] as? String ?? "").contains("amount"), "\(bottom)")
+    let maxAmount = vals.isEmpty ? nil : (try? String(contentsOf: url, encoding: .utf8))?.split(separator: "\n").dropFirst().prefix(shownRows).compactMap { Double($0.split(separator: ",")[3]) }.max()
+    check("2: the last row holds the largest amount", maxAmount != nil && bottom["lastAmount"] as? Double == maxAmount, "\(String(describing: bottom["lastAmount"])) vs \(String(describing: maxAmount))")
+    close()
+    // Decimal commas in a semicolon file sort as numbers.
+    let semi = space([corpus.appendingPathComponent("semicolon-decimal.csv")])
+    _ = js("document.querySelector('#doc .csv-sort[data-col=\"1\"]').click(); 0")
+    spin(0.3)
+    let first = jsJSON("return { head: document.querySelector('#doc .viewer-kind').textContent, first: document.querySelector('#doc table.csv tbody tr:not(.pad) td').textContent };")
+    check("2: semicolon CSV with decimal commas: named as such, sorted by value (0,99 first)",
+          semi.view == "csv" && (first["head"] as? String ?? "").contains("semicolon-separated") && first["first"] as? String == "Kirschen", "view \(semi.view) \(first)")
+    noErrors("2", page())
+    close()
+}
+
+// ================= 3. broken JSON and 2 MB of minified JSON =================
+if flows.contains("3") {
+    print("\n== 3. broken JSON and a 2 MB minified JSON: both render, the tree works")
+    let broken = space([corpus.appendingPathComponent("broken.json")])
+    check("3: broken JSON is shown as is, with a note", broken.view == "json" && broken.page.notes.contains { $0.contains("Not valid JSON") }
+          && broken.page.text.contains("\"spacebar\""), "\(broken.view) \(broken.page.notes)")
+    noErrors("3 broken", broken.page)
+    close()
+    let big = space([corpus.appendingPathComponent("minified-2mb.json")], settle: 0.2, timeout: 15)
+    info(String(format: "2 MB JSON painted in %.0f ms", big.painted ?? .nan))
+    let tree = { jsJSON("""
+      const rows = document.querySelectorAll('#doc .json-tree .jt-row');
+      return { rows: rows.length, mode: (document.querySelector('#doc .viewer-toggle[aria-pressed=true]') || {}).textContent || '',
+        closed: [...document.querySelectorAll('#doc .jt-row[aria-expanded=false] .jt-tw')].length, deepest: Math.max(0, ...[...rows].map((r) => +r.getAttribute('aria-level'))) };
+      """) }
+    let t1 = tree()
+    check("3: the 2 MB JSON opens as a tree", big.view == "json" && t1["mode"] as? String == "Tree" && (t1["rows"] as? Int ?? 0) >= 2, "\(t1)")
+    target(String(format: "3: the 2 MB JSON is painted within 1 s (%.0f ms)", big.painted ?? .nan), (big.painted ?? 9999) <= 1000)
+    var t0 = now()
+    _ = js("document.querySelector('#doc .jt-row[aria-expanded=false] .jt-tw').click(); 0")
+    spin(0.2)
+    let t2 = tree()
+    check("3: a click on a closed node opens it", (t2["rows"] as? Int ?? 0) > (t1["rows"] as? Int ?? 0), "\(t1) -> \(t2)")
+    t0 = now()
+    _ = js("[...document.querySelectorAll('#doc .json-all')].find((b) => b.dataset.open === '1').click(); 0")
+    spin(until: 5) { (tree()["rows"] as? Int ?? 0) > 3000 }
+    let t3 = tree(), expandMs = ms(t0, now())
+    check("3: Expand All opens thousands of rows", (t3["rows"] as? Int ?? 0) > 3000, "\(t3)")
+    target(String(format: "3: Expand All is drawn within 1 s (%.0f ms)", expandMs), expandMs <= 1000)
+    _ = js("[...document.querySelectorAll('#doc .json-all')].find((b) => b.dataset.open === '0').click(); 0")
+    spin(0.3)
+    check("3: Collapse All closes it to the root", (tree()["rows"] as? Int ?? 99) <= 2, "\(tree())")
+    t0 = now()
+    _ = js("[...document.querySelectorAll('#doc .viewer-toggle')].find((b) => b.dataset.mode === 'raw').click(); 0")
+    spin(until: 5) { (jsJSON("return { n: (document.querySelector('#doc pre.code') || {textContent: ''}).textContent.length };")["n"] as? Int ?? 0) > 1_000_000 }
+    let rawMs = ms(t0, now())
+    let rawLen = jsJSON("return { n: (document.querySelector('#doc pre.code') || {textContent: ''}).textContent.length };")["n"] as? Int ?? 0
+    check("3: Raw shows all of the 2 MB line", rawLen > 1_900_000, "\(rawLen) characters")
+    target(String(format: "3: Raw is drawn within 1 s (%.0f ms)", rawMs), rawMs <= 1000)
+    noErrors("3 big", page())
+    close()
+    let nested = space([corpus.appendingPathComponent("nested-500.json")])
+    _ = js("[...document.querySelectorAll('#doc .json-all')].find((b) => b.dataset.open === '1').click(); 0")
+    spin(0.5)
+    let deep = tree()
+    check("3: 500 levels of nesting: a tree, Expand All reaches the bottom", nested.view == "json" && (deep["deepest"] as? Int ?? 0) >= 500, "\(deep)")
+    noErrors("3 nested", page())
+    close()
+}
+
+// ================= 4. every corpus file =================
+if flows.contains("4") {
+    print("\n== 4. every corpus file: shown by its kind and view, no page error, no crash")
+    var prevMarker: String?
+    let skip: Set<String> = ["loop-a", "loop-b", "unreadable.txt", "unreadable.md"]   // flow 7
+    for name in corpusSpec.keys.sorted() where !skip.contains(name) {
+        let spec = corpusSpec[name]!
+        let url = corpus.appendingPathComponent(name)
+        let views = spec["view"] as? [String] ?? []
+        if spec["package"] as? Bool == true {
+            // Space on a package is declined (Apple's preview takes it); in the sidebar it opens in the panel.
+            request += 1
+            let id = request, from = rec.renders.count
+            DispatchQueue.global().async { viewer.show([url.path], requestID: id) { _ in } }
+            spin(2)
+            check("4: Space on \(name) (a package) is declined, as the README says", rec.renders.count == from && viewer.panel.alphaValue == 0,
+                  "\(rec.renders.count - from) renders, panel alpha \(viewer.panel.alphaValue)")
+            _ = space([corpus], any: true, settle: 0.5)
+            let rowJS = "[...document.querySelectorAll('#side-list a.row')].find((a) => a.dataset.path === \(String(data: try! JSONSerialization.data(withJSONObject: [url.path]), encoding: .utf8)!)[0])"
+            for _ in 0..<40 where (js("!!\(rowJS)") as? Bool) != true { _ = js("(() => { const l = document.getElementById('side-list'); (l.closest('#sidebar') || l).scrollBy(0, 300); l.scrollBy(0, 300); return 0; })()"); spin(0.05) }
+            let from2 = rec.renders.count, t0 = now()
+            _ = js("\(rowJS).click(); 0")
+            let w = waitShown(url.path, from: from2, t0: t0)
+            let n = natives()
+            check("4: \(name) from the sidebar -> \(w.view)", views.contains(w.view) && (n.text?.string.contains(spec["contains"] as? String ?? "") ?? false),
+                  "view \(w.view), text '\(n.text?.string.prefix(80) ?? "none")'")
+            close()
+            continue
+        }
+        let readies = readyCount()
+        let s = space([url], settle: ["video", "audio", "quicklook", "info", "archive"].contains(views.first ?? "") ? 1.0 : 0.3, timeout: 15)
+        let p = s.page
+        var problems: [String] = []
+        if s.rendered == nil { problems.append("never rendered") }
+        if !views.contains(s.view) { problems.append("view \(s.view), expected \(views.joined(separator: "/"))") }
+        if readyCount() != readies { problems.append("the page reloaded (its web process quit)") }
+        if !p.errs.isEmpty { problems.append("page errors: \(p.errs.joined(separator: " | "))") }
+        if let m = prevMarker, p.text.contains(m), marker(of: url) != m { problems.append("the last file's text (\(m)) is still on the page") }
+        if let want = nativeFor(s.view), !s.natives.shown.contains(want) { problems.append("its native view is not up") }
+        let stray = s.natives.shown.subtracting([nativeFor(s.view)].compactMap { $0 })
+        if !stray.isEmpty { problems.append("stale native view: \(stray.sorted())") }
+        if let c = spec["contains"] as? String {
+            let hay = p.text + (s.natives.text?.string ?? "")
+            if !hay.contains(c) { problems.append("'\(c)' not shown") }
+        }
+        if let e = spec["encoding"] as? String, !p.kindName.contains(e) { problems.append("kind '\(p.kindName)' does not name \(e)") }
+        if let e = spec["encodingPrefix"] as? String, !p.kindName.contains(e) { problems.append("kind '\(p.kindName)' does not name \(e)") }
+        if let k = spec["kindName"] as? String, p.kindName != k { problems.append("kind '\(p.kindName)', expected '\(k)'") }
+        if let t = spec["truncated"] as? Bool {
+            let noted = p.notes.contains { $0.contains("2 MB") || $0.lowercased().contains("first") }
+            if t != noted { problems.append(t ? "no note that only the first 2 MB is shown" : "a truncation note on a file under the cap") }
+        }
+        if let rows = spec["rows"] as? Int, let cols = spec["cols"] as? Int {
+            let shape = "\(rows.formatted()) \(rows == 1 ? "row" : "rows") × \(cols) \(cols == 1 ? "column" : "columns")"
+            if !p.head.contains(shape) { problems.append("head '\(p.head)', expected \(shape)") }
+        }
+        if let h = spec["firstHeader"] as? String {
+            let first = js("(document.querySelector('#doc table.csv thead .csv-h') || {}).textContent") as? String
+            if first != h { problems.append("first header '\(first ?? "nil")'") }
+        }
+        if let mode = spec["mode"] as? String, spec["knownBug"] == nil {
+            let pressed = js("(document.querySelector('#doc .viewer-toggle[aria-pressed=true]') || {}).dataset?.mode || 'raw'") as? String
+            if pressed != mode { problems.append("JSON mode \(pressed ?? "nil"), expected \(mode)") }
+        }
+        if let n = spec["images"] as? Int {
+            let got = js("[...document.querySelectorAll('#doc img')].filter((i) => i.naturalWidth > 0).length") as? Int ?? 0
+            if got < n { problems.append("\(got) of \(n) notebook images drawn") }
+        }
+        if let n = spec["pages"] as? Int, s.natives.pdf?.document?.pageCount != n { problems.append("\(s.natives.pdf?.document?.pageCount ?? 0) PDF pages") }
+        if let n = spec["mermaid"] as? Int {
+            let got = js("document.querySelectorAll('#doc pre.mermaid svg').length") as? Int ?? 0
+            if got < n { problems.append("\(got) mermaid diagrams drawn") }
+        }
+        if let n = spec["katex"] as? Int {
+            let got = js("document.querySelectorAll('#doc .katex-html').length") as? Int ?? 0
+            if got < n { problems.append("\(got) formulas drawn") }
+        }
+        if let n = spec["tableRows"] as? Int {
+            let got = js("document.querySelectorAll('#doc table tbody tr').length") as? Int ?? 0
+            if got != n { problems.append("\(got) table rows") }
+        }
+        if spec["frontMatter"] as? Bool == true, (js("!!document.querySelector('#doc .frontmatter, #doc .frontmatter-raw')") as? Bool) != true {
+            problems.append("no front matter block")
+        }
+        if let w = spec["width"] as? Int, let h = spec["height"] as? Int, s.view == "image" {
+            let dims = js("(() => { const i = document.querySelector('#doc .img-stage img'); return i ? i.naturalWidth + 'x' + i.naturalHeight : ''; })()") as? String
+            if dims != "\(w)x\(h)" { problems.append("image \(dims ?? "nil")") }
+        }
+        if let w = spec["width"] as? Int, let h = spec["height"] as? Int, s.view == "bitmap", !p.head.contains("\(w) × \(h)") { problems.append("caption '\(p.head)'") }
+        if s.view == "archive" {
+            spin(until: 8) { (js("document.querySelectorAll('#doc .arc-row, #doc .arc-dir, #doc .arc-file').length") as? Int ?? 0) > 0
+                || (js("document.querySelector('#doc .viewer-note') ? 1 : 0") as? Int ?? 0) > 0 }
+            let arc = jsJSON("return { rows: document.querySelectorAll('#doc [data-path]').length, text: document.getElementById('doc').textContent.slice(0, 400), notes: [...document.querySelectorAll('#doc .viewer-note')].map((n) => n.textContent) };")
+            let notes = arc["notes"] as? [String] ?? []
+            if notes.contains(where: { $0.contains("can’t be listed") }) { problems.append("archive not listed: \(notes)") }
+            if spec["truncated"] as? Bool == true, !notes.contains(where: { $0.contains("5,000") || $0.lowercased().contains("first") }) {
+                problems.append("no note that only the first 5,000 entries are listed: \(notes)")
+            }
+            if (arc["rows"] as? Int ?? 0) == 0 { problems.append("no entries listed") }
+        }
+        if name == ".env", UTType(filenameExtension: "env")?.identifier == "md.spacebar.type.env", (js("current.canOpen === true") as? Bool) != false {
+            problems.append("offered to another app, though .env often holds secrets")
+        }
+        if name == "comments.jsonc" {
+            let pressed = js("(document.querySelector('#doc .viewer-toggle[aria-pressed=true]') || {}).dataset?.mode || 'raw'") as? String
+            known("BUG-jsonc", "4: comments.jsonc (JSON with comments) opens as a tree", pressed == "tree" && !p.notes.contains { $0.contains("Not valid") },
+                  "mode \(pressed ?? "nil"), notes \(p.notes)")
+        }
+        check(String(format: "4: %@ -> %@ (%@)%@", name.count > 60 ? String(name.prefix(57)) + "…" : name, s.view, p.kindName,
+                     s.painted.map { String(format: ", %.0f ms", $0) } ?? ""), problems.isEmpty, problems.joined(separator: "; "))
+        prevMarker = marker(of: url)
+        close()
+    }
+    // A folder of 5,000 files.
+    let many = corpus.appendingPathComponent("many")
+    let m = space([many], any: true, settle: 0.5, timeout: 10)
+    let listed = js("+(document.querySelector('#side-list a.row') || { getAttribute: () => 0 }).getAttribute('aria-setsize')") as? Int ?? 0
+    info(String(format: "a folder of 5,000 files: %@ in %.0f ms, %d entries in the sidebar (%d rows drawn), more: '%@'", m.view, m.painted ?? .nan, listed, page().rows.count, page().more))
+    check("4: a folder of 5,000 files opens on its overview and lists all 5,000", m.view == "overview" && listed == 5000 && page().errs.isEmpty, "\(m.view) \(listed) entries")
+    close()
+}
+
+// ================= 5. the video-tests folder =================
+if flows.contains("5") {
+    print("\n== 5. video and audio formats: each plays or shows its info card")
+    if let dir = videoDir, let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path).filter({ !$0.hasPrefix(".") && $0 != "README.md" }).sorted(), !names.isEmpty {
+        let dims: [String: (Int, Int)] = ["mp4-h264.mp4": (1280, 720), "mp4-hevc.mp4": (1280, 720), "mov-prores422.mov": (1280, 720), "mov-h264.mov": (1280, 720),
+                                          "m4v-h264.m4v": (1280, 720), "3gp-h264.3gp": (352, 288), "mpg-mpeg2.mpg": (720, 480), "m2v-mpeg2.m2v": (720, 480),
+                                          "portrait-9x16.mp4": (720, 1280), "4k-hevc.mov": (3840, 2160)]
+        for name in names {
+            let url = dir.appendingPathComponent(name)
+            let ext = url.pathExtension.lowercased()
+            let want = FileTypes.videoExtensions.contains(ext) ? "video" : FileTypes.audioExtensions.contains(ext) ? "audio" : "info"
+            let s = space([url], settle: 0.2, timeout: 10)
+            var problems: [String] = []
+            var facts = ""
+            if want == "info" {
+                if s.view != "info" { problems.append("view \(s.view)") }
+                if s.natives.player != nil { problems.append("a player is up") }
+                facts = "info card: \(s.page.kindName)"
+            } else {
+                var item: AVPlayerItem?
+                spin(until: 8) {
+                    item = natives().player?.player?.currentItem
+                    return item?.status == .readyToPlay || item?.status == .failed || rec.renders.last?.view == "info"
+                }
+                let final = rec.renders.last { $0.path == url.path }?.view ?? s.view
+                if final != want { problems.append("view \(final)\(final == "info" ? " (" + page().notes.joined(separator: " ") + ")" : "")") }
+                if let item, item.status == .readyToPlay, let player = natives().player?.player {
+                    let d = item.duration.seconds
+                    // An MPEG-2 elementary stream has no container clock: its length is estimated from the bit rate.
+                    if !(abs(d - 6) < (ext == "m2v" ? 0.5 : 0.2)) { problems.append(String(format: "duration %.2f s", d)) }
+                    facts = String(format: "%.2f s", d)
+                    if want == "video" {
+                        let sz = item.presentationSize
+                        facts += " \(Int(sz.width))×\(Int(sz.height))"
+                        if let e = dims[name], Int(sz.width) != e.0 || Int(sz.height) != e.1 { problems.append("size \(Int(sz.width))×\(Int(sz.height)), expected \(e.0)×\(e.1)") }
+                    }
+                    player.isMuted = true
+                    player.play()
+                    spin(1.2)
+                    let t = player.currentTime().seconds
+                    player.pause()
+                    facts += String(format: ", played to %.2f s", t)
+                    if !(t > 0.5) { problems.append(String(format: "did not play (at %.2f s after 1.2 s)", t)) }
+                } else if final == want {
+                    problems.append("the player never became ready (\(item.map { "\($0.status.rawValue) \($0.error?.localizedDescription ?? "")" } ?? "no item"))")
+                }
+            }
+            check("5: \(name) -> \(want): \(facts)", problems.isEmpty, problems.joined(separator: "; "))
+            close()
+        }
+    } else {
+        print("SKIP 5: no video-tests folder (make_media.sh needs ffmpeg)")
+    }
+}
+
+// ================= 6. a selection of 5 mixed files =================
+if flows.contains("6") {
+    print("\n== 6. a selection of 5 files: the sidebar shows exactly those")
+    let picks = ["front-matter.md", "semicolon-decimal.csv", "shot.png", "anchors.yaml", "broken.json"].map { corpus.appendingPathComponent($0) }
+    let s = space(picks, expect: picks[0], settle: 0.5)
+    let rows = Set(s.page.rows.map { ($0 as NSString).lastPathComponent })
+    check("6: the first of the selection is shown", s.page.path == picks[0].path && s.view == "markdown", s.page.path)
+    check("6: the sidebar lists exactly the 5 selected files", rows == Set(picks.map(\.lastPathComponent)) && s.page.rows.count == 5,
+          "\(s.page.rows.count) rows: \(rows.sorted())")
+    spin(until: 5) { viewer.keys.session != nil }
+    var seen: [String] = [s.page.path]
+    for key in ["down", "down", "down", "down", "up", "up", "up", "up", "up", "up"] {
+        let from = rec.renders.count
+        DispatchQueue.global().async { viewer.key(key, isRepeat: false) }
+        spin(until: 2) { rec.renders.count > from && rec.renders.last?.view != "loading" }
+        spin(0.2)
+        seen.append(page().path)
+    }
+    let outside = seen.filter { p in !picks.contains { $0.path == p } }
+    check("6: ↓ and ↑ walk the selection and never leave it", outside.isEmpty && Set(seen).count == 5, "\(seen.map { ($0 as NSString).lastPathComponent })")
+    noErrors("6", page())
+    close()
+}
+
+// ================= 7. hostile files =================
+if flows.contains("7") {
+    print("\n== 7. hostile files: an SVG with script, a symlink loop, unreadable files")
+    rec.messages = []
+    let svg = space([corpus.appendingPathComponent("script.svg")], settle: 1.0)
+    let links = rec.messages.filter { $0["type"] as? String == "link" }
+    check("7: an SVG with script is drawn as an image, its script inert", svg.view == "image" && svg.page.pwned == nil && links.isEmpty,
+          "view \(svg.view), pwned \(svg.page.pwned ?? "nil"), links \(links)")
+    close()
+    rec.messages = []
+    let md = space([corpus.appendingPathComponent("svg-embed.md")], settle: 1.0)
+    let objects = js("document.querySelectorAll('#doc object, #doc embed, #doc iframe, #doc script').length") as? Int ?? -1
+    check("7: the SVG embedded in Markdown (img, object, embed) runs nothing", md.page.pwned == nil && objects == 0
+          && rec.messages.filter { $0["type"] as? String == "link" }.isEmpty, "pwned \(md.page.pwned ?? "nil"), \(objects) active elements")
+    close()
+    // The symlink loop, alone and in its folder.
+    for name in ["loop-a"] {
+        let url = corpus.appendingPathComponent(name)
+        request += 1
+        let id = request, from = rec.renders.count, t0 = now()
+        mark("show symlink loop")
+        DispatchQueue.global().async { viewer.show([url.path], requestID: id) { _ in } }
+        spin(until: 6) { viewer.panel.alphaValue > 0 || rec.renders.count > from }
+        spin(0.5)
+        let p = page(), elapsed = ms(t0, now())
+        let said = p.status + " " + p.text
+        info(String(format: "symlink loop: %.0f ms, panel %@, page %@, status '%@'", elapsed, viewer.panel.alphaValue > 0 ? "shown" : "not shown",
+                    p.blank ? "blank" : "'\(p.text.prefix(80))'", p.status))
+        check("7: a symlink loop does not hang the viewer", elapsed < 6000 && (js("1") as? Int) == 1)
+        known("BUG-loop", "7: a symlink loop says, visibly, that it cannot be opened", !p.blank && (said.lowercased().contains("can’t") || said.lowercased().contains("cannot")),
+              p.blank ? "the panel is shown blank: the page is still hidden from the last close, the status '\(p.status)' with it" : "the panel shows '\(said.prefix(160))'")
+        close()
+    }
+    let folder = space([corpus], any: true, settle: 0.8, timeout: 10)
+    info(String(format: "the corpus folder (with a symlink loop and a link to itself): %@ in %.0f ms, %d sidebar rows", (folder.page.path as NSString).lastPathComponent, folder.painted ?? .nan, folder.page.rows.count))
+    let loopListed = folder.page.rows.contains { $0.hasSuffix("/loop-a") }
+    info("the symlink loop and the link to the folder itself are \(loopListed ? "listed" : "left out of the sidebar")")
+    check("7: the folder holding a symlink loop and a link to itself opens and lists at once", folder.page.rows.count > 40 && (folder.painted ?? 9999) < 3000,
+          "\(folder.page.rows.count) rows in \(Int(folder.painted ?? -1)) ms")
+    close()
+    // Unreadable files.
+    let txt = space([corpus.appendingPathComponent("unreadable.txt")], settle: 0.5)
+    let txtSays = (txt.page.notes + [txt.page.status]).joined(separator: " ")
+    let offers = js("current.canOpen === true") as? Bool ?? true
+    check("7: an unreadable (chmod 000) text file says it couldn’t be read, and offers no app", txt.view == "info" && txtSays.contains("couldn’t be read") && !offers,
+          "view \(txt.view), card says '\(txt.page.text.replacingOccurrences(of: "\n", with: " ").prefix(160))'")
+    close()
+    let mdu = corpus.appendingPathComponent("unreadable.md")
+    request += 1
+    let id = request, from = rec.renders.count
+    DispatchQueue.global().async { viewer.show([mdu.path], requestID: id) { _ in } }
+    spin(until: 6) { firstRender(mdu.path, from: from) != nil }
+    spin(0.5)
+    let mp = page()
+    check("7: an unreadable Markdown file says it cannot be read", (mp.notes + [mp.status]).joined().contains("couldn’t be read") || mp.text.contains("couldn’t be read"),
+          "view \(mp.view), notes \(mp.notes), status '\(mp.status)'")
+    close()
+}
+
+// ================= 8. missing images in Markdown =================
+if flows.contains("8") {
+    print("\n== 8. missing images in Markdown show the placeholder")
+    let s = space([corpus.appendingPathComponent("missing-images.md")], settle: 0.5)
+    var box: [String: Any] = [:]
+    spin(until: 5) {
+        box = jsJSON("""
+          const boxes = [...document.querySelectorAll('#doc .img-missing')];
+          return { n: boxes.length, alts: boxes.map((b) => (b.querySelector('.img-missing-alt') || {}).textContent),
+            paths: boxes.map((b) => (b.querySelector('.img-missing-path') || {}).textContent),
+            why: boxes.map((b) => [...b.querySelectorAll('.img-missing-why > *')].map((n) => n.textContent).join(' ')),
+            present: [...document.querySelectorAll('#doc img')].map((i) => i.naturalWidth) };
+          """)
+        return box["n"] as? Int == 2
+    }
+    check("8: both missing images show a placeholder with their alt text and path", box["n"] as? Int == 2
+          && (box["alts"] as? [String] ?? []).contains("Architecture diagram") && (box["paths"] as? [String] ?? []).contains("img/architecture.png"), "\(box)")
+    check("8: the image that is there still renders", (box["present"] as? [Int] ?? []).contains(40), "\(box)")
+    noErrors("8", s.page)
+    close()
+}
+
+if let e = js("(() => { const e = window.__errs || []; window.__errs = []; return e; })()") as? [String] { closingErrors += e }
+check("no page errors while panels closed and reopened", closingErrors.isEmpty, closingErrors.joined(separator: " | "))
+print("\n" + (failures == 0 ? "scenarios: all passed" : "scenarios: \(failures) failed") + (knownBugs.isEmpty ? "" : "; known bugs seen: \(Set(knownBugs).sorted().joined(separator: ", "))"))
+exit(failures == 0 ? 0 : 1)

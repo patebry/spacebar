@@ -96,6 +96,10 @@ enum LinkPolicy {
         let type = contentType(resolved) ?? .data
         if deniedInEditor.contains(where: { type.conforms(to: $0) }) { return "file type \(type.identifier) not allowed in an editor" }
         if type.identifier.hasPrefix("md.spacebar.type."), !type.conforms(to: .text) { return "file type \(type.identifier) kept in the preview" }
+        // LaunchServices sees no extension in a dotfile's name, so a plain `.env` or `.npmrc` is public.data, not the declared type.
+        let name = resolved.lastPathComponent
+        if resolved.pathExtension.isEmpty, name.hasPrefix("."), let t = UTType(filenameExtension: String(name.dropFirst())),
+           t.identifier.hasPrefix("md.spacebar.type."), !t.conforms(to: .text) { return "file type \(t.identifier) kept in the preview" }
         return nil
     }
 

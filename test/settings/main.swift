@@ -354,6 +354,12 @@ do {
           && (b["kindName"] as? String ?? "").contains("Binary"))
     check("XML plist: shown as it is", x["view"] as? String == "code" && (x["text"] as? String ?? "").hasPrefix("<?xml") && !(x["kindName"] as? String ?? "").contains("Binary"))
     check("archive: its own view, with no contents until the writer lists them", z["view"] as? String == "archive" && z["text"] == nil && z["entries"] == nil)
+    let locked = d.appendingPathComponent("locked.txt")
+    try! Data("secret".utf8).write(to: locked)
+    chmod(locked.path, 0)
+    let l = FileView.payload(path: locked.path, kind: .text, root: d.path, reason: "open", canOpen: true)
+    check("unreadable (chmod 000) text: the info card says it couldn’t be read, and offers no app",
+          geteuid() == 0 || (l["view"] as? String == "info" && l["note"] as? String == "This file couldn’t be read." && l["canOpen"] as? Bool == false))
     try? fm.removeItem(at: d)
 }
 check("claims summary names archives and Markdown", QuickLookClaims.summary.contains("archives") && QuickLookClaims.summary.hasPrefix("Markdown"))

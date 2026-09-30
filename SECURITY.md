@@ -71,7 +71,13 @@ Nine features reach further than a rendered page, and are in scope:
 - **Images and disk images parsed in the sandbox.** HEIC, AVIF, TIFF, camera RAW, PSD, OpenEXR, TGA, JPEG 2000 and icon
   files are decoded by ImageIO in the sandboxed extension or viewer, as a PDF is by PDFKit, rather than in WebKit's content
   process; an image declaring more than 80 megapixels is refused before any decode, the decode is bounded to 8,192 pixels a
-  side and 40 megapixels, and files to at most 50 MB. A `.dmg`'s format and encryption are
+  side and 40 megapixels, and files to at most 50 MB. The folder grid's thumbnails of images are made the same way (ImageIO
+  in the sandboxed process, under the same bounds, an image past them getting none), from a descriptor whose real path must
+  still be inside the folder, so a link swapped in after the check is not read; video and SVG thumbnails come from
+  QuickLookThumbnailing, in Quick Look's daemons. A file iCloud has evicted gets none. Thumbnails are encoded in memory and
+  never written to disk. The page gets them from `spacebar://thumb/<path>`, which serves only an image or video the sidebar
+  listed (a plain path inside the root, symlinks resolved, checked as a file the page asks to open is), as a JPEG or PNG. A
+  `.dmg`'s format and encryption are
   read from its trailer and block table in the same sandboxed process, with every offset checked against the file, the
   table at most 16 MB and 2 million entries; nothing is mounted or run.
 - **The one-click update** runs the app's own copy of `scripts/install.sh`, sealed by the app's signature, detached from Quick

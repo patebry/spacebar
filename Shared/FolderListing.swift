@@ -798,6 +798,8 @@ enum FolderListing {
         var broken = false
 
         var isMarkdown: Bool { kind == .markdown }
+        /// An image or a video: the folder grid shows its thumbnail (ThumbnailPipeline).
+        var hasThumbnail: Bool { !broken && (kind == .image || kind == .video) }
     }
 
     struct Listing: Equatable {
@@ -816,6 +818,7 @@ enum FolderListing {
                                          "modified": (e.modified * 1000).rounded()]
                  if e.size >= 0 { d["size"] = e.size }
                  if e.broken { d["broken"] = true }
+                 if e.hasThumbnail { d["thumb"] = true }
                  return d
              },
              "more": more]
@@ -921,6 +924,15 @@ enum FolderListing {
     static func isDirectory(_ path: String) -> Bool {
         var st = stat()
         return stat(path, &st) == 0 && st.st_mode & S_IFMT == S_IFDIR
+    }
+
+    /// A folder the grid suits: at least `gridMinFiles` files, and `gridMediaShare` of them images or videos.
+    static let gridMinFiles = 6
+    static let gridMediaShare = 0.6
+    static func isMediaFolder(_ l: Listing) -> Bool {
+        let files = l.files
+        guard files.count >= gridMinFiles else { return false }
+        return Double(files.filter(\.hasThumbnail).count) >= gridMediaShare * Double(files.count)
     }
 
     static func firstDocument(_ l: Listing) -> Entry? {

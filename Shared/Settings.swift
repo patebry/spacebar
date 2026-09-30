@@ -26,6 +26,9 @@ struct Settings: Codable, Equatable {
     var sidebarCollapsed = false
     var sidebarWidth = 240
     var sidebarKeys = true
+    /// The folder view's grid or list, remembered for folders mostly of images and video and for every other folder.
+    var folderViewMedia = "grid"
+    var folderViewOther = "list"
     var showHiddenFiles = false
     var minimalChrome = false
     var frontMatter = "table"
@@ -70,6 +73,8 @@ struct Settings: Codable, Equatable {
         "monoFont": ["system", "menlo", "monaco", "courier"],
         "width": ["narrow", "medium", "wide", "full"],
         "folderSort": ["name", "modified"],
+        "folderViewMedia": ["grid", "list"],
+        "folderViewOther": ["list", "grid"],
         "frontMatter": ["table", "hide", "raw"],
         "toc": ["auto", "on", "off"],
         "mdLinks": ["preview", "editor"],
@@ -88,9 +93,11 @@ struct Settings: Codable, Equatable {
     static var allKeys: Set<String> { Set(choices.keys).union(intRanges.keys).union(doubleRanges.keys).union(boolKeys).union(optionalKeys) }
     /// The only keys the preview panel may change (its Aa popover and sidebar controls). The page renders an untrusted document,
     /// so even a page that was somehow scripted can restyle the preview but never pick a CSS file, an editor app, or what is
-    /// rendered or opened. folderSort only reorders what is listed; showHiddenFiles would list, and so open, more, so it is
+    /// rendered or opened. folderSort only reorders what is listed, and the folder views lay it out as a grid or a list (a
+    /// folder of images shows its grid instead of opening its README); showHiddenFiles would list, and so open, more, so it is
     /// changed in the settings window only.
-    static let panelKeys: Set<String> = Set(["theme", "appearance", "fontSize", "width", "bodyFont", "sidebarCollapsed", "sidebarWidth", "folderSort"])
+    static let panelKeys: Set<String> = Set(["theme", "appearance", "fontSize", "width", "bodyFont", "sidebarCollapsed", "sidebarWidth", "folderSort",
+                                             "folderViewMedia", "folderViewOther"])
         .union(rawKeys)
     /// The keys the settings window shows, on its page and under Advanced. Every other key is changed in the preview (panelKeys),
     /// by spacebar itself, or in settings.json only, and keeps its stored value.
@@ -184,6 +191,7 @@ struct Settings: Codable, Equatable {
         take(.width, \.width); takeOptional(.editorBundleID, \.editorBundleID)
         take(.inlineEditing, \.inlineEditing); take(.taskToggles, \.taskToggles); take(.folderMode, \.folderMode)
         take(.folderReadmeFirst, \.folderReadmeFirst); take(.folderSort, \.folderSort); take(.frontMatter, \.frontMatter)
+        take(.folderViewMedia, \.folderViewMedia); take(.folderViewOther, \.folderViewOther)
         take(.sidebarCollapsed, \.sidebarCollapsed); take(.sidebarKeys, \.sidebarKeys); take(.showHiddenFiles, \.showHiddenFiles); take(.minimalChrome, \.minimalChrome)
         if let n = try? c.decodeIfPresent(Double.self, forKey: .sidebarWidth), let v = Self.sanitize("sidebarWidth", n) as? Int { s.sidebarWidth = v }
         take(.toc, \.toc); take(.stats, \.stats); take(.mdLinks, \.mdLinks); take(.webLinks, \.webLinks)

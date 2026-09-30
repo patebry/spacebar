@@ -2,6 +2,18 @@
 
 Each release's notes on GitHub also list its commits. This file keeps what changed for someone using spacebar.
 
+## Unreleased (0.4)
+
+### A grid for folders of pictures
+
+- **A folder mostly of images and video opens on a grid of thumbnails**, as Finder's gallery does: at least six files, 60% or
+  more of them pictures or movies. Its README no longer opens first. Other folders keep the overview.
+- A grid and list toggle in the folder view's header, remembered separately for folders of pictures and for every other folder.
+- The arrow keys move through the tiles in two directions, Home and End go to the ends, and Return or a double-click opens the
+  picture. Space and Esc work as before; in the Space helper's panel the arrows drive the grid too.
+- The grid shows at once with placeholders, and thumbnails fill in, the ones in view first. A folder of 5,000 pictures keeps
+  only the tiles on screen in the page and makes only their thumbnails; they are made in memory and never written to disk.
+
 ## 0.3.0 (unreleased)
 
 Waits for the Developer ID: the first release with the Space helper is notarized.

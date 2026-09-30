@@ -46,6 +46,11 @@
 // A PDF is shown as the extension shows it: a PDFPane (Preview/PDFPane.swift) over the web view, placed by the page's "pdfRect"
 // messages and closed by the next render of anything else.
 // "copy" is answered as the extension answers it, but the clipboard is never touched: the text is recorded as "_copied".
+// The `thumb` host is answered as the extension answers it (an image or video a listing named, made by ThumbnailPipeline);
+// a thumbnail the page drops is recorded as "_thumbStop", a refused one as "_refused".
+//   @thumbs            the pipeline's counts: {made, failed, hits, dropped, abandoned, cached, peak, pending}; @thumbs:purge empties
+//                      its cache, @thumbs:slow=<seconds> makes each thumbnail take that much longer
+//   @folder:<dir>      a media folder (FolderListing.isMediaFolder) with the grid setting opens on its overview, as the extension does
 //   @pdf               the pane: {open, hidden, placed, frame [x, y, w, h] from the top left of the web view, pages, text,
 //                      autoScales, continuous, bg [r, g, b], dark, docAlive (a weak reference to the last document), fds (open
 //                      descriptors on that file), pixel [r, g, b] at the pane's centre as the window draws it}
@@ -229,7 +234,9 @@ func renderOverview(_ r: FolderScan.Result, reason: String) {
     currentFile = nil
     currentKind = .other
     offered.formUnion(r.recent.map(\.path))
-    _ = eval(web, "sb.render(\(jsonString(r.payload(reason: reason)))); 0")
+    var payload = r.payload(reason: reason)
+    payload["media"] = listings[root].map(FolderListing.isMediaFolder) ?? false
+    _ = eval(web, "sb.render(\(jsonString(payload))); 0")
     spin(8) { rec.messages.contains { $0["type"] as? String == "rendered" } }
 }
 
@@ -338,6 +345,11 @@ func startFolder(_ dir: String) -> String {
     scheme.fileRoot = root
     let s = Settings(dictionary: settingsDict)
     let l = FolderListing.list(root, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles)
+    if FolderListing.isMediaFolder(l), s.folderViewMedia == "grid" {
+        sendFolder(root)
+        renderOverview(FolderScan.scan(root, showHidden: s.showHiddenFiles), reason: "overview")
+        return "overview"
+    }
     if let first = FolderListing.firstDocument(l) { renderFile(first.path); return "file:" + first.path }
     let r = FolderScan.scan(root, showHidden: s.showHiddenFiles)
     if let md = r.bestMarkdown { offered.insert(md.path); renderFile(md.path); return "file:" + md.path }
@@ -357,6 +369,25 @@ func snapshot(_ path: String) -> String {
     }
     spin(10) { done }
     return result
+}
+
+// As the extension's thumbnail(): only an image or video a listing named, under listedFile's checks.
+/// Seconds each thumbnail takes on top of making it (@thumbs:slow=<s>), so a test can scroll past thumbnails still being made.
+var thumbDelay: TimeInterval = 0
+let thumbs = ThumbnailPipeline { key, cancelled in
+    if thumbDelay > 0 { Thread.sleep(forTimeInterval: thumbDelay) }
+    return ThumbnailPipeline.makeThumb(key, cancelled: cancelled)
+}
+scheme.thumbnail = { path, px, reply in
+    guard FolderListing.isPlainPath(path, under: root),
+          let e = listings[(path as NSString).deletingLastPathComponent]?.entries.first(where: { $0.path == path && !$0.isDirectory }),
+          e.hasThumbnail, FolderListing.isInside(path, root: root), let realRoot = FolderListing.realPath(root) else { return nil }
+    let ticket = thumbs.request(path: path, root: realRoot, stamp: "\(e.size)-\(e.modified)", px: px) { reply($0?.data, $0?.mime ?? "") }
+    return {
+        guard let ticket else { return }
+        rec.messages.append(["type": "_thumbStop", "path": path])
+        thumbs.cancel(ticket)
+    }
 }
 
 // As the extension: a granted request re-renders the file on screen with the gate's flag.
@@ -409,6 +440,8 @@ rec.onMessage = { type, body in
         textEdit = (seq, f, o.source, o.text, o.bytes)
     case "pdfRect":
         if currentKind == .pdf { pdfPane?.place(message: body, in: web) }
+    case "thumbDrop":
+        if let urls = body["urls"] as? [Any], urls.count <= 512 { scheme.dropThumbs(urls.compactMap { $0 as? String }) }
     case "overview":
         DispatchQueue.main.async { renderOverview(FolderScan.scan(root, showHidden: Settings(dictionary: settingsDict).showHiddenFiles), reason: "overview") }
     case "copy":
@@ -625,6 +658,12 @@ func run(_ cmd: String) -> String {
         guard let data = t.source.bytes(text) else { result = "unencodable"; break }
         if let why = EditableText.writeRefusal(path: t.path, data: data, base: t.bytes) { result = why; break }
         do { try data.write(to: URL(fileURLWithPath: t.path)); textEdit = (t.seq, t.path, t.source, text, data); result = "saved" } catch { result = "\(error)" }
+    case "@thumbs":
+        if arg == "purge" { thumbs.purge() }
+        if arg.hasPrefix("slow=") { thumbDelay = Double(arg.dropFirst(5)) ?? 0 }
+        let st = thumbs.stats
+        result = ["made": st.made, "failed": st.failed, "hits": st.hits, "dropped": st.dropped, "abandoned": st.abandoned, "cached": thumbs.cachedCount,
+                  "peak": thumbs.peakRunning, "pending": thumbs.pending]
     case "@remotereset":
         gate.reset()
         result = gate.blocking

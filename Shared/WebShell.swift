@@ -11,6 +11,8 @@ import WebKit
 ///   spacebar://user/themes/<f>.css a user theme; only a plain file name inside themes/
 ///   spacebar://body/<token>        the text of the render in flight, too large to send as a script (PageBody): once, as
 ///                                  plain text, and only while its file is the one on screen. Nothing is read from disk
+///   spacebar://thumb/<path>?s=<px> the folder grid's thumbnail of a file the sidebar listed, made in memory by `thumbnail`
+///                                  (which refuses any other path); a load the page drops (`dropThumbs`) is cancelled
 /// The app's live preview uses it with `fileHost: false`.
 final class SchemeHandler: NSObject, WKURLSchemeHandler {
     let webRoot: URL
@@ -42,6 +44,18 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
     var body: PageBody?
     /// Whether `path` is still the file on screen: a body for any other file is dropped unserved.
     var bodyCurrent: (String) -> Bool = { _ in false }
+
+    /// The `thumb` host's source: for a path the page names and the pixels it asks for, nil when the path is refused, else a
+    /// cancel for a load the page drops; `reply` runs once on the main thread, maybe before this returns, with the image and
+    /// its Content-Type, or nil.
+    var thumbnail: ((_ path: String, _ px: Int, _ reply: @escaping (Data?, String) -> Void) -> (() -> Void)?)?
+    /// The `thumb` tasks still being made, by URL: WebKit keeps loading an image the page no longer shows, so the page names
+    /// the loads it dropped. A URL dropped before its task starts is remembered (the last `maxDropped`) and refused then.
+    private var thumbTasks: [String: (task: WKURLSchemeTask, cancel: () -> Void)] = [:]
+    private var dropped: [String] = []
+    private var droppedSet: Set<String> = []
+    static let maxThumbPixels = 1024
+    static let maxDropped = 1024
 
     init(webRoot: URL, supportDir: @escaping () -> URL = { SettingsFile.supportDir }, fileHost: Bool = true) {
         self.webRoot = webRoot.standardizedFileURL
@@ -110,6 +124,7 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
         guard let url = task.request.url else { return }
         if url.host == "body" { return serveBody(task, url: url) }
+        if url.host == "thumb" { return serveThumb(task, url: url) }
         guard let fileURL = resolve(url) else {
             onRefused("refused load \(url.absoluteString)")
             return task.didFailWithError(URLError(.noPermissionsToReadFile))
@@ -147,7 +162,71 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {
-        live[ObjectIdentifier(task)] = nil
+        let id = ObjectIdentifier(task)
+        live[id] = nil
+        if let url = task.request.url?.absoluteString, let t = thumbTasks[url], t.task === task {
+            thumbTasks[url] = nil
+            t.cancel()
+        }
+    }
+
+    /// The page dropped these thumbnail loads (their tiles left the window): each is cancelled and failed, or refused when
+    /// its task starts.
+    func dropThumbs(_ urls: [String]) {
+        for u in urls {
+            if let t = thumbTasks.removeValue(forKey: u) {
+                live[ObjectIdentifier(t.task)] = nil
+                t.cancel()
+                t.task.didFailWithError(URLError(.cancelled))
+            } else if droppedSet.insert(u).inserted {
+                dropped.append(u)
+                if dropped.count > Self.maxDropped { droppedSet.remove(dropped.removeFirst()) }
+            }
+        }
+    }
+
+    /// The path and pixel size a `thumb` URL names: `/<the absolute path, percent-encoded as one component>?s=<px>`.
+    static func thumbRequest(_ url: URL) -> (path: String, px: Int)? {
+        guard url.host == "thumb", let c = URLComponents(url: url, resolvingAgainstBaseURL: false), c.percentEncodedPath.hasPrefix("/"),
+              let path = String(c.percentEncodedPath.dropFirst()).removingPercentEncoding, path.hasPrefix("/"), path.utf8.count <= 4096,
+              let s = c.queryItems?.first(where: { $0.name == "s" })?.value, let px = Int(s), (16...maxThumbPixels).contains(px) else { return nil }
+        return (path, px)
+    }
+
+    private func serveThumb(_ task: WKURLSchemeTask, url: URL) {
+        guard fileHost, let source = thumbnail, let req = Self.thumbRequest(url) else {
+            onRefused("refused load \(url.absoluteString)")
+            return task.didFailWithError(URLError(.noPermissionsToReadFile))
+        }
+        let key = url.absoluteString
+        if droppedSet.remove(key) != nil {
+            dropped.removeAll { $0 == key }
+            return task.didFailWithError(URLError(.cancelled))
+        }
+        tokens += 1
+        let id = ObjectIdentifier(task), token = tokens
+        live[id] = token
+        let cancel = source(req.path, req.px) { [weak self] data, mime in
+            guard let self, self.live[id] == token else { return }
+            self.live[id] = nil
+            if self.thumbTasks[key]?.task === task { self.thumbTasks[key] = nil }
+            guard let data, mime == "image/jpeg" || mime == "image/png" else { return task.didFailWithError(URLError(.cannotDecodeContentData)) }
+            let headers = ["Content-Type": mime, "Content-Length": String(data.count), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+                           "Content-Security-Policy": "default-src 'none'"]
+            task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!)
+            task.didReceive(data)
+            task.didFinish()
+        }
+        guard let cancel else {
+            live[id] = nil
+            onRefused("refused thumbnail \(req.path)")
+            return task.didFailWithError(URLError(.noPermissionsToReadFile))
+        }
+        if live[id] == token {
+            // A URL is one tile's load; should the same URL come again, the older task is let go.
+            if let old = thumbTasks[key] { live[ObjectIdentifier(old.task)] = nil; old.cancel(); old.task.didFailWithError(URLError(.cancelled)) }
+            thumbTasks[key] = (task, cancel)
+        }
     }
 
     private func respond(_ task: WKURLSchemeTask, url: URL, file: URL, data: Data) {

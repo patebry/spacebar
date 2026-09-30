@@ -260,6 +260,19 @@ func space(_ paths: [URL], expect: URL? = nil, any: Bool = false, settle: Double
     let p = page()
     return Shown(view: p.path == target ? p.view : w.view, rendered: w.rendered, painted: w.painted, page: p, natives: natives())
 }
+/// The pointer over `x`, `y` points from the panel's top left, as the page sees it: WebKit takes no synthetic mouse-moved
+/// event in a window off screen, so the element there gets a mousemove.
+func hover(_ x: Double, _ y: Double) {
+    _ = js("{ const t = document.elementFromPoint(\(x), \(y)); t && t.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: \(x), clientY: \(y) })); } 0")
+    spin(0.2)
+}
+/// Whether a press at `x`, `y` points from the panel's top left would drag the panel; the press is not sent.
+func pressDrags(_ x: Double, _ y: Double) -> Bool {
+    let p = viewer.panel
+    guard let e = NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: x, y: p.frame.height - y), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                     windowNumber: p.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { return false }
+    return p.drags(e)
+}
 func close() {
     mark("close")
     viewer.close()
@@ -291,6 +304,27 @@ if flows.contains("1") {
     let rows = page().fileRows
     check("1: the sidebar lists README first and every file", rows.first?.hasSuffix("/README.md") == true && rows.count == (manifest["repo"] as? [String])?.count,
           "\(rows.count) rows, first \(rows.first ?? "-")")
+    // The traffic lights and the sidebar button share the top row's centre line, and the lights are clear of the button.
+    let lights = [NSWindow.ButtonType.closeButton, .zoomButton].compactMap { viewer.panel.standardWindowButton($0).map { $0.convert($0.bounds, to: nil) } }
+    let tg = jsJSON("const r = document.getElementById('side-toggle').getBoundingClientRect(); return { mid: r.top + r.height / 2, left: r.left };")
+    let lightsMid = lights.first.map { viewer.panel.frame.height - $0.midY } ?? .nan, toggleMid = tg["mid"] as? Double ?? .nan
+    check("1: the sidebar button is centred on the traffic lights, to their right", lights.count == 2 && abs(lightsMid - toggleMid) <= 2
+          && (tg["left"] as? Double ?? 0) >= lights[1].maxX + 8, "lights \(lights) centre \(lightsMid), button \(tg)")
+    // The empty top row and the folder heading's margin drag the panel; its controls and the folder's name do not.
+    let head = jsJSON("const r = document.getElementById('side-head').getBoundingClientRect(), t = document.getElementById('side-title').getBoundingClientRect(); return { x: r.right - 12, y: t.top + t.height / 2, tx: t.left + 4 };")
+    var zones: [Bool] = []
+    for (x, y) in [(300.0, 20.0), ((tg["left"] as? Double ?? 0) + 8, 20.0), (head["x"] as? Double ?? 0, head["y"] as? Double ?? 0), (head["tx"] as? Double ?? 0, head["y"] as? Double ?? 0), (300, 200)] as [(Double, Double)] {
+        hover(x, y)
+        zones.append(pressDrags(x, y))
+    }
+    check("1: the empty top row and heading drag the panel; the sidebar button, the folder's name and the page do not", zones == [true, false, true, false, false], "\(zones)")
+    hover(300, 20)
+    let light = lights.first.map { (Double($0.midX), lightsMid) } ?? (0, 0)
+    check("1: a press on a traffic light is the button's, not a drag", viewer.panel.dragZone && !pressDrags(light.0, light.1) && pressDrags(300, 20))
+    let ctrl = NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 300, y: viewer.panel.frame.height - 20), modifierFlags: .control,
+                                  timestamp: 0, windowNumber: viewer.panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+    check("1: the window's top edge resizes and a control-click is the page's, not a drag", !pressDrags(300, 2) && ctrl.map { !viewer.panel.drags($0) } == true)
+    hover(300, 200)
     var passes: [[Double]] = []
     var worst: [(String, Double)] = []
     var idx = 0
@@ -774,6 +808,21 @@ if flows.contains("9"), let dir = env["SCEN_SHOTS"] {
         NSApp.appearance = NSAppearance(named: mode == "dark" ? .darkAqua : .aqua)
         _ = space([corpus.appendingPathComponent("front-matter.md")], settle: 0.6)
         shot("panel-\(mode)-1-markdown")
+        // WebKit takes no synthetic mouse-moved event off screen: the page's own :hover rules, applied to the folder name, with no
+        // transition (a page off screen gets no rendering updates).
+        _ = js("""
+          { const rules = [], walk = (list) => { for (const r of list) {
+              if (r instanceof CSSStyleRule) { if (r.selectorText.includes(':hover')) rules.push(r.cssText.replaceAll(':hover', '.sb-hover')); }
+              else if (r instanceof CSSImportRule) { if (r.styleSheet) walk(r.styleSheet.cssRules); } else if (r.cssRules) walk(r.cssRules); } };
+            for (const s of document.styleSheets) { try { walk(s.cssRules); } catch (e) {} }
+            const sheet = new CSSStyleSheet(); sheet.replaceSync('* { transition: none !important; }\\n' + rules.join('\\n')); document.adoptedStyleSheets = [sheet];
+            for (let e = document.getElementById('side-title'); e; e = e.parentElement) e.classList.add('sb-hover'); } 0
+          """)
+        shot("panel-\(mode)-1b-header-hover")
+        _ = js("document.adoptedStyleSheets = []; document.querySelectorAll('.sb-hover').forEach((e) => e.classList.remove('sb-hover')); 0")
+        _ = js("document.getElementById('side-title').click(); 0")
+        spin(0.6)
+        shot("panel-\(mode)-1c-title-clicked")
         _ = js("document.getElementById('side-menu').click(); 0")
         shot("panel-\(mode)-2-sort-menu")
         _ = js(reset)
@@ -786,9 +835,10 @@ if flows.contains("9"), let dir = env["SCEN_SHOTS"] {
         _ = js("document.getElementById('find-btn').click(); 0")
         shot("panel-\(mode)-5-find")
         _ = js("document.getElementById('find-close').click(); 0")
-        _ = js("document.getElementById('side-toggle').click(); 0")
+        // Applied in the page only: the stub writer saves no setting, so a click's change would be sent back undone.
+        _ = js("sb.applySettings({ ...settings, sidebarCollapsed: true }); 0")
         shot("panel-\(mode)-6-sidebar-hidden")
-        _ = js("document.getElementById('side-toggle').click(); 0")
+        _ = js("sb.applySettings({ ...settings, sidebarCollapsed: false }); 0")
         close()
         _ = space([corpus.appendingPathComponent("anchors.yaml").deletingLastPathComponent().appendingPathComponent("analysis.ipynb")], settle: 0.6)
         shot("panel-\(mode)-7-notebook-seg")

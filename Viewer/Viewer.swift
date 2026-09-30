@@ -5,9 +5,70 @@ import os
 let vlog = Logger(subsystem: logSubsystem, category: "viewer")
 
 /// Floats over Finder without taking the keyboard: Finder stays key, and the helper routes its keys here.
+/// Its traffic lights sit centred in the page's top row beside the sidebar button, as Finder's sit in its toolbar; AppKit lays
+/// them out for a 28 pt title bar, so they are moved after each of its layouts. The web view takes every click in the title
+/// bar and never moves the window, so the page says when the pointer is over empty chrome (`dragZone`), and a press there
+/// drags the panel.
 final class ViewerPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+    /// The page's top row: `--bar-h` in base.css.
+    static let rowHeight: CGFloat = 40
+    static let lightsLeft: CGFloat = 12
+    /// A press this far below the top never drags, whatever the page last said.
+    static let dragDepth: CGFloat = 96
+    var dragZone = false
+
+    override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing: NSWindow.BackingStoreType, defer flag: Bool) {
+        super.init(contentRect: contentRect, styleMask: style, backing: backing, defer: flag)
+        // A resize lays the buttons out again just before this notification, so moving them here never shows.
+        NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: self, queue: nil) { [weak self] _ in self?.placeLights() }
+        // Any other layout. A move from inside AppKit's own setFrame does not stick, so it waits for the next turn.
+        if let close = standardWindowButton(.closeButton) {
+            close.postsFrameChangedNotifications = true
+            NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: close, queue: nil) { [weak self] _ in
+                DispatchQueue.main.async { self?.placeLights() }
+            }
+        }
+        placeLights()
+    }
+
+    func placeLights() {
+        guard let close = standardWindowButton(.closeButton) else { return }
+        let at = close.convert(close.bounds, to: nil)
+        let dx = Self.lightsLeft - at.minX, dy = frame.height - (Self.rowHeight + at.height) / 2 - at.minY
+        guard abs(dx) > 0.5 || abs(dy) > 0.5 else { return }
+        for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            guard let b = standardWindowButton(kind) else { continue }
+            b.setFrameOrigin(NSPoint(x: b.frame.minX + dx, y: b.frame.minY + (b.superview?.isFlipped == true ? -dy : dy)))
+        }
+    }
+
+    /// A plain press on the page's empty chrome: not on a traffic light, a native pane over the page, or the window's edges,
+    /// where AppKit resizes it.
+    func drags(_ event: NSEvent) -> Bool {
+        let p = event.locationInWindow, edge: CGFloat = 4
+        return event.type == .leftMouseDown && dragZone && !event.modifierFlags.contains(.control)
+            && p.y > frame.height - Self.dragDepth && p.y < frame.height - edge && p.x > edge && p.x < frame.width - edge
+            && contentView?.superview?.hitTest(p)?.isDescendant(of: WebHost.shared.web) == true
+    }
+
+    override func sendEvent(_ event: NSEvent) {
+        guard drags(event) else { return super.sendEvent(event) }
+        if event.clickCount == 2 {
+            // As a title bar: the double-click action in Desktop & Dock settings. The panel cannot minimize.
+            let action = UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") ?? "Maximize"
+            if action == "Maximize" || action == "Fill" { zoom(nil) }
+        } else if event.clickCount < 2 {
+            performDrag(with: event)
+        }
+    }
+
+    override func orderOut(_ sender: Any?) {
+        dragZone = false
+        WebHost.shared.web.evaluateJavaScript("window.sb && sb.dragReset && sb.dragReset(); 0")
+        super.orderOut(sender)
+    }
 }
 
 /// The list session without the writer: the helper sends the keys, so nothing needs a key window. Filter and edit sessions
@@ -42,6 +103,11 @@ final class PanelController: PreviewController {
     }
 
     override func copyFileAndText(_ url: URL, _ text: String) -> Bool { FinderCopy.write(file: url, text: text) }
+
+    override func handle(_ type: String, _ body: [String: Any]) {
+        guard type == "dragZone" else { return super.handle(type, body) }
+        (view.window as? ViewerPanel)?.dragZone = PageMessage(body: body).bool("on") == true
+    }
 }
 
 final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {

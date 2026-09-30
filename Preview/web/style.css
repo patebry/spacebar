@@ -150,7 +150,14 @@
   /* Only the document is selectable: a selection that runs past it must not paint the empty page, the frame or the chrome. */
   #toc, #frame, #toolbar, #side-toggle { -webkit-user-select: none; user-select: none; }
   #sidebar { font: 13px/1.35 -apple-system, BlinkMacSystemFont, sans-serif; -webkit-user-select: none; user-select: none; }
-  #side-head { padding: 44px 16px 6px; font-size: 11px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The folder's name is a plain section title: only its text takes a click (the overview), and the space around it, under
+     the traffic lights in the Space helper's panel, is the window's to drag. */
+  #side-head { padding: 44px 16px 6px; font-size: 11px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; }
+  #side-title { display: inline-block; max-width: 100%; vertical-align: top; overflow: hidden; text-overflow: ellipsis; margin: 0; padding: 0; border: 0;
+    border-radius: 3px; background: none; font: inherit; color: inherit; text-align: left; cursor: default; -webkit-appearance: none; appearance: none;
+    transition: color .12s; }
+  #side-title:hover { color: var(--fg); }
+  #side-title:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 2px; }
   #side-list { padding: 0 8px 12px; }
   /* Every row is as tall as app.js's SIDE_ROW_H: the list draws only the rows in view and spaces out the rest by that height. */
   #side-list a.row { display: flex; align-items: center; gap: 5px; height: 24px; box-sizing: border-box; padding: 0 8px 0 calc(2px + var(--depth, 0) * 14px);
@@ -161,9 +168,6 @@
   #side-list a.row:active { background: color-mix(in srgb, var(--fg) 10%, transparent); }
   #side-list a.row.broken { opacity: .45; cursor: default; }
   #side-list a.row.active { background: color-mix(in srgb, var(--accent) 12%, transparent); font-weight: 600; }
-  #sidebar > #side-head { width: calc(var(--side-w) - 16px); }
-  #side-head { cursor: default; border-radius: 6px; margin: 0 8px; padding-left: 8px; padding-right: 8px; transition: background-color .12s; }
-  #side-head:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 6%, transparent); }
   #side-list .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   #side-list .twisty { flex: none; width: 12px; height: 12px; display: inline-grid; place-items: center; color: var(--muted); }
   #side-list .twisty svg { width: 10px; height: 10px; fill: currentColor; transition: transform .12s ease-out; }
@@ -194,7 +198,7 @@
   #side-resize::after { content: ""; position: absolute; top: 0; bottom: 0; right: 0; width: 2px; background: transparent; transition: background .12s; }
   #side-resize:hover::after, :root.sb-resizing #side-resize::after { background: color-mix(in srgb, var(--accent) 60%, transparent); }
   @media (prefers-reduced-motion: reduce) {
-    #side-list .twisty svg, #side-list a.row, #side-head, #doc a.ov-row { transition: none; }
+    #side-list .twisty svg, #side-list a.row, #side-title, #doc a.ov-row { transition: none; }
     #toolbar > button, #side-toggle, #doc .viewer button { transition: none !important; transform: none !important; }
   }
 

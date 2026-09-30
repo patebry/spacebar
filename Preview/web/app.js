@@ -2855,8 +2855,8 @@ function renderSidebar() {
   if (!on || key === sideDrawn) return;
   const moved = sideDrawn.split('\n')[1] !== current.path, refiltered = sideDrawn.split('\n')[2] !== sideQuery;
   sideDrawn = key;
-  $('side-head').textContent = tree.name;
-  $('side-head').title = `${tree.root}\nClick for an overview of this folder`;
+  $('side-title').textContent = tree.name;
+  $('side-title').title = `${tree.root}\nClick for an overview of this folder`;
   const list = $('side-list');
   const rows = [];
   const exp = expanded();
@@ -3211,6 +3211,29 @@ Object.assign(window.sb, {
     return true;
   },
 });
+
+// The panel's title bar is the page's top row, and WKWebView never moves its window: the panel is told when the pointer is
+// over empty chrome there or in the sidebar's heading, and a press there drags the panel, as a title bar does.
+// A click there must still reach the page while a popover or an edit is open, since it closes them. The answer is checked
+// again when the chrome changes under a pointer that has not moved (Find opening, the sidebar folding).
+if (HOST === 'panel') {
+  const barH = parseFloat(getComputedStyle(root).getPropertyValue('--bar-h')) || 40;
+  const controls = 'a, button, input, select, textarea, summary, label, [role=button], [role=separator], [contenteditable], #toolbar, #doc, #toc, #side-filter, #side-list, #side-pop';
+  let dragOn = null, at = null;
+  const drag = (on) => { if (on !== dragOn) { dragOn = on; post({ type: 'dragZone', on }); } };
+  const check = () => {
+    const t = at && document.elementFromPoint(at[0], at[1]);
+    drag(!!t && (at[1] < barH || t === $('side-head')) && !t.closest(controls)
+      && $('aa-pop').hidden && $('side-pop').hidden && !editing);
+  };
+  document.addEventListener('mousemove', (e) => { at = [e.clientX, e.clientY]; check(); }, { passive: true });
+  root.addEventListener('mouseleave', () => { at = null; check(); });
+  const again = new MutationObserver(() => { if (at) check(); });
+  again.observe(root, { attributes: true, attributeFilter: ['data-sidebar', 'data-view', 'class'] });
+  for (const id of ['toolbar', 'sidebar']) again.observe($(id), { attributes: true, subtree: true, attributeFilter: ['hidden', 'aria-expanded'] });
+  window.sb.dragReset = () => { at = null; dragOn = null; check(); };
+  check();
+}
 
 // ---------- the toolbar's tools: Formatted or Raw, Find and Copy, each shown only for the views they apply to ----------
 
@@ -3874,7 +3897,7 @@ document.addEventListener('click', (e) => {
   }
   if (e.target === filterField) { if (e.isTrusted) beginFilter(e); return; }
   if (e.target === findField) { if (e.isTrusted) beginFind(); return; }
-  if (e.target.closest('#side-head') && tree.root) { e.preventDefault(); peek(false); post({ type: 'overview' }); return; }
+  if (e.target.closest('#side-title') && tree.root) { e.preventDefault(); peek(false); post({ type: 'overview' }); return; }
   const row = e.target.closest('#side-list a.row');
   if (row) {
     e.preventDefault();

@@ -1610,6 +1610,99 @@ def auto_session(page, check, T, types, opened):
     page.cmd('@root:')
 
 
+# :hover as the page's own stylesheets have it, on `sel` and its ancestors (null clears it): WebKit takes no synthetic
+# mouse-moved event in the harness's window, which is off screen.
+HOVER = """(sel) => {
+  const rules = [];
+  const walk = (list) => { for (const r of list) {
+    if (r instanceof CSSStyleRule) { if (r.selectorText.includes(':hover')) rules.push(r.cssText.replaceAll(':hover', '.sb-hover')); }
+    else if (r instanceof CSSImportRule) { if (r.styleSheet) walk(r.styleSheet.cssRules); }
+    else if (r.cssRules) walk(r.cssRules); } };
+  for (const s of document.styleSheets) { try { walk(s.cssRules); } catch (e) {} }
+  const sheet = new CSSStyleSheet();
+  // A page off screen gets no rendering updates, so a transition would stay at its start.
+  sheet.replaceSync('* { transition: none !important; }\\n' + rules.join('\\n'));
+  document.adoptedStyleSheets = sel ? [sheet] : [];
+  document.querySelectorAll('.sb-hover').forEach((e) => e.classList.remove('sb-hover'));
+  for (let e = sel && document.querySelector(sel); e; e = e.parentElement) e.classList.add('sb-hover');
+  return rules.length; }"""
+HEADER = """const h = document.getElementById('side-head'), t = document.getElementById('side-title'), g = document.getElementById('side-toggle');
+  const cs = (e) => getComputedStyle(e), hr = h.getBoundingClientRect(), tr = t.getBoundingClientRect(), gr = g.getBoundingClientRect();
+  const range = document.createRange(); range.selectNodeContents(t); const txt = range.getBoundingClientRect();
+  const beside = document.elementFromPoint(hr.right - 12, tr.top + tr.height / 2), above = document.elementFromPoint(hr.left + hr.width / 2, 10);
+  return { fill: [cs(h).backgroundColor, cs(t).backgroundColor, cs(h).backgroundImage, cs(t).backgroundImage], shadow: [cs(h).boxShadow, cs(t).boxShadow],
+    cursor: [cs(h).cursor, cs(t).cursor], color: cs(t).color, outline: cs(t).outlineStyle, text: [txt.width, txt.height], box: [tr.width, tr.height],
+    beside: beside && beside.id, above: above && above.id, toggle: [gr.left, gr.top + gr.height / 2], bar: parseFloat(cs(document.documentElement).getPropertyValue('--bar-h')) };"""
+
+
+def calm_header(page, check, host):
+    """The sidebar's heading, as Finder's and Preview's: the folder's name a plain section title with no fill in any state,
+    whose click target (the overview) is its text alone; the space around it, under the traffic lights in the panel, takes no
+    click and, in the panel, drags it. The sidebar button sits in the top row, centred on it, beside the traffic lights."""
+    msgs = lambda r, t: [m for m in r['messages'] if m.get('type') == t]
+    clear = ('rgba(0, 0, 0, 0)', 'rgba(0, 0, 0, 0)', 'none', 'none')
+    arrow = lambda q: q['cursor'][0] in ('auto', 'default') and q['cursor'][1] == 'default'
+    idle = page.js(HEADER)
+    check(tuple(idle['fill']) == clear and idle['shadow'] == ['none', 'none'] and arrow(idle),
+          f'{host}: the sidebar heading has no fill, no shadow and an arrow cursor', json.dumps(idle))
+    for sel, what in (('#side-head', 'the space around the folder name'), ('#side-title', 'the folder name')):
+        n = page.cmd('@eval:(' + HOVER + ')(' + json.dumps(sel) + ')')['result']
+        hov = page.js(HEADER)
+        ok = tuple(hov['fill']) == clear and hov['shadow'] == ['none', 'none'] and arrow(hov)
+        if sel == '#side-title':
+            ok = ok and hov['color'] != idle['color']
+            if SHOTS:
+                shoot(page, f'header-{host}-hover')
+        check(n and ok, f'{host}: hovering {what} fills nothing' + (', only the text brightens' if sel == '#side-title' else ''), json.dumps([n, hov]))
+    page.cmd('@eval:(' + HOVER + ')(null)')
+    check(idle['box'][0] <= idle['text'][0] + 2 and idle['box'][1] <= idle['text'][1] + 4 and idle['beside'] == 'side-head' and idle['above'] != 'side-title',
+          f"{host}: the folder name's click target is its text alone", json.dumps(idle))
+    r = click(page, '#side-head')
+    page.cmd('@wait:0.3')
+    check(not msgs(r, 'overview'), f'{host}: a click beside the folder name opens nothing', json.dumps([m.get('type') for m in r['messages']]))
+    r = click(page, '#side-title')
+    page.cmd('@wait:0.4')
+    after = page.js(HEADER)
+    check(msgs(r, 'overview') and tuple(after['fill']) == clear and after['outline'] == 'none',
+          f'{host}: a click on the folder name opens the overview, and leaves the heading as it was', json.dumps([[m.get('type') for m in r['messages']], after]))
+    if SHOTS:
+        shoot(page, f'header-{host}-clicked')
+    mid = idle['bar'] / 2
+    # The panel centres its traffic lights (12 to 66 pt from the left) on the top row: ViewerPanel.rowHeight and lightsLeft.
+    clear_of_lights = idle['toggle'][0] >= 66 + 8 if host == 'panel' else True
+    check(abs(idle['toggle'][1] - mid) <= 2 and clear_of_lights, f'{host}: the sidebar button sits in the top row, centred on it'
+          + (", the traffic lights' line, and clear of them" if host == 'panel' else ''),
+          json.dumps([idle['toggle'], mid]))
+    page.cmd("@eval:document.getElementById('side-toggle').click(); 0")
+    page.cmd('@wait:0.4')
+    folded = page.js("const g = document.getElementById('side-toggle').getBoundingClientRect(); return [document.documentElement.dataset.sidebar, g.left, g.top + g.height / 2];")
+    check(folded[0] == 'collapsed' and folded[1:] == idle['toggle'], f'{host}: with the sidebar collapsed the button stays where it was', json.dumps([folded, idle['toggle']]))
+    if SHOTS:
+        shoot(page, f'header-{host}-collapsed')
+    page.cmd("@eval:document.getElementById('side-toggle').click(); 0")
+    page.cmd('@wait:0.4')
+    move = lambda sel, dx, dy: page.cmd("@eval:(() => { const r = document.querySelector(" + json.dumps(sel) + ").getBoundingClientRect(), x = r.left + " + str(dx)
+                                          + ", y = r.top + " + str(dy) + "; document.elementFromPoint(x, y).dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y })); return 0; })()")
+    zones = [msgs(move(sel, dx, dy), 'dragZone') for sel, dx, dy in (('#side-head', 30, 10), ('#side-title', 4, 4), ('#side-head', idle['box'][0] + 40, 50), ('#side-toggle', 8, 8), ('#doc', 40, 200))]
+    want = [[True], [False], [True], [False], []] if host == 'panel' else [[]] * 5
+    got = [[m.get('on') in (True, 1, 'true', '1') for m in z] for z in zones]
+    check(got == want, f'{host}: ' + ('the empty heading and top row drag the panel; the folder name, the button and the page do not' if host == 'panel'
+                                     else 'nothing asks to drag the window'), json.dumps(got))
+    if host == 'panel':
+        move('#side-head', 30, 10)
+        opened = msgs(page.cmd("@eval:document.getElementById('aa').click(); 0"), 'dragZone')
+        closed = msgs(page.cmd("@eval:document.getElementById('aa').click(); 0"), 'dragZone')
+        on = lambda ms: [m.get('on') in (True, 1, 'true', '1') for m in ms]
+        check(on(opened) == [False] and on(closed) == [True],
+              'panel: with the Aa popover open the top row takes the click that closes it, checked again with the pointer still', json.dumps([opened, closed]))
+        reset = msgs(page.cmd('@eval:sb.dragReset(); 0'), 'dragZone')
+        check(on(reset) == [False], 'panel: a reset (the panel closing) says the pointer is over nothing', json.dumps(reset))
+        long = 'A folder with a name far too long to fit in the sidebar at its width'
+        w = page.js("const t = document.getElementById('side-title'), was = t.textContent; t.textContent = " + json.dumps(long)
+                    + "; const r = [t.scrollWidth > t.clientWidth, t.getBoundingClientRect().right <= document.getElementById('side-head').getBoundingClientRect().right - 15, getComputedStyle(t).textOverflow]; t.textContent = was; return r;")
+        check(w == [True, True, 'ellipsis'], 'panel: a long folder name is cut with an ellipsis inside the heading', json.dumps(w))
+
+
 def panel_host(check):
     """The page as the Space helper's panel shows it (host "panel" in the document-start script): the traffic lights' inset,
     the list session starting on its own and driven by keys the panel sends (no writer: the helper routes Finder's keys), no
@@ -1630,7 +1723,10 @@ def panel_host(check):
         page.cmd('@wait:0.3')
         g = page.js("""const r = document.documentElement, t = document.getElementById('side-toggle').getBoundingClientRect();
           return [r.dataset.host, getComputedStyle(r).getPropertyValue('--titlebar-inset').trim(), Math.round(t.left)];""")
-        check(g[0] == 'panel' and g[1] == '68px' and g[2] >= 68, "panel: the host is set at document start, and the sidebar button clears the traffic lights", json.dumps(g))
+        check(g[0] == 'panel' and g[1] == '76px' and g[2] >= 76, "panel: the host is set at document start, and the sidebar button clears the traffic lights", json.dumps(g))
+        calm_header(page, check, 'panel')
+        page.render(T('README.md'))
+        page.cmd('@wait:0.3')
         r = page.cmd('@eval:sb.listKeysWanted(' + json.dumps({'root': root}) + '); 0')
         fb = msgs(r, 'filterBegin') + msgs(page.cmd('@wait:0.3'), 'filterBegin')
         flag = lambda m, k: str(m.get(k)).lower() in ('1', 'true')
@@ -2805,9 +2901,10 @@ def main():
         r = click(page, '#doc a.ov-row')
         page.cmd('@wait:0.4')
         check(st()['view'] == 'image' and st()['active'] == [['c.png', 'page']] and 'open' in types(r), 'an overview row opens its file', json.dumps(types(r)))
-        r = click(page, '#side-head')
+        r = click(page, '#side-title')
         page.cmd('@wait:0.4')
         check('overview' in types(r) and st()['view'] == 'overview', "the sidebar's folder name brings the overview back", json.dumps(types(r)))
+        calm_header(page, check, 'quicklook')
         page.cmd('@root:')
         viewers(page, check, page.out, st)
         tools(page, check, page.out)

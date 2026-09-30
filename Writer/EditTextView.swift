@@ -23,6 +23,8 @@ final class EditTextView: NSTextView {
     var listKeys = false
     var session = 0
     var firstKeyLogged = false
+    /// A whole text file rather than a Markdown block (see setPlain).
+    private(set) var plain = false
     /// Keys (and shortcuts) that arrive between a merge or split request and its resetEdit, replayed onto the new text. They are
     /// never applied to the old buffer: the host has already saved the change, so the buffer must not change until the reset.
     private var held: [NSEvent]?
@@ -144,6 +146,17 @@ final class EditTextView: NSTextView {
         re.firstMatch(in: s, range: NSRange(location: 0, length: (s as NSString).length))
     }
 
+    /// A text file: monospaced and unwrapped like the page's code view, so ↑ and ↓ keep the column and Command-arrows reach the
+    /// ends of the real line; a Markdown block: the proportional font, wrapped at the block's width.
+    func setPlain(_ on: Bool) {
+        plain = on
+        font = on ? .monospacedSystemFont(ofSize: 13, weight: .regular) : .systemFont(ofSize: 15)
+        layoutManager?.allowsNonContiguousLayout = on
+        isHorizontallyResizable = on
+        textContainer?.widthTracksTextView = !on
+        textContainer?.containerSize = NSSize(width: on ? CGFloat.greatestFiniteMagnitude : frame.width, height: CGFloat.greatestFiniteMagnitude)
+    }
+
     /// Enter ends the block like a block editor: the text after the caret becomes a new paragraph below, shown as one new line
     /// (the blank line markdown needs between them is never part of an edited block). A list item or quote line continues with
     /// its marker; Enter on an empty one leaves the list or quote. Code, math and HTML blocks take a plain line break, and so
@@ -151,6 +164,11 @@ final class EditTextView: NSTextView {
     override func insertNewline(_ sender: Any?) {
         let ns = string as NSString
         let sel = selectedRange()
+        if plain {
+            let start = ns.lineRange(for: NSRange(location: sel.location, length: 0)).location
+            let head = ns.substring(with: NSRange(location: start, length: sel.location - start))
+            return insertText("\n" + head.prefix { $0 == " " || $0 == "\t" }, replacementRange: sel)
+        }
         guard let split = onSplit, sel.length == 0, (replaying ?? NSApp.currentEvent)?.modifierFlags.contains(.shift) != true,
               Self.matches(Self.literal, string) == nil else { return insertText("\n", replacementRange: sel) }
         let lineRange = ns.lineRange(for: NSRange(location: sel.location, length: 0))

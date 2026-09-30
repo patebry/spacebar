@@ -147,6 +147,57 @@ tv.onFilterKey = nil
 tv.onEscape = {}
 check("after a list session, Command shortcuts work again", letter("v") && tv.string == "pasted")
 
+// A text file (plain): Enter and Backspace edit the text as it is, Enter keeps the indentation, Tab types a tab, lines do not wrap.
+func plainSession() {
+    tv.setPlain(true)
+    tv.onSplit = nil
+    tv.onMergeBackward = nil
+    tv.onEscape = { ends += 1 }
+}
+/// Through the key bindings, as keyDown does once the panel is key (a panel that is never shown has no input context of its own).
+func type(_ chars: String, _ keyCode: UInt16, _ flags: NSEvent.ModifierFlags = []) {
+    let e = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: panel.windowNumber, context: nil,
+                             characters: chars, charactersIgnoringModifiers: chars, isARepeat: false, keyCode: keyCode)!
+    tv.interpretKeyEvents([e])
+}
+plainSession()
+check("plain: monospaced and unwrapped", tv.plain && tv.font?.isFixedPitch == true && tv.textContainer?.widthTracksTextView == false)
+let code = "func f() {\n    let x = 1\n}\n"
+set(code, caret: 24)
+type("\r", 36)
+check("plain: Enter inserts a line that keeps the indentation", tv.string == "func f() {\n    let x = 1\n    \n}\n" && tv.selectedRange() == NSRange(location: 29, length: 0))
+set(code, caret: 11)
+type("\u{7f}", 51)
+check("plain: Backspace at a line's start joins it to the line above", tv.string == "func f() {    let x = 1\n}\n")
+set(code, caret: 0)
+type("\u{7f}", 51)
+check("plain: Backspace at the start of the file does nothing", tv.string == code)
+set(code, caret: 15)
+type("\t", 48)
+check("plain: Tab types a tab", tv.string == "func f() {\n    \tlet x = 1\n}\n")
+set(code, caret: 15)
+type("\r", 36, [.shift])
+check("plain: Shift+Enter is a plain line break too", tv.string.hasPrefix("func f() {\n    \n    let x"))
+let longLine = String(repeating: "word ", count: 40) + "\nnext"
+set(longLine, caret: 0)
+tv.layoutManager!.ensureLayout(for: tv.textContainer!)
+_ = press(right, 124, .command)
+check("plain: Cmd+Right goes to the end of the whole line (no wrapping)", tv.selectedRange().location == longLine.count - 5)
+set("abc\nabcdef\nabcdef", caret: 5)
+type(arrow(down), 125, arrowFlags)
+check("plain: ↓ keeps the column", tv.selectedRange().location == 12)
+set(code, caret: 4)
+check("plain: Cmd+A, Cmd+Z work as in a block", letter("a") && tv.selectedRange() == NSRange(location: 0, length: (code as NSString).length))
+ends = 0
+key("\u{1b}", 53)
+check("plain: Esc ends the edit", ends == 1)
+tv.setPlain(false)
+check("a Markdown block again: proportional and wrapped", !tv.plain && tv.font?.isFixedPitch == false && tv.textContainer?.widthTracksTextView == true)
+set(long, caret: 0)
+tv.layoutManager!.ensureLayout(for: tv.textContainer!)
+_ = press(right, 124, .command)
+check("a Markdown block again: Cmd+Right stops at the visual line", tv.selectedRange().location < long.count - 1)
+
 privateBoard.releaseGlobally()
 print("\n\(failures == 0 ? "all" : "\(failures) FAILED of") edit key checks")
 exit(failures == 0 ? 0 : 1)

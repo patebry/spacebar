@@ -11,8 +11,29 @@ within a week. Fixes ship in the next release, and the advisory is published onc
 Only the latest release is supported. [FINDINGS.md](FINDINGS.md#security-model) describes the threat model: a Markdown file,
 and whatever sits beside it, is treated as hostile.
 
-Six features reach further than a rendered page, and are in scope:
+Seven features reach further than a rendered page, and are in scope:
 
+- **Editing files in place.** The unsandboxed writer saves what is typed. It writes only to an existing regular file whose
+  name, and the name of the file it resolves to, is of a type spacebar edits: Markdown, the code, JSON, CSV and text types
+  spacebar shows as text, and dotfile config (`.env`, `.env.<name>`, `.gitignore`). Unless both are Markdown, a link
+  and its target must have the same extension (the same name, when there is none), so a `notes.txt` that links to `~/.zshrc`
+  is not editable. Markdown is bounded at 64 MB. Any other file is refused when it or either buffer is over 2 MB (spacebar
+  reads at most 2 MB of text, so a buffer cut from a longer file is never saved), when what is on disk does not read as text
+  (TextDecoding's check: a NUL, or many control characters, in its first 64 K characters), and when either side is a binary
+  property list. Code and config can run, so the extension cannot write content of its own into them: when an edit of such a
+  file starts, the writer reads the file itself and takes the edit's text only if it is that file's text (or one its edits of
+  the file already sent), a script cannot replace the buffer, and every write must be, byte for byte, a buffer the writer's
+  own panel sent, in the file's encoding. Markdown writes are as before: any content, to Markdown only. Every write names
+  the bytes it expects on disk (compare-and-swap), and the resolved path is opened without following a link swapped in for
+  it. The preview edits a file only when its bytes come back exactly from its text in the encoding and byte order mark they
+  were read with; a character that encoding cannot hold is not saved, and a file is never converted to UTF-8. A `.env` is
+  editable: an edit goes back into the same file, and LinkPolicy still never hands it to another app, which was the risk that
+  rule addresses. `.npmrc` is not: npm runs what its config names (`script-shell`, `node-options`).
+  Residual risk: the extension can fill the pasteboard and open the invisible panel over a file other than the one on screen,
+  so a ⌘V the user meant for the preview could land there. Files that run on their own are therefore never editable, on the
+  resolved path: shell startup files (`.zshrc`, `.bash_profile`, `.profile` and the rest), `.gitconfig`, `.npmrc`, `.yarnrc`,
+  `.command` and `.tool` scripts, anything in a `LaunchAgents` or `LaunchDaemons` folder, and git hooks. Other code pasted
+  this way would still run only when the user runs it.
 - **HTML files** open in a separate web view with no message handler, no `spacebar:` scheme and no stored data. By default
   a file without the quarantine flag runs its scripts and may load from the web, like a browser would; only files a
   browser, Mail or AirDrop marked as downloaded are held back. Files from `git clone`, `curl`, `unzip` or a USB drive are

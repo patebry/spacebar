@@ -683,7 +683,18 @@ function blockRange(b) {
 /** Every redraw makes new diagram nodes holding their source; each is drawn here, whatever redrew the document. */
 let drawnMermaid = Promise.resolve();
 function draw() {
-  if (!isMarkdown(current)) { $('doc').replaceChildren(viewNode(current)); decorate(); syncPdf(); return; }
+  if (!isMarkdown(current)) {
+    $('doc').replaceChildren(viewNode(current));
+    // The view no longer shows the file's text (another JSON mode): the edit ends.
+    if (editing && editing.whole && !paintTextEditor()) {
+      const seq = editing.seq;
+      endTextEditing();
+      post({ type: 'editStop', seq });
+    }
+    decorate();
+    syncPdf();
+    return;
+  }
   const heights = [...document.querySelectorAll('#doc pre.mermaid')].map((n) => n.getBoundingClientRect().height);
   const frag = render(current.text);
   mountMermaid(frag, heights);
@@ -754,7 +765,8 @@ function wordAt(text, i) {
 function select(start, len) {
   Object.assign(editing, { selStart: start, selLen: len });
   const el = editorEl();
-  if (el) el.innerHTML = editorHTML();
+  if (editing.whole) paintTextEditor();
+  else if (el) el.innerHTML = editorHTML();
   post({ type: 'editSelect', seq: editing.seq, start, length: len });
 }
 
@@ -789,6 +801,250 @@ function beginEdit(block, e, tClick) {
   post({ type: 'editBlock', path: current.path, seq: editing.seq, start, end, text: src, caret, tag: block.tagName,
          clickX: e.clientX - r.left, clickY: e.clientY - r.top, width: r.width, height: r.height, ver: docVer, tClick, tMapped });
   afterPaint(() => post({ type: 'caretPainted', t: now() }));
+}
+
+// ---------- editing a whole text file (code, text, and the text of JSON and CSV) ----------
+
+/** Offset in `code`'s text under a point. */
+function textOffset(code, x, y) {
+  const r = document.caretRangeFromPoint(x, y);
+  if (!r || !code.contains(r.startContainer)) return null;
+  const pre = document.createRange();
+  pre.selectNodeContents(code);
+  pre.setEnd(r.startContainer, r.startOffset);
+  return pre.toString().length;
+}
+
+/** Draws the caret at `start` (len 0) or wraps the selection in `.sel`, among `root`'s text nodes (highlighted or one plain node). */
+function markText(root, start, len) {
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walk.nextNode()) nodes.push(walk.currentNode);
+  let pos = 0;
+  if (!len) {
+    // At a boundary the caret goes at the start of the next node: after a block's last line break it would open a line.
+    for (const n of nodes) {
+      if (start < pos + n.length) { n.splitText(start - pos).before(el('span', 'caret')); return; }
+      pos += n.length;
+    }
+    (nodes.length ? nodes[nodes.length - 1].parentNode : root).append(el('span', 'caret'));
+    return;
+  }
+  const end = start + len;
+  for (let n of nodes) {
+    const a = pos, b = pos + n.length;
+    pos = b;
+    if (b <= start || a >= end) continue;
+    if (start > a) n = n.splitText(start - a);
+    if (end < b) n.splitText(end - Math.max(a, start));
+    const s = el('span', 'sel');
+    n.before(s);
+    s.append(n);
+  }
+}
+
+// A plain edit's text in blocks of this many lines, so a keystroke lays out one block rather than the whole file.
+const EDIT_CHUNK = 200;
+
+function textChunks(code, text) {
+  const chunks = [];
+  let start = 0;
+  do {
+    let end = start;
+    for (let n = 0; n < EDIT_CHUNK && end < text.length; n++) { const j = text.indexOf('\n', end); end = j < 0 ? text.length : j + 1; }
+    chunks.push({ start, end, node: el('span', 'tchunk', text.slice(start, end)) });
+    start = end;
+  } while (start < text.length);
+  code.replaceChildren(...chunks.map((c) => c.node));
+  return chunks;
+}
+
+function unmark(root) {
+  root.querySelectorAll('.caret').forEach((c) => c.remove());
+  root.querySelectorAll('.sel').forEach((s) => s.replaceWith(...s.childNodes));
+  root.normalize();
+}
+
+/** Replaces [from, to) of the text under `root` with `insert`, in its text nodes: what is typed takes the colour of the token
+ *  it follows until the next highlight. */
+function spliceText(root, from, to, insert) {
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walk.nextNode()) nodes.push(walk.currentNode);
+  if (!nodes.length) { root.append(insert); return; }
+  let pos = 0;
+  for (const n of nodes) {
+    const a = pos;
+    pos += n.length;
+    const s = Math.max(a, from), e = Math.min(pos, to);
+    if (e > s) n.deleteData(s - a, e - s);
+  }
+  pos = 0;
+  for (const n of nodes) {
+    if (from === 0 || (from > pos && from <= pos + n.length) || n === nodes[nodes.length - 1]) { n.insertData(Math.min(from - pos, n.length), insert); return; }
+    pos += n.length;
+  }
+}
+
+let relightTimer = 0;
+function relightSoon() {
+  clearTimeout(relightTimer);
+  relightTimer = setTimeout(() => { if (editing && editing.whole && editing.lit) { editing.lit = null; paintTextEditor(); } }, 200);
+}
+
+/** The block holding offset `at`: the first whose end is past it, else the last. */
+function chunkAt(chunks, at) {
+  let lo = 0, hi = chunks.length - 1;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (chunks[mid].end > at) hi = mid; else lo = mid + 1; }
+  return lo;
+}
+
+/** The file's text with the caret or selection, in place of its code view's text: small files stay highlighted as they change,
+ *  larger ones are plain until the edit ends, redrawn only in the blocks a change or the caret touch. `change` is the last
+ *  update's { from, to, length } in the text before it. False when the view shows something other than the file's text. */
+function paintTextEditor(scroll = false, change = null) {
+  const pre = document.querySelector('#doc pre.code[data-file-text]');
+  if (!pre || !editing || !editing.whole) return false;
+  const code = pre.querySelector('code') || pre;
+  const { text, selStart, selLen } = editing;
+  pre.classList.add('text-editing');
+  const lang = pre.dataset.lang;
+  if (lang && text.length <= HIGHLIGHT_NOW) {
+    // Highlighted: a change goes into the tokens around it at once, and the whole is highlighted again once typing pauses.
+    editing.chunks = null;
+    if (editing.lit === code) {
+      unmark(code);
+      if (change) { spliceText(code, change.from, change.to, text.substr(change.from, change.length)); relightSoon(); }
+    } else {
+      code.replaceChildren(highlighted(text, lang));
+      editing.lit = code;
+    }
+  } else {
+    editing.lit = null;
+    let ch = editing.chunks && editing.chunks.length && editing.chunks[0].node.parentNode === code ? editing.chunks : null;
+    const dirty = new Set(ch ? editing.marked : []);
+    if (ch && change) {
+      const i = chunkAt(ch, change.from), d = change.length - (change.to - change.from);
+      if (i !== chunkAt(ch, Math.max(change.from, change.to - 1))) ch = null;
+      else {
+        ch[i].end += d;
+        for (let k = i + 1; k < ch.length; k++) { ch[k].start += d; ch[k].end += d; }
+        dirty.add(i);
+        // A block must end at a line break, or its last line would show split from the next block's first.
+        if (i < ch.length - 1 && text[ch[i].end - 1] !== '\n') ch = null;
+      }
+    }
+    if (!ch) { ch = editing.chunks = textChunks(code, text); dirty.clear(); }
+    for (const k of dirty) if (ch[k]) ch[k].node.textContent = text.slice(ch[k].start, ch[k].end);
+    editing.marked = [];
+    for (let k = chunkAt(ch, selStart); k <= chunkAt(ch, selStart + selLen); k++) editing.marked.push(k);
+  }
+  markText(code, selStart, selLen);
+  const gutter = pre.parentElement.querySelector('.gutter');
+  const n = Math.max(1, lineCount(text) + (text.endsWith('\n') && selStart + selLen >= text.length ? 1 : 0));
+  if (gutter && +gutter.dataset.n !== n) { gutter.dataset.n = n; gutter.textContent = Array.from({ length: n }, (_, i) => i + 1).join('\n'); }
+  if (scroll) { const c = code.querySelector('.caret, .sel'); if (c) c.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+  return true;
+}
+
+/** A click on the text of an editable file: the whole file is edited; the native side is told and takes the keyboard. */
+function beginTextEdit(pre, e, tClick) {
+  if (updateBusy) { window.sb.status('Updating…'); return; }
+  const text = current.text;
+  const at = textOffset(pre.querySelector('code') || pre, e.clientX, e.clientY);
+  const caret = Math.min(at === null ? text.length : at, text.length);
+  const r = pre.getBoundingClientRect();
+  editing = { seq: ++editSeq, whole: true, start: 0, lines: 0, text, selStart: caret, selLen: 0, tag: 'PRE' };
+  const tMapped = now();
+  paintTextEditor();
+  jsonCheckSoon();
+  post({ type: 'editText', path: current.path, seq: editing.seq, caret, len: text.length, clickX: e.clientX - r.left, clickY: e.clientY - r.top,
+         width: r.width, height: r.height, tClick, tMapped });
+  afterPaint(() => post({ type: 'caretPainted', t: now() }));
+}
+
+/** Ends a whole-file edit on the page: its text becomes the view's (a new object, so JSON and CSV parse it afresh). */
+function endTextEditing() {
+  if (editing && editing.whole) current = { ...current, text: editing.text };
+  editing = null;
+  retired = null;
+}
+
+// JSON as typed: where it stops being JSON, said quietly above the text. It is saved either way.
+const strictJSON = (p) => p.view === 'json' && !/\.(jsonc|json5)$/i.test(p.name || '');
+let jsonCheckTimer = 0;
+
+function jsonCheckSoon() {
+  clearTimeout(jsonCheckTimer);
+  if (!strictJSON(current)) return;
+  jsonCheckTimer = setTimeout(() => {
+    const box = document.querySelector('#doc .viewer-json');
+    if (!box || !editing || !editing.whole) return;
+    const at = jsonErrorAt(editing.text);
+    let n = box.querySelector('.json-warn');
+    if (at === null) { if (n) n.remove(); return; }
+    if (!n) { n = note(''); n.classList.add('json-warn'); box.querySelector('.viewer-head').after(n); }
+    n.textContent = `Invalid JSON at ${jsonWhere(editing.text, at)}. It is saved as typed.`;
+  }, 150);
+}
+
+function jsonWhere(text, at) {
+  const before = text.slice(0, at);
+  const nl = before.lastIndexOf('\n');
+  return `line ${(before.match(/\n/g) || []).length + 1}, column ${at - nl}`;
+}
+
+/** The offset where `t` stops being JSON, or null when it is JSON. JSON.parse says only whether; this finds where, without
+ *  recursion, so no nesting depth can overflow the stack. */
+function jsonErrorAt(t) {
+  try { JSON.parse(t); return null; } catch (e) { /* located below */ }
+  const n = t.length, stack = [];
+  let i = 0, want = 'value';
+  const ws = () => { while (i < n && ' \t\n\r'.includes(t[i])) i++; };
+  const str = () => {
+    for (i++; i < n; i++) {
+      const c = t.charCodeAt(i);
+      if (c === 34) { i++; return true; }
+      if (c < 32) return false;
+      if (c === 92) {
+        const e = t[i + 1];
+        if (e === 'u') { if (!/^[0-9a-fA-F]{4}$/.test(t.substr(i + 2, 4))) return false; i += 5; } else if (e && '"\\/bfnrt'.includes(e)) i++; else return false;
+      }
+    }
+    return false;
+  };
+  const SCALAR = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null/y;
+  for (;;) {
+    ws();
+    if (want === 'value') {
+      const c = t[i];
+      if (c === '{' || c === '[') {
+        i++;
+        ws();
+        if (t[i] === (c === '{' ? '}' : ']')) { i++; want = 'after'; continue; }
+        stack.push(c);
+        want = c === '{' ? 'key' : 'value';
+        continue;
+      }
+      if (c === '"') { if (!str()) return i; } else {
+        SCALAR.lastIndex = i;
+        const m = SCALAR.exec(t);
+        if (!m) return i;
+        i += m[0].length;
+      }
+      want = 'after';
+    } else if (want === 'key') {
+      if (t[i] !== '"' || !str()) return i;
+      ws();
+      if (t[i] !== ':') return i;
+      i++;
+      want = 'value';
+    } else {
+      const top = stack[stack.length - 1];
+      if (!top) return i < n ? i : null;
+      if (t[i] === ',') { i++; want = top === '{' ? 'key' : 'value'; } else if (t[i] === (top === '{' ? '}' : ']')) { i++; stack.pop(); } else return i;
+    }
+  }
 }
 
 // ---------- table of contents and reading stats (outside #doc, rebuilt after every draw) ----------
@@ -988,9 +1244,24 @@ window.sb = {
   },
   editEnd(e) {
     if (!editing || (e && e.seq !== undefined && e.seq !== editing.seq)) return;
-    editing = null;
-    retired = null;
+    endTextEditing();
     draw();
+  },
+  /** A change to the text of a whole-file edit, as UTF-16 offsets: [from, to) became `insert`. Keys of an edit that has ended
+   *  still land in the view's text. */
+  textUpdate(u) {
+    const changed = u.from !== u.to || u.insert !== '';
+    const apply = (t) => t.slice(0, u.from) + u.insert + t.slice(u.to);
+    if (editing && editing.whole && editing.seq === u.seq) {
+      if (changed) editing.text = current.text = apply(editing.text);
+      Object.assign(editing, { selStart: u.selStart, selLen: u.selLen });
+      paintTextEditor(true, changed ? { from: u.from, to: u.to, length: u.insert.length } : null);
+      if (changed) jsonCheckSoon();
+      requestAnimationFrame(() => post({ type: 'editPainted', keyTime: u.keyTime }));
+    } else if (changed && !editing) {
+      current = { ...current, text: apply(current.text) };
+      draw();
+    }
   },
   /** One folder of the sidebar's tree: the root, or a folder expanded in it. */
   setFiles(f) { setFolder(f); },
@@ -1169,6 +1440,7 @@ function viewerAction(b, e) {
   const a = b.dataset.action;
   if ((a === 'openFile' || a === 'reveal') && e.isTrusted) post({ type: a, path: current.path });
   else if (a === 'csvSort') csvSortBy(+b.dataset.col);
+  else if (a === 'textMode') textMode();
   else if (a === 'jsonMode' || a === 'jsonToggle' || a === 'jsonAll' || a === 'jsonMore') jsonAction(a, b);
   else if (a === 'archiveDir' && archiveOpen) {
     const path = b.dataset.path;
@@ -1183,27 +1455,55 @@ function viewerAction(b, e) {
 
 function viewHead(p, ...extra) {
   const head = el('div', 'viewer-head');
-  head.append(el('span', 'viewer-kind', [p.kindName, fmtSize(p.size)].filter(Boolean).join(' · ')), ...extra, openButton(p));
+  head.append(el('span', 'viewer-kind', [p.kindName, fmtSize(p.size)].filter(Boolean).join(' · ')), ...extra.filter(Boolean), openButton(p));
   return head;
 }
 
 function note(text) { return el('div', 'viewer-note', text); }
 
+/** The JSON and CSV views' Edit toggle: the file's text in place of the tree or table, where a click edits it; again to go back. */
+function editToggle(p, on) {
+  if (p.editable !== true || !settings.inlineEditing) return null;
+  const b = el('button', 'viewer-edit', 'Edit');
+  b.type = 'button';
+  b.dataset.action = 'textMode';
+  b.setAttribute('aria-pressed', String(on));
+  return b;
+}
+
+// CSV files flipped to their text by the Edit toggle.
+const csvAsText = new Set();
+
+function textMode() {
+  const m = jsonState;
+  if (current.view === 'json' && m && m.p === current) {
+    if (m.mode !== 'raw') { m.back = m.mode; m.mode = 'raw'; } else m.mode = m.modes.includes(m.back) ? m.back : m.modes[0];
+  } else if (current.view === 'csv' && !csvAsText.delete(current.path)) csvAsText.add(current.path);
+  const y = window.scrollY;
+  draw();
+  window.scrollTo(0, y);
+}
+
 function truncNote(p) { return p.truncated ? note(`Showing the first 2 MB of ${fmtSize(p.size)}.`) : null; }
 
-/** Source with line numbers; highlighted by the bundled highlight.js when the language is known and the text is not huge. */
-function codeBlock(text, lang) {
+const highlighted = (text, lang) => DOMPurify.sanitize(hljs.highlight(text, { language: lang, ignoreIllegals: true }).value,
+  { ALLOWED_TAGS: ['span'], ALLOWED_ATTR: ['class'], RETURN_DOM_FRAGMENT: true });
+
+/** Source with line numbers; highlighted by the bundled highlight.js when the language is known and the text is not huge.
+ *  `file`: the text is the editable file's own, which a click edits. */
+function codeBlock(text, lang, file = false) {
   const wrap = el('div', 'code-view');
   const n = Math.max(1, lineCount(text));
-  wrap.append(el('pre', 'gutter', Array.from({ length: n }, (_, i) => i + 1).join('\n')));
+  const gutter = el('pre', 'gutter', Array.from({ length: n }, (_, i) => i + 1).join('\n'));
+  gutter.dataset.n = n;
+  wrap.append(gutter);
   const pre = el('pre', 'code');
+  if (file) pre.dataset.fileText = '';
   const code = el('code', 'hljs');
-  const highlight = () => {
-    const html = hljs.highlight(text, { language: lang, ignoreIllegals: true }).value;
-    code.replaceChildren(DOMPurify.sanitize(html, { ALLOWED_TAGS: ['span'], ALLOWED_ATTR: ['class'], RETURN_DOM_FRAGMENT: true }));
-  };
+  const highlight = () => code.replaceChildren(highlighted(text, lang));
   code.textContent = text;
   if (lang && window.hljs && hljs.getLanguage(lang) && text.length <= HIGHLIGHT_MAX) {
+    pre.dataset.lang = lang;
     // A long file is painted plain first: highlighting it would hold the first paint.
     if (text.length <= HIGHLIGHT_NOW) highlight();
     else afterPaint(() => { if (code.isConnected) highlight(); });
@@ -1233,7 +1533,7 @@ function jsonModel(p) {
   const modes = nb ? ['notebook', 'tree', 'raw'] : ok && isBranch(value) ? ['tree', 'formatted', 'raw'] : ok ? ['formatted', 'raw'] : ['raw'];
   const same = jsonState && jsonState.p.path === p.path;
   const mode = same && modes.includes(jsonState.mode) ? jsonState.mode : modes[0];
-  jsonState = { p, value, ok, nb, modes, mode, open: same ? jsonState.open : new Set(), more: same ? jsonState.more : new Map(), pretty: null };
+  jsonState = { p, value, ok, nb, modes, mode, back: same ? jsonState.back : null, open: same ? jsonState.open : new Set(), more: same ? jsonState.more : new Map(), pretty: null };
   if (!same && ok && isBranch(value)) jsonOpenLevels(jsonState, JSON_AUTO_ROWS);
   return jsonState;
 }
@@ -1268,6 +1568,8 @@ function jsonView(p) {
     }
   }
   if (m.modes.length > 1) {
+    const edit = editToggle(p, m.mode === 'raw');
+    if (edit) extra.push(edit);
     const seg = el('span', 'viewer-seg');
     seg.setAttribute('role', 'group');
     seg.setAttribute('aria-label', 'View as');
@@ -1284,13 +1586,18 @@ function jsonView(p) {
   box.append(viewHead(p, ...extra));
   const t = truncNote(p);
   if (t) box.append(t, note(/\.ipynb$/i.test(p.name || '') ? 'A notebook this large is shown as its text.' : 'A file this large is shown as its text, not as a tree.'));
-  if (!m.ok && !p.truncated) box.append(note('Not valid JSON: shown as is.'));
+  if (!m.ok && !p.truncated) {
+    const at = strictJSON(p) ? jsonErrorAt(p.text) : null;
+    const n = note(at === null ? 'Not valid JSON: shown as is.' : `Not valid JSON at ${jsonWhere(p.text, at)}: shown as is.`);
+    n.classList.add('json-warn');
+    box.append(n);
+  }
   if (m.mode === 'tree') box.append(jsonTree(m));
   else if (m.mode === 'notebook') box.append(notebookView(m.value));
   else if (m.mode === 'formatted') {
     if (m.pretty === null) m.pretty = JSON.stringify(m.value, null, 2);
     box.append(codeBlock(m.pretty, 'json'));
-  } else box.append(codeBlock(p.text, 'json'));
+  } else box.append(codeBlock(p.text, 'json', p.editable === true));
   return box;
 }
 
@@ -1595,12 +1902,17 @@ function sortCsv(m) {
 }
 
 function csvView(p) {
+  if (csvAsText.has(p.path) && editToggle(p, true)) {
+    const box = el('div', 'viewer viewer-code viewer-csv');
+    box.append(viewHead(p, editToggle(p, true)), codeBlock(p.text, null, true));
+    return box;
+  }
   const m = csvModel(p);
   const box = el('div', 'viewer viewer-csv');
   const shape = m.head.length ? `${Math.max(0, m.total - 1).toLocaleString()} ${m.total === 2 ? 'row' : 'rows'} × ${m.cols} ${m.cols === 1 ? 'column' : 'columns'}` : '';
   const head = el('div', 'viewer-head');
   const sepName = m.sep === ',' || (m.sep === '\t' && p.tsv === true) ? '' : `${DELIMITER_NAMES[m.sep]}-separated`;
-  head.append(el('span', 'viewer-kind', [p.kindName, fmtSize(p.size), shape, sepName].filter(Boolean).join(' · ')), openButton(p));
+  head.append(el('span', 'viewer-kind', [p.kindName, fmtSize(p.size), shape, sepName].filter(Boolean).join(' · ')), ...[editToggle(p, false)].filter(Boolean), openButton(p));
   box.append(head);
   const t = truncNote(p);
   if (t) box.append(t);
@@ -2154,7 +2466,7 @@ function viewNode(p) {
         const t = truncNote(p);
         if (t) box.append(t);
         if (p.view === 'code' && p.lang && p.text.length > HIGHLIGHT_MAX) box.append(note('Highlighting is off for files over 512 KB.'));
-        box.append(codeBlock(p.text, p.view === 'code' ? p.lang : null));
+        box.append(codeBlock(p.text, p.view === 'code' ? p.lang : null, p.editable === true));
         return box;
       }
       break;
@@ -2936,10 +3248,10 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !pop.hid
 syncPopover();
 
 // Clicks in the editor move the caret and double-clicks select a word; the page's own selection stays out of the editor.
-document.addEventListener('mousedown', (e) => { if (editing && e.target.closest('#doc > .md-editing')) e.preventDefault(); });
+document.addEventListener('mousedown', (e) => { if (editing && e.target.closest('#doc > .md-editing, #doc pre.text-editing')) e.preventDefault(); });
 
 document.addEventListener('dblclick', (e) => {
-  const el = e.target.closest('#doc > .md-editing');
+  const el = e.target.closest('#doc > .md-editing, #doc pre.text-editing');
   if (!editing || !el) return;
   e.preventDefault();
   const [a, b] = wordAt(editing.text, editorOffset(el, e.clientX, e.clientY));
@@ -2979,7 +3291,7 @@ document.addEventListener('click', (e) => {
   }
   if (e.target.closest('#sidebar, #crumbs')) return;
   const act = e.target.closest('#doc .viewer [data-action]');
-  if (act) { e.preventDefault(); viewerAction(act, e); return; }
+  if (act) { e.preventDefault(); if (editing && editing.whole) stopEditing(); viewerAction(act, e); return; }
   const ov = e.target.closest('#doc .overview a.ov-row');
   if (ov) { e.preventDefault(); if (ov.dataset.path !== current.path) post({ type: 'open', path: ov.dataset.path }); return; }
   const wl = e.target.closest('#doc a.wikilink');
@@ -2989,9 +3301,11 @@ document.addEventListener('click', (e) => {
   if (a && href && !href.startsWith('#')) { e.preventDefault(); post({ type: 'link', href: new URL(href, document.baseURI).href }); return; }
   // An embedded note is another file: it is read here, never edited.
   if (e.target.closest('#doc .wl-embed')) return;
-  const el = e.target.closest('#doc > .md-editing');
+  const el = e.target.closest('#doc > .md-editing, #doc pre.text-editing');
   if (editing && el) { if (e.detail < 2) select(editorOffset(el, e.clientX, e.clientY), 0); return; }
   if (a || e.target.closest('input, button, #toolbar') || getSelection().toString()) return;
+  const text = e.target.closest('#doc pre.code[data-file-text]');
+  if (text && settings.inlineEditing && current.editable === true && !isMarkdown(current)) { beginTextEdit(text, e, tClick); return; }
   const block = e.target.closest('#doc > [data-src]');
   if (block && settings.inlineEditing) beginEdit(block, e, tClick);
   else if (editing) stopEditing();
@@ -3000,8 +3314,7 @@ document.addEventListener('click', (e) => {
 /** A click outside every block ends the edit; native saves what the writer still holds and re-renders. */
 function stopEditing() {
   const seq = editing.seq;
-  editing = null;
-  retired = null;
+  endTextEditing();
   draw();
   post({ type: 'editStop', seq });
 }

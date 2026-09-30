@@ -25,6 +25,10 @@ check("UTF-16 LE without a BOM (a Windows log)", decode("utf16le-nobom.log") == 
 check("Shift JIS is found by the detector", decode("shiftjis.txt") == TextDecoding.Decoded(text: "日本語のテキストです。これはテストです。\n", name: "Shift JIS"),
       "\(String(describing: decode("shiftjis.txt")))")
 
+let texts = ["latin1-cp1252.txt", "latin1-iso.txt", "shiftjis.txt", "utf16le-bom.txt", "utf16be-bom.txt", "utf32le-bom.txt", "utf32be-bom.txt",
+             "utf16le-nobom.log", "utf8-bom.csv"]
+let back = texts.filter { f in decode(f).flatMap { EditableText.open(data(f), decoded: $0) } == nil }
+check("every text fixture comes back byte for byte from its text, encoding and byte order mark (EditableText.open)", back.isEmpty, "\(back)")
 check("binary with NUL bytes is not text", decode("binary-nul.dat") == nil)
 check("binary of control bytes without a NUL is not text", decode("binary-controls.dat") == nil)
 check("UTF-16 holding a NUL character is not text", decode("utf16-nul.txt") == nil)

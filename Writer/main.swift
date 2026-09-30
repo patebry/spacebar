@@ -4,28 +4,29 @@ import os
 
 // Unsandboxed XPC service embedded in the preview appex; only reachable by that appex (launchd scopes bundled services to their container).
 private let log = Logger(subsystem: logSubsystem, category: "writer")
-private let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "mkdn"]
-private let maxWriteBytes = 64 << 20
 private let writeGate = WriteGate()
 
 final class Writer: NSObject, SpacebarWriterProtocol {
     private weak var connection: NSXPCConnection?
+    let typed = TypedTexts()
 
     init(connection: NSXPCConnection) { self.connection = connection }
 
     func write(_ data: Data, toPath path: String, expecting base: Data, reply: @escaping (String?) -> Void) {
-        // Both the named path and what it resolves to must be existing markdown files, so a .md symlink cannot aim a write at
+        // Both the named path and what it resolves to must be of a type spacebar edits, so a .md symlink cannot aim a write at
         // some other file.
-        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath()
-        var st = stat()
-        guard path.hasPrefix("/"), [URL(fileURLWithPath: path), resolved].allSatisfy({ markdownExtensions.contains($0.pathExtension.lowercased()) }),
-              stat(resolved.path, &st) == 0, st.st_mode & S_IFMT == S_IFREG, data.count <= maxWriteBytes, base.count <= maxWriteBytes else {
-            log.error("refused write to \(path, privacy: .private)")
-            return reply("refused: not an existing markdown file")
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        var why = EditableText.writeRefusal(path: path, data: data, base: base)
+        if why == nil, !(EditableText.isMarkdown(path) && EditableText.isMarkdown(resolved)), !typed.allows(path: resolved, data: data) {
+            why = "not a text typed in this file's edit"
+        }
+        if let why {
+            log.error("refused write to \(path, privacy: .private): \(why, privacy: .public)")
+            return reply("refused: \(why)")
         }
         guard writeGate.begin() else { return reply("write failed (the writer is quitting); file left as it was") }
         defer { writeGate.end() }
-        let err = compareAndWrite(data, path: path, expecting: base)
+        let err = compareAndWrite(data, path: resolved, expecting: base, noFollow: true)
         if let err { log.error("write \(path, privacy: .private): \(err, privacy: .private)") } else { log.info("wrote \(data.count) bytes to \(path, privacy: .private)") }
         reply(err)
     }
@@ -264,6 +265,22 @@ final class Writer: NSObject, SpacebarWriterProtocol {
     }
 
     func beginEdit(_ session: Int, text: String, caret: Int, clickX: Double, clickY: Double, blockWidth: Double, blockHeight: Double, reply: @escaping (Bool) -> Void) {
+        beginEdit(session, text: text, caret: caret, file: nil, clickX: clickX, clickY: clickY, width: blockWidth, height: blockHeight, reply: reply)
+    }
+
+    func beginTextEdit(_ session: Int, path: String, text: String, caret: Int, clickX: Double, clickY: Double, width: Double, height: Double,
+                       reply: @escaping (Bool) -> Void) {
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        guard path.hasPrefix("/"), typed.begin(path: resolved, text: text) else {
+            log.error("refused text edit of \(path, privacy: .private): not the file's text")
+            return reply(false)
+        }
+        beginEdit(session, text: text, caret: caret, file: resolved, clickX: clickX, clickY: clickY, width: width, height: height, reply: reply)
+    }
+
+    /// `file`: a whole text file (plain mode), whose sent texts are recorded for its writes.
+    private func beginEdit(_ session: Int, text: String, caret: Int, file: String?, clickX: Double, clickY: Double, width blockWidth: Double,
+                           height blockHeight: Double, reply: @escaping (Bool) -> Void) {
         log.info("lat[\(session)] writer-recv \(upMs(), format: .fixed(precision: 1))")
         let host = connection?.remoteObjectProxyWithErrorHandler { err in
             log.error("edit host gone: \(err.localizedDescription, privacy: .public)")
@@ -281,7 +298,7 @@ final class Writer: NSObject, SpacebarWriterProtocol {
             FilterSession.current?.end("replaced", notify: true, hide: false)
             let mouse = NSEvent.mouseLocation
             let frame = NSRect(x: mouse.x - clickX, y: mouse.y + clickY - blockHeight, width: max(blockWidth, 40), height: max(blockHeight, 24))
-            let s = EditSession(owner: self, id: session, text: text, caret: caret, frame: frame, host: host)
+            let s = EditSession(owner: self, id: session, text: text, caret: caret, file: file, frame: frame, host: host)
             EditSession.current = s
             log.info("lat[\(session)] panel-shown \(upMs(), format: .fixed(precision: 1))")
             reply(true)
@@ -409,6 +426,8 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private var sendQueued = false
     private var ended = false
     private var keyLogged = false
+    /// The text file edited as a whole (resolved path), whose every sent buffer is recorded in the owner's TypedTexts.
+    private let file: String?
 
     static func find(owner: Writer, session: Int) -> EditSession? {
         guard let s = current, s.owner === owner, s.id == session, !s.ended else { return nil }
@@ -421,16 +440,19 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         s.end(reason, notify: true)
     }
 
-    init(owner: Writer, id: Int, text: String, caret: Int, frame: NSRect, host: SpacebarEditHostProtocol) {
+    init(owner: Writer, id: Int, text: String, caret: Int, file: String? = nil, frame: NSRect, host: SpacebarEditHostProtocol) {
         self.owner = owner
         self.id = id
         self.host = host
+        self.file = file
         super.init()
+        let plain = file != nil
         let panel = surface.panel
         panel.setFrame(frame, display: false)
         textView.frame = NSRect(origin: .zero, size: frame.size)
         textView.delegate = nil
         textView.dropHeld()
+        textView.setPlain(plain)
         textView.string = text
         textView.setSelectedRange(NSRange(location: min(caret, (text as NSString).length), length: 0))
         textView.undoManager?.removeAllActions()
@@ -441,12 +463,12 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         textView.onHoldTimeout = { [weak self] in self?.end("hold-timeout", notify: true) }
         textView.onFilterKey = nil
         textView.listKeys = false
-        textView.onMergeBackward = { [weak self] in
+        textView.onMergeBackward = plain ? nil : { [weak self] in
             guard let self, !self.ended else { return }
             self.flush(force: true)
             self.host.editMergeBackward(self.id)
         }
-        textView.onSplit = { [weak self] before, after, tail in
+        textView.onSplit = plain ? nil : { [weak self] before, after, tail in
             guard let self, !self.ended else { return }
             self.flush(force: true)
             self.host.editSplit(self.id, before: before, after: after, tail: tail)
@@ -477,7 +499,8 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
 
     func reset(text: String?, caret: Int) {
         textView.releaseHeld {
-            if let text {
+            // A text file's buffer changes only by typing: what it holds may be written to the file.
+            if let text, file == nil {
                 textView.string = text
                 textView.undoManager?.removeAllActions()
             }
@@ -508,7 +531,9 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         guard force || !textView.isHolding, let keyTime = pendingKeyTime else { return }
         pendingKeyTime = nil
         let sel = textView.selectedRange()
-        host.editChanged(id, text: textView.string, selectionStart: sel.location, selectionLength: sel.length, keyTime: keyTime)
+        let text = textView.string
+        if let file { owner?.typed.sent(path: file, text: text) }
+        host.editChanged(id, text: text, selectionStart: sel.location, selectionLength: sel.length, keyTime: keyTime)
     }
 
     func windowDidBecomeKey(_ notification: Notification) { logKey() }
@@ -521,6 +546,7 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         // Messages on the connection are ordered, so a change still waiting for its main-queue turn lands before the end.
         flush()
         ended = true
+        if let file { owner?.typed.ended(path: file) }
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         log.info("edit end: \(reason, privacy: .public)")
         if surface.panel.delegate === self { surface.panel.delegate = nil }
@@ -568,6 +594,7 @@ final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         textView.frame = NSRect(origin: .zero, size: frame.size)
         textView.delegate = nil
         textView.dropHeld()
+        textView.setPlain(false)
         textView.string = text
         textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
         textView.undoManager?.removeAllActions()

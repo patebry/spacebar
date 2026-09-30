@@ -112,7 +112,7 @@ plist() {
 }
 
 WRITER_BIN=$OBJ/$WRITER_EXE
-compile "$WRITER_BIN" -module-name "$WRITER_EXE" Writer/main.swift Writer/EditTextView.swift Writer/FileWrite.swift Shared/ArchiveListing.swift Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/Updates.swift
+compile "$WRITER_BIN" -module-name "$WRITER_EXE" Writer/main.swift Writer/EditTextView.swift Writer/FileWrite.swift Shared/ArchiveListing.swift Shared/FolderListing.swift Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/Updates.swift
 PREVIEW_BIN=$OBJ/$APPEX_EXE
 PROBE_FLAGS=()
 [ "${PROBE:-0}" = 1 ] && PROBE_FLAGS=(-D PROBE)

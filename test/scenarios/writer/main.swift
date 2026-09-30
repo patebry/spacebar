@@ -1,0 +1,41 @@
+// The scenario harness's writer XPC service: the viewer latency stub (test/viewerlatency/writer), but it lists archives as the
+// real writer does (ArchiveListing, a sandboxed bsdtar), so an archive shows its entries. Nothing is written, opened or fetched.
+import Foundation
+
+final class StubWriter: NSObject, SpacebarWriterProtocol, NSXPCListenerDelegate {
+    func write(_ data: Data, toPath path: String, expecting base: Data, reply: @escaping (String?) -> Void) { reply("refused") }
+    func open(_ url: URL, reply: @escaping (Bool) -> Void) { reply(false) }
+    func open(_ url: URL, appBundleID: String?, reply: @escaping (Bool) -> Void) { reply(false) }
+    func openFileOnScreen(_ url: URL, reply: @escaping (Bool) -> Void) { reply(false) }
+    func openText(_ url: URL, appBundleID: String?, reply: @escaping (Bool) -> Void) { reply(false) }
+    func textOpener(_ url: URL, appBundleID: String?, reply: @escaping (String?, Bool) -> Void) { reply("TextEdit", true) }
+    func reveal(_ url: URL, reply: @escaping (Bool) -> Void) { reply(false) }
+    func defaultApp(_ url: URL, reply: @escaping (String?) -> Void) { reply("Preview") }
+    func listArchive(_ path: String, reply: @escaping (Data?) -> Void) { DispatchQueue.global().async { reply(ArchiveListing.list(path)) } }
+    func ensureSupportDir(reply: @escaping (Bool) -> Void) { reply(true) }
+    func updateSettings(_ patch: Data, reply: @escaping (Bool) -> Void) { reply(false) }
+    func openSettings(_ tab: String, reply: @escaping (Bool) -> Void) { reply(false) }
+    func updateOffer(reply: @escaping (Data?) -> Void) { reply(nil) }
+    func copyInstallCommand(reply: @escaping (Bool) -> Void) { reply(false) }
+    func installUpdate(_ version: String, reply: @escaping (String?) -> Void) { reply("stub") }
+    func prepare() {}
+    func beginEdit(_ session: Int, text: String, caret: Int, clickX: Double, clickY: Double, blockWidth: Double, blockHeight: Double, reply: @escaping (Bool) -> Void) { reply(false) }
+    func setSelection(_ session: Int, start: Int, length: Int) {}
+    func resetEdit(_ session: Int, text: String?, caret: Int) {}
+    func endEdit(_ session: Int) {}
+    func beginFilter(_ session: Int, text: String, clickX: Double, clickY: Double, fieldWidth: Double, fieldHeight: Double, reply: @escaping (Bool) -> Void) { reply(false) }
+    func beginListKeys(_ session: Int, clickX: Double, clickY: Double, rowWidth: Double, rowHeight: Double, reply: @escaping (Bool) -> Void) { reply(false) }
+    func endFilter(_ session: Int) {}
+
+    func listener(_ listener: NSXPCListener, shouldAcceptNewConnection c: NSXPCConnection) -> Bool {
+        c.exportedInterface = NSXPCInterface(with: SpacebarWriterProtocol.self)
+        c.exportedObject = self
+        c.resume()
+        return true
+    }
+}
+
+let stub = StubWriter()
+let listener = NSXPCListener.service()
+listener.delegate = stub
+listener.resume()

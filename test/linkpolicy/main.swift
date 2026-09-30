@@ -80,6 +80,8 @@ check("editor: refused a folder, a package, a missing file, an app", LinkPolicy.
 if UTType(filenameExtension: "env")?.identifier == "md.spacebar.type.env" {
     check("editor: refused .env and .npmrc (spacebar's secret-bearing types stay in the preview)",
           LinkPolicy.editorRefusal(file("a.env")) != nil && LinkPolicy.editorRefusal(file("a.npmrc")) != nil)
+    check("editor: refused the dotfiles .env and .npmrc; .editorconfig, a text type, allowed",
+          LinkPolicy.editorRefusal(file(".env")) != nil && LinkPolicy.editorRefusal(file(".npmrc")) != nil && LinkPolicy.editorRefusal(file(".editorconfig")) == nil)
 } else {
     print("SKIP .env: md.spacebar.type.env is not registered on this Mac")
 }

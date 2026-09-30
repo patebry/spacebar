@@ -32,6 +32,13 @@ jobs:
           RUNS: '5'
         run: test/viewerlatency/run.sh
 
+      # Day-in-the-life flows through the same off-screen viewer, over a corpus made at test time. Timings are printed, not
+      # graded; without ffmpeg on the runner the video and audio flow is skipped.
+      - name: Scenarios
+        env:
+          SCEN_TIMING: '0'
+        run: test/scenarios/run.sh
+
       # One stable identity for every release keeps the designated requirement the same, so an update does not make macOS
       # ask again about the extension's sandbox container (FINDINGS.md). Forks without the secrets build ad-hoc.
       - name: Signing identity

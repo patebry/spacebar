@@ -872,6 +872,12 @@ class PreviewController: NSViewController {
         fileURL = nil
         fileKind = .other
         quickLookShown = false
+        archive = nil
+        entryShown = nil
+        entryNext = nil
+        entryGen += 1
+        host.scheme.entryImage = nil
+        host.scheme.filesBlocked = false
         watcher = nil
         docText = nil
         diskText = nil

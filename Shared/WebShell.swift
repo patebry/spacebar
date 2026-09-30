@@ -201,7 +201,7 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     private func serveThumb(_ task: WKURLSchemeTask, url: URL) {
-        guard fileHost, let source = thumbnail, let req = Self.thumbRequest(url) else {
+        guard fileHost, !filesBlocked, let source = thumbnail, let req = Self.thumbRequest(url) else {
             onRefused("refused load \(url.absoluteString)")
             return task.didFailWithError(URLError(.noPermissionsToReadFile))
         }

@@ -3079,7 +3079,7 @@ function syncOpen(p) {
   b.textContent = b.dataset.action === 'reveal' ? 'Reveal' : 'Open';
   b.title = openTitle(p, b.dataset.action);
   $('open-with').hidden = b.hidden || b.dataset.action === 'reveal';
-  if (owPop.dataset.path !== p.path) showOpenWith(false);
+  if ($('open-with').hidden || owPop.dataset.path !== p.path) showOpenWith(false);
 }
 
 /** ⌘O opens the file only in the Space helper's panel; Quick Look never passes it on. */
@@ -3401,8 +3401,8 @@ function sidebarShown() { return narrow.matches ? root.classList.contains('sb-pe
 function syncToggle() {
   const open = sidebarShown(), t = $('side-toggle');
   // The filter must not keep the keyboard for a sidebar that is gone: collapsed, peeked away, or narrowed out of view. The grid
-  // keeps a session it holds.
-  if (!open && filterSession && !filterSession.find && !(gridTakesKeys() && filterSession.list)) endFilter();
+  // and the archive keep a session they hold.
+  if (!open && filterSession && !filterSession.find && !filterSession.arc && !(gridTakesKeys() && filterSession.list)) endFilter();
   t.setAttribute('aria-expanded', String(open));
   t.title = open ? 'Hide sidebar' : 'Show sidebar';
 }
@@ -4646,7 +4646,7 @@ $('open-with').addEventListener('click', (e) => {
 Object.assign(window.sb, {
   /** The writer's answer: [{ id, name, icon }], the default app first; empty when nothing but spacebar may open the file. */
   openWithApps(m) {
-    if (!m || m.path !== current.path || owPop.dataset.path !== m.path) return;
+    if (!m || m.path !== current.path || current.entry || owPop.dataset.path !== m.path) return;
     const apps = Array.isArray(m.apps) ? m.apps.filter((a) => a && typeof a.id === 'string' && typeof a.name === 'string') : [];
     const item = (a, i) => {
       const b = el('button', null);

@@ -244,6 +244,10 @@ func renderOverview(_ r: FolderScan.Result, reason: String) {
     pdfPane = nil
     currentFile = nil
     currentKind = .other
+    archiveState = nil
+    entryShown = nil
+    scheme.entryImage = nil
+    scheme.filesBlocked = false
     offered.formUnion(r.recent.map(\.path))
     var payload = r.payload(reason: reason)
     payload["media"] = listings[root].map(FolderListing.isMediaFolder) ?? false

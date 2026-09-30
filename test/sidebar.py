@@ -2363,6 +2363,21 @@ def release_interactions(check):
         r['messages'] += page.cmd('@wait:0.2')['messages']
         check([m.get('path') for m in msgs(r, '_dragOut')] == [zpath], "together: back at the listing, the kind drags the archive itself",
               json.dumps(r['messages'])[:300])
+
+        # With the sidebar collapsed, the archive's own key session outlives the renders it causes.
+        page.apply(sidebarCollapsed=True)
+        page.render(zpath)
+        page.cmd('@wait:0.4')
+        page.cmd('@nativeclick:#doc .arc-entry[data-entry="fix.diff"]')
+        page.cmd('@wait:0.5')
+        seq = page.js('return filterSession && filterSession.arc ? filterSession.seq : null')
+        one = page.js('return [current.entry && current.entry.name, !!(filterSession && filterSession.arc)]')
+        page.cmd(f"@eval:sb.filterKey({{ seq: {json.dumps(seq)}, key: 'down' }}); 0")
+        page.cmd('@wait:0.5')
+        two = page.js('return [current.entry && current.entry.name, !!(filterSession && filterSession.arc)]')
+        check(seq is not None and one == ['fix.diff', True] and two == ['notes.txt', True],
+              "together: with the sidebar collapsed, the archive keeps its keys: a click opens a file, ↓ the next", json.dumps([seq, one, two]))
+        page.apply(sidebarCollapsed=False)
         page.cmd('@root:')
     finally:
         page.close()

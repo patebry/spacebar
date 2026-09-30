@@ -102,7 +102,7 @@ you type. In the Space helper's panel (**Use spacebar for every file**, below) t
 | ↵, ⇧↵, ⌘G, ⇧⌘G | In the find field: the next and previous match |
 | Esc | Closes the find bar, clears the filter, or gives the keys back |
 | ⌘C | Copies the selection, or with nothing selected the whole file's text. In the Space helper's panel it copies the file too, as Finder's ⌘C does: paste in Finder for the file, in an editor for the text (an image, a PDF or another file: the file) |
-| ↑ ↓ ← → Home End ↵ | Move through the sidebar |
+| ↑ ↓ ← → Home End ↵ | Move through the sidebar, or through a folder's grid (↵ opens the picture) |
 | ⌘O | Open, in the Space helper's panel |
 | ⌘+ ⌘− ⌘0 | Zoom |
 
@@ -172,6 +172,12 @@ Press Space on any folder. It opens on:
    hidden folders, `node_modules` or packages;
 4. else an overview of the folder: how many folders, notes, images, PDFs and other files it holds, and the files changed most
    recently, each a click away.
+
+A folder mostly of pictures (at least six files, 60% or more of them images or videos) opens on a grid of thumbnails
+instead, like Finder's gallery, even when it has a README (Unreleased, 0.4). The arrows move through the tiles in two
+directions and Return or a double-click opens the picture; the buttons at the top right of the folder view switch between the
+grid and the list, and spacebar remembers the choice for folders of pictures and for every other folder. Only the tiles on
+screen are drawn, so a folder of thousands of pictures opens as fast as a small one.
 
 App bundles and other packages, the top of a volume and system folders (`/System`, `/Library`, `/usr` and the like, and
 `~/Library`) keep Quick Look's usual preview. Click the folder's name at the top of the sidebar to see its overview again.

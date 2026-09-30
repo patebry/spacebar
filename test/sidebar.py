@@ -11,7 +11,7 @@ document-start state, the toggle and its persistence, the message gate, and that
 popover, themes and narrow panels still work with the sidebar open or collapsed, and the native PDF view: laid over the page's
 PDF area, following the sidebar and the panel, and torn down cleanly. A sandboxed copy of the harness, signed with the
 extension's entitlements, shows that a PDF and an image render under the extension's sandbox."""
-import base64, json, os, random, shutil, struct, subprocess, sys, tempfile, wave, zlib
+import base64, json, os, random, shutil, struct, subprocess, sys, tempfile, urllib.parse, wave, zlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webthemes import Page, ROOT, THEMES, HELPERS, TASK_NAMES, click
 import hostile
@@ -165,7 +165,7 @@ def sandboxed(tree, check, runtime=False):
     subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-O', '-target', 'arm64-apple-macos13.0'] +
                    [os.path.join(ROOT, *p) for p in (('test', 'web', 'main.swift'), ('Shared', 'Settings.swift'), ('Shared', 'WebShell.swift'),
                                                       ('Shared', 'FolderListing.swift'), ('Shared', 'ArchiveListing.swift'), ('Shared', 'FolderScan.swift'), ('Shared', 'LinkPolicy.swift'), ('Preview', 'PDFPane.swift'),
-                                                      ('Preview', 'Gestures.swift'), ('test', 'nsevents.swift'))] +
+                                                      ('Preview', 'Gestures.swift'), ('Preview', 'Thumbnail.swift'), ('Preview', 'ImagePane.swift'), ('test', 'nsevents.swift'))] +
                    ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist', '-Xlinker', plist, '-o', exe], check=True)
     subprocess.run(['codesign', '--force', '--sign', '-', '-i', SANDBOX_ID] + (['--options', 'runtime'] if runtime else []) + ['--entitlements', ent, exe],
                    check=True, capture_output=True)
@@ -1965,6 +1965,7 @@ def panel_host(check):
         check(tip == 'Open in your editor (⌘O)', 'panel: the Open tooltip gives ⌘O, which the panel takes', tip)
         page.cmd("@eval:getSelection().removeAllRanges(); 0")
         page.cmd("@eval:document.getElementById('find-close').click(); 0")
+        panel_grid(page, check, page.out)
     finally:
         page.close()
         shutil.rmtree(page.out, ignore_errors=True)
@@ -2206,6 +2207,238 @@ def missing_images(page, check, out):
     shutil.copy(os.path.join(d, 'here.png'), os.path.join(d, 'nofolder', 'gone.png'))
     w = page.cmd('@wait:1.5')
     check(['nofolder/gone.png', 40] in page.js(natural), 'live reload: an image whose folder did not exist yet, once both appear', json.dumps(types(w)))
+
+
+GRID = """const g = document.querySelector('#doc .ov-grid'), tiles = [...document.querySelectorAll('#doc a.gt')];
+  const box = g && g.getBoundingClientRect();
+  return { view: document.documentElement.dataset.view, grid: !!g, attr: document.documentElement.hasAttribute('data-grid'),
+    list: !!document.querySelector('#doc .ov-list, #doc .ov-counts'), tiles: tiles.length, loaded: document.querySelectorAll('#doc a.gt img.ld').length,
+    height: g ? g.offsetHeight : 0, names: tiles.map((t) => t.querySelector('.gt-name').textContent),
+    sel: (document.querySelector('#doc a.gt.sel .gt-name') || {}).textContent || null,
+    lefts: [...new Set(tiles.map((t) => t.offsetLeft))].length,
+    top: tiles.length ? Math.min(...tiles.map((t) => t.offsetTop)) : -1, bottom: tiles.length ? Math.max(...tiles.map((t) => t.offsetTop)) : -1,
+    pressed: [...document.querySelectorAll('#doc .ov-views button')].map((b) => [b.dataset.folderView, b.getAttribute('aria-pressed')]) };"""
+
+
+def folder_grid(page, check, out):
+    """A folder mostly of images and video opens on a grid of thumbnails; any other folder keeps the overview. The toggle in the
+    folder view's header switches grid and list, remembered for each kind of folder; the arrows move in two dimensions and
+    Return or a double-click opens the image; only the tiles in view are in the page, and only their thumbnails are made, by
+    the `thumb` host, which serves a file the sidebar listed and nothing else."""
+    msgs = lambda r, t: [m for m in r['messages'] if m.get('type') == t]
+    grid = lambda: page.js(GRID)
+    fx = os.path.join(out, 'grid')
+    photos, code, big = (os.path.join(fx, n) for n in ('Photos', 'code', 'many'))
+    for d in (photos, code, big, os.path.join(photos, 'sub')):
+        os.makedirs(d)
+    for i in range(30):
+        open(os.path.join(photos, f'p{i:02d}.png'), 'wb').write(make_png(60 + i, 40, (20 + i * 7, 120, 200)))
+    open(os.path.join(photos, 'README.md'), 'w').write('# Photos\n')
+    open(os.path.join(photos, 'notes.txt'), 'w').write('notes\n')
+    open(os.path.join(photos, 'sub', 'hidden.png'), 'wb').write(make_png(10, 10))
+    for i in range(8):
+        open(os.path.join(code, f'm{i}.ts'), 'w').write(f'export const x{i} = {i};\n')
+    for i in range(5):
+        open(os.path.join(code, f'shot{i}.png'), 'wb').write(make_png(20, 20))
+    one = make_png(24, 16, (90, 160, 90))
+    for i in range(5000):
+        open(os.path.join(big, f'img-{i:04d}.png'), 'wb').write(one)
+    P = lambda n: os.path.join(photos, n)
+    thumb_url = lambda p: 'spacebar://thumb/' + urllib.parse.quote(p, safe='') + '?s=256'
+
+    # ---- which folders open on the grid ----
+    r = page.cmd('@folder:' + photos)
+    page.cmd('@wait:0.6')
+    g = grid()
+    check(r['result'] == 'overview' and g['grid'] and g['attr'] and not g['list'] and g['names'][:3] == ['README.md', 'notes.txt', 'p00.png']
+          and g['pressed'] == [['grid', 'true'], ['list', 'false']],
+          'grid: a folder mostly of images opens on its grid, not its README', json.dumps([r['result'], g]))
+    check(g['loaded'] >= 20 and g['lefts'] >= 3, 'grid: the thumbnails in view fill in, in several columns', json.dumps([g['loaded'], g['lefts']]))
+    shoot(page, 'grid')
+    r = page.cmd('@folder:' + code)
+    page.cmd('@wait:0.4')
+    g = grid()
+    check(r['result'] == 'overview' and not g['grid'] and g['list'] and not g['attr'] and g['pressed'] == [['grid', 'false'], ['list', 'true']],
+          'grid: a folder of code (a third of it images) keeps the overview', json.dumps([r['result'], g]))
+
+    # ---- the toggle, remembered per kind of folder ----
+    r = click(page, '#doc .ov-views button[data-folder-view=grid]')
+    page.cmd('@wait:0.4')
+    g = grid()
+    written = [m.get('patch') for m in msgs(r, '_written')]
+    check(g['grid'] and g['tiles'] == 13 and written == ['{"folderViewOther":"grid"}'], 'grid: the toggle shows any folder as a grid, and saves it for its kind',
+          json.dumps([written, g['tiles']]))
+    r = click(page, '#doc .ov-views button[data-folder-view=list]')
+    page.cmd('@wait:0.3')
+    check(not grid()['grid'] and [m.get('patch') for m in msgs(r, '_written')] == ['{"folderViewOther":"list"}'], 'grid: and back to the list')
+    page.cmd('@folder:' + photos)
+    page.cmd('@wait:0.3')
+    r = click(page, '#doc .ov-views button[data-folder-view=list]')
+    page.cmd('@wait:0.3')
+    g = grid()
+    check(not g['grid'] and g['list'] and [m.get('patch') for m in msgs(r, '_written')] == ['{"folderViewMedia":"list"}'],
+          'grid: a folder of images can be a list', json.dumps(g))
+    page.cmd('@apply:' + json.dumps({'folderViewMedia': 'list'}))
+    r = page.cmd('@folder:' + photos)
+    check(r['result'] == 'file:' + P('README.md'), 'grid: with its kind set to list, a folder of images opens its README again', r['result'])
+    page.cmd('@apply:' + json.dumps({'folderViewMedia': 'grid'}))
+    r = page.cmd('@folder:' + photos)
+    page.cmd('@wait:0.4')
+    check(r['result'] == 'overview' and grid()['grid'], 'grid: and set back to grid, its grid')
+
+    # ---- keys: 2D arrows, Home, End, Return; a double-click ----
+    cols = grid()['lefts']
+    files = page.js('return grid.entries.map((e) => e.name)')
+    seq = []
+    for k in ('ArrowRight', 'ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'End', 'ArrowUp', 'Home'):
+        dispatch_key(page, k)
+        seq.append(grid()['sel'])
+    n = len(files)
+    want = [files[0], files[1], files[1 + cols], files[cols], files[0], files[n - 1], files[n - 1 - cols], files[0]]
+    check(seq == want, f'grid: the arrows move in two dimensions ({cols} columns), Home and End to the ends', json.dumps([seq, want]))
+    kept = [dispatch_key(page, k, **m)['result'] for k, m in ((' ', {}), ('Escape', {}), ('ArrowRight', {'metaKey': True}))]
+    check(kept == ['false'] * 3 and grid()['sel'] == files[0], 'grid: Space, Esc and ⌘-arrows are left to Quick Look and the panel', json.dumps(kept))
+    r = dispatch_key(page, 'ArrowDown')
+    r = page.cmd('@eval:(() => { const e = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }); document.body.dispatchEvent(e); return 0; })()')
+    w = page.cmd('@wait:0.5')
+    opened = [m.get('path') for m in msgs(r, 'open') + msgs(w, 'open')]
+    check(opened == [P(files[cols])] and page.js("return document.documentElement.dataset.view") == 'image',
+          'grid: Return opens the image in the viewer', json.dumps(opened))
+    click(page, '#side-title')
+    page.cmd('@wait:0.5')
+    check(grid()['grid'] and grid()['sel'] == files[cols], "grid: the folder's name brings the grid back, the same tile selected", json.dumps(grid()['sel']))
+    r = page.cmd("""@eval:(() => { const t = [...document.querySelectorAll('#doc a.gt')].find((a) => a.textContent === 'p03.png');
+      t.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }));
+      t.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, detail: 2 })); return 0; })()""")
+    w = page.cmd('@wait:0.5')
+    check([m.get('path') for m in msgs(r, 'open') + msgs(w, 'open')] == [P('p03.png')] and page.js("return document.documentElement.dataset.view") == 'image',
+          'grid: a double-click opens the image', json.dumps([m.get('type') for m in r['messages'] + w['messages']]))
+    click(page, '#side-title')
+    page.cmd('@wait:0.5')
+
+    # The list session the preview starts on its own drives the grid, as the helper's and the writer's keys arrive.
+    page.cmd('@eval:sb.filterEnd({ all: true }); 0')
+    r = page.cmd('@eval:sb.listKeysWanted(' + json.dumps({'root': photos}) + '); 0')
+    fb = msgs(r, 'filterBegin') + msgs(page.cmd('@wait:0.2'), 'filterBegin')
+    sq = int(fb[0]['seq']) if fb else -1
+    page.cmd('@eval:sb.filterKey({ seq: ' + str(sq) + ', key: "home" }); sb.filterKey({ seq: ' + str(sq) + ', key: "down" }); sb.filterKey({ seq: ' + str(sq) + ', key: "right" }); 0')
+    s1 = grid()['sel']
+    r = page.cmd('@eval:sb.filterKey({ seq: ' + str(sq) + ', key: "return" }); 0')
+    w = page.cmd('@wait:0.5')
+    opened = [m.get('path') for m in msgs(r, 'open') + msgs(w, 'open')]
+    check(len(fb) == 1 and s1 == files[cols + 1] and opened == [P(files[cols + 1])],
+          'grid: the keys of the list session (↓ → ↵) drive the grid, not the sidebar', json.dumps([fb, s1, opened]))
+    page.cmd('@eval:sb.filterEnd({ all: true }); 0')
+
+    # With the sidebar collapsed, the session the preview asks for as it opens waits for the grid to be drawn (the listing comes
+    # first), and ends when the grid goes: the keys never drive a sidebar that is not on screen.
+    flag = lambda m, k: str(m.get(k)).lower() in ('1', 'true')
+    page.cmd('@apply:' + json.dumps({'sidebarCollapsed': True}))
+    page.cmd('@folder:' + code)
+    page.cmd('@wait:0.3')
+    page.cmd('@eval:sb.filterEnd({ all: true }); 0')
+    r0 = page.cmd('@eval:sb.listKeysWanted(' + json.dumps({'root': photos}) + '); 0')
+    r = page.cmd('@folder:' + photos)
+    w = page.cmd('@wait:0.4')
+    fb = msgs(r0, 'filterBegin') + msgs(r, 'filterBegin') + msgs(w, 'filterBegin')
+    sq = int(fb[0]['seq']) if fb else -1
+    page.cmd('@eval:sb.filterKey({ seq: ' + str(sq) + ', key: "home" }); sb.filterKey({ seq: ' + str(sq) + ', key: "right" }); sb.filterKey({ seq: ' + str(sq) + ', key: "right" }); 0')
+    s1 = grid()['sel']
+    r = page.cmd('@eval:sb.filterKey({ seq: ' + str(sq) + ', key: "return" }); 0')
+    w = page.cmd('@wait:0.5')
+    stops = [m.get('seq') for m in msgs(r, 'filterStop') + msgs(w, 'filterStop')]
+    check(len(fb) == 1 and flag(fb[0], 'auto') and s1 == files[2] and stops == [str(sq)],
+          'grid: with the sidebar collapsed the grid takes the keys once drawn, and lets them go when it goes', json.dumps([fb, s1, stops]))
+    page.cmd('@apply:' + json.dumps({'sidebarCollapsed': False}))
+    page.cmd('@eval:sb.filterEnd({ all: true }); 0')
+
+    # ---- only listed files, and only images and video ----
+    page.cmd('@folder:' + photos)
+    page.cmd('@wait:0.4')
+    probe = """(() => { window.__probe = {}; for (const [k, u] of Object.entries(URLS)) { const i = new Image();
+      i.onload = () => { window.__probe[k] = i.naturalWidth; }; i.onerror = () => { window.__probe[k] = 'error'; }; i.src = u; } return 0; })()"""
+    urls = {'listed': thumb_url(P('p01.png')), 'notMedia': thumb_url(P('notes.txt')), 'notListed': thumb_url(os.path.join(photos, 'sub', 'hidden.png')),
+            'outside': thumb_url('/etc/hosts'), 'otherRoot': thumb_url(os.path.join(code, 'shot0.png')),
+            'dotdot': thumb_url(photos + '/sub/../p01.png'), 'relative': 'spacebar://thumb/p01.png?s=256', 'noSize': 'spacebar://thumb/' + urllib.parse.quote(P('p01.png'), safe=''),
+            'huge': 'spacebar://thumb/' + urllib.parse.quote(P('p01.png'), safe='') + '?s=99999'}
+    r = page.cmd('@eval:' + probe.replace('URLS', json.dumps(urls)))
+    w = page.cmd('@wait:0.8')
+    got = page.js('return window.__probe')
+    refused = [m.get('msg', '') for m in msgs(r, '_refused') + msgs(w, '_refused')]
+    check(isinstance(got, dict) and got.get('listed', 0) > 0 and all(got.get(k) == 'error' for k in urls if k != 'listed') and len(refused) == len(urls) - 1,
+          'grid: the thumb host serves a listed image only: not a text file, one no listing named, one outside the root, a .. path, a bad size',
+          json.dumps([got, refused]))
+
+    # ---- 5,000 images: only the tiles in view are in the page, and only their thumbnails are made ----
+    page.cmd('@thumbs:purge')
+    before = page.cmd('@thumbs')['result']
+    r = page.cmd('@folder:' + big)
+    w = page.cmd('@wait:0.8')
+    g = grid()
+    after = page.cmd('@thumbs')['result']
+    made = after['made'] - before['made']
+    rows = -(-5000 // g['lefts'])
+    check(r['result'] == 'overview' and g['grid'] and 0 < g['tiles'] <= 120 and g['height'] > rows * 100 and 0 < made <= g['tiles'],
+          'grid: 5,000 images: a few rows of tiles in the page, the grid as tall as all of them, thumbnails made only for those',
+          json.dumps({'tiles': g['tiles'], 'height': g['height'], 'made': made, 'cols': g['lefts']}))
+    first = [m['msg'] for m in msgs(r, 'log') + msgs(w, 'log') if m.get('msg', '').startswith('grid first row')]
+    ms = int(first[0].split()[3][:-2]) if first else 9999
+    check(ms <= 150, 'grid: the first row fills within 150 ms, thumbnails made on demand', first[0] if first else 'no timing logged')
+    page.cmd('@eval:window.scrollTo(0, document.querySelector(".ov-grid").offsetHeight / 2); 0')
+    page.cmd('@wait:0.5')
+    g = grid()
+    mid = page.js("""const t = [...document.querySelectorAll('#doc a.gt')].map((a) => +a.textContent.slice(4, 8)); return [Math.min(...t), Math.max(...t)];""")
+    check(g['tiles'] <= 120 and 2000 < mid[0] < mid[1] < 3000, 'grid: scrolled halfway, the tiles in the page are those halfway', json.dumps([g['tiles'], mid]))
+    # A fast scroll through the whole grid, forty screens in one go: the tiles passed over are dropped before they load.
+    s0 = page.cmd('@thumbs')['result']
+    page.cmd("""@eval:(() => { const h = document.querySelector('.ov-grid').offsetHeight;
+      for (let i = 1; i <= 40; i++) { window.scrollTo(0, h * i / 41); gridWindow(); } return 0; })()""")
+    page.cmd('@wait:1.0')
+    s1 = page.cmd('@thumbs')['result']
+    made = s1['made'] - s0['made']
+    # A load already under way when its tile went may finish: at most one round of loads more than the last screen.
+    check(made <= grid()['tiles'] + 8 and s1['pending'] == 0, 'grid: scrolled through 5,000 images at once, only the last screen of thumbnails is made',
+          json.dumps({'made': made, 'tiles': grid()['tiles']}))
+    # Thumbnails slow to make (150 ms each): a scroll past tiles still loading stops their loads, and what is queued is never made.
+    page.cmd('@thumbs:slow=0.15')
+    page.cmd('@eval:window.scrollTo(0, 0); 0')
+    page.cmd('@wait:0.1')
+    s0 = page.cmd('@thumbs')['result']
+    stops = 0
+    for i in range(1, 16):
+        rr = page.cmd(f'@eval:window.scrollTo(0, document.querySelector(".ov-grid").offsetHeight * {i / 32}); 0')
+        ww = page.cmd('@wait:0.05')
+        stops += len(msgs(rr, '_thumbStop') + msgs(ww, '_thumbStop'))
+    ww = page.cmd('@wait:2.5')
+    stops += len(msgs(ww, '_thumbStop'))
+    s1 = page.cmd('@thumbs')['result']
+    made, dropped = s1['made'] - s0['made'], s1['dropped'] - s0['dropped'] + s1['abandoned'] - s0['abandoned']
+    check(stops > 0 and dropped > 0 and made < 15 * 8 and s1['pending'] == 0 and s1['peak'] <= 6,
+          'grid: scrolling past thumbnails being made stops their loads; the dropped ones are never made, six at a time at most',
+          json.dumps({'made': made, 'stops': stops, 'dropped': dropped, 'peak': s1['peak']}))
+    page.cmd('@thumbs:slow=0')
+    loaded = page.js("return [...document.querySelectorAll('#doc a.gt')].filter((a) => a.querySelector('img.ld')).length")
+    check(loaded == grid()['tiles'], 'grid: after the scroll, every tile in view has its thumbnail', json.dumps([loaded, grid()['tiles']]))
+    page.cmd('@eval:window.scrollTo(0, 0); 0')
+
+
+def panel_grid(page, check, root):
+    """In the Space helper's panel the arrows arrive as named keys outside a list session (sb.hostKey): they drive the grid."""
+    fx = os.path.join(root, 'shots')
+    os.makedirs(fx)
+    for i in range(12):
+        open(os.path.join(fx, f's{i:02d}.png'), 'wb').write(make_png(30, 20))
+    r = page.cmd('@folder:' + fx)
+    page.cmd('@wait:0.5')
+    page.cmd('@eval:sb.filterEnd({ all: true }); 0')
+    used = page.js("return [sb.hostKey({ key: 'right' }), sb.hostKey({ key: 'right' }), sb.hostKey({ key: 'down' })]")
+    cols = page.js('return grid.cols')
+    sel = page.js("return (document.querySelector('#doc a.gt.sel .gt-name') || {}).textContent")
+    r2 = page.cmd("@eval:sb.hostKey({ key: 'return' })")
+    w = page.cmd('@wait:0.4')
+    opened = [m.get('path') for m in r2['messages'] + w['messages'] if m.get('type') == 'open']
+    check(r['result'] == 'overview' and used == [True] * 3 and sel == f's{1 + cols:02d}.png' and opened == [os.path.join(fx, sel or '')],
+          'panel: the arrows and Return the helper sends drive the grid', json.dumps([r['result'], used, cols, sel, opened]))
 
 
 def main():
@@ -3241,6 +3474,7 @@ def main():
         page.cmd('@wait:0.4')
         check('overview' in types(r) and st()['view'] == 'overview', "the sidebar's folder name brings the overview back", json.dumps(types(r)))
         calm_header(page, check, 'quicklook')
+        folder_grid(page, check, page.out)
         page.cmd('@root:')
         viewers(page, check, page.out, st)
         tools(page, check, page.out)

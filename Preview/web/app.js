@@ -700,6 +700,7 @@ function blockRange(b) {
 let drawnMermaid = Promise.resolve();
 function draw() {
   if (editing && !editing.whole && rawOn(current)) { stopEditing(); return; }
+  if (!gridWanted(current)) gridStop();
   $('kind').replaceChildren();
   if (!isMarkdown(current) || rawOn(current)) {
     $('doc').replaceChildren(viewNode(current));
@@ -1152,7 +1153,7 @@ function decorate() {
 
 // Keys that change what is rendered (a redraw) and keys that only change colours or fonts (mermaid draws its own).
 const RENDER_KEYS = ['frontMatter', 'toc', 'stats', 'math', 'mermaid', 'rawHTML', 'inlineEditing', 'taskToggles', 'remoteImages', 'rawMarkdown', 'rawJSON',
-  'rawNotebook', 'rawCSV', 'rawXML', 'rawCSS'];
+  'rawNotebook', 'rawCSV', 'rawXML', 'rawCSS', 'folderViewMedia', 'folderViewOther'];
 const LOOK_KEYS = ['theme', 'codeTheme', 'appearance', 'bodyFont', 'userThemeURL', 'customCSSURL'];
 
 /** A large render's text, sent apart from its script (PageBody). Read synchronously, so this render finishes before the next
@@ -1501,6 +1502,8 @@ const ICONS = {
   model: ['M8 1.8 13.6 5v6L8 14.2 2.4 11V5z', 'M2.4 5 8 8.2 13.6 5M8 8.2v6'],
   video: ['M1.8 3.5h12.4v9H1.8z', 'M6.8 6.1v3.8l3.2-1.9z'],
   audio: ['M6.5 11.8V3.9l6-1.4v7.9', 'M3.6 11.8a1.45 1.25 0 1 0 2.9 0 1.45 1.25 0 1 0-2.9 0zM9.6 10.4a1.45 1.25 0 1 0 2.9 0 1.45 1.25 0 1 0-2.9 0z'],
+  grid: ['M2.5 2.5h4.5v4.5H2.5zM9 2.5h4.5v4.5H9zM2.5 9h4.5v4.5H2.5zM9 9h4.5v4.5H9z'],
+  list: ['M2.5 4h11M2.5 8h11M2.5 12h11'],
 };
 function icon(kind, size = 16) {
   const k = ICONS[kind] ? kind : 'other';
@@ -2780,6 +2783,9 @@ function overviewView(p) {
   head.append(icon('folder', 40), title);
   box.append(head);
   if (loading) return box;
+  head.append(viewToggle(p));
+  document.documentElement.toggleAttribute('data-grid', gridWanted(p));
+  if (gridWanted(p)) { box.append(gridView(p)); return box; }
   const chips = el('div', 'ov-counts');
   const chip = (ic, n, one, many) => {
     const c = el('span', 'ov-chip');
@@ -2810,6 +2816,242 @@ function overviewView(p) {
   if (p.complete === false) box.append(note(`A large folder: counted what could be read quickly, ${+p.depth || 3} folders deep.`));
   return box;
 }
+
+// ---------- the folder grid: the root's files as thumbnails, for a folder mostly of images and video ----------
+// Its files are the sidebar's listing of the root; only the tiles in view (and a margin) are in the page, and only their
+// thumbnails are asked for, a few at a time, from the `thumb` host, which serves a file the sidebar listed and nothing else.
+
+const GRID_MIN = 128, GRID_GAP = 12, GRID_LABEL = 21, GRID_OVERSCAN = 2, GRID_LOADS = 8;
+// Thumbnail loads dropped since the last window, told to the extension at once: WebKit goes on loading an image no longer shown.
+let gridDropped = [];
+let gridLoadSeq = 0;
+// { box, p, entries, cols, tile, rowH, tiles: Map(path → tile), queue, loading, win, t0, firstRow }
+let grid = null;
+// The tile the keys are on, by root, for this session.
+const gridCursor = new Map();
+
+/** Grid or list: the setting of the folder's kind (a folder mostly of images and video, or any other). */
+const viewKey = (p) => (p.media === true ? 'folderViewMedia' : 'folderViewOther');
+const gridWanted = (p) => p.view === 'overview' && p.reason !== 'loading' && (p.media === true ? settings.folderViewMedia !== 'list' : settings.folderViewOther === 'grid');
+const gridShown = () => !!grid && grid.box.isConnected;
+
+function viewToggle(p) {
+  const g = el('div', 'ov-views');
+  g.setAttribute('role', 'group');
+  g.setAttribute('aria-label', 'View');
+  for (const [v, label] of [['grid', 'Grid'], ['list', 'List']]) {
+    const b = el('button');
+    b.type = 'button';
+    b.dataset.folderView = v;
+    b.title = `View as ${label.toLowerCase()}`;
+    b.setAttribute('aria-label', label);
+    b.setAttribute('aria-pressed', String((v === 'grid') === gridWanted(p)));
+    b.append(icon(v, 14));
+    g.append(b);
+  }
+  return g;
+}
+
+function gridView(p) {
+  const box = el('div', 'ov-grid');
+  box.setAttribute('role', 'grid');
+  box.setAttribute('aria-label', plainName(p.name || 'Folder'));
+  // Its width, watched on a line of no height: the grid's own height changes with its width, which would call the observer again.
+  const probe = el('div', 'gt-probe');
+  box.append(probe);
+  // The same folder drawn again (it changed on disk) keeps its tiles, and the thumbnails they have or are loading.
+  const old = grid && grid.p.root === p.root ? grid : null;
+  if (old) gridObserver.unobserve(old.probe); else gridStop();
+  grid = { box, probe, p, entries: [], cols: 1, tile: GRID_MIN, rowH: GRID_MIN + GRID_LABEL + GRID_GAP, tiles: old ? old.tiles : new Map(), queue: [],
+    loading: old ? old.loading : 0, win: '', t0: old ? old.t0 : performance.now(), firstRow: old ? old.firstRow : false };
+  gridEntries();
+  gridObserver.observe(probe);
+  return box;
+}
+
+/** The root's files from the sidebar's listing; the grid waits for it when it is not in yet. */
+function gridEntries() {
+  const d = tree.dirs.get(grid.p.root);
+  grid.entries = d && grid.p.root === tree.root ? d.entries.filter((e) => !e.dir) : [];
+  grid.win = '';
+  if (!grid.entries.some((e) => e.path === gridCursor.get(tree.root))) gridCursor.delete(tree.root);
+}
+
+function gridStop() {
+  if (!grid) return;
+  gridObserver.unobserve(grid.probe);
+  for (const t of grid.tiles.values()) gridUnload(t);
+  grid = null;
+  gridFlushDropped();
+  // A session the grid kept with the sidebar hidden ends with it (syncToggle).
+  syncToggle();
+}
+
+function gridFlushDropped() {
+  while (gridDropped.length) post({ type: 'thumbDrop', urls: gridDropped.splice(0, 512) });
+}
+
+function gridLayout() {
+  if (!gridShown()) return;
+  const w = grid.box.clientWidth;
+  if (!w) return;
+  const cols = Math.max(1, Math.floor((w + GRID_GAP) / (GRID_MIN + GRID_GAP)));
+  const tile = Math.floor((w - (cols - 1) * GRID_GAP) / cols);
+  if (cols !== grid.cols || tile !== grid.tile) { grid.cols = cols; grid.tile = tile; grid.rowH = tile + GRID_LABEL + GRID_GAP; grid.win = ''; }
+  grid.box.style.height = `${Math.max(0, Math.ceil(grid.entries.length / cols) * grid.rowH - GRID_GAP)}px`;
+  gridWindow();
+  gridKeysNow();
+}
+
+/** Puts the tiles of the rows in view (and a margin) into the grid, drops the rest, and asks for thumbnails, those in view first. */
+function gridWindow() {
+  if (!gridShown() || !grid.box.clientWidth) return;
+  const top = grid.box.getBoundingClientRect().top, rows = Math.ceil(grid.entries.length / grid.cols);
+  const first = Math.max(0, Math.floor(-top / grid.rowH)), last = Math.min(rows - 1, Math.floor((window.innerHeight - top) / grid.rowH));
+  const a = Math.max(0, first - GRID_OVERSCAN) * grid.cols, b = Math.min(grid.entries.length, (Math.max(last, first) + GRID_OVERSCAN + 1) * grid.cols);
+  const key = `${a},${b},${grid.tile}`;
+  if (key === grid.win) return;
+  grid.win = key;
+  const want = new Map();
+  for (let i = a; i < b; i++) want.set(grid.entries[i].path, grid.entries[i]);
+  for (const [path, t] of grid.tiles) {
+    const e = want.get(path);
+    if (!e || e.size !== t.e.size || e.modified !== t.e.modified) { gridUnload(t); t.a.remove(); grid.tiles.delete(path); }
+  }
+  const cursorPath = gridCursor.get(tree.root);
+  for (let i = a; i < b; i++) {
+    const e = grid.entries[i];
+    let t = grid.tiles.get(e.path);
+    if (!t) { t = gridTile(e); grid.tiles.set(e.path, t); }
+    if (t.a.parentNode !== grid.box) grid.box.append(t.a);
+    t.i = i;
+    Object.assign(t.a.style, { left: `${(i % grid.cols) * (grid.tile + GRID_GAP)}px`, top: `${Math.floor(i / grid.cols) * grid.rowH}px`, width: `${grid.tile}px` });
+    t.a.classList.toggle('sel', e.path === cursorPath);
+    t.a.setAttribute('aria-selected', String(e.path === cursorPath));
+  }
+  // In view first, then the margin, each in reading order.
+  const inView = (t) => t.i >= first * grid.cols && t.i < (last + 1) * grid.cols;
+  grid.queue = [...grid.tiles.values()].filter((t) => t.want && !t.img).sort((x, y) => (inView(y) - inView(x)) || x.i - y.i);
+  gridFlushDropped();
+  gridPump();
+}
+
+function gridTile(e) {
+  const a = el('a', 'gt');
+  a.href = '#';
+  a.dataset.path = e.path;
+  a.title = rowTitle(e);
+  a.setAttribute('role', 'gridcell');
+  const pic = el('span', 'gt-pic');
+  pic.append(icon(e.icon, 48));
+  a.append(pic, el('span', 'gt-name', plainName(e.name)));
+  return { a, pic, e, i: 0, img: null, want: e.thumb === true };
+}
+
+function gridPump() {
+  const px = Math.max(16, Math.min(1024, Math.round(grid.tile * Math.min(2, window.devicePixelRatio || 1))));
+  while (grid.loading < GRID_LOADS && grid.queue.length) {
+    const t = grid.queue.shift();
+    if (t.img || !t.a.isConnected) continue;
+    const img = document.createElement('img');
+    img.alt = '';
+    img.draggable = false;
+    t.img = img;
+    grid.loading++;
+    const done = (ok) => {
+      if (t.img !== img) return;
+      t.done = true;
+      if (ok) {
+        img.classList.add('ld');
+        t.pic.replaceChildren(img);
+      } else {
+        t.want = false;
+      }
+      // A redraw of the same folder hands its tiles, loads and all, to the new grid.
+      if (!grid || grid.tiles.get(t.e.path) !== t) return;
+      grid.loading--;
+      gridFirstRow();
+      gridPump();
+    };
+    img.addEventListener('load', () => done(true), { once: true });
+    img.addEventListener('error', () => done(false), { once: true });
+    img.src = `spacebar://thumb/${encodeURIComponent(t.e.path)}?s=${px}&v=${t.e.size ?? 0}-${t.e.modified ?? 0}&n=${++gridLoadSeq}`;
+  }
+}
+
+/** A tile leaving the window drops its thumbnail's load, which the extension then stops making. */
+function gridUnload(t) {
+  if (!t.img || t.done) return;
+  gridDropped.push(t.img.src);
+  t.img.removeAttribute('src');
+  t.img = null;
+  if (grid) grid.loading--;
+}
+
+/** Once, how long the first row's thumbnails took from the grid's first draw (the extension logs it). */
+function gridFirstRow() {
+  if (grid.firstRow) return;
+  const row = [...grid.tiles.values()].filter((t) => t.i < grid.cols && t.e.thumb === true);
+  if (!row.length || !row.every((t) => t.done)) return;
+  grid.firstRow = true;
+  post({ type: 'log', msg: `grid first row ${Math.round(performance.now() - grid.t0)}ms (${row.length} thumbnails)` });
+}
+
+const gridObserver = new ResizeObserver(() => gridLayout());
+// A taller window shows more rows at the same width, which the observer does not see.
+window.addEventListener('resize', () => { if (gridShown()) { grid.win = ''; gridWindow(); } });
+let gridScrollQueued = false;
+window.addEventListener('scroll', () => {
+  if (gridScrollQueued || !gridShown()) return;
+  gridScrollQueued = true;
+  requestAnimationFrame(() => { gridScrollQueued = false; gridWindow(); });
+}, { passive: true });
+
+function gridSelect(path, reveal) {
+  gridCursor.set(tree.root, path);
+  if (gridCursor.size > 64) gridCursor.delete(gridCursor.keys().next().value);
+  const i = grid.entries.findIndex((e) => e.path === path);
+  if (reveal && i >= 0) {
+    const y = grid.box.getBoundingClientRect().top + Math.floor(i / grid.cols) * grid.rowH, bar = appChrome() ? 48 : 8;
+    if (y < bar) window.scrollBy({ top: y - bar, behavior: 'instant' });
+    else if (y + grid.rowH > window.innerHeight) window.scrollBy({ top: y + grid.rowH - window.innerHeight, behavior: 'instant' });
+  }
+  grid.win = '';
+  gridWindow();
+}
+
+function gridOpen(path) {
+  const e = grid.entries.find((x) => x.path === path);
+  if (!e || e.broken) return;
+  peek(false);
+  post({ type: 'open', path });
+}
+
+/** The arrows move through the tiles in two dimensions, Home and End to the first and last, Return opens. */
+function gridKey(key) {
+  if (!gridShown() || editing || !pop.hidden || !sidePop.hidden || findOpen() || !grid.entries.length) return false;
+  const n = grid.entries.length, cols = grid.cols;
+  const i = grid.entries.findIndex((e) => e.path === gridCursor.get(tree.root));
+  let j;
+  switch (key) {
+    case 'ArrowRight': j = i < 0 ? 0 : Math.min(n - 1, i + 1); break;
+    case 'ArrowLeft': j = i < 0 ? 0 : Math.max(0, i - 1); break;
+    case 'ArrowDown': j = i < 0 ? 0 : i + cols < n ? i + cols : Math.floor(i / cols) < Math.floor((n - 1) / cols) ? n - 1 : i; break;
+    case 'ArrowUp': j = i < 0 ? 0 : i - cols >= 0 ? i - cols : i; break;
+    case 'Home': j = 0; break;
+    case 'End': j = n - 1; break;
+    case 'Enter':
+      if (i < 0) { gridSelect(grid.entries[0].path, true); return true; }
+      gridOpen(grid.entries[i].path);
+      return true;
+    default: return false;
+  }
+  gridSelect(grid.entries[j].path, true);
+  return true;
+}
+
+/** Whether the list keys drive the grid: it is on screen, and the session holding them was not begun in the sidebar. */
+const gridTakesKeys = () => gridShown() && (!filterSession || filterSession.auto === true || filterSession.grid === true);
 
 /** The toolbar's Open button: the editor for Markdown, else what the viewer offers (Open with, or Reveal in Finder). Its label
  *  is one short word whatever the app, so the toolbar keeps its place from file to file; the tooltip names the app. */
@@ -2907,12 +3149,13 @@ function setFolder(f) {
   const entries = Array.isArray(f.entries) ? f.entries.filter((e) => e && typeof e.name === 'string' && typeof e.path === 'string' && parentOf(e.path) === f.dir) : [];
   const num = (v) => (typeof v === 'number' && isFinite(v) ? v : null);
   tree.dirs.set(f.dir, { entries: entries.map((e) => ({ name: e.name, path: e.path, dir: e.dir === true, icon: typeof e.icon === 'string' ? e.icon : 'other',
-    size: num(e.size), modified: num(e.modified), broken: e.broken === true })),
+    size: num(e.size), modified: num(e.modified), broken: e.broken === true, thumb: e.thumb === true })),
     more: Math.max(0, +f.more || 0), stale: false });
   requested.delete(f.dir);
   treeVersion++;
   requestFolders();
   renderSidebar();
+  if (gridShown() && f.dir === grid.p.root) { gridEntries(); gridLayout(); gridKeysNow(); }
   autoListKeys();
 }
 
@@ -3140,8 +3383,9 @@ function sidebarShown() { return narrow.matches ? root.classList.contains('sb-pe
 
 function syncToggle() {
   const open = sidebarShown(), t = $('side-toggle');
-  // The filter must not keep the keyboard for a sidebar that is gone: collapsed, peeked away, or narrowed out of view.
-  if (!open && filterSession && !filterSession.find) endFilter();
+  // The filter must not keep the keyboard for a sidebar that is gone: collapsed, peeked away, or narrowed out of view. The grid
+  // keeps a session it holds.
+  if (!open && filterSession && !filterSession.find && !(gridTakesKeys() && filterSession.list)) endFilter();
   t.setAttribute('aria-expanded', String(open));
   t.title = open ? 'Hide sidebar' : 'Show sidebar';
 }
@@ -3432,6 +3676,7 @@ document.addEventListener('keydown', (e) => {
   if (inFilter ? !['ArrowUp', 'ArrowDown', 'Enter'].includes(e.key) : e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable]')) return;
   const arc = !inFilter && { ArrowUp: 'up', ArrowDown: 'down', Home: 'home', End: 'end', ArrowLeft: 'left', ArrowRight: 'right', Enter: 'return' }[e.key];
   if (arc && arcKey(arc)) { e.preventDefault(); return; }
+  if (!inFilter && !(e.target instanceof Element && e.target.closest('button')) && gridTakesKeys() && gridKey(e.key)) { e.preventDefault(); return; }
   if (sideKey(e.key, inFilter, e.repeat)) e.preventDefault();
 });
 
@@ -3470,16 +3715,40 @@ function beginListKeys(e, r) {
 // arrows move through the sidebar at once instead of Finder's selection. It waits for the tree of that root to be listed, then
 // starts only with the sidebar on screen and more than one row to move through.
 let autoKeysRoot = '';
+// The root whose session the hidden sidebar could not take: a folder that opens on its grid takes it once the grid is drawn.
+let gridKeysRoot = '';
 function autoListKeys() {
   if (!autoKeysRoot || autoKeysRoot !== tree.root) return;
   const d = tree.dirs.get(tree.root);
   if (!d || d.stale) return;
   autoKeysRoot = '';
-  if (settings.sidebarKeys === false || filterSession || editing || updateBusy || !sidebarShown()) return;
-  if (sideRows.filter((x) => x.e).length < 2) return;
-  const r = ($('side-list').querySelector('a.cursor') || $('side-list')).getBoundingClientRect();
+  gridKeysRoot = '';
+  if (settings.sidebarKeys === false || filterSession || editing || updateBusy) return;
+  if (!gridShown() && (!sidebarShown() || sideRows.filter((x) => x.e).length < 2)) { gridKeysRoot = tree.root; return; }
+  startAutoKeys();
+}
+
+function startAutoKeys() {
+  const r = (gridShown() ? grid.box : $('side-list').querySelector('a.cursor') || $('side-list')).getBoundingClientRect();
   filterSession = { seq: ++filterSeq, list: true, auto: true };
   post({ type: 'filterBegin', list: true, auto: true, seq: filterSession.seq, clickX: 0, clickY: 0, width: r.width, height: Math.min(r.height, SIDE_ROW_H) });
+}
+
+/** The grid is on screen: it takes the session its root was offered while the sidebar was hidden. */
+function gridKeysNow() {
+  if (!gridKeysRoot || gridKeysRoot !== tree.root || !gridShown()) return;
+  gridKeysRoot = '';
+  if (settings.sidebarKeys === false || filterSession || editing || updateBusy) return;
+  startAutoKeys();
+}
+
+/** A click on a tile holds the list keys for the grid, as a click on a row does for the sidebar. */
+function beginGridKeys(e, r) {
+  if (filterSession && !filterSession.list) return;
+  if (editing || updateBusy || (filterSession && filterSession.grid)) return;
+  endFilter();
+  filterSession = { seq: ++filterSeq, list: true, grid: true };
+  post({ type: 'filterBegin', list: true, seq: filterSession.seq, clickX: e.clientX - r.left, clickY: e.clientY - r.top, width: r.width, height: Math.min(r.height, SIDE_ROW_H) });
 }
 
 function endFilter() {
@@ -3511,10 +3780,12 @@ Object.assign(window.sb, {
     if (filterSession.list && LIST_COMMANDS.has(m.key)) { hostCommand(m.key); return; }
     if (filterSession.arc) { arcKey(m.key); return; }
     if (!Object.hasOwn(FILTER_KEYS, m.key) || (!filterSession.list && (m.key === 'left' || m.key === 'right'))) return;
+    if (filterSession.list && gridTakesKeys() && gridKey(FILTER_KEYS[m.key])) return;
     sideKey(FILTER_KEYS[m.key], !filterSession.list, m.repeat === true);
   },
   listKeysWanted(m) {
     autoKeysRoot = m && typeof m.root === 'string' ? m.root : '';
+    gridKeysRoot = '';
     autoListKeys();
   },
   /** One session's end, or with `all` any session: a new preview's controller never began the one the page may hold. Esc in
@@ -3528,8 +3799,8 @@ Object.assign(window.sb, {
 });
 document.addEventListener('click', (e) => {
   if (!filterSession) return;
-  // The archive's own session stays through clicks in the listing, on a file of it and on Back.
-  const inside = filterSession.find ? '#find' : filterSession.arc ? '#doc, #crumbs' : '#sidebar';
+  // The archive's own session stays through clicks in the listing, on a file of it and on Back; the grid's through clicks on it.
+  const inside = filterSession.find ? '#find' : filterSession.arc ? '#doc, #crumbs' : filterSession.grid ? '#sidebar, #doc .ov-grid' : '#sidebar';
   if (!e.target.closest(inside)) endFilter();
 }, true);
 
@@ -3549,6 +3820,7 @@ Object.assign(window.sb, {
     if (HOST !== 'panel' || typeof key !== 'string') return false;
     if (LIST_COMMANDS.has(key)) return hostCommand(key);
     if (Object.hasOwn(HOST_ZOOM, key)) return zoomImage(HOST_ZOOM[key]);
+    if (Object.hasOwn(FILTER_KEYS, key) && gridTakesKeys() && gridKey(FILTER_KEYS[key])) return true;
     const page = Math.max(40, window.innerHeight * 0.9), max = document.scrollingElement.scrollHeight;
     const by = { up: -40, down: 40, pageup: -page, pagedown: page, home: -max, end: max }[key];
     if (by === undefined) return false;
@@ -4221,6 +4493,8 @@ syncPopover();
 document.addEventListener('mousedown', (e) => { if (editing && e.target.closest('#doc > .md-editing, #doc pre.text-editing')) e.preventDefault(); });
 
 document.addEventListener('dblclick', (e) => {
+  const gt = e.target.closest('#doc a.gt');
+  if (gt && gridShown()) { e.preventDefault(); gridOpen(gt.dataset.path); return; }
   const el = e.target.closest('#doc > .md-editing, #doc pre.text-editing');
   if (!editing || !el) return;
   e.preventDefault();
@@ -4265,6 +4539,16 @@ document.addEventListener('click', (e) => {
   if (e.target.closest('#sidebar, #crumbs')) return;
   const act = e.target.closest('#doc .viewer [data-action]');
   if (act) { e.preventDefault(); if (editing && editing.whole) stopEditing(); viewerAction(act, e); return; }
+  const fv = e.target.closest('#doc .ov-views button');
+  if (fv) { e.preventDefault(); choose(viewKey(current), fv.dataset.folderView); return; }
+  const gt = e.target.closest('#doc a.gt');
+  if (gt) {
+    e.preventDefault();
+    if (!gridShown()) return;
+    gridSelect(gt.dataset.path, false);
+    if (e.isTrusted) beginGridKeys(e, gt.getBoundingClientRect());
+    return;
+  }
   const ov = e.target.closest('#doc .overview a.ov-row');
   if (ov) { e.preventDefault(); if (ov.dataset.path !== current.path) post({ type: 'open', path: ov.dataset.path }); return; }
   const wl = e.target.closest('#doc a.wikilink');

@@ -306,6 +306,22 @@ Big trees stay off the main thread and bounded: a folder's listing stats at most
 scan and the overview share one scan (3 deep, 5,000 entries, 250 ms), and the link index stops at 20,000 entries or 400 ms.
 `test/settings/run.sh` times a 12,000-file folder through all three and prints the times of each run.
 
+### The folder grid
+
+A folder of pictures opens on a grid (`FolderListing.isMediaFolder`: six files or more, 60% images or video). The page draws
+only the rows in view plus two above and below, from the sidebar's listing of the root, and asks for their thumbnails from
+the `thumb` host, eight at a time, those in view first. ThumbnailPipeline makes them, up to six at once, in request order,
+and keeps them in memory (48 MB or 4,000, least recently used first; all dropped under memory pressure).
+
+- **WebKit does not stop an image load when the `<img>` goes.** Removing a tile's image, or its `src`, never reached
+  `webView(_:stop:)` for a custom scheme: WebKit keeps loading the resource for its memory cache. A fast scroll through 5,000
+  images made 582 thumbnails for a screen of 36. The page therefore names the loads it dropped (`thumbDrop`), and the handler
+  cancels each (a queued one is never made, a Quick Look request is cancelled) or refuses it when its task starts later. The
+  same scroll now makes 40.
+- **Timings** (M2 Max, macOS 15.4.1, warm web view, `test/sidebar.py`'s harness): the first row of five 12-megapixel JPEGs (14 MB
+  each, noise, the slow case) filled in 84 to 133 ms with nothing cached, 8 to 10 ms from the cache; four at once took 167 to
+  178 ms, hence six. The first row is logged as `grid first row …ms`.
+
 ## Platform findings
 
 - **Which extension wins for Markdown depends on the bundle ID.** With QLMarkdown installed, Quick Look chose `com.patebryant.mdpeek.preview` and `zz.spacebar.preview` over QLMarkdown, but chose QLMarkdown over `md.spacebar.preview`. The name, signing identity and a pluginkit `use` did not change this. Tests use `qlmanage -c md.spacebar.qlmanage -p`, a content type only this extension claims.

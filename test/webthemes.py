@@ -24,7 +24,8 @@ class Page:
                         os.path.join(ROOT, 'test', 'web', 'main.swift'), os.path.join(ROOT, 'Shared', 'Settings.swift'),
                         os.path.join(ROOT, 'Shared', 'WebShell.swift'),
                         os.path.join(ROOT, 'Shared', 'FolderListing.swift'), os.path.join(ROOT, 'Shared', 'ArchiveListing.swift'), os.path.join(ROOT, 'Shared', 'FolderScan.swift'), os.path.join(ROOT, 'Shared', 'LinkPolicy.swift'), os.path.join(ROOT, 'Preview', 'PDFPane.swift'),
-                        os.path.join(ROOT, 'Preview', 'Gestures.swift'), os.path.join(ROOT, 'test', 'nsevents.swift'), '-o', exe], check=True)
+                        os.path.join(ROOT, 'Preview', 'Gestures.swift'), os.path.join(ROOT, 'Preview', 'Thumbnail.swift'), os.path.join(ROOT, 'Preview', 'ImagePane.swift'),
+                        os.path.join(ROOT, 'test', 'nsevents.swift'), '-o', exe], check=True)
         self.proc = subprocess.Popen([exe, WEB], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
                                      env=dict(os.environ, SPACEBAR_SUPPORT_DIR=self.support, SPACEBAR_PAGE_HOST=host))
         self.logs = []

@@ -81,7 +81,13 @@ check("panel allow-list drops userTheme/editor/customCSS/editing/rawHTML/remoteI
       afterPanel.userTheme == nil && afterPanel.editorBundleID == nil && afterPanel.customCSS && afterPanel.inlineEditing
       && afterPanel.rawHTML == "sanitized" && !afterPanel.remoteImages)
 check("panel keys are cosmetic only", Settings.panelKeys.isSubset(of: ["theme", "appearance", "fontSize", "width", "bodyFont", "lineHeight", "sidebarCollapsed", "sidebarWidth", "folderSort",
-                                                                     "rawMarkdown", "rawJSON", "rawNotebook", "rawCSV", "rawXML", "rawCSS"]))
+                                                                     "folderViewMedia", "folderViewOther", "rawMarkdown", "rawJSON", "rawNotebook", "rawCSV", "rawXML", "rawCSS"]))
+check("folder views: grid for folders of pictures and list for the rest by default, grid or list only, from the panel",
+      Settings().folderViewMedia == "grid" && Settings().folderViewOther == "list"
+      && Settings(dictionary: ["folderViewMedia": "list", "folderViewOther": "grid"]).folderViewMedia == "list"
+      && Settings(dictionary: ["folderViewOther": "grid"]).folderViewOther == "grid"
+      && Settings(dictionary: ["folderViewMedia": "tiles", "folderViewOther": true]) == Settings()
+      && Settings.panelPatch("folderViewMedia", "list") != nil && Settings.panelPatch("folderViewOther", "huge") == nil)
 check("raw views: off by default, bools only, panel keys", Settings.rawKeys.allSatisfy { k in
     !(Settings().dictionary[k] as? Bool ?? true) && Settings(dictionary: [k: true]).dictionary[k] as? Bool == true
         && [1, "true", NSNull()].allSatisfy { Settings(dictionary: [k: $0]).dictionary[k] as? Bool == false }

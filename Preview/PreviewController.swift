@@ -68,6 +68,7 @@ final class WebHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         web = PreviewWebView(frame: .zero, configuration: config)
         remoteImages = RemoteImageGate(config.userContentController)
         super.init()
+        scheme.thumbnail = { [weak self] path, px, reply in self?.controller?.thumbnail(path, px: px, reply) }
         remoteImages.onError = { log.error("\($0, privacy: .public)") }
         config.userContentController.add(self, name: "sb")
         web.navigationDelegate = self
@@ -798,7 +799,11 @@ class PreviewController: NSViewController {
         refreshListing(rootDir, then: { [weak self] l in
             guard let self else { return }
             log.info("folder preview: \(l.entries.count + l.more) items")
-            if let first = FolderListing.firstDocument(l) {
+            if FolderListing.isMediaFolder(l), SettingsStore.shared.settings.folderViewMedia == "grid" {
+                // A folder of images or video opens on its grid, even when it holds a README.
+                self.overviewRequested = true
+                self.scanFolder(openBest: false)
+            } else if let first = FolderListing.firstDocument(l) {
                 self.folderPending = false
                 self.open(URL(fileURLWithPath: first.path))
             } else {
@@ -879,7 +884,9 @@ class PreviewController: NSViewController {
         unavailablePath = nil
         offer(r.recent.map(\.path))
         host.scheme.body = nil
-        let json = String(data: try! JSONSerialization.data(withJSONObject: r.payload(reason: reason)), encoding: .utf8)!
+        var payload = r.payload(reason: reason)
+        payload["media"] = listings[rootDir].map(FolderListing.isMediaFolder) ?? false
+        let json = String(data: try! JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!
         host.whenReady { [host] in
             host.remoteImages.whenInPlace {
                 host.web.evaluateJavaScript("sb.render(\(json)); 0") { _, err in
@@ -1734,10 +1741,24 @@ class PreviewController: NSViewController {
 
     /// A path the page names, accepted only when it is plain, inside the root (symlinks resolved), and one the sidebar listed.
     private func listedFile(_ m: PageMessage) -> String? {
-        guard let p = m.string("path", max: 4096), FolderListing.isPlainPath(p, under: rootDir),
-              listings.values.contains(where: { l in l.entries.contains { $0.path == p && !$0.isDirectory } }),
+        m.string("path", max: 4096).flatMap(listedEntry)?.path
+    }
+
+    /// The sidebar's entry for `p`, a file, under the same checks as `listedFile`.
+    private func listedEntry(_ p: String) -> FolderListing.Entry? {
+        guard FolderListing.isPlainPath(p, under: rootDir),
+              let e = listings[(p as NSString).deletingLastPathComponent]?.entries.first(where: { $0.path == p && !$0.isDirectory }),
               FolderListing.isInside(p, root: rootDir) else { return nil }
-        return p
+        return e
+    }
+
+    /// The `thumb` host's answer for the folder grid: only an image or video the sidebar listed, as `listedFile` takes a path.
+    /// The pipeline checks again, as it reads the file, that it is still inside the root.
+    fileprivate func thumbnail(_ path: String, px: Int, _ reply: @escaping (Data?, String) -> Void) -> (() -> Void)? {
+        guard let e = listedEntry(path), e.hasThumbnail, let realRoot = FolderListing.realPath(rootDir) else { return nil }
+        let pipe = ThumbnailPipeline.shared
+        let ticket = pipe.request(path: path, root: realRoot, stamp: "\(e.size)-\(e.modified)", px: px) { reply($0?.data, $0?.mime ?? "") }
+        return { if let ticket { pipe.cancel(ticket) } }
     }
 
     /// A path the overview or a wikilink offered: plain, inside the root (symlinks resolved), a regular file.
@@ -1827,6 +1848,10 @@ class PreviewController: NSViewController {
             startSearch(q, seq: seq)
         case "searchStop":
             stopSearch()
+        case "thumbDrop":
+            // Thumbnail loads the grid dropped: they only ever stop work, so nothing else is checked.
+            guard let urls = body["urls"] as? [Any], urls.count <= 512 else { return refuse("thumbDrop", "bad list") }
+            host.scheme.dropThumbs(urls.compactMap { ($0 as? String).flatMap { $0.utf8.count <= 8192 ? $0 : nil } })
         case "overview":
             // The sidebar's folder name: the overview of the root.
             guard !torn else { return }

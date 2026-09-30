@@ -140,7 +140,7 @@ def main():
         check(s['buttons'] == 0 and s['remote'] >= 3, "after it, the document's remote images are in the page", json.dumps(s))
         after = open(settings_file).read() if os.path.exists(settings_file) else None
         check(after == before and s['root'] == 'off', 'the setting is not saved or changed', f'settings.json {before!r} -> {after!r}')
-        check("img-src spacebar://bundle spacebar://file spacebar://user spacebar://entry https: data: blob:" in s['csp'] and "default-src 'none'" in s['csp'], 'the CSP is unchanged', s['csp'])
+        check("img-src spacebar://bundle spacebar://file spacebar://user spacebar://entry spacebar://thumb https: data: blob:" in s['csp'] and "default-src 'none'" in s['csp'], 'the CSP is unchanged', s['csp'])
         if net:
             check(s['remoteLoaded'] and all(w > 0 for w in s['remoteLoaded']), 'the remote images load', json.dumps(s['remoteLoaded']))
             loaded = probe()

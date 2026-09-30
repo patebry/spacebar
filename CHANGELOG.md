@@ -10,7 +10,7 @@ Waits for the Developer ID: the first release with the Space helper is notarized
 
 - **Space in Finder opens spacebar for any file**, not only the types Quick Look hands it: plain text, CSV, HTML (scripts
   off), PDF, images, video and audio open in spacebar's own panel with the same sidebar. Off until you turn it on in the
-  welcome sheet or Settings, General.
+  welcome sheet or Settings.
 - Space, Esc, ⌘W and ⌘. close the panel in one press; the arrow keys drive the sidebar, or Finder's selection with the
   panel following. Several selected files open with a sidebar of just those files.
 - The panel hides while another app is in front and comes back with Finder, a PDF at its page and a video at its time.
@@ -18,7 +18,7 @@ Waits for the Developer ID: the first release with the Space helper is notarized
 - A rename, the search field, ⌘Y, secure input and every other app keep their keys; a Space spacebar cannot answer in
   150 ms is handed back to Finder.
 - It works through a small helper that needs Accessibility (listed as "spacebar Helper") and runs at login; it never opens a
-  file, and a sandboxed viewer renders them. SECURITY.md has the threat model. Settings, General shows its state.
+  file, and a sandboxed viewer renders them. SECURITY.md has the threat model. Settings shows its state.
 - Installing, updating and uninstalling handle the helper: an update brings it back within about 20 seconds, and the
   uninstaller removes it with its permissions.
 
@@ -63,8 +63,17 @@ Waits for the Developer ID: the first release with the Space helper is notarized
   A notebook shows as its cells (Raw for its JSON).
 - The info card's Where names the folder the file is in, with `~` for your home, and its Open button gives way to the
   toolbar's (Minimal chrome keeps it).
-- Word count and reading time are off by default. A settings file that had them on keeps them on.
+- Word count and reading time are off by default, and a settings file from an earlier version is read with them off.
 - With **Use spacebar for every file** on but the helper not taking Space (Accessibility off, or not running),
   the first Quick Look preview spacebar draws says so in one quiet line, once, and a click opens Settings.
-- Settings, General lists other Quick Look extensions that claim spacebar's types, with a Turn Off button.
+- **Settings is one short page**: theme, Automatic, Light or Dark, text size, Use spacebar for every file with its
+  status, the editor, updates, Report a Problem and Uninstall. Everything else is under **Advanced**, closed until you
+  open it: scripts in HTML files, HTML in Markdown, remote images, editing in the preview, checking off tasks, hidden
+  files, a custom theme and custom.css, and the settings file with Reset to Defaults.
+- Body font and page width (both still in the Aa button), code font, line height, code highlighting, Minimal chrome,
+  table of contents, front matter, word count, math, Mermaid, Markdown links, README first, folder previews and the
+  sidebar's arrow keys left the window. Each keeps its saved value (word count excepted, above) and is still a key in settings.json (the README lists
+  them); Reset to Defaults puts them back too, and turns folder previews back on in System Settings.
+- The Quick Look extension's state and other apps' Quick Look extensions that claim spacebar's types show at the top of
+  Settings only while something is wrong, with Open Quick Look Extensions or a Turn Off button.
 - A welcome window on first launch, and a new app icon.

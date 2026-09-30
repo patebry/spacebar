@@ -1410,7 +1410,7 @@ window.sb = {
     if (s.textContent) return false;
     s.textContent = 'Space helper is off: open spacebar Settings';
     s.dataset.hint = '';
-    s.title = 'Open spacebar Settings, General';
+    s.title = 'Open spacebar Settings';
     return true;
   },
   installCopied(r) {

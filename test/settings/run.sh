@@ -3,5 +3,5 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 out=$(mktemp -d)
-xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/settings/main.swift Shared/Settings.swift Shared/FolderListing.swift Shared/FolderScan.swift Shared/QuickLookClaims.swift Shared/ArchiveListing.swift Shared/HelperProtocol.swift -o "$out/settings"
+xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/settings/main.swift App/SettingsTab.swift Shared/Settings.swift Shared/FolderListing.swift Shared/FolderScan.swift Shared/QuickLookClaims.swift Shared/ArchiveListing.swift Shared/HelperProtocol.swift -o "$out/settings"
 SPACEBAR_SUPPORT_DIR="$out/support" "$out/settings"

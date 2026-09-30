@@ -152,7 +152,7 @@ the viewer is a name from a fixed list (`up`, `down`, `left`, `right`, `home`, `
 decisions and timings, never a key.
 
 **Secure input.** While a password field or another app has secure input on, macOS sends no key events to event taps, so the
-helper sees nothing and Space reaches Finder's own Quick Look. Settings, General shows "Secure input on".
+helper sees nothing and Space reaches Finder's own Quick Look. Settings shows "Secure input on".
 
 **Residual risks.**
 

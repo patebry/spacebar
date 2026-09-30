@@ -82,73 +82,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// A classic preferences window: toolbar tabs, a fixed width, and a height that follows the selected tab.
+/// The settings window: one page at a fixed width, with a height that follows it (Advanced opening and closing, a notice
+/// appearing) up to what the screen allows; past that the page scrolls.
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
-    private let tabs = SettingsTabViewController()
+    private let store: SettingsStore
+    private let host: NSHostingController<AnyView>
+    private var sizeObservation: NSKeyValueObservation?
 
     init(store: SettingsStore, system: SystemStatus) {
-        for tab in SettingsTab.allCases {
-            let root: AnyView
-            switch tab {
-            case .general: root = AnyView(GeneralPane())
-            case .appearance: root = AnyView(AppearancePane())
-            case .folders: root = AnyView(FoldersPane())
-            case .editing: root = AnyView(EditingPane())
-            case .advanced: root = AnyView(AdvancedPane())
-            }
-            let host = NSHostingController(rootView: root.environmentObject(store).environmentObject(system))
-            host.sizingOptions = [.preferredContentSize]
-            let item = NSTabViewItem(viewController: host)
-            item.label = tab.title
-            item.identifier = tab.rawValue
-            item.image = NSImage(systemSymbolName: tab.symbol, accessibilityDescription: tab.title)
-            tabs.addTabViewItem(item)
-        }
-        tabs.tabStyle = .toolbar
+        self.store = store
+        host = NSHostingController(rootView: AnyView(SettingsPane().environmentObject(store).environmentObject(system)))
+        host.sizingOptions = [.preferredContentSize]
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: paneWidth, height: 400),
                               styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-        window.contentViewController = tabs
-        window.toolbarStyle = .preference
+        window.contentViewController = host
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
+        window.title = "spacebar Settings"
         super.init(window: window)
         window.delegate = self
-        window.title = SettingsTab.general.title
-        tabs.fitWindow(animated: false)
+        fitWindow(animated: false)
         window.center()
         window.setFrameAutosaveName("Settings")
+        sizeObservation = host.observe(\.preferredContentSize) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.fitWindow(animated: self?.window?.isVisible == true) }
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     func select(_ tab: SettingsTab) {
-        if let i = SettingsTab.allCases.firstIndex(of: tab) { tabs.selectedTabViewItemIndex = i }
-        window?.title = tab.title
-    }
-}
-
-final class SettingsTabViewController: NSTabViewController {
-    override func tabView(_ tabView: NSTabView, didSelect item: NSTabViewItem?) {
-        super.tabView(tabView, didSelect: item)
-        view.window?.title = item?.label ?? ""
-        fitWindow(animated: view.window?.isVisible == true)
+        store.revealAdvanced(tab.opensAdvanced)
     }
 
-    /// A pane grew or shrank on its own (e.g. the extension list arrived): refit if it is the one showing.
-    override func preferredContentSizeDidChange(for viewController: NSViewController) {
-        guard selectedTabViewItemIndex >= 0, tabViewItems[selectedTabViewItemIndex].viewController === viewController else { return }
-        fitWindow(animated: view.window?.isVisible == true)
-    }
-
-    /// Resizes the window to the selected pane's natural height, keeping its top edge where it is.
+    /// Resizes the window to the page's natural height, keeping its top edge where it is.
     func fitWindow(animated: Bool) {
-        guard let window = view.window, selectedTabViewItemIndex >= 0,
-              let host = tabViewItems[selectedTabViewItemIndex].viewController else { return }
+        guard let window else { return }
         let screen = (window.screen ?? NSScreen.main)?.visibleFrame.height ?? 800
         let natural = host.preferredContentSize.height > 0 ? host.preferredContentSize.height : host.view.fittingSize.height
-        let height = min(max(natural, 200), screen - 140, 820)
+        let height = min(max(natural, 200), screen - 140, 900)
         var frame = window.frameRect(forContentRect: NSRect(x: 0, y: 0, width: paneWidth, height: height))
         frame.origin = NSPoint(x: window.frame.minX, y: window.frame.maxY - frame.height)
+        guard frame != window.frame else { return }
         window.setFrame(frame, display: true, animate: animated)
     }
 }

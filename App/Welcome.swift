@@ -83,7 +83,7 @@ struct WelcomeView: View {
             }
             Text("Space in Finder can open spacebar for any file you select, images, PDFs and video included, not only the types Quick Look hands it.")
                 .fixedSize(horizontal: false, vertical: true)
-            Text("This needs Accessibility, listed there as \(HelperCopy.accessibilityName), which lets spacebar notice when you press Space in Finder and read which file is selected. It never reads what you type anywhere else. You can turn it off in Settings, General.")
+            Text("This needs Accessibility, listed there as \(HelperCopy.accessibilityName), which lets spacebar notice when you press Space in Finder and read which file is selected. It never reads what you type anywhere else. You can turn it off in Settings.")
                 .foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
             if turnedOn { progress }
             if let problem { Text(problem).foregroundColor(.red).fixedSize(horizontal: false, vertical: true) }
@@ -114,7 +114,7 @@ struct WelcomeView: View {
                 Text("Waiting for Login Items…")
                 Button("Open Login Items Settings") { HelperAgent.openLoginItems() }.buttonStyle(.link)
             case .notRunning:
-                Text("macOS did not start it. Try again in Settings, General.")
+                Text("macOS did not start it. Try again in Settings.")
             case .off, .starting:
                 Text("Starting…")
             }

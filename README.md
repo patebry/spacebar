@@ -22,8 +22,8 @@ archives, disk images (`.dmg`), and files with no extension (a `Dockerfile`, a `
 Unless you turn on [**Use spacebar for every file**](#use-spacebar-for-every-file), plain text, rich text, HTML, CSV, PDF,
 images, video and audio keep Apple's own preview in Finder: Quick Look never hands a file of those types to another app's
 extension, so spacebar cannot take them. Inside spacebar's sidebar every one of them opens, as the table below shows. Another installed app that claims one of spacebar's types (a Markdown or code previewer)
-may still win it: `install.sh` lists the ones it finds and how many of spacebar's types each claims, and Settings, General
-lists them with a Turn Off button.
+may still win it: `install.sh` lists the ones it finds and how many of spacebar's types each claims, and Settings lists each one that is on
+with a Turn Off button.
 
 What the panel shows for each file in the sidebar, and, with **Use spacebar for every file** on, for each file you press
 Space on in Finder:
@@ -47,7 +47,7 @@ Space on in Finder:
 | Disk images (`.dmg`) | the info card, with the image's format and whether it is encrypted, read from the file without mounting it |
 | Anything else | an info card: Finder's large thumbnail when there is one, kind, size, date modified and the folder it is in; the toolbar's Open opens it in its default app (Reveal in Finder for apps and executables) |
 
-The Open button in the toolbar opens Markdown in your editor (Settings, General: **Open files in**). Code, JSON, CSV and text
+The Open button in the toolbar opens Markdown in your editor (Settings: **Open files in**). Code, JSON, CSV and text
 open there too. The button always says just "Open" (or "Reveal" where only Finder may show the file), so it stays in place as
 you move from file to file; its tooltip names the app, such as "Open in Visual Studio Code". A script (`.sh`, `.py`, a `.command`) opens in the editor as text and is never run; with
 **Default App** chosen it opens in your default text editor, never in Terminal or an interpreter. Files that often hold
@@ -57,7 +57,7 @@ Text over 2 MB shows its first 2 MB; a CSV or TSV table reads up to 16 MB, and o
 Matroska, Ogg, Opus and AVI files, which macOS cannot play, get the info card and a note saying so. A link that loops or leads
 nowhere is listed greyed in the sidebar, and Space on one says it can't be opened. An archive lists its first 5,000 entries. Images over 50 MB, and PDFs, video and audio over 512 MB, get the info card.
 
-**Editing.** With **Edit text in the preview** on (Settings, Editing; one setting for everything), a click on the text of
+**Editing.** With **Edit text in the preview** on (the default; Settings, Advanced; one setting for everything), a click on the text of
 Markdown, code, text, JSON, CSV or TSV, YAML, TOML, XML, an INI or `.conf` file, or dotfile config (`.env`, `.env.local`,
 `.gitignore`) puts the caret there, and every change is saved as you type. Markdown is edited a block at a time;
 other files as a whole, highlighted as you type (plain while you type in files over 24 KB, highlighted again when the edit
@@ -70,8 +70,8 @@ the edit, and the file's own text wins.
 
 The preview sits in a thin outlined page under a toolbar row: the sidebar button and the path on the left, Aa and Open on the
 right, and beside them, in quiet text, the file's kind and size (an image's zoom too), so a PDF or an image fills the page
-under the row. Word count and reading time (Settings, Advanced) are off unless you turn them on; with them on, a Markdown
-file shows its words and a code file its lines there too. **Minimal chrome** (Settings, Appearance) goes back to floating
+under the row. Word count and reading time are off unless `stats` is on in settings.json; with them on, a Markdown
+file shows its words and a code file its lines there too. `minimalChrome` in settings.json goes back to floating
 buttons over the page.
 
 ### Copy, Find and Raw
@@ -92,7 +92,7 @@ place in the toolbar where it does not. A button with a key gives it in its tool
 ### Keys
 
 Quick Look gives a preview no keys of its own. There these work while spacebar holds the keys: its sidebar list takes them as
-a preview opens (Settings, Sidebar: **Arrow keys move through the sidebar**), and the filter and find fields hold them while
+a preview opens (`sidebarKeys` in settings.json), and the filter and find fields hold them while
 you type. In the Space helper's panel (**Use spacebar for every file**, below) they always work. The buttons work in both.
 
 | Key | Does |
@@ -108,7 +108,7 @@ you type. In the Space helper's panel (**Use spacebar for every file**, below) t
 
 ### Use spacebar for every file
 
-Quick Look hands spacebar only the types above. Turn on **Use spacebar for every file in Finder** (Settings, General, or the
+Quick Look hands spacebar only the types above. Turn on **Use spacebar for every file in Finder** (Settings, or the
 second step of the welcome sheet) and Space in Finder opens spacebar for any file you select, in the same panel with the same
 sidebar:
 
@@ -126,14 +126,14 @@ With it on:
 
 - Space, Esc, ⌘W or ⌘. close the panel in one press.
 - The panel opens where you last moved or resized it on that display, fitted to the screen if the display has changed.
-- While it is open the arrow keys move through spacebar's sidebar, or, with **Arrow keys move through the sidebar**
-  (Settings, Sidebar) off, through Finder's selection, and the panel follows.
+- While it is open the arrow keys move through spacebar's sidebar, or, with `sidebarKeys` off in
+  settings.json, through Finder's selection, and the panel follows.
 - Like Apple's Quick Look, it hides while another app is in front and comes back when you return to Finder, a PDF at its page
   and a video at its time.
 - Space in a rename or the search field, with Apple's Quick Look already open, or in any other app is left alone. ⌘Y still
   opens Apple's Quick Look. A Space spacebar cannot answer within 150 ms is handed back to Finder.
 - While a password field or another app has secure input on, macOS gives spacebar no keys, so Space opens Apple's Quick Look;
-  Settings, General says so.
+  Settings says so.
 
 #### What it asks macOS for
 
@@ -149,15 +149,15 @@ for two things:
   Background). macOS starts the helper at login and keeps it running.
 
 The helper never opens a file. A separate viewer does, sandboxed like the Quick Look extension, and the first time it shows a
-file in Documents, Desktop, Downloads or iCloud Drive macOS may ask whether **spacebar** may access that folder. Settings,
-General shows whether the helper is on, waiting for Accessibility, blocked in Login Items, or paused by secure input. While
+file in Documents, Desktop, Downloads or iCloud Drive macOS may ask whether **spacebar** may access that folder. Settings
+shows whether the helper is on, waiting for Accessibility, blocked in Login Items, or paused by secure input. While
 the setting is on but the helper is not taking Space (Accessibility off, or not running), the first Quick Look preview that spacebar draws says so in one quiet
 line, once: "Space helper is off: open spacebar Settings" (a click opens Settings).
 [SECURITY.md](SECURITY.md#the-space-helper) has how the privileges are split.
 
 #### Turning it off
 
-Turn off **Use spacebar for every file in Finder** in Settings, General. The helper stops and leaves Login Items, and Space
+Turn off **Use spacebar for every file in Finder** in Settings. The helper stops and leaves Login Items, and Space
 in Finder is Quick Look's again. Its Accessibility entry stays, unused, until you remove it in System Settings or
 [uninstall](#uninstall) spacebar, which removes it for you.
 
@@ -175,15 +175,15 @@ Press Space on any folder. It opens on:
 
 App bundles and other packages, the top of a volume and system folders (`/System`, `/Library`, `/usr` and the like, and
 `~/Library`) keep Quick Look's usual preview. Click the folder's name at the top of the sidebar to see its overview again.
-Folder previews are on by default; **Preview folders** (Settings, Sidebar) turns them off.
+Folder previews are on by default; `"folderMode": false` in settings.json turns them off.
 
 While the sidebar shows, it takes the arrow keys as soon as the preview opens, so they move through spacebar's list rather
 than Finder's selection: ↑ and ↓ move through the files and open each one in spacebar (a CSV or an image too, which Quick
 Look would otherwise show in its own previewer), → and ← open and close folders, Home and End jump to the ends and Return
 opens the file or folder under the cursor. Esc or Space gives the keys back to Quick Look without closing the preview (the
 preview cannot close Quick Look), and the preview says so: press Space or Esc again to close it. A click in the document
-gives them back too, and a click on a row takes them again. With the sidebar collapsed, or **Arrow keys move through the
-sidebar** (Settings, Sidebar) off, the arrows stay with Finder and Space closes the preview at once. Click the filter field
+gives them back too, and a click on a row takes them again. With the sidebar collapsed, or `sidebarKeys` off in
+settings.json, the arrows stay with Finder and Space closes the preview at once. Click the filter field
 at the top and type to narrow the tree to names that match (letters in order, so `rdme` finds `README.md`); ↑, ↓, Home, End
 and Return still work while you type, and Esc clears the field, then goes back to the list.
 
@@ -203,6 +203,44 @@ In a vault (a folder with `.obsidian` in it), and in any other folder:
   <source media="(prefers-color-scheme: dark)" srcset="docs/evidence/themes/theme-github-dark.png">
   <img alt="A Markdown file in spacebar's Quick Look preview: math, highlighted code, a Mermaid diagram and a task list" src="docs/evidence/themes/theme-github-light.png" width="720">
 </picture>
+
+### Settings
+
+Open spacebar to change its settings. The window holds only what most people change:
+
+- **Appearance**: the theme, Automatic, Light or Dark, and the text size. The preview's Aa button changes these too, with the
+  font and page width.
+- **Use spacebar for every file in Finder**, and whether the helper is running.
+- **Open files in**: the editor the preview's Open button uses.
+- **Check for updates**, **Report a Problem…** and **Uninstall spacebar…**.
+
+Anything wrong with the setup (spacebar turned off in Quick Look, another app's previewer claiming its types, folder previews
+off in System Settings, an unreadable settings file) shows at the top while it is wrong.
+
+**Advanced**, closed until you open it, holds scripts in HTML files, HTML in Markdown and remote images; editing in the
+preview and checking off tasks; hidden files in the sidebar; a custom theme and `custom.css`; and the settings file with
+**Reset to Defaults…**, which puts every key back, including the ones below, and leaves **Use spacebar for every file** as it is.
+
+Everything else is a key in `~/Library/Application Support/spacebar/settings.json`, which takes effect as soon as it is saved.
+spacebar keeps the file's `"version"` up to date; in a file you write yourself or link from elsewhere, set `"version": 4`, or
+an older version's defaults are applied to it (`stats` is read as off):
+
+| Key | Default | Values |
+|---|---|---|
+| `bodyFont` | `"system"` | `"serif"`, `"rounded"`, `"mono"`; also in the Aa button |
+| `width` | `"medium"` | `"narrow"`, `"wide"`, `"full"`; also in the Aa button |
+| `monoFont` | `"system"` | `"menlo"`, `"monaco"`, `"courier"` |
+| `lineHeight` | `1.6` | 1.2 to 2.0 |
+| `codeTheme` | `"auto"` (match the theme) | `"apple"`, `"github"`, `"paper"`, `"solarized"`, `"nord"`, `"contrast"` |
+| `minimalChrome` | `false` | floating buttons instead of the toolbar row |
+| `stats` | `false` | word count and reading time |
+| `toc` | `"auto"` | `"on"`, `"off"` |
+| `frontMatter` | `"table"` | `"hide"`, `"raw"` |
+| `math`, `mermaid` | `true` | |
+| `mdLinks` | `"preview"` | `"editor"` opens Markdown links in your editor |
+| `folderMode` | `true` | folder previews |
+| `folderReadmeFirst` | `true` | |
+| `sidebarKeys` | `true` | the sidebar takes the arrow keys as a preview opens |
 
 ## Install
 
@@ -238,8 +276,8 @@ Read [`scripts/install.sh`](scripts/install.sh) before you run it. It:
 
 ### Updates
 
-Once a day spacebar asks GitHub for the latest release's version number, and nothing else (turn this off in Settings,
-Advanced). A newer version shows as a dot on the preview's Aa button; its **Update** button runs the app's own sealed copy of
+Once a day spacebar asks GitHub for the latest release's version number, and nothing else (turn this off in Settings:
+**Check for updates**). A newer version shows as a dot on the preview's Aa button; its **Update** button runs the app's own sealed copy of
 `install.sh` for that version, which downloads and checks the release exactly as above. Quick Look shows an error for a moment
 while the installer replaces the extension; press Space again after. An edit in progress is saved first, and no edit, task
 toggle or sidebar filter starts while the update runs. The installer's output goes to `~/Library/Logs/spacebar-update.log`.
@@ -262,7 +300,7 @@ curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/unins
 
 This stops the Space helper (its launchd agent, then the helper, the viewer and the viewer's writer), resets the
 Accessibility permission the helper had and every permission the viewer had, unregisters spacebar's Quick Look extensions and
-deletes `~/Applications/spacebar.app`, which takes its Login Items entry with it. **Uninstall spacebar…** in Settings, Advanced, runs the same
+deletes `~/Applications/spacebar.app`, which takes its Login Items entry with it. **Uninstall spacebar…** in Settings runs the same
 script from inside the app (not while an update runs), after removing the helper from Login Items. Both quit spacebar's
 Quick Look extensions first. To also delete your settings and themes in `~/Library/Application Support/spacebar` and the
 helper's log in `~/Library/Logs`:
@@ -323,7 +361,7 @@ disk, the external change wins.
 ## Privacy and security
 
 - No analytics, telemetry or accounts. The one request spacebar makes on its own is the daily update check: GitHub's latest
-  release, of which only the version number is read (off in Settings, Advanced). **Report a Problem** (Settings, Advanced)
+  release, of which only the version number is read (off in Settings). **Report a Problem** (Settings)
   opens a new GitHub issue in your browser with your versions, Mac model and the end of the update log filled in; nothing is
   sent unless you submit it there. Settings are a JSON file in `~/Library/Application Support/spacebar`.
 - Remote images are off by default (fetching one tells its server when you opened the document). A blocked image offers a

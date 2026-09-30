@@ -40,7 +40,7 @@ struct Settings: Codable, Equatable {
     var htmlScripts = "local"
     var checkUpdates = true
     var welcomeShown = false
-    /// Space in Finder opens spacebar's own panel through the helper (Settings, General; or the welcome sheet).
+    /// Space in Finder opens spacebar's own panel through the helper (Settings, or the welcome sheet).
     var spaceHelper = false
     /// The welcome sheet has offered the helper once; an upgrade that already dismissed the sheet sees only that step.
     var helperOffered = false
@@ -54,8 +54,10 @@ struct Settings: Codable, Equatable {
 
     /// 2: folder previews became on by default. A file written before that stores the old default, false, so it reads as on
     /// until SettingsFile.update rewrites it; a user who turns them off afterwards stays off.
-    /// 3: reading stats became off by default. A file written before that without the key had them on, and keeps them on.
-    static let currentVersion = 3
+    /// 3: reading stats became off by default.
+    /// 4: reading stats left the settings window, so a file from before is read and rewritten with them off: its "on" was almost
+    /// always the old default, which the window could no longer turn off.
+    static let currentVersion = 4
     static func fileVersion(_ raw: [String: Any]) -> Int { (raw["version"] as? NSNumber)?.intValue ?? 1 }
 
     static let themes = ["apple", "github", "paper", "solarized", "nord", "contrast"]
@@ -90,6 +92,20 @@ struct Settings: Codable, Equatable {
     /// changed in the settings window only.
     static let panelKeys: Set<String> = Set(["theme", "appearance", "fontSize", "width", "bodyFont", "sidebarCollapsed", "sidebarWidth", "folderSort"])
         .union(rawKeys)
+    /// The keys the settings window shows, on its page and under Advanced. Every other key is changed in the preview (panelKeys),
+    /// by spacebar itself, or in settings.json only, and keeps its stored value.
+    static let windowKeys: Set<String> = ["theme", "appearance", "fontSize", "spaceHelper", "editorBundleID", "checkUpdates"]
+    static let advancedKeys: Set<String> = ["htmlScripts", "rawHTML", "remoteImages", "inlineEditing", "taskToggles", "showHiddenFiles", "userTheme", "customCSS"]
+    /// Kept by Reset to Defaults: resetting must not bring the welcome sheet back or change the Space helper behind its Login Items entry.
+    static let keptOnReset = ["welcomeShown", "helperOffered", "spaceHelper"]
+
+    /// Reset to Defaults as a patch: every key at its default, including the ones only settings.json can change. The kept keys
+    /// are left out, so the file's own values stand.
+    static func resetPatch() -> [String: Any] {
+        var d = Settings().dictionary
+        for k in keptOnReset { d.removeValue(forKey: k) }
+        return d
+    }
 
     /// A panel change as the JSON patch the writer takes, or nil when the key is not a panel key or the value does not
     /// sanitize (sidebarCollapsed takes a JSON boolean only, never a number or a string; sidebarWidth a number, clamped).
@@ -144,7 +160,7 @@ struct Settings: Codable, Equatable {
             if let clean = Self.sanitize(k, v) { d[k] = clean }
         }
         if !raw.isEmpty, Self.fileVersion(raw) < 2 { d["folderMode"] = true }
-        if !raw.isEmpty, Self.fileVersion(raw) < 3, raw["stats"] == nil { d["stats"] = true }
+        if !raw.isEmpty, Self.fileVersion(raw) < 4 { d["stats"] = false }
         let data = try! JSONSerialization.data(withJSONObject: d)
         self = (try? JSONDecoder().decode(Settings.self, from: data)) ?? Settings()
     }
@@ -293,7 +309,7 @@ enum SettingsFile {
         // Migrated before the patch, so a user's "off" in the same write is kept.
         if Settings.fileVersion(obj) < Settings.currentVersion {
             // No file yet: nothing was written under an older default.
-            if !obj.isEmpty, Settings.fileVersion(obj) < 3, obj["stats"] == nil { obj["stats"] = true }
+            if !obj.isEmpty, obj["stats"] as? Bool == true { obj["stats"] = false }
             if Settings.fileVersion(obj) < 2 { obj["folderMode"] = true }
             obj["version"] = Settings.currentVersion
             changed = true
@@ -309,7 +325,7 @@ enum SettingsFile {
 
     /// Brings an existing settings.json up to Settings.currentVersion. Run by the app and the writer, never the sandboxed extension.
     /// A symbolic link (a dotfiles setup) is never written, so it is not migrated: until its target gains the current "version"
-    /// it reads as folder previews on whatever its folderMode says, and reading stats on unless it names them. The failure is returned for the caller's log.
+    /// it reads as folder previews on whatever its folderMode says, and reading stats off. The failure is returned for the caller's log.
     @discardableResult
     static func migrate(at url: URL = url) -> Failure? {
         var st = stat()

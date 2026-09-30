@@ -90,7 +90,7 @@ final class SystemStatus: ObservableObject {
 
     // MARK: The Space helper
 
-    /// Polls the helper every second while someone shows its state (the General tab, the welcome sheet).
+    /// Polls the helper every second while someone shows its state (the settings window, the welcome sheet).
     func watchHelper() {
         helperWatchers += 1
         guard helperTimer == nil else { return }

@@ -41,5 +41,15 @@ check("once offered, nothing", offered.welcomeSteps(helperAvailable: true).isEmp
 check("a copy without a usable helper never offers it", fresh.welcomeSteps(helperAvailable: false) == [.intro] && upgraded.welcomeSteps(helperAvailable: false).isEmpty)
 _ = SettingsFile.update(["helperOffered": true])
 check("helperOffered is saved", SettingsFile.load().helperOffered && SettingsFile.load().welcomeSteps(helperAvailable: true).isEmpty)
+_ = SettingsFile.update(["spaceHelper": true, "theme": "nord"])
+guard case .success(let reset) = SettingsFile.update(Settings.resetPatch()) else { check("Reset to Defaults writes", false); exit(1) }
+check("Reset to Defaults does not bring the welcome sheet or the helper's offer back", reset.welcomeSteps(helperAvailable: true).isEmpty)
+check("Reset to Defaults leaves Use spacebar for every file on", reset.spaceHelper && reset.theme == "apple")
+_ = SettingsFile.update(["helperOffered": false])
+guard case .success(let resetBeforeOffer) = SettingsFile.update(Settings.resetPatch()) else { check("Reset to Defaults writes", false); exit(1) }
+check("a reset before the offer was answered still offers the helper once", resetBeforeOffer.welcomeSteps(helperAvailable: true) == [.helper])
+let welcomeSource = (try? String(contentsOfFile: "App/Welcome.swift", encoding: .utf8)) ?? ""
+check("the welcome sheet names Settings, not a tab it no longer has",
+      welcomeSource.contains("in Settings.") && !["Settings, General", "Settings, Advanced", "Settings, Sidebar"].contains { welcomeSource.contains($0) })
 print(failed == 0 ? "\nall welcome checks" : "\n\(failed) welcome checks failed")
 exit(failed == 0 ? 0 : 1)

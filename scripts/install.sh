@@ -365,7 +365,7 @@ else
   run pluginkit -a "$DEST/Contents/PlugIns/SpacebarPreview.appex"
   run pluginkit -a "$DEST/Contents/PlugIns/SpacebarFolders.appex"
   run pluginkit -e use -i "$APPEX_ID"
-  # Folder previews are on by default (Settings > Sidebar); the folders extension stays off only if they were turned off.
+  # Folder previews are on by default ("folderMode" in settings.json); the folders extension stays off only if they were turned off.
   settings="$HOME/Library/Application Support/spacebar/settings.json"
   [ -e "${settings%/*}" ] || settings="$HOME/Library/Application Support/spacebar.md/settings.json"
   if grep -qE '"folderMode"[[:space:]]*:[[:space:]]*false' "$settings" 2>/dev/null && grep -qE '"version"[[:space:]]*:[[:space:]]*([2-9]|[1-9][0-9])' "$settings"; then
@@ -414,7 +414,7 @@ if [ -n "$rivals" ]; then
   say "Other Quick Look extensions that preview some of the same files are turned on:"
   say "$rivals"
   say "Quick Look uses one extension per file type. If those files do not open in spacebar, turn the others off in"
-  say "spacebar's Settings (General), or in System Settings > General >"
+  say "spacebar's Settings, or in System Settings > General >"
   say "Login Items & Extensions > Quick Look (macOS 13-14: Privacy & Security > Extensions > Quick Look),"
   say "or run:  pluginkit -e ignore -i <id>"
   if [ "$PROMPT" = 1 ] && [ "$DRY_RUN" != 1 ] && [ -t 1 ] && (: </dev/tty) 2>/dev/null; then

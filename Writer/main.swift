@@ -384,7 +384,7 @@ func containingApp() -> URL? {
 
 /// Whether the Space helper takes Space: an enabled event tap owned by this app's own spacebar Helper.app, read from the
 /// window server's list of taps, so nothing connects to the helper. Secure input is not counted: it is another app's, and
-/// passes; Settings, General names it.
+/// passes; Settings names it.
 enum HelperTap {
     static func taking() -> Bool {
         var n: UInt32 = 0

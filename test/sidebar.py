@@ -492,7 +492,7 @@ def viewers(page, check, out, st):
     r = click(page, '#side-hidden')
     o = [m for m in r['messages'] if m.get('type') == 'openSettings']
     check(len(o) == 1 and o[0].get('tab') == 'folders' and not [m for m in r['messages'] if m.get('type') == 'setting'],
-          'sidebar menu: Show Hidden Files opens Settings › Sidebar; the page never changes it', json.dumps(o))
+          'sidebar menu: Show Hidden Files opens Settings › Advanced; the page never changes it', json.dumps(o))
     r = page.cmd("@eval:window.webkit.messageHandlers.sb.postMessage({type: 'setting', key: 'showHiddenFiles', value: true}); 0")
     page.cmd('@wait:0.2')
     check('_settingRefused' in [m.get('type') for m in r['messages'] + page.cmd('@eval:0')['messages']], 'showHiddenFiles from the page is refused by the gate')
@@ -2179,7 +2179,7 @@ def main():
         h4 = page.js(HINT)
         check(h1 == ['Space helper is off: open spacebar Settings', True, 'pointer'] and [x.get('tab') for x in o] == ['general'] and h2 == ['', False, 'auto']
               and h3 == ['', False, 'auto'] and h4[:2] == ['Copied', False],
-              'Space helper hint: one line; a click opens Settings, General and takes it down; the next file clears it; it never covers another status',
+              'Space helper hint: one line; a click opens Settings and takes it down; the next file clears it; it never covers another status',
               json.dumps([h1, o, h2, h3, h4]))
         view(T('code.ts'))
         r = click(page, '#doc pre.code')

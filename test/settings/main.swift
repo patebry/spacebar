@@ -10,6 +10,13 @@ let exe = CommandLine.arguments[0]
 var failures = 0
 func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)"); if !ok { failures += 1 } }
 func obj(_ json: String) -> [String: Any] { (try! JSONSerialization.jsonObject(with: Data(json.utf8))) as! [String: Any] }
+extension String {
+    /// The first capture group of every match of `pattern`.
+    func matches(_ pattern: String) -> [String] {
+        let re = try! NSRegularExpression(pattern: pattern)
+        return re.matches(in: self, range: NSRange(startIndex..., in: self)).compactMap { Range($0.range(at: 1), in: self).map { String(self[$0]) } }
+    }
+}
 func decode(_ json: String) -> Settings? { try? JSONDecoder().decode(Settings.self, from: Data(json.utf8)) }
 
 let dir = SettingsFile.supportDir
@@ -30,7 +37,7 @@ check("font size clamped low", Settings(dictionary: ["fontSize": -3]).fontSize =
 check("font size rounded", Settings(dictionary: ["fontSize": 16.6]).fontSize == 17)
 check("line height clamped", Settings(dictionary: ["lineHeight": 9.5]).lineHeight == 2.0 && Settings(dictionary: ["lineHeight": 0]).lineHeight == 1.2)
 check("bool is not a number", Settings(dictionary: ["fontSize": true]).fontSize == 15)
-check("number is not a bool", Settings(dictionary: ["math": 0]).math == true && Settings(dictionary: ["version": 3, "stats": 1]).stats == false)
+check("number is not a bool", Settings(dictionary: ["math": 0]).math == true && Settings(dictionary: ["version": 4, "stats": 1]).stats == false)
 check("NaN-free: huge number clamps", Settings(dictionary: ["fontSize": 1e300]).fontSize == 24)
 check("rawHTML on is refused", Settings(dictionary: ["rawHTML": "on"]).rawHTML == "sanitized")
 check("rawHTML off accepted", Settings(dictionary: ["rawHTML": "off"]).rawHTML == "off")
@@ -588,32 +595,45 @@ withExtendedLifetime(watch) {}
 let migDir = FileManager.default.temporaryDirectory.appendingPathComponent("spacebar-migrate-\(UUID().uuidString)")
 try! FileManager.default.createDirectory(at: migDir, withIntermediateDirectories: true)
 let migFile = migDir.appendingPathComponent("settings.json")
-check("defaults: folder previews on, reading stats off, version 3", Settings().folderMode && !Settings().stats && Settings().version == 3)
+check("defaults: folder previews on, reading stats off, version 4", Settings().folderMode && !Settings().stats && Settings().version == 4)
 try! Data(#"{"version": 1, "folderMode": false, "theme": "nord"}"#.utf8).write(to: migFile)
 check("a version-1 file reads as folder previews on", SettingsFile.load(at: migFile).folderMode)
 SettingsFile.migrate(at: migFile)
 let migrated = (try! JSONSerialization.jsonObject(with: Data(contentsOf: migFile))) as! [String: Any]
-check("migrate turns folder previews on once and writes version 3, keeping other keys",
-      migrated["folderMode"] as? Bool == true && (migrated["version"] as? NSNumber)?.intValue == 3 && migrated["theme"] as? String == "nord")
+check("migrate turns folder previews on once and writes version 4, keeping other keys",
+      migrated["folderMode"] as? Bool == true && (migrated["version"] as? NSNumber)?.intValue == 4 && migrated["theme"] as? String == "nord")
 _ = SettingsFile.update(["folderMode": false], at: migFile)
 SettingsFile.migrate(at: migFile)
 check("turned off after the migration stays off", SettingsFile.load(at: migFile).folderMode == false)
 try! Data(#"{"folderMode": false}"#.utf8).write(to: migFile)
 _ = SettingsFile.update(["folderMode": false], at: migFile)
 check("an unversioned file's off in the same write is kept", SettingsFile.load(at: migFile).folderMode == false)
-// Version 3: reading stats off by default; a file written before it keeps them on, whether it stored the key or not.
-try! Data(#"{"version": 1, "theme": "nord"}"#.utf8).write(to: migFile)
-check("a version-1 file reads with reading stats on", SettingsFile.load(at: migFile).stats)
+// Version 4: reading stats left the settings window, so a file from before is read, and rewritten, with them off.
+for v in 1...3 {
+    try! Data(#"{"version": \#(v), "stats": true, "theme": "nord"}"#.utf8).write(to: migFile)
+    check("a version-\(v) file with reading stats on reads with them off", SettingsFile.load(at: migFile).stats == false)
+}
 try! Data(#"{"version": 2, "theme": "nord"}"#.utf8).write(to: migFile)
-check("a version-2 file without the key reads with reading stats on", SettingsFile.load(at: migFile).stats)
+check("a version-2 file without the key reads with reading stats off", SettingsFile.load(at: migFile).stats == false)
+try! Data(#"{"version": 3, "stats": true, "theme": "nord", "futureKey": 7}"#.utf8).write(to: migFile)
 SettingsFile.migrate(at: migFile)
-let v3 = (try! JSONSerialization.jsonObject(with: Data(contentsOf: migFile))) as! [String: Any]
-check("migrate writes reading stats on into a version-2 file", v3["stats"] as? Bool == true && (v3["version"] as? NSNumber)?.intValue == 3)
-try! Data(#"{"version": 2, "stats": false}"#.utf8).write(to: migFile)
+let v4 = (try! JSONSerialization.jsonObject(with: Data(contentsOf: migFile))) as! [String: Any]
+check("migrate writes reading stats off and version 4, keeping other keys",
+      v4["stats"] as? Bool == false && (v4["version"] as? NSNumber)?.intValue == 4 && v4["theme"] as? String == "nord" && v4["futureKey"] as? Int == 7)
+_ = SettingsFile.update(["stats": true], at: migFile)
 SettingsFile.migrate(at: migFile)
-check("a version-2 file with reading stats off keeps them off", SettingsFile.load(at: migFile).stats == false)
-_ = SettingsFile.update(["stats": false], at: migFile)
-check("turned off after the migration stays off", SettingsFile.load(at: migFile).stats == false)
+check("turned on in settings.json after the migration stays on", SettingsFile.load(at: migFile).stats)
+try! Data(#"{"version": 3, "stats": true}"#.utf8).write(to: migFile)
+_ = SettingsFile.update(["stats": true], at: migFile)
+check("an old file's on in the same write as the migration is kept", SettingsFile.load(at: migFile).stats)
+// Settings the window no longer shows keep what the user chose, through the migration.
+let hiddenValues: [String: Any] = ["monoFont": "menlo", "lineHeight": 1.8, "codeTheme": "nord", "minimalChrome": true, "toc": "off", "frontMatter": "raw",
+                             "math": false, "mermaid": false, "mdLinks": "editor", "folderReadmeFirst": false, "sidebarKeys": false, "folderMode": false]
+var hiddenFile = hiddenValues; hiddenFile["version"] = 3
+try! JSONSerialization.data(withJSONObject: hiddenFile).write(to: migFile)
+SettingsFile.migrate(at: migFile)
+let keptHidden = SettingsFile.load(at: migFile).dictionary
+check("every setting the window no longer shows keeps its saved value", hiddenValues.allSatisfy { k, v in (keptHidden[k] as? NSObject) == (v as? NSObject) })
 try! FileManager.default.removeItem(at: migFile)
 _ = SettingsFile.update(["theme": "nord"], at: migFile)
 check("a first write with no file keeps reading stats off", SettingsFile.load(at: migFile).stats == false)
@@ -622,6 +642,63 @@ check("a new settings.json has reading stats off", SettingsFile.ensure(at: migDi
 try? FileManager.default.removeItem(at: migDir)
 SettingsFile.migrate(at: migFile)
 check("migrate creates nothing when there is no file", !FileManager.default.fileExists(atPath: migFile.path))
+
+// Where each key is changed: the window's page, its Advanced section, the preview, or settings.json.
+let security: Set<String> = ["htmlScripts", "rawHTML", "remoteImages"]
+check("security settings stay in the window, under Advanced", security.isSubset(of: Settings.advancedKeys))
+check("page and Advanced keys are known and do not overlap", Settings.windowKeys.union(Settings.advancedKeys).isSubset(of: Settings.allKeys)
+      && Settings.windowKeys.isDisjoint(with: Settings.advancedKeys))
+check("the preview can change no Advanced setting", Settings.panelKeys.isDisjoint(with: Settings.advancedKeys) && Settings.panelKeys.isSubset(of: Settings.allKeys))
+check("every key is in the window, the preview, or the README's settings.json list, or is spacebar's own",
+      Settings.allKeys == Settings.windowKeys.union(Settings.advancedKeys).union(Settings.panelKeys)
+        .union(["monoFont", "lineHeight", "codeTheme", "minimalChrome", "stats", "toc", "frontMatter", "math", "mermaid", "mdLinks",
+                "folderMode", "folderReadmeFirst", "sidebarKeys", "welcomeShown", "helperOffered", "webLinks"]))
+let paneSource = (try? String(contentsOfFile: "App/Panes.swift", encoding: .utf8)) ?? ""
+let paneKeys = Set(paneSource.matches(#"store\.(?:binding\(\\\.\w+, |set\()"(\w+)""#))
+check("the window's controls are exactly the page and Advanced keys (the helper's through its own toggle)",
+      !paneKeys.isEmpty && paneKeys.union(["spaceHelper"]) == Settings.windowKeys.union(Settings.advancedKeys))
+let readme = (try? String(contentsOfFile: "README.md", encoding: .utf8)) ?? ""
+check("the README lists every key only settings.json changes",
+      ["monoFont", "lineHeight", "codeTheme", "minimalChrome", "stats", "toc", "frontMatter", "math", "mermaid", "mdLinks", "folderMode", "folderReadmeFirst", "sidebarKeys"]
+        .allSatisfy { readme.contains("`\($0)`") })
+
+// Reset to Defaults
+var tweaked = Settings(dictionary: hiddenValues)
+tweaked.theme = "nord"; tweaked.remoteImages = true; tweaked.htmlScripts = "off"; tweaked.inlineEditing = false; tweaked.stats = true
+tweaked.spaceHelper = true; tweaked.welcomeShown = true; tweaked.helperOffered = true
+let resetDir = FileManager.default.temporaryDirectory.appendingPathComponent("spacebar-reset-\(UUID().uuidString)")
+let resetFile = resetDir.appendingPathComponent("settings.json")
+try! FileManager.default.createDirectory(at: resetDir, withIntermediateDirectories: true)
+var resetRaw = tweaked.dictionary; resetRaw["futureKey"] = "kept"
+try! JSONSerialization.data(withJSONObject: resetRaw).write(to: resetFile)
+if case .success(let r) = SettingsFile.update(Settings.resetPatch(), at: resetFile) {
+    var expected = Settings(); expected.spaceHelper = true; expected.welcomeShown = true; expected.helperOffered = true
+    check("Reset to Defaults resets every key, the settings.json-only ones too, and keeps the helper and the welcome sheet's state", r == expected)
+    check("Reset to Defaults turns inline editing back on and remote images off", r.inlineEditing && !r.remoteImages && r.htmlScripts == "local")
+} else { check("Reset to Defaults writes", false) }
+let afterReset = (try! JSONSerialization.jsonObject(with: Data(contentsOf: resetFile))) as! [String: Any]
+check("Reset to Defaults keeps keys a newer version wrote", afterReset["futureKey"] as? String == "kept")
+check("Reset to Defaults leaves the kept keys to the file", Settings.keptOnReset.allSatisfy { Settings.resetPatch()[$0] == nil })
+// A linked settings.json (a dotfiles setup) is read but never migrated: an old one reads with stats off and its target is left alone.
+let linkTarget = resetDir.appendingPathComponent("target.json"), link = resetDir.appendingPathComponent("link.json")
+try! Data(#"{"version": 3, "stats": true}"#.utf8).write(to: linkTarget)
+try! FileManager.default.createSymbolicLink(at: link, withDestinationURL: linkTarget)
+check("a linked version-3 file reads with reading stats off", SettingsFile.load(at: link).stats == false)
+SettingsFile.migrate(at: link)
+check("migrate leaves a linked file's target untouched", String(data: FileManager.default.contents(atPath: linkTarget.path)!, encoding: .utf8) == #"{"version": 3, "stats": true}"#)
+try! Data(#"{"version": 4, "stats": true}"#.utf8).write(to: linkTarget)
+check("a linked version-4 file can turn reading stats on", SettingsFile.load(at: link).stats)
+try? FileManager.default.removeItem(at: resetDir)
+
+// spacebar-md://settings/<name>: the old tab names still open the window; those whose settings moved open Advanced.
+let tabNames = ["general", "appearance", "folders", "editing", "advanced"]
+check("every name the preview may send opens the window", tabNames.allSatisfy { SettingsTab(url: URL(string: "spacebar-md://settings/\($0)")!) != nil }
+      && Set(SettingsTab.allCases.map(\.rawValue)) == Set(tabNames))
+check("no tab means the page, closed", SettingsTab(url: URL(string: "spacebar-md://settings")!) == .general && !SettingsTab.general.opensAdvanced)
+check("hidden files (folders), editing and advanced open Advanced; general and appearance do not",
+      tabNames.map { SettingsTab(rawValue: $0)!.opensAdvanced } == [false, false, true, true, true])
+check("other links open nothing", SettingsTab(url: URL(string: "spacebar-md://settings/sidebar")!) == nil
+      && SettingsTab(url: URL(string: "https://settings/general")!) == nil)
 
 print("\n\(failures == 0 ? "all" : "\(failures) FAILED of") settings checks")
 exit(failures == 0 ? 0 : 1)

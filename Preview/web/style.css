@@ -152,6 +152,7 @@
   #side-list a.row:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
   #side-list a.row.folder:hover .twisty { color: var(--fg); }
   #side-list a.row:active { background: color-mix(in srgb, var(--fg) 10%, transparent); }
+  #side-list a.row.broken { opacity: .45; cursor: default; }
   #side-list a.row.active { background: color-mix(in srgb, var(--accent) 12%, transparent); font-weight: 600; }
   /* The row of the file just opened settles into its highlight. */
   #side-list a.row.active.arrive { animation: row-in .24s ease-out; }

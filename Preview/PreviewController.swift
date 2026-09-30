@@ -916,11 +916,14 @@ class PreviewController: NSViewController {
     private func open(_ url: URL, anchor: String? = nil) {
         if torn { return status("NOT SAVED: file partly written; retrying before switching") }
         var st = stat()
-        guard stat(url.path, &st) == 0 else { return status("cannot read \(url.lastPathComponent)") }
-        let kind = FileTypes.kind(name: url.lastPathComponent, isDirectory: st.st_mode & S_IFMT == S_IFDIR, isPackage: st.st_mode & S_IFMT == S_IFDIR,
-                                  executable: st.st_mode & 0o111 != 0)
-        if kind == .markdown, let why = Self.unreadable(url) { log.error("open: \(why, privacy: .private)"); return status(why) }
-        if kind != .markdown, st.st_mode & S_IFMT != S_IFREG, st.st_mode & S_IFMT != S_IFDIR { return status("\(url.lastPathComponent) is not a regular file") }
+        let found = stat(url.path, &st) == 0
+        let kind = found ? FileTypes.kind(name: url.lastPathComponent, isDirectory: st.st_mode & S_IFMT == S_IFDIR, isPackage: st.st_mode & S_IFMT == S_IFDIR,
+                                          executable: st.st_mode & 0o111 != 0) : .other
+        var refusal: String?
+        if !found || (kind == .markdown && Self.unreadable(url) != nil) || (kind != .markdown && st.st_mode & S_IFMT != S_IFREG && st.st_mode & S_IFMT != S_IFDIR) {
+            refusal = FileView.openRefusal(url.path)
+            log.error("open: \(refusal!, privacy: .private)")
+        }
         // The document being edited keeps its last keys: the edit ends, and the switch waits for the writer to flush them and
         // for every save of this document to land.
         if holdUntilSaved(.file(url, anchor: anchor)) { return }
@@ -951,8 +954,24 @@ class PreviewController: NSViewController {
         textPayload = nil
         lineEnding = "\n"
         if encodeRefused || textStranded { encodeRefused = false; textStranded = false; stickyStatus("") }
+        if let refusal {
+            watcher = nil
+            return host.whenReady { self.showUnopenable(url, note: refusal) }
+        }
         watcher = FileWatcher(path: url.path) { [weak self] in self?.fileChanged() }
         host.whenReady { self.reload(reason: "open") }
+    }
+
+    /// The info card for an item that cannot be opened at all (a link that loops or leads nowhere, a FIFO): never a blank panel.
+    private func showUnopenable(_ url: URL, note: String) {
+        guard fileURL == url else { return }
+        closePDF()
+        shownView = "info"
+        shownStamp = nil
+        shownCanOpen = false
+        shownText = false
+        shownBody = nil
+        render(FileView.unopenable(path: url.path, root: rootDir, note: note))
     }
 
     private func fileChanged() {
@@ -968,7 +987,7 @@ class PreviewController: NSViewController {
     private func reload(reason: String) {
         guard let url = fileURL, !writing, !torn else { return }
         guard fileKind == .markdown else { return show(url, reason: reason) }
-        if let why = Self.unreadable(url) { log.error("read refused: \(why, privacy: .private)"); return status(why) }
+        if let why = Self.unreadable(url) { log.error("read refused: \(why, privacy: .private)"); return showUnopenable(url, note: FileView.openRefusal(url.path)) }
         if reason == "change", awaitingDownload(url) { return }
         let epoch = writeEpoch, cloud = FileTypes.isDataless(url.path)
         // A conflict keeps the rejected text on screen until the file's own text arrives: it may be the only copy left to copy.
@@ -1145,7 +1164,7 @@ class PreviewController: NSViewController {
     /// here (the first 2 MB), anything else as an info card. Nothing here is ever rendered as HTML.
     private func show(_ url: URL, reason: String) {
         var st = stat()
-        guard stat(url.path, &st) == 0 else { return status("cannot read \(url.lastPathComponent)") }
+        guard stat(url.path, &st) == 0 else { return showUnopenable(url, note: FileView.openRefusal(url.path)) }
         let stamp = "\(st.st_size)-\(st.st_mtimespec.tv_sec).\(st.st_mtimespec.tv_nsec)-\(st.st_ino)"
         if reason == "change", stamp == shownStamp || awaitingDownload(url) { return }
         shownStamp = stamp

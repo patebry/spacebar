@@ -25,6 +25,10 @@ enum FileTypes {
     /// Played by AVFoundation (test/mediapane plays each). WebM, Ogg, Opus and Matroska are not: AVFoundation cannot open them.
     static let videoExtensions: Set<String> = ["mp4", "m4v", "mov", "3gp", "mpg", "mpeg", "m2v"]
     static let audioExtensions: Set<String> = ["mp3", "m4a", "m4b", "aac", "wav", "aif", "aiff", "flac", "caf", "amr"]
+    /// Media AVFoundation cannot play, by the name its info card gives it where macOS declares no type.
+    static let unplayableMedia: [String: String] = ["webm": "WebM video", "mkv": "Matroska video", "mka": "Matroska audio", "ogg": "Ogg audio",
+                                                    "oga": "Ogg audio", "ogv": "Ogg video", "opus": "Opus audio", "avi": "AVI movie",
+                                                    "wmv": "Windows Media video", "wma": "Windows Media audio", "flv": "Flash video"]
     /// Images. SVG is here: as an image (`<img>`) it runs no script.
     static let imageExtensions = Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "svg"]).union(nativeImageExtensions)
     /// Images the panel decodes with ImageIO (Preview/ImagePane.swift) rather than as `<img>`: WebKit's decoding of these is
@@ -154,6 +158,8 @@ enum FileTypes {
     static let maxFileBytes: Int64 = 512 << 20
     /// Text and code past this show their first 2 MB, with a note.
     static let maxTextBytes = 2 << 20
+    /// A CSV or TSV is read this far for its table: 50,000 typical rows. Editing stays within maxTextBytes.
+    static let maxTableBytes = 16 << 20
 
     /// The `file` URL of an absolute path, as the page loads it; `version` busts the cache after a change on disk.
     static func fileURL(_ path: String, version: String? = nil) -> URL? {
@@ -587,6 +593,37 @@ enum FileView {
         return p
     }
 
+    /// Why an item cannot be opened at all, as the info card says it: a link that loops or leads nowhere, no permission, or not
+    /// a regular file.
+    static func openRefusal(_ path: String) -> String {
+        var ls = stat(), st = stat()
+        let link = lstat(path, &ls) == 0 && ls.st_mode & S_IFMT == S_IFLNK
+        if stat(path, &st) != 0 {
+            let err = errno
+            if link && err == ELOOP { return "This item can’t be opened (a link that loops)." }
+            if link && err == ENOENT { return "This item can’t be opened (a link to an item that is missing)." }
+            if err == EACCES { return "This item can’t be opened (no permission to read it)." }
+            return "This item can’t be opened."
+        }
+        if st.st_mode & S_IFMT != S_IFREG && st.st_mode & S_IFMT != S_IFDIR { return "This item can’t be opened (not a regular file)." }
+        if st.st_size > FolderListing.maxDocumentBytes { return "This item can’t be opened (too large to preview)." }
+        return "This item couldn’t be read."
+    }
+
+    /// The info card of an item that cannot be opened at all (openRefusal). Nothing here reads the file.
+    static func unopenable(path: String, root: String, note: String) -> [String: Any] {
+        var p = base(path: path, root: root, reason: "open")
+        var ls = stat()
+        let link = lstat(path, &ls) == 0 && ls.st_mode & S_IFMT == S_IFLNK
+        p["kindName"] = link ? "Broken link" : UTType(filenameExtension: (path as NSString).pathExtension).flatMap(\.localizedDescription) ?? "Document"
+        p["icon"] = FileTypes.glyph(name: (path as NSString).lastPathComponent, kind: .other)
+        p["size"] = NSNull()
+        p["canOpen"] = false
+        p["view"] = "info"
+        p["note"] = note
+        return p
+    }
+
     /// A binary property list as XML text, or nil when `data` is not a whole binary plist (a file cut at 2 MB is not). A
     /// binary plist can name one object many times, so a small file can stand for an exponentially large tree, or one large
     /// string or blob written out thousands of times: past `maxPlistNodes` objects, or an estimate of `maxTextBytes` of XML
@@ -636,6 +673,8 @@ enum FileView {
         p["modified"] = Double(st.st_mtimespec.tv_sec) * 1000 + Double(st.st_mtimespec.tv_nsec / 1_000_000)
         let type = (regular ? nil : UTType(filenameExtension: ext, conformingTo: .package)) ?? UTType(filenameExtension: ext)
         p["kindName"] = type.flatMap(\.localizedDescription) ?? (regular ? "Document" : "Folder")
+        let media = FileTypes.unplayableMedia[ext.lowercased()]
+        if let media, type?.isDynamic != false { p["kindName"] = media }
         p["icon"] = FileTypes.glyph(name: (path as NSString).lastPathComponent, kind: kind)
         p["canOpen"] = canOpen
         // A text file whose extension the system takes for something else (.ts is also an MPEG transport stream) is named by
@@ -679,7 +718,8 @@ enum FileView {
             var fst = stat()
             guard fstat(fd, &fst) == 0, fst.st_mode & S_IFMT == S_IFREG else { close(fd); break }
             let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-            let read = { try? h.read(upToCount: FileTypes.maxTextBytes) ?? Data() }
+            let cap = kind == .csv ? FileTypes.maxTableBytes : FileTypes.maxTextBytes
+            let read = { try? h.read(upToCount: cap) ?? Data() }
             // Only a text kind is downloaded when evicted, and within Markdown's bound: the download is the whole file, and
             // anything else only turns into its info card.
             let fetch = [.code, .json, .csv, .text].contains(kind) && size <= FolderListing.maxDocumentBytes
@@ -690,7 +730,7 @@ enum FileView {
                 converted = true
                 p["kindName"] = "Binary property list, shown as XML"
             }
-            guard let decoded = size == 0 ? TextDecoding.Decoded(text: "", name: "UTF-8") : TextDecoding.decode(data, truncated: size > FileTypes.maxTextBytes) else { break }
+            guard let decoded = size == 0 ? TextDecoding.Decoded(text: "", name: "UTF-8") : TextDecoding.decode(data, truncated: size > cap) else { break }
             view = kind == .code ? "code" : kind == .json ? "json" : kind == .csv ? "csv" : "text"
             p["text"] = decoded.text
             if !converted, size <= FileTypes.maxTextBytes, Int64(data.count) == size, EditableText.allowed(path: path),
@@ -703,12 +743,14 @@ enum FileView {
                 p["encoding"] = decoded.name
                 p["kindName"] = "\(p["kindName"] as? String ?? "Plain text") (\(decoded.name))"
             }
-            p["truncated"] = size > FileTypes.maxTextBytes
+            p["truncated"] = size > cap
+            p["readCap"] = cap
             p["lang"] = kind == .code ? FileTypes.language(name: (path as NSString).lastPathComponent) ?? NSNull() : NSNull()
             if ext.lowercased() == "tsv" { p["tsv"] = true }
         default:
             break
         }
+        if view == "info", regular, media != nil, p["note"] == nil { p["note"] = "macOS can’t play this format; open it in another app." }
         p["view"] = view
         return (p, opened)
     }
@@ -718,7 +760,8 @@ enum FileView {
 /// ("name", or "modified", newest first), with a README first among the files when `readmeFirst`.
 ///
 /// Hidden files (a leading dot or the hidden flag) are skipped unless `showHidden`. A symbolic link is listed only when it
-/// resolves inside the root to a regular file or a folder, so the tree never reaches outside the root. FIFOs, sockets and
+/// resolves inside the root to a regular file or a folder, so the tree never reaches outside the root; one that loops or leads
+/// nowhere is listed as broken, by its name only, and is never opened. FIFOs, sockets and
 /// devices are skipped. A package (an app, a document bundle) is listed as one item. At most `cap` entries are listed and `more`
 /// counts the rest.
 enum FolderListing {
@@ -738,6 +781,8 @@ enum FolderListing {
         /// -1 for anything that is a directory on disk, a package included: it has no size of its own.
         let size: Int64
         let modified: Double
+        /// A symbolic link that loops or leads nowhere: listed greyed, never opened.
+        var broken = false
 
         var isMarkdown: Bool { kind == .markdown }
     }
@@ -757,6 +802,7 @@ enum FolderListing {
                  var d: [String: Any] = ["name": e.name, "path": e.path, "dir": e.isDirectory, "icon": FileTypes.glyph(name: e.name, kind: e.kind),
                                          "modified": (e.modified * 1000).rounded()]
                  if e.size >= 0 { d["size"] = e.size }
+                 if e.broken { d["broken"] = true }
                  return d
              },
              "more": more]
@@ -815,7 +861,15 @@ enum FolderListing {
             guard lstat(path, &st) == 0 else { continue }
             if !showHidden && isHidden(name, st) { continue }
             if st.st_mode & S_IFMT == S_IFLNK {
-                guard let real = realPath(path), real.hasPrefix(inside), stat(real, &st) == 0 else { continue }
+                guard let real = realPath(path) else {
+                    let e = errno
+                    if e == ELOOP || e == ENOENT {
+                        let modified = Double(st.st_mtimespec.tv_sec) + Double(st.st_mtimespec.tv_nsec) / 1e9
+                        found.append(Entry(name: name, path: path, isDirectory: false, kind: .other, size: -1, modified: modified, broken: true))
+                    }
+                    continue
+                }
+                guard real.hasPrefix(inside), stat(real, &st) == 0 else { continue }
                 // A link to a folder that holds the link itself would nest without end.
                 if st.st_mode & S_IFMT == S_IFDIR, let parent = realPath(dir), (parent + "/").hasPrefix(real + "/") { continue }
             }

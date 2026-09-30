@@ -52,7 +52,9 @@ open there too: "Open in <editor>". A script (`.sh`, `.py`, a `.command`) opens 
 **Default App** chosen it opens in your default text editor, never in Terminal or an interpreter. Files that often hold
 secrets (`.env`, `.npmrc`) are shown but never offered to another app; a `.env` can be edited in place.
 
-Text over 2 MB shows its first 2 MB. An archive lists its first 5,000 entries. Images over 50 MB, and PDFs, video and audio over 512 MB, get the info card.
+Text over 2 MB shows its first 2 MB; a CSV or TSV table reads up to 16 MB, and one over 2 MB is shown but not edited. WebM,
+Matroska, Ogg, Opus and AVI files, which macOS cannot play, get the info card and a note saying so. A link that loops or leads
+nowhere is listed greyed in the sidebar, and Space on one says it can't be opened. An archive lists its first 5,000 entries. Images over 50 MB, and PDFs, video and audio over 512 MB, get the info card.
 
 **Editing.** With **Edit text in the preview** on (Settings, Editing; one setting for everything), a click on the text of
 Markdown, code, text, JSON, CSV or TSV, YAML, TOML, XML, an INI or `.conf` file, or dotfile config (`.env`, `.env.local`,

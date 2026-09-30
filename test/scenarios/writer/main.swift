@@ -17,6 +17,7 @@ final class StubWriter: NSObject, SpacebarWriterProtocol, NSXPCListenerDelegate 
     func openSettings(_ tab: String, reply: @escaping (Bool) -> Void) { reply(false) }
     func updateOffer(reply: @escaping (Data?) -> Void) { reply(nil) }
     func copyInstallCommand(reply: @escaping (Bool) -> Void) { reply(false) }
+    func copyText(_ text: String, reply: @escaping (Bool) -> Void) { reply(false) }
     func installUpdate(_ version: String, reply: @escaping (String?) -> Void) { reply("stub") }
     func prepare() {}
     func beginEdit(_ session: Int, text: String, caret: Int, clickX: Double, clickY: Double, blockWidth: Double, blockHeight: Double, reply: @escaping (Bool) -> Void) { reply(false) }
@@ -25,6 +26,9 @@ final class StubWriter: NSObject, SpacebarWriterProtocol, NSXPCListenerDelegate 
     func endEdit(_ session: Int) {}
     func beginFilter(_ session: Int, text: String, clickX: Double, clickY: Double, fieldWidth: Double, fieldHeight: Double, reply: @escaping (Bool) -> Void) { reply(false) }
     func beginListKeys(_ session: Int, clickX: Double, clickY: Double, rowWidth: Double, rowHeight: Double, reply: @escaping (Bool) -> Void) { reply(false) }
+    func beginFind(_ session: Int, text: String, clickX: Double, clickY: Double, fieldWidth: Double, fieldHeight: Double, reply: @escaping (Bool) -> Void) { reply(false) }
+    func beginTextEdit(_ session: Int, path: String, text: String, caret: Int, clickX: Double, clickY: Double, width: Double, height: Double,
+                       reply: @escaping (Bool) -> Void) { reply(false) }
     func endFilter(_ session: Int) {}
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection c: NSXPCConnection) -> Bool {

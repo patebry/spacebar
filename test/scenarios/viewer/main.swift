@@ -451,12 +451,14 @@ if flows.contains("3") {
     spin(0.3)
     check("3: Collapse All closes it to the root", (tree()["rows"] as? Int ?? 99) <= 2, "\(tree())")
     t0 = now()
-    _ = js("[...document.querySelectorAll('#doc .viewer-toggle')].find((b) => b.dataset.mode === 'raw').click(); 0")
+    // The stub writer keeps no settings, so Raw is applied in the page as settings.json would bring it.
+    _ = js("sb.applySettings({ ...settings, rawJSON: true }); 0")
     spin(until: 5) { (jsJSON("return { n: (document.querySelector('#doc pre.code') || {textContent: ''}).textContent.length };")["n"] as? Int ?? 0) > 1_000_000 }
     let rawMs = ms(t0, now())
     let rawLen = jsJSON("return { n: (document.querySelector('#doc pre.code') || {textContent: ''}).textContent.length };")["n"] as? Int ?? 0
     check("3: Raw shows all of the 2 MB line", rawLen > 1_900_000, "\(rawLen) characters")
     target(String(format: "3: Raw is drawn within 1 s (%.0f ms)", rawMs), rawMs <= 1000)
+    _ = js("sb.applySettings({ ...settings, rawJSON: false }); 0")
     noErrors("3 big", page())
     close()
     let nested = space([corpus.appendingPathComponent("nested-500.json")])
@@ -608,6 +610,8 @@ if flows.contains("5") {
                 if s.view != "info" { problems.append("view \(s.view)") }
                 if s.natives.player != nil { problems.append("a player is up") }
                 facts = "info card: \(s.page.kindName)"
+                if !s.page.notes.contains(where: { $0.contains("can’t play this format") }) { problems.append("no note that macOS can’t play it: \(s.page.notes)") }
+                if s.page.kindName == "Document" { problems.append("named only \"Document\"") }
             } else {
                 var item: AVPlayerItem?
                 spin(until: 8) {
@@ -705,7 +709,8 @@ if flows.contains("7") {
     let folder = space([corpus], any: true, settle: 0.8, timeout: 10)
     info(String(format: "the corpus folder (with a symlink loop and a link to itself): %@ in %.0f ms, %d sidebar rows", (folder.page.path as NSString).lastPathComponent, folder.painted ?? .nan, folder.page.rows.count))
     let loopListed = folder.page.rows.contains { $0.hasSuffix("/loop-a") }
-    info("the symlink loop and the link to the folder itself are \(loopListed ? "listed" : "left out of the sidebar")")
+    let loopRow = js("(() => { const r = [...document.querySelectorAll('#side-list a.row')].find((a) => a.dataset.path.endsWith('/loop-a')); return r ? [r.classList.contains('broken'), r.title].join('|') : ''; })()") as? String ?? ""
+    check("7: the symlink loop is listed greyed, as a broken link", loopListed && loopRow.hasPrefix("true|") && loopRow.contains("Broken link"), loopRow)
     check("7: the folder holding a symlink loop and a link to itself opens and lists at once", folder.page.rows.count > 40 && (folder.painted ?? 9999) < 3000,
           "\(folder.page.rows.count) rows in \(Int(folder.painted ?? -1)) ms")
     close()

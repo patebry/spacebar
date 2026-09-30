@@ -1356,7 +1356,7 @@ window.sb = {
   /** The writer's answer to a copy: the Copy button shows a check for a moment, and the status line says what was copied. */
   copied(r) {
     const ok = !!r && r.ok === true, b = $('copy');
-    window.sb.status(ok ? (r.truncated === true ? 'Copied the first 2 MB' : 'Copied') : 'Could not copy');
+    window.sb.status(ok ? (r.truncated === true ? `Copied the first ${readCap(current)}` : 'Copied') : 'Could not copy');
     b.classList.toggle('done', ok);
     clearTimeout(copyTimer);
     copyTimer = setTimeout(() => b.classList.remove('done'), 1500);
@@ -1476,7 +1476,8 @@ function viewHead(p, ...extra) {
 
 function note(text) { return el('div', 'viewer-note', text); }
 
-function truncNote(p) { return p.truncated ? note(`Showing the first 2 MB of ${fmtSize(p.size)}.`) : null; }
+const readCap = (p) => `${(typeof p.readCap === 'number' ? p.readCap : 2 << 20) >> 20} MB`;
+function truncNote(p) { return p.truncated ? note(`Showing the first ${readCap(p)} of ${fmtSize(p.size)}.`) : null; }
 
 const highlighted = (text, lang) => DOMPurify.sanitize(hljs.highlight(text, { language: lang, ignoreIllegals: true }).value,
   { ALLOWED_TAGS: ['span'], ALLOWED_ATTR: ['class'], RETURN_DOM_FRAGMENT: true });
@@ -1532,7 +1533,9 @@ const branchSize = (v) => (Array.isArray(v) ? v.length : Object.keys(v).length);
 function jsonModel(p) {
   if (jsonState && jsonState.p === p) return jsonState;
   let value, ok = false;
-  if (!p.truncated) { try { value = JSON.parse(p.text); ok = true; } catch (e) { ok = false; } }
+  if (!p.truncated) {
+    try { value = JSON.parse(strictJSON(p) ? p.text : jsonLoose(p.text)); ok = true; } catch (e) { ok = false; }
+  }
   const nb = ok && /\.ipynb$/i.test(p.name || '') && isBranch(value) && Array.isArray(value.cells);
   // Raw is the toolbar's toggle (rawOn); these are the formatted views.
   const modes = nb ? ['notebook', 'tree'] : ok && isBranch(value) ? ['tree', 'formatted'] : ['formatted'];
@@ -1541,6 +1544,36 @@ function jsonModel(p) {
   jsonState = { p, value, ok, nb, modes, mode, open: same ? jsonState.open : new Set(), more: same ? jsonState.more : new Map(), pretty: null };
   if (!same && ok && isBranch(value)) jsonOpenLevels(jsonState, JSON_AUTO_ROWS);
   return jsonState;
+}
+
+/** JSONC and JSON5 text as JSON: comments and trailing commas out, strings untouched. Offsets are not kept; editing is on
+ *  the file's own text. */
+function jsonLoose(t) {
+  let out = '', last = -1;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (c === '"' || c === "'") {
+      let j = i + 1;
+      while (j < t.length && t[j] !== c && t[j] !== '\n') j += t[j] === '\\' ? 2 : 1;
+      out += t.slice(i, j + 1);
+      last = out.length - 1;
+      i = j;
+    } else if (c === '/' && t[i + 1] === '/') {
+      const j = t.indexOf('\n', i);
+      i = j < 0 ? t.length : j - 1;
+    } else if (c === '/' && t[i + 1] === '*') {
+      const j = t.indexOf('*/', i + 2);
+      i = j < 0 ? t.length : j + 1;
+      out += ' ';
+    } else if ((c === '}' || c === ']') && last >= 0 && out[last] === ',') {
+      out = out.slice(0, last) + out.slice(last + 1) + c;
+      last = out.length - 1;
+    } else {
+      out += c;
+      if (!/\s/.test(c)) last = out.length - 1;
+    }
+  }
+  return out;
 }
 
 /** Opens the tree level by level, breadth first, while the rows shown stay within `budget`. */
@@ -1861,7 +1894,7 @@ function csvModel(p) {
   const parsed = parseDelimited(text, sep, CSV_ROWS);
   let { total } = parsed;
   const rows = parsed.rows;
-  // A file cut at 2 MB ends in a row cut short.
+  // A file cut short ends in a row cut short.
   if (p.truncated && rows.length > 1 && total <= CSV_ROWS + 1) { rows.pop(); total--; }
   const head = rows.length ? rows[0].slice(0, CSV_COLS) : [];
   const body = rows.slice(1, CSV_ROWS + 1);
@@ -1910,6 +1943,7 @@ function csvView(p) {
     box.append(viewHead(p));
     const t = truncNote(p);
     if (t) box.append(t);
+    else if (p.editable !== true && settings.inlineEditing && p.size > 2 << 20) box.append(note('Too large to edit here.'));
     box.append(codeBlock(p.text, null, p.editable === true));
     return box;
   }
@@ -2621,7 +2655,7 @@ function setFolder(f) {
   const entries = Array.isArray(f.entries) ? f.entries.filter((e) => e && typeof e.name === 'string' && typeof e.path === 'string' && parentOf(e.path) === f.dir) : [];
   const num = (v) => (typeof v === 'number' && isFinite(v) ? v : null);
   tree.dirs.set(f.dir, { entries: entries.map((e) => ({ name: e.name, path: e.path, dir: e.dir === true, icon: typeof e.icon === 'string' ? e.icon : 'other',
-    size: num(e.size), modified: num(e.modified) })),
+    size: num(e.size), modified: num(e.modified), broken: e.broken === true })),
     more: Math.max(0, +f.more || 0), stale: false });
   requested.delete(f.dir);
   treeVersion++;
@@ -2695,6 +2729,7 @@ function treeRow(r) {
     tw.appendChild(svg);
   }
   a.append(tw, icon(e.dir ? 'folder' : e.icon), el('span', 'nm', plainName(e.name)));
+  if (e.broken) { a.classList.add('broken'); a.title = `${plainName(e.name)}\nBroken link`; a.setAttribute('aria-disabled', 'true'); }
   if (!e.dir && e.path === current.path) { a.classList.add('active'); a.setAttribute('aria-current', 'page'); }
   return a;
 }
@@ -2935,7 +2970,7 @@ function moveCursor(r, open, repeat) {
   revealRow(r);
   markCursor();
   clearTimeout(openTimer);
-  if (!open || r.e.dir || cursor === current.path) return;
+  if (!open || r.e.dir || r.e.broken || cursor === current.path) return;
   const path = cursor;
   keyed.set(path, performance.now());
   const go = () => { peek(false); post({ type: 'open', path }); };
@@ -3785,7 +3820,7 @@ document.addEventListener('click', (e) => {
     $('side-list').classList.remove('keyed');
     const at = row.getBoundingClientRect();
     if (row.dataset.dir) toggleFolder(row.dataset.path);
-    else {
+    else if (!row.classList.contains('broken')) {
       peek(false);
       if (row.dataset.path !== current.path) post({ type: 'open', path: row.dataset.path });
     }

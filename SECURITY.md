@@ -18,7 +18,8 @@ Seven features reach further than a rendered page, and are in scope:
   spacebar shows as text, and dotfile config (`.env`, `.env.<name>`, `.gitignore`). Unless both are Markdown, a link
   and its target must have the same extension (the same name, when there is none), so a `notes.txt` that links to `~/.zshrc`
   is not editable. Markdown is bounded at 64 MB. Any other file is refused when it or either buffer is over 2 MB (spacebar
-  reads at most 2 MB of text, so a buffer cut from a longer file is never saved), when what is on disk does not read as text
+  reads at most 2 MB of text, 16 MB for a CSV table, and edits only a file it read whole, so a buffer cut from a longer file
+  is never saved), when what is on disk does not read as text
   (TextDecoding's check: a NUL, or many control characters, in its first 64 K characters), and when either side is a binary
   property list. Code and config can run, so the extension cannot write content of its own into them: when an edit of such a
   file starts, the writer reads the file itself and takes the edit's text only if it is that file's text (or one its edits of

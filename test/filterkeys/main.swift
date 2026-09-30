@@ -49,5 +49,29 @@ check("not after the keyboard went elsewhere", ["blur", "app-activated", "not-ke
 check("Esc on text clears it", !FilterKeys.escapeEnds(text: "abc"))
 check("Esc on an empty field ends the session", FilterKeys.escapeEnds(text: ""))
 
+// The find field: Return and Shift+Return step through the matches; ⌘G and ⇧⌘G too.
+let shiftFlag: UInt = 1 << 17, optionFlag: UInt = 1 << 19, commandFlag: UInt = 1 << 20
+check("find: Return and keypad Enter are next", FilterKeys.findName(keyCode: 36, modifiers: 0) == "next" && FilterKeys.findName(keyCode: 76, modifiers: 1 << 21) == "next")
+check("find: Shift+Return is prev", FilterKeys.findName(keyCode: 36, modifiers: shiftFlag) == "prev" && FilterKeys.findName(keyCode: 76, modifiers: shiftFlag | 1 << 21) == "prev")
+check("find: Option, Control or Command+Return stay in the field", [optionFlag, 1 << 18, commandFlag].allSatisfy { FilterKeys.findName(keyCode: 36, modifiers: $0) == nil })
+check("find: arrows, Home, End, Esc and letters stay in the field", [126, 125, 115, 119, 53, 0, 49].allSatisfy { FilterKeys.findName(keyCode: UInt16($0), modifiers: 0) == nil })
+check("find: ⌘G is next, ⇧⌘G is prev", FilterKeys.command("g", modifiers: commandFlag, find: true) == "next"
+      && FilterKeys.command("g", modifiers: commandFlag | shiftFlag, find: true) == "prev")
+check("find: ⌥⌘G, ⌘F, ⌘C and a plain G are nothing", FilterKeys.command("g", modifiers: commandFlag | optionFlag, find: true) == nil
+      && FilterKeys.command("f", modifiers: commandFlag, find: true) == nil && FilterKeys.command("c", modifiers: commandFlag, find: true) == nil
+      && FilterKeys.command("g", modifiers: 0, find: true) == nil)
+check("find: every name is one the extension accepts", Set(["next", "prev"]) == FilterKeys.findNames)
+
+// A list session's Command shortcuts: find in the file, the sidebar's filter, copy.
+check("list: ⌘F is find, ⌥⌘F is filter, ⌘C is copy", FilterKeys.command("f", modifiers: commandFlag, find: false) == "find"
+      && FilterKeys.command("f", modifiers: commandFlag | optionFlag, find: false) == "filter" && FilterKeys.command("c", modifiers: commandFlag, find: false) == "copy")
+check("list: caps lock does not count", FilterKeys.command("f", modifiers: commandFlag | 1 << 16, find: false) == "find")
+check("list: ⇧⌘F, ⌃⌘F, ⌥⌘C, ⌘G, ⌘V and plain F are nothing", FilterKeys.command("f", modifiers: commandFlag | shiftFlag, find: false) == nil
+      && FilterKeys.command("f", modifiers: commandFlag | 1 << 18, find: false) == nil && FilterKeys.command("c", modifiers: commandFlag | optionFlag, find: false) == nil
+      && FilterKeys.command("g", modifiers: commandFlag, find: false) == nil && FilterKeys.command("v", modifiers: commandFlag, find: false) == nil
+      && FilterKeys.command("f", modifiers: 0, find: false) == nil)
+check("list: every command is one the extension accepts", Set(["find", "filter", "copy"]) == FilterKeys.listCommands
+      && FilterKeys.listCommands.isDisjoint(with: FilterKeys.listNames) && FilterKeys.findNames.isDisjoint(with: FilterKeys.listNames))
+
 print(failures == 0 ? "\nall filter key checks passed" : "\n\(failures) filter key checks failed")
 exit(failures == 0 ? 0 : 1)

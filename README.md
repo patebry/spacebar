@@ -7,7 +7,8 @@ subfolders open in place, and a click shows any file in the panel, so you can re
 HTML, video, code, JSON, CSV and archives beside a document without leaving Quick Look. While it shows, the arrow keys
 move through the tree and open each file in spacebar; type in its filter to narrow it by name. Drag its edge to resize it; its button collapses it, and every
 preview remembers both. Click a block of Markdown to edit it in place, or tick a task box, and the file is saved. Obsidian
-vaults read as they do in Obsidian: `[[wikilinks]]`, `![[embeds]]`, callouts and tags. When a new version is out, the
+vaults read as they do in Obsidian: `[[wikilinks]]`, `![[embeds]]`, callouts and tags. The toolbar copies a file's text,
+finds in it (⌘F) and switches a formatted view (Markdown, JSON, a notebook, CSV, XML) to the file as it is. When a new version is out, the
 preview's Aa button shows a dot and one click on Update installs it. Free and open source, for macOS 13 and later (Apple
 silicon and Intel).
 
@@ -28,17 +29,17 @@ Space on in Finder:
 
 | File | Shown as |
 |---|---|
-| Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`, `.mkdn`) | rendered, with inline editing and task toggles |
+| Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`, `.mkdn`) | rendered, with inline editing and task toggles; Raw shows its source |
 | Images (`.png`, `.jpg`, `.gif`, `.webp`, `.bmp`, `.ico`, `.svg`) | fitted to the panel, with its dimensions and size; a click toggles fitted and actual size, a drag moves it, a pinch or ⌘+ ⌘− ⌘0 zoom; SVG as an image only |
 | HEIC, AVIF, TIFF, camera RAW (`.dng`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.orf`, `.raf`, `.rw2`), Photoshop (`.psd`), OpenEXR, TGA, JPEG 2000, icons (`.icns`) | decoded by macOS's own ImageIO and drawn natively in the panel, turned as the camera recorded it, with the same fit, zoom and pan |
 | PDF | drawn natively by PDFKit in the panel, fitted to its width, pages in one scroll |
 | HTML (`.html`, `.htm`) | rendered in its own web view: with its scripts and web content unless it was marked as downloaded, with neither when it was (see below) |
 | Video (`.mp4`, `.m4v`, `.mov`, `.3gp`, `.mpg`, `.mpeg`, `.m2v`) | played by AVKit in the panel, paused on its first frame until you press play |
 | Audio (`.mp3`, `.m4a`, `.m4b`, `.aac`, `.wav`, `.aif`, `.aiff`, `.flac`, `.caf`, `.amr`) | the same player, under the file's artwork or icon |
-| Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.xml`, `.yaml`, `.toml`, `.sql`, `.plist`, `Makefile` and more) | highlighted source with line numbers; a binary property list is shown as XML. A language with no bundled grammar (`Dockerfile`, `.ps1`, `.bat`, Dart, Scala, Elixir, Haskell, Zig and others) is plain text with line numbers |
+| Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.xml`, `.yaml`, `.toml`, `.sql`, `.plist`, `Makefile` and more) | highlighted source with line numbers; a binary property list is shown as XML. XML and property lists are indented, and a minified stylesheet is laid out a declaration to a line, with Raw for the file as is. A language with no bundled grammar (`Dockerfile`, `.ps1`, `.bat`, Dart, Scala, Elixir, Haskell, Zig and others) is plain text with line numbers |
 | Archives (`.zip`, `.tar`, `.tgz`, `.tar.gz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz`, `.7z`, `.rar`, `.zst`, `.tzst`) | its files and folders as a tree, with sizes and dates, listed without extracting anything; Open with its default app |
-| JSON | pretty-printed and highlighted, with a Raw toggle |
-| CSV and TSV | a table, first row as the header, up to 50,000 rows and 200 columns |
+| JSON | a tree, or pretty-printed and highlighted; a Jupyter notebook as its cells, or the tree; Raw shows the file as is |
+| CSV and TSV | a table, first row as the header, up to 50,000 rows and 200 columns; Raw shows its text |
 | Text (`.txt`, `.log`, `.conf`, `.env`, `LICENSE`, `.env.example`, `.strings`, `.pbxproj` and any other file macOS declares as text) | as is, with line numbers. Text need not be UTF-8: a byte order mark (UTF-8, UTF-16, UTF-32), UTF-16 without one, and legacy encodings (Windows-1252, Latin-1, Shift JIS, GB 18030, EUC-KR, Big5, Windows-1251 and others) are detected, and the kind line names the encoding |
 | Rich text (`.rtf`, `.rtfd`) | drawn by AppKit's own text view, fonts, colours, tables and pictures as the document has them (mapped for a dark theme, as TextEdit does); never as RTF source |
 | Office, iWork, fonts, 3D, certificates, calendars, e-books and other files macOS previews (`.docx`, `.xlsx`, `.pptx`, `.pages`, `.numbers`, `.key`, `.ttf`, `.otf`, `.usdz`, `.obj`, `.stl`, `.glb`, `.cer`, `.crt`, `.p12`, `.ics`, `.epub` and any other type macOS declares, is not text, and spacebar has no view of its own for) | Apple's own Quick Look preview, inside the panel; the file's text, or the info card, when Quick Look cannot show it. A contact card (`.vcf`) is shown as its text: Apple's preview of it would read your Contacts |
@@ -54,6 +55,36 @@ Text over 2 MB shows its first 2 MB. An archive lists its first 5,000 entries. I
 
 The preview sits in a thin outlined page under a toolbar row: the sidebar button and the path on the left, Aa and Open on the
 right. **Minimal chrome** (Settings, Appearance) goes back to floating buttons over the page.
+
+### Copy, Find and Raw
+
+Beside Aa, three icon buttons show where they apply:
+
+- **Copy** puts the file's text on the clipboard: a Markdown file's source, a table's CSV, JSON as it is on disk (the first
+  2 MB of a larger file, as shown). Not offered for images, PDFs, media or archives.
+- **Find** searches the file on screen: Markdown, code, text, JSON and CSV, as each is shown. Matches are highlighted and
+  counted; ↵ and ⇧↵ (or ⌘G and ⇧⌘G) go to the next and previous, Esc closes the bar. A long table and a JSON tree are
+  searched whole, not just the rows drawn: a match in a collapsed branch opens it. At most 10,000 matches are counted.
+- **Raw** switches a formatted view to the file as it is, read only: Markdown to its source, JSON and a notebook to their
+  text, a table to its CSV, XML and a minified stylesheet to the file unindented. Each kind remembers its choice.
+  Minified JavaScript is shown as it is: there is no formatter for it.
+
+### Keys
+
+Quick Look gives a preview no keys of its own. There these work while spacebar holds the keys: its sidebar list takes them as
+a preview opens (Settings, Sidebar: **Arrow keys move through the sidebar**), and the filter and find fields hold them while
+you type. In the Space helper's panel (**Use spacebar for every file**, below) they always work. The buttons work in both.
+
+| Key | Does |
+|---|---|
+| ⌘F | Find in the file |
+| ⌥⌘F | The sidebar's filter (a click in the field works too) |
+| ↵, ⇧↵, ⌘G, ⇧⌘G | In the find field: the next and previous match |
+| Esc | Closes the find bar, clears the filter, or gives the keys back |
+| ⌘C | Copies the selection, or with nothing selected the whole file |
+| ↑ ↓ ← → Home End ↵ | Move through the sidebar |
+| ⌘O | Open, in the Space helper's panel |
+| ⌘+ ⌘− ⌘0 | Zoom |
 
 ### Use spacebar for every file
 
@@ -91,7 +122,7 @@ for two things:
 - **Accessibility** (System Settings, Privacy & Security, Accessibility: turn on **spacebar Helper**). This lets the helper
   notice a Space pressed in Finder and read which files are selected. It sees your key presses while it runs, but acts only
   on a plain Space in Finder and, while spacebar's panel is open, on the keys that drive it (Esc, the arrows, Home, End, Page
-  Up and Down, Return, ⌘W, ⌘., ⌘O, ⌘F and zoom). It never records what you type, and no character you type leaves it: it
+  Up and Down, Return, ⌘W, ⌘., ⌘O, ⌘F, ⌥⌘F, ⌘C and zoom). It never records what you type, and no character you type leaves it: it
   tells the panel only a key's name, such as "down".
 - **Running in the background** (System Settings, General, Login Items & Extensions: **spacebar**, under Allow in the
   Background). macOS starts the helper at login and keeps it running.

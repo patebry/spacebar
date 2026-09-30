@@ -103,7 +103,7 @@ extension HelperState {
 /// Names of the keys the helper routes to the viewer while its panel is open.
 enum HelperKeys {
     static let list: Set<String> = ["up", "down", "left", "right", "home", "end", "pageup", "pagedown", "return"]
-    static let commands: Set<String> = ["open", "find", "zoomIn", "zoomOut", "zoomReset"]
+    static let commands: Set<String> = ["open", "find", "filter", "copy", "zoomIn", "zoomOut", "zoomReset"]
     static let all = list.union(commands)
 }
 

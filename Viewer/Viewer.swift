@@ -280,6 +280,7 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
     private func route(_ name: String, isRepeat: Bool) {
         if keys.key(name, isRepeat: isRepeat) { return }
         if name == "open" { return controller.openOnScreen() }
+        if name == "copy" { controller.armCopy() }
         if controller.zoomKey(name) { return }
         let web = controller.webView
         let arg = String(data: try! JSONSerialization.data(withJSONObject: ["key": name]), encoding: .utf8)!
@@ -289,6 +290,8 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
             case "zoomIn": web.pageZoom = min(web.pageZoom * 1.1, 3)
             case "zoomOut": web.pageZoom = max(web.pageZoom / 1.1, 0.5)
             case "zoomReset": web.pageZoom = 1
+            // Nothing to copy as text (an image, a PDF): the file itself, as Finder's ⌘C would have.
+            case "copy": self.controller.copyFileOnScreen()
             default: break
             }
         }

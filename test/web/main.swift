@@ -37,6 +37,7 @@
 // recorded as "_written" or "_settingRefused". No subframe may load (ShellPolicy).
 // A PDF is shown as the extension shows it: a PDFPane (Preview/PDFPane.swift) over the web view, placed by the page's "pdfRect"
 // messages and closed by the next render of anything else.
+// "copy" is answered as the extension answers it, but the clipboard is never touched: the text is recorded as "_copied".
 //   @pdf               the pane: {open, hidden, placed, frame [x, y, w, h] from the top left of the web view, pages, text,
 //                      autoScales, continuous, bg [r, g, b], dark, docAlive (a weak reference to the last document), fds (open
 //                      descriptors on that file), pixel [r, g, b] at the pane's centre as the window draws it}
@@ -197,6 +198,8 @@ var session = 1
 var currentKind: FileKind = .markdown
 var currentCanOpen = false
 var currentText = false
+/// The text a copy of the whole file takes, as the extension keeps it (the Markdown source, or a text view's payload text).
+var currentBody: (text: String, truncated: Bool)?
 var offered: Set<String> = []
 var linkIndex: LinkIndex?
 var pendingAnchor: String?
@@ -258,6 +261,7 @@ func renderFile(_ file: String, listFirst: Bool = true) {
         if gate.allowedPath == url.path { payload[RemoteImageGate.payloadKey] = true }
         if let a = pendingAnchor { payload["anchor"] = a; pendingAnchor = nil }
         let text = payload["text"] as! String
+        currentBody = (text, false)
         if text.contains("[[") {
             if linkIndex?.root != root { linkIndex = LinkIndex.build(root: root, showHidden: Settings(dictionary: settingsDict).showHiddenFiles) }
             let r = linkIndex!.payload(text: text, current: url.path)
@@ -272,6 +276,7 @@ func renderFile(_ file: String, listFirst: Bool = true) {
         currentText = ["code", "json", "csv", "text"].contains(payload["view"] as? String ?? "")
         if currentText, LinkPolicy.editorRefusal(url) == nil { payload["canOpen"] = true }
         currentCanOpen = payload["canOpen"] as? Bool == true
+        currentBody = currentText ? (payload["text"] as? String).map { ($0, payload["truncated"] as? Bool == true) } : nil
         // As the extension's show(): a PDF PDFKit cannot open gets the info card with a note; any other view closes the pane.
         var doc: PDFDocument?
         if payload["view"] as? String == "pdf" {
@@ -389,6 +394,15 @@ rec.onMessage = { type, body in
         if currentKind == .pdf { pdfPane?.place(message: body, in: web) }
     case "overview":
         DispatchQueue.main.async { renderOverview(FolderScan.scan(root, showHidden: Settings(dictionary: settingsDict).showHiddenFiles), reason: "overview") }
+    case "copy":
+        // As the extension, with the clipboard left alone: what it would copy is recorded as "_copied".
+        let selection = body["text"] as? String
+        guard let f = currentFile, path == f, let text = selection ?? currentBody?.text, !text.isEmpty else {
+            rec.messages.append(["type": "_copyRefused", "path": path ?? ""]); return
+        }
+        let cut = selection == nil && currentBody?.truncated == true
+        rec.messages.append(["type": "_copied", "text": text, "truncated": cut])
+        web.evaluateJavaScript("sb.copied(\(jsonString(["ok": true, "truncated": cut]))); 0")
     case "openFile", "reveal":
         let u = path.map { URL(fileURLWithPath: $0) }
         let asText = type == "openFile" && currentText && u.map { LinkPolicy.editorRefusal($0) == nil } == true

@@ -21,6 +21,15 @@ Waits for the Developer ID: the first release with the Space helper is notarized
 - Installing, updating and uninstalling handle the helper: an update brings it back within about 20 seconds, and the
   uninstaller removes it with its permissions.
 
+### Copy, Find and Raw
+
+- **Copy** in the toolbar puts a text file's contents on the clipboard (a Markdown file's source); ⌘C copies the selection,
+  or the whole file when nothing is selected.
+- **Find** (⌘F) searches Markdown, code, text, JSON and CSV, with highlighted matches, a count, ↵ and ⇧↵ for the next and
+  previous, and Esc to close. Long tables and JSON trees are searched whole. The sidebar's filter moves to ⌥⌘F.
+- **Raw** shows a formatted view's file as it is: Markdown source, JSON, notebooks, CSV, XML and property lists (now indented)
+  and minified stylesheets (now laid out). The choice is remembered per kind.
+
 ### Viewers
 
 - HEIC, AVIF, TIFF, camera RAW, PSD, OpenEXR, TGA, JPEG 2000 and icons are decoded natively, with fit, zoom and pan.

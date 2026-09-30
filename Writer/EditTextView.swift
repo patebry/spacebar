@@ -21,6 +21,8 @@ final class EditTextView: NSTextView {
     /// A list session: only the list keys (FilterKeys.listNames) go anywhere, Esc and Space end it (onEscape), nothing is typed
     /// and no shortcut runs.
     var listKeys = false
+    /// A find session: Return and Shift+Return (⌘G and ⇧⌘G too) go to onFilterKey as FilterKeys.findNames.
+    var findKeys = false
     var session = 0
     var firstKeyLogged = false
     /// Keys (and shortcuts) that arrive between a merge or split request and its resetEdit, replayed onto the new text. They are
@@ -42,7 +44,9 @@ final class EditTextView: NSTextView {
         }
         // While an input method composes, its keys (Esc to cancel, arrows to choose, Return to commit) belong to it.
         if event.keyCode == 53, !hasMarkedText() { onEscape(); return }
-        if let key = onFilterKey, !hasMarkedText(), let name = FilterKeys.name(keyCode: event.keyCode, modifiers: event.modifierFlags.rawValue) {
+        if let key = onFilterKey, !hasMarkedText(),
+           let name = findKeys ? FilterKeys.findName(keyCode: event.keyCode, modifiers: event.modifierFlags.rawValue)
+                               : FilterKeys.name(keyCode: event.keyCode, modifiers: event.modifierFlags.rawValue) {
             key(name, event.isARepeat)
             return
         }
@@ -100,9 +104,18 @@ final class EditTextView: NSTextView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if held != nil, event.modifierFlags.contains(.command) { held!.append(event); return true }
         // A plain key may come here before keyDown: only Command shortcuts are swallowed, so the list keys, Esc and Space still arrive.
-        if listKeys, event.modifierFlags.contains(.command) { return true }
+        let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        if listKeys, event.modifierFlags.contains(.command) {
+            if let name = FilterKeys.command(chars, modifiers: event.modifierFlags.rawValue, find: false) { onFilterKey?(name, event.isARepeat) }
+            return true
+        }
+        if findKeys, let key = onFilterKey, let name = FilterKeys.command(chars, modifiers: event.modifierFlags.rawValue, find: true) {
+            key(name, event.isARepeat)
+            return true
+        }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard flags.contains(.command), let key = event.charactersIgnoringModifiers?.lowercased() else { return super.performKeyEquivalent(with: event) }
+        guard flags.contains(.command), !chars.isEmpty else { return super.performKeyEquivalent(with: event) }
+        let key = chars
         let shift = flags.contains(.shift)
         if flags.isDisjoint(with: [.option, .control]), let binding = Self.commandBindings[key] {
             if let command = shift ? binding.extend : binding.move { doCommand(by: command) }

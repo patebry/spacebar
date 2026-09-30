@@ -359,6 +359,8 @@ do {
     check("the info card's folder abbreviates the home", FileView.tildePath("/Users/a/Documents", home: "/Users/a") == "~/Documents"
           && FileView.tildePath("/Users/a", home: "/Users/a") == "~" && FileView.tildePath("/Users/ab/x", home: "/Users/a") == "/Users/ab/x"
           && FileView.tildePath("/Volumes/X", home: "/Users/a") == "/Volumes/X")
+    check("an empty home abbreviates nothing", FileView.tildePath("/Volumes/X", home: "") == "/Volumes/X"
+          && FileView.tildePath("/", home: "") == "/")
     check("a payload names its folder", FileView.payload(path: bin.path, kind: .code, root: d.path, reason: "open", canOpen: true)["folder"] as? String
           == FileView.tildePath(d.path))
     let b = FileView.payload(path: bin.path, kind: .code, root: d.path, reason: "open", canOpen: true)

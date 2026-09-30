@@ -347,6 +347,10 @@
   #kind .img-zoom { flex: none; font-variant-numeric: tabular-nums; }
   #kind .img-zoom:empty { display: none; }
   #kind:not(:empty) + #stats:not(:empty)::before { content: "· "; }
+  /* Over the page (Minimal chrome, or a very narrow panel) the text sits on the buttons' material, so it stays legible. */
+  #toolbar > :is(#status, #kind, #stats):not(:empty) { display: flex; height: 24px; align-items: center; padding: 0 8px; border-radius: 6px; background: var(--ui-bg);
+    box-shadow: 0 0 0 .5px var(--ui-edge), 0 1px 2px rgba(0, 0, 0, .06); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); }
+  #toolbar > #kind:not(:empty) + #stats:not(:empty)::before { content: none; }
   #status[data-hint] { cursor: pointer; }
   #status[data-hint]:hover { color: var(--fg); text-decoration: underline; }
   #toolbar > button, #side-toggle {
@@ -422,12 +426,10 @@
   #toolbar > button, #side-toggle { transition: background-color .12s, transform .08s; }
   #toolbar > button:active, #side-toggle:active { transform: scale(.96); }
 
-  /* Icon buttons: raw text and find, each shown only where it applies. A hidden .tb-slot (Raw, Find, Aa, and Open in the
-     toolbar row) keeps its place, and Open is as wide as Reveal, so nothing in the toolbar moves from file to file. */
+  /* Icon buttons: raw text and find, each shown only where it applies. Floating over the page a hidden one leaves no gap; in
+     the toolbar row a hidden .tb-slot keeps its place (below). */
   #toolbar > .tb-ic { width: 28px; padding: 0; display: inline-grid; place-items: center; }
-  #toolbar > .tb-slot[hidden] { visibility: hidden; }
-  #toolbar > #aa[hidden] { display: inline-block; }
-  #toolbar > #edit[hidden] { display: none; }
+  #toolbar > .tb-slot[hidden] { display: none; }
   #toolbar > #edit { min-width: 60px; box-sizing: border-box; }
   #toolbar > button:focus-visible, #side-toggle:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 1px; }
   #toolbar > #raw[aria-pressed=true], #toolbar > #find-btn[aria-expanded=true] { background: color-mix(in srgb, var(--ui-bg) 70%, var(--ui-fg) 16%); }
@@ -471,6 +473,16 @@
   :root[data-chrome=minimal] #edit[data-kind=file] { display: none; }
   @media (min-width: 480px) {
     :root:not([data-chrome=minimal]) #toolbar { color: var(--muted); gap: 4px; }
+    :root:not([data-chrome=minimal]) #toolbar > :is(#status, #kind, #stats) { height: auto; padding: 0; background: none; box-shadow: none;
+      -webkit-backdrop-filter: none; backdrop-filter: none; }
+    :root:not([data-chrome=minimal]) #toolbar > #kind:not(:empty) + #stats:not(:empty)::before { content: "· "; }
+    /* A hidden .tb-slot (Raw, Find, Aa, Open) keeps its place, and Open is as wide as Reveal, so nothing in the row moves from
+       file to file. An update where Aa is hidden (so are Raw and Find) fills exactly their three slots. */
+    :root:not([data-chrome=minimal]) #toolbar > .tb-slot[hidden] { visibility: hidden; }
+    :root:not([data-chrome=minimal]) #toolbar > .tb-ic[hidden] { display: inline-grid; }
+    :root:not([data-chrome=minimal]) #toolbar > :is(#aa, #edit)[hidden] { display: inline-block; }
+    :root:not([data-chrome=minimal]) #toolbar:has(> #upd:not([hidden])) > :is(#raw, #find-btn, #aa)[hidden] { display: none; }
+    :root:not([data-chrome=minimal]) #toolbar > #upd { width: calc(28px + 28px + 32px + 2 * 4px); box-sizing: border-box; justify-content: center; }
     :root:not([data-chrome=minimal]) :is(#toolbar > button, #side-toggle) { height: 26px; color: var(--fg); background: transparent; box-shadow: none;
       -webkit-backdrop-filter: none; backdrop-filter: none; }
     :root:not([data-chrome=minimal]) #side-toggle { color: var(--muted); }
@@ -482,7 +494,6 @@
     :root:not([data-chrome=minimal]) #side-list a.row.active { background: color-mix(in srgb, var(--accent) 11%, transparent); }
     :root[data-theme=solarized] #side-list a.row.active { background: color-mix(in srgb, var(--accent) 9%, transparent); }
     :root:not([data-chrome=minimal]) #toolbar > #edit { padding: 0 10px; box-shadow: inset 0 0 0 1px var(--frame-line); }
-    :root:not([data-chrome=minimal]) #toolbar > #edit[hidden] { display: inline-block; }
     :root:not([data-chrome=minimal]) #crumbs { color: var(--muted); font-size: 12.5px; line-height: var(--bar-h); }
     :root:not([data-chrome=minimal]) #side-head { padding-top: calc(var(--bar-h) + 8px); }
     /* A PDF stays inside the page's outline; the extension rounds the native view's corners to match. */

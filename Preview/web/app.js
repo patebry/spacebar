@@ -3181,6 +3181,7 @@ Object.assign(window.sb, {
 // The Raw toggle's panel key for each kind of formatted view. Raw is always the file's own text, read only, in the code view.
 const RAW_KEYS = { markdown: 'rawMarkdown', json: 'rawJSON', notebook: 'rawNotebook', csv: 'rawCSV', xml: 'rawXML', css: 'rawCSS' };
 const RAW_NAMES = { markdown: 'Markdown source', json: 'raw JSON', notebook: 'raw JSON', csv: 'raw text', xml: 'raw XML', css: 'raw CSS' };
+const FORMATTED_NAMES = { markdown: 'rendered', json: 'tree', notebook: 'cells', csv: 'table', xml: 'indented', css: 'laid out' };
 const XML_FILES = /\.(xml|plist|xsd|xslt?)$/i;
 const minified = (t) => t.length > 2000 && t.length / Math.max(1, lineCount(t)) > 300;
 const hasText = (p) => !!p.path && typeof p.text === 'string' && (isMarkdown(p) || TEXT_VIEWS.has(p.view) || p.view === 'csv');
@@ -3202,7 +3203,7 @@ function syncRaw(p) {
   const b = $('raw'), k = rawKind(p), on = rawOn(p);
   b.hidden = !k;
   b.setAttribute('aria-pressed', String(on));
-  b.title = on ? 'Show formatted' : `Show ${RAW_NAMES[k] || 'raw text'}`;
+  b.title = `Show ${(on ? FORMATTED_NAMES : RAW_NAMES)[k] || 'raw text'}`;
 }
 
 function syncTools(p) {

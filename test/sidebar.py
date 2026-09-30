@@ -342,13 +342,14 @@ def text_editing(page, check, out, view, T):
 
     view(E('table.csv'), root=d)
     page.cmd('@nativeclick:#raw')
+    csv_title = page.js("return document.getElementById('raw').title")
     r = click(page, '#doc pre.code')
     res = typ('name,qty\napple,3\npear,5\nfig,7\n', 30)
     page.cmd('@nativeclick:#raw')
     page.cmd('@wait:0.2')
     rows = page.js("return [...document.querySelectorAll('#doc table.csv tbody tr')].map((r) => [...r.cells].map((c) => c.textContent))")
     check(asked(r, 'table.csv') and res == 'saved' and rows == [['1', 'apple', '3'], ['2', 'pear', '5'], ['3', 'fig', '7']]
-          and open(E('table.csv')).read().endswith('fig,7\n'), 'CSV: Raw flips the table to its text to edit, and back to the edited table', json.dumps([res, rows]))
+          and open(E('table.csv')).read().endswith('fig,7\n') and csv_title == 'Show table', 'CSV: Raw flips the table to its text to edit, and back to the edited table', json.dumps([res, rows]))
 
     page.apply(inlineEditing=False)
     view(E('code.ts'), root=d)
@@ -612,10 +613,18 @@ def viewers(page, check, out, st):
     check(got['markdown']['parts'] == ['aa-themes', 'aa-width', 'aa-font', 'aa-settings'] and got['csv']['parts'] == ['aa-themes', 'aa-settings']
           and got['json']['parts'] == ['aa-themes', 'aa-settings'] and not got['info']['aa'] and not got['image']['aa'],
           'Aa: every option for Markdown; text size and theme for CSV, JSON and code; none for an image or an info card', json.dumps(got))
+    BAR = """const r = (id) => document.getElementById(id).getBoundingClientRect();
+      return [r('toolbar').left, r('toolbar').width, r('kind').left, r('edit').left].map(Math.round)"""
+    view('big.png')
+    bar0 = page.js(BAR)
+    page.cmd('@root:')
+    page.render(os.path.join(ROOT, 'test', 'fixtures', 'demo.md'))
     page.cmd("@eval:sb.update({ state: 'available', version: '9.9.9' }); 0")
     md = page.js(AA)
     view('big.png')
     a = page.js(AA)
+    bar1 = page.js(BAR)
+    check(bar0 == bar1, 'an update on an image takes the empty Raw, Find and Aa slots: nothing in the toolbar moves', json.dumps([bar0, bar1]))
     click(page, '#upd')
     b = page.js(AA)
     shoot(page, 'update-button')
@@ -1097,7 +1106,7 @@ def tools(page, check, out):
     m = page.js("""const b = document.getElementById('raw'); return [b.getAttribute('aria-pressed'), b.title, (document.querySelector('#doc .viewer-source pre.code') || {}).textContent,
       document.querySelectorAll('#doc > [data-src]').length];""")
     written = [x.get('patch') for x in msgs(r, '_written')]
-    check(m[:3] == ['true', 'Show formatted', open(D('notes.md')).read()] and m[3] == 0 and written == ['{"rawMarkdown":true}'],
+    check(m[:3] == ['true', 'Show rendered', open(D('notes.md')).read()] and m[3] == 0 and written == ['{"rawMarkdown":true}'],
           'raw: Markdown shows its source, read only, and the choice is saved as a panel setting', json.dumps([m[:2], m[3], written]))
     r = click(page, '#doc .viewer-source pre.code')
     check(not msgs(r, 'editBlock'), 'raw: a click in the source edits nothing')
@@ -1114,6 +1123,7 @@ def tools(page, check, out):
           'raw: and back to rendered')
     view('cells.ipynb')
     page.cmd('@nativeclick:#raw')
+    titles = [page.js("return document.getElementById('raw').title")]
     nb = page.js("return [(document.querySelector('#doc pre.code') || {}).textContent, document.querySelectorAll('#doc .nb-cell, #doc .viewer-toggle').length]")
     page.cmd('@nativeclick:#raw')
     check(nb == [open(D('cells.ipynb')).read(), 0] and page.js("return document.querySelectorAll('#doc .nb-cell').length") == 2,
@@ -1121,6 +1131,7 @@ def tools(page, check, out):
     view('info.plist')
     pretty = page.js("return document.querySelector('#doc pre.code').textContent")
     page.cmd('@nativeclick:#raw')
+    titles.append(page.js("return document.getElementById('raw').title"))
     raw = page.js("return document.querySelector('#doc pre.code').textContent")
     page.cmd('@nativeclick:#raw')
     check(pretty.startswith('<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0">\n  <dict>\n    <key>Name</key>\n    <string>a &amp; b</string>')
@@ -1129,8 +1140,14 @@ def tools(page, check, out):
     view('min.css')
     pretty = page.js("return document.querySelector('#doc pre.code').textContent")
     page.cmd('@nativeclick:#raw')
+    titles.append(page.js("return document.getElementById('raw').title"))
     raw = page.js("return document.querySelector('#doc pre.code').textContent")
     page.cmd('@nativeclick:#raw')
+    view('tree.json')
+    page.cmd('@nativeclick:#raw')
+    titles.append(page.js("return document.getElementById('raw').title"))
+    page.cmd('@nativeclick:#raw')
+    check(titles == ['Show cells', 'Show indented', 'Show laid out', 'Show tree'], 'raw: its tooltip names the view it goes back to', json.dumps(titles))
     check(pretty.startswith('.a {\n  color:red;\n  background:url(data:image/png;base64,AA;BB)\n}\n\n.b>c,d:hover {\n  margin:0 auto;\n  content:"x;}{y"\n}\n\n@media (max-width:10px) {\n  .e {\n    top:0\n  }\n}')
           and raw == open(D('min.css')).read(), 'raw: minified CSS is laid out a declaration to a line (strings and url() kept whole), or shown as is', json.dumps(pretty[:160]))
     t = page.js("""const t0 = performance.now(); const a = prettyXML('<!DOCTYPE a ' + '[]'.repeat(100000)), b = prettyCSS('/* '.repeat(700000));

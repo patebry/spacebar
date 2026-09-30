@@ -713,6 +713,23 @@ def main():
         check(p.get('startChrome') == 'minimal' and p.get('dclChrome') == 'minimal' and m == {'frame': 'none', 'aaTop': 8, 'sideBorder': '1px', 'crumbs': 'static', 'docPad': '12px'},
               'minimal chrome: no outline or row, floating buttons, set at document start (no flash)', json.dumps([p, m]))
         page.cmd(f'@shot:{SHOTS}/minimal-chrome.png')
+        code = os.path.join(page.out, 'tool.py')
+        with open(code, 'w') as f:
+            f.write('def main():\n    print("hi")\n' * 40)
+        BAR = """const bar = document.getElementById('toolbar'), kids = [...bar.children].filter((e) => getComputedStyle(e).display !== 'none');
+          const r = kids.map((e) => e.getBoundingClientRect()), k = getComputedStyle(document.getElementById('kind'));
+          return { shown: kids.map((e) => e.id), hidden: kids.filter((e) => getComputedStyle(e).visibility !== 'visible').map((e) => e.id),
+            gaps: r.slice(1).map((x, i) => Math.round(x.left - r[i].right)), kindBg: k.backgroundColor, kindBlur: /blur/.test(k.backdropFilter) }"""
+        bars = {}
+        for name, path in (('code', code), ('image', os.path.join(ROOT, 'test', 'fixtures', 'img.png'))):
+            page.render(path)
+            page.cmd('@wait:0.3')
+            bars[name] = page.js(BAR)
+            page.cmd(f'@shot:{SHOTS}/minimal-chrome-{name}.png')
+        check(all(b['shown'] and 'kind' in b['shown'] and not b['hidden'] and set(b['gaps']) <= {6} and b['kindBlur']
+                  and b['kindBg'] not in ('rgba(0, 0, 0, 0)', 'transparent') for b in bars.values())
+              and 'raw' not in bars['code']['shown'] and 'find-btn' in bars['code']['shown'] and 'aa' not in bars['image']['shown'],
+              'minimal chrome: a hidden Raw, Find or Aa leaves no gap among the floating buttons, and the kind sits on their material', json.dumps(bars))
         page.apply(minimalChrome=False)
         check(page.js("return getComputedStyle(document.getElementById('frame')).display") == 'block', 'minimal chrome switches off live')
         page.cmd('@load:{}')

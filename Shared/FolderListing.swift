@@ -574,7 +574,8 @@ enum FileView {
 
     /// `path` with the user's home as `~`: the real home, since inside the sandbox NSHomeDirectory() is the container.
     static func tildePath(_ path: String, home: String = getpwuid(getuid()).flatMap({ String(validatingUTF8: $0.pointee.pw_dir) }) ?? NSHomeDirectory()) -> String {
-        path == home ? "~" : path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
+        guard !home.isEmpty else { return path }
+        return path == home ? "~" : path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
     }
 
     /// A Markdown document's text, downloaded first when iCloud has evicted it.

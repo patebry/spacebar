@@ -259,17 +259,6 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         return app.hasPrefix(home + "/") ? "~" + app.dropFirst(home.count) : app
     }
 
-    /// The app that contains this service: the outermost spacebar.app, since the viewer's copy sits in an app of its own inside it.
-    private func containingApp() -> URL? {
-        var dir = Bundle.main.bundleURL
-        var found: URL?
-        while dir.pathComponents.count > 1 {
-            if dir.pathExtension == "app", Bundle(url: dir)?.bundleIdentifier == "md.spacebar" { found = dir }
-            dir.deleteLastPathComponent()
-        }
-        return found
-    }
-
     func prepare() {
         _ = SettingsFile.ensure()
         startAppKit()
@@ -382,7 +371,18 @@ final class Writer: NSObject, SpacebarWriterProtocol {
     }
 }
 
-/// Whether the Space helper takes Space: an enabled event tap owned by a process running spacebar Helper.app, read from the
+/// The app that contains this service: the outermost spacebar.app, since the viewer's copy sits in an app of its own inside it.
+func containingApp() -> URL? {
+    var dir = Bundle.main.bundleURL
+    var found: URL?
+    while dir.pathComponents.count > 1 {
+        if dir.pathExtension == "app", Bundle(url: dir)?.bundleIdentifier == "md.spacebar" { found = dir }
+        dir.deleteLastPathComponent()
+    }
+    return found
+}
+
+/// Whether the Space helper takes Space: an enabled event tap owned by this app's own spacebar Helper.app, read from the
 /// window server's list of taps, so nothing connects to the helper. Secure input is not counted: it is another app's, and
 /// passes; Settings, General names it.
 enum HelperTap {
@@ -391,13 +391,16 @@ enum HelperTap {
         guard CGGetEventTapList(0, nil, &n) == .success, n > 0 else { return false }
         var taps = [CGEventTapInformation](repeating: CGEventTapInformation(), count: Int(n))
         guard CGGetEventTapList(n, &taps, &n) == .success else { return false }
-        return taps.prefix(Int(n)).contains { $0.enabled && isHelper($0.tappingProcess) }
+        guard let helper = containingApp()?.appendingPathComponent("Contents/Helpers/spacebar Helper.app", isDirectory: true)
+            .resolvingSymlinksInPath().path else { return false }
+        return taps.prefix(Int(n)).contains { $0.enabled && runs(helper, $0.tappingProcess) }
     }
 
-    private static func isHelper(_ pid: pid_t) -> Bool {
+    /// A stale or development copy of the helper runs from another bundle, so only this app's helper counts.
+    private static func runs(_ helper: String, _ pid: pid_t) -> Bool {
         var buf = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
         guard proc_pidpath(pid, &buf, UInt32(buf.count)) > 0 else { return false }
-        return String(cString: buf).contains("/spacebar Helper.app/Contents/MacOS/")
+        return URL(fileURLWithPath: String(cString: buf)).resolvingSymlinksInPath().path.hasPrefix(helper + "/Contents/MacOS/")
     }
 }
 

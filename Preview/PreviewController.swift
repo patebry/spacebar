@@ -1807,6 +1807,20 @@ class PreviewController: NSViewController {
         search = nil
     }
 
+    /// A file the page may drag out of the panel: one the sidebar listed or the overview or a wikilink offered, or the file on
+    /// screen (the toolbar's kind), a regular file now.
+    func dragOutFile(_ body: [String: Any]) -> URL? {
+        let m = PageMessage(body: body)
+        let url: URL
+        if let p = listedFile(m) ?? offeredFile(m) { url = URL(fileURLWithPath: p) } else {
+            guard let f = fileURL, m.string("path", max: 4096) == f.path, unavailablePath != f.path else { return nil }
+            url = f
+        }
+        var st = stat()
+        guard stat(url.path, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return nil }
+        return url
+    }
+
     func handle(_ type: String, _ body: [String: Any]) {
         let m = PageMessage(body: body)
         switch type {
@@ -1879,6 +1893,21 @@ class PreviewController: NSViewController {
             } else {
                 helper { $0.openFileOnScreen(url, reply: done) }
             }
+        case "openWithList", "openWith":
+            // The toolbar's Open With menu, for the file on screen only; the writer lists and checks the apps again.
+            guard let url = fileURL, m.string("path", max: 4096) == url.path, fileKind == .markdown || shownCanOpen,
+                  LinkPolicy.fileRefusal(url, allowArchives: fileKind == .archive) == nil else {
+                if type == "openWithList" { js("sb.openWithApps", ["path": m.string("path", max: 4096) ?? "", "apps": []]) }
+                return refuse(type, "not the file on screen or not allowed")
+            }
+            if type == "openWithList" {
+                let answer = { (apps: Any) in DispatchQueue.main.async { self.js("sb.openWithApps", ["path": url.path, "apps": apps]) } }
+                return helper(onError: { answer([]) }) {
+                    $0.openWithApps(url) { data in answer(data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [[String: String]] } ?? []) }
+                }
+            }
+            guard let id = m.string("app", max: 256) else { return refuse(type, "no app") }
+            helper { $0.openWith(url, appBundleID: id) { ok in if !ok { DispatchQueue.main.async { self.status("not opened: \(url.lastPathComponent)") } } } }
         case "reveal":
             // A broken link does not resolve: its card reveals the link itself, in a folder inside the root.
             guard let url = fileURL, fileKind != .markdown || unavailablePath == url.path, m.string("path", max: 4096) == url.path,

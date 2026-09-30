@@ -34,6 +34,20 @@ Each release's notes on GitHub also list its commits. This file keeps what chang
 - The grid shows at once with placeholders, and thumbnails fill in, the ones in view first. A folder of 5,000 pictures keeps
   only the tiles on screen in the page and makes only their thumbnails; they are made in memory and never written to disk.
 
+### Drag out, Open With, diffs
+
+- **Drag a file out of the Space panel.** Drag a row of the sidebar, a row of a folder's overview, or the file's kind in the
+  toolbar into Finder, Mail, a chat or an editor: the drop gets the file, as a drag from Finder does, except that Finder
+  copies it rather than moving it. Only files the sidebar lists (or the overview offers) and the file on screen can be dragged.
+  This is the Space panel's; Quick Look's own window does not offer it.
+- **Open With.** The chevron beside Open lists the apps that open the file, its default app first, at most 12, with their
+  icons. It offers exactly what Open allows: nothing for a script, an app, an executable or a file that often holds secrets
+  (`.env`, `.npmrc`); beyond the default app, never a terminal or script runner, a web browser, an office suite or an app
+  outside the Applications folders, and for a text file only text editors. A per-file "Open With" choice another app saved on the file is ignored.
+- **Diffs.** `.diff` and `.patch` files and Markdown `diff` fences tint each added line green and each removed line red
+  across the block, dim the hunk headers (`@@ -1 +1 @@` too, with its function name), and keep file headers quiet, in every
+  theme, light and dark.
+
 ## 0.3.0 (unreleased)
 
 Waits for the Developer ID: the first release with the Space helper is notarized.

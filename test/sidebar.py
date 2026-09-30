@@ -2128,6 +2128,158 @@ def archive_entries(page, check, out):
     page.cmd('@root:')
 
 
+def drag_openwith_diff(check):
+    """0.4: a file dragged out of the panel (only a listed row, an overview row or the file on screen, and only from a press still
+    under way; never in Quick Look), the toolbar's Open With menu (the apps LinkPolicy.openWithApps offers, the default first;
+    nothing for a script; an app not offered refused), and diffs tinted line by line in a .diff, a .patch and a ```diff fence."""
+    page = Page(host='panel')
+    ql = None
+    try:
+        root = os.path.join(page.out, 'dragroot')
+        os.makedirs(os.path.join(root, 'sub'))
+        patch = ('diff --git a/x.py b/x.py\nindex 1..2 100644\n--- a/x.py\n+++ b/x.py\n@@ -1,3 +1,3 @@ def main():\n context\n'
+                 '-removed line\n+added line\n@@ -9 +9 @@\n--- a removed SQL comment\n--- one\n+kept\n--- old\n+++ new\n---\n')
+        files = {'a.txt': 'alpha\n', 'b.md': '# Bee\n\n```diff\n@@ -1 +1 @@\n-old\n+new\n```\n', 'run.sh': '#!/bin/sh\necho hi\n',
+                 'x.diff': patch, 'y.patch': patch, '.hid.txt': 'hidden\n', 'sub/in.txt': 'in\n'}
+        for n, t in files.items():
+            open(os.path.join(root, n), 'w').write(t)
+        os.symlink('/etc/hosts', os.path.join(root, 'out.txt'))
+        T = lambda *p: os.path.join(root, *p)
+        msgs = lambda r, t: [m for m in r['messages'] if m.get('type') == t]
+        row = lambda n: f'#side-list a.row[data-path="{T(n)}"]'
+        page.cmd('@size:1100x760')
+        page.cmd('@root:' + root)
+        page.render(T('b.md'))
+        page.cmd('@wait:0.3')
+
+        # ---- drag out ----
+        r = page.cmd(f'@nativedrag:{row("a.txt")},60')
+        r['messages'] += page.cmd('@wait:0.2')['messages']
+        d, ok = msgs(r, 'dragOut'), msgs(r, '_dragOut')
+        check([m.get('path') for m in d] == [T('a.txt')] and len(ok) == 1 and ok[0]['path'] == T('a.txt') and ok[0]['refusal'] == 'the button is up',
+              'drag out: a press that moves on a file row asks the viewer to drag that file; the web view holds the press, and with no button down no drag starts', json.dumps(r['messages'])[:400])
+        check(not msgs(r, 'open') and page.js("return document.querySelector('#side-list a.active').dataset.path") == T('b.md'),
+              'drag out: the press a drag began with opens nothing', json.dumps([m.get('type') for m in r['messages']]))
+        r = page.cmd(f'@nativedrag:{row("a.txt")},2')
+        check(not msgs(r, 'dragOut'), 'drag out: a press that barely moves is a click, not a drag', json.dumps([m.get('type') for m in r['messages']]))
+        r = page.cmd(f'@nativedrag:{row("sub")},60')
+        check(not msgs(r, 'dragOut'), 'drag out: a folder row is not dragged', json.dumps([m.get('type') for m in r['messages']]))
+        forged = [T('.hid.txt'), T('out.txt'), '/etc/hosts', T('sub', 'in.txt'), root, T('sub', '..', 'a.txt')]
+        r = page.cmd('@eval:' + ';'.join(f"window.webkit.messageHandlers.sb.postMessage({{ type: 'dragOut', path: {json.dumps(p)} }})" for p in forged) + '; 0')
+        r['messages'] += page.cmd('@wait:0.2')['messages']
+        check([m.get('path') for m in msgs(r, '_dragRefused')] == forged and not msgs(r, '_dragOut'),
+              'drag out: a path the sidebar did not list (hidden, a link out of the root, outside it, in a closed folder, the root, not plain) is refused',
+              json.dumps(r['messages'])[:400])
+        page.render(T('a.txt'))
+        page.cmd('@wait:0.3')
+        r = page.cmd('@nativedrag:#kind,60')
+        r['messages'] += page.cmd('@wait:0.2')['messages']
+        check([m.get('path') for m in msgs(r, '_dragOut')] == [T('a.txt')], "drag out: the toolbar's kind drags the file on screen", json.dumps(r['messages'])[:300])
+
+        # ---- Open With ----
+        check(not page.js("return document.getElementById('open-with').hidden"), 'Open With: the chevron shows beside Open for a text file')
+        r = page.cmd('@eval:document.getElementById("open-with").click(); 0')
+        check(not msgs(r, 'openWithList'), 'Open With: a script-made click asks for nothing')
+        r = page.cmd('@nativeclick:#open-with')
+        listed = (msgs(r, '_openWithList') or [{}])[0].get('apps', [])
+        listed = json.loads(listed) if isinstance(listed, str) else listed
+        menu = page.js("""const p = document.getElementById('ow-pop');
+          return [p.hidden, [...p.querySelectorAll('button[data-app]')].map((b) => b.dataset.app), (p.querySelector('button') || {}).textContent || '',
+            p.querySelectorAll('.ow-sep').length, document.getElementById('open-with').getAttribute('aria-expanded')];""")
+        check(listed and not menu[0] and menu[1] == listed and menu[2].endswith('(default)') and len(listed) <= 12 and menu[4] == 'true'
+              and menu[3] == (1 if len(listed) > 1 else 0) and 'com.apple.Terminal' not in listed,
+              'Open With: the menu lists the apps the writer offers, the default first and marked, at most 12', json.dumps([listed, menu]))
+        if len(listed) > 1:
+            r = page.cmd(f'@nativeclick:#ow-pop button[data-app="{listed[1]}"]')
+            w = msgs(r, 'openWith')
+            check(len(w) == 1 and w[0].get('app') == listed[1] and w[0].get('path') == T('a.txt') and msgs(r, '_openWith')
+                  and page.js("return document.getElementById('ow-pop').hidden"),
+                  'Open With: choosing an app opens the file in it, and the menu closes', json.dumps(r['messages'])[:300])
+        page.cmd('@nativeclick:#open-with')
+        r = page.cmd('@nativeclick:#doc')
+        check(page.js("return document.getElementById('ow-pop').hidden") and not msgs(r, 'openWith'), 'Open With: a click elsewhere only closes the menu')
+        r = page.cmd("@eval:window.webkit.messageHandlers.sb.postMessage({ type: 'openWith', path: " + json.dumps(T('a.txt')) + ", app: 'com.apple.Terminal' }); 0")
+        r['messages'] += page.cmd('@wait:0.2')['messages']
+        check(msgs(r, '_openWithRefused') and not msgs(r, '_openWith'), 'Open With: an app the menu did not offer (Terminal) is refused', json.dumps(r['messages'])[:300])
+        r = page.cmd("@eval:window.webkit.messageHandlers.sb.postMessage({ type: 'openWithList', path: " + json.dumps(T('run.sh')) + " }); 0")
+        r['messages'] += page.cmd('@wait:0.2')['messages']
+        check(msgs(r, '_openWithRefused') and not msgs(r, '_openWithList'), 'Open With: a file not on screen is refused', json.dumps(r['messages'])[:300])
+        page.render(T('run.sh'))
+        page.cmd('@wait:0.3')
+        r = page.cmd('@nativeclick:#open-with')
+        r['messages'] += page.cmd('@wait:0.2')['messages']
+        none = page.js("return [document.getElementById('ow-pop').hidden, document.querySelectorAll('#ow-pop button[data-app]').length, document.querySelector('#ow-pop .ow-none')?.textContent]")
+        check(msgs(r, '_openWithRefused') and not msgs(r, '_openWithList') and none[0] is False and none[1] == 0 and none[2],
+              'Open With: a script is refused, and the menu says nothing else may open it', json.dumps([r['messages'], none])[:300])
+        page.cmd('@nativeclick:#open-with')
+        r = page.cmd("@eval:window.webkit.messageHandlers.sb.postMessage({ type: 'openWith', path: " + json.dumps(T('run.sh')) + ", app: 'com.apple.TextEdit' }); 0")
+        r['messages'] += page.cmd('@wait:0.2')['messages']
+        check(msgs(r, '_openWithRefused') and not msgs(r, '_openWith'), 'Open With: a script never opens in another app, not even an editor, this way', json.dumps(r['messages'])[:300])
+        page.render(T('b.md'))
+        page.cmd('@wait:0.3')
+        r = page.cmd('@nativeclick:#open-with')
+        check(not page.js("return document.getElementById('open-with').hidden") and msgs(r, '_openWithList'), 'Open With: offered for Markdown too')
+        page.cmd('@nativeclick:#open-with')
+
+        # ---- diffs ----
+        DIFF = """const pick = (sel) => { const n = document.querySelector(sel); if (!n) return null; const cs = getComputedStyle(n);
+            return [n.textContent, cs.display, cs.backgroundColor, cs.color, Math.round(n.getBoundingClientRect().width)]; };
+          const box = document.querySelector('#doc pre.code, #doc pre code')?.closest('pre');
+          return { add: pick('#doc .hljs-addition'), del: pick('#doc .hljs-deletion'), meta: [...document.querySelectorAll('#doc .hljs-meta')].map((n) => n.textContent),
+            comment: [...document.querySelectorAll('#doc .hljs-comment')].map((n) => n.textContent), dels: [...document.querySelectorAll('#doc .hljs-deletion')].map((n) => n.textContent),
+            width: box ? Math.round(box.getBoundingClientRect().width) : 0, fg: getComputedStyle(document.body).color };"""
+        alpha = lambda c: c and c != 'rgba(0, 0, 0, 0)' and c != 'transparent'
+        for name in ('x.diff', 'y.patch'):
+            page.render(T(name))
+            page.cmd('@wait:0.3')
+            d = page.js(DIFF)
+            check(d['add'] and d['add'][0] == '+added line' and d['add'][1] == 'inline-block' and alpha(d['add'][2]) and d['del'][0] == '-removed line'
+                  and alpha(d['del'][2]) and d['add'][2] != d['del'][2] and d['add'][4] > d['width'] * 0.8,
+                  f'diff: {name} tints each added and removed line across the block', json.dumps(d))
+            check(d['meta'] == ['@@ -1,3 +1,3 @@ def main():', '@@ -9 +9 @@'] and d['comment'][:4] == ['diff --git a/x.py b/x.py', 'index 1..2 100644', '--- a/x.py', '+++ b/x.py']
+                  and '--- a removed SQL comment' in d['dels'] and '--- one' in d['dels'] and '--- old\n+++ new' in d['comment'] and '---' in d['comment'],
+                  f'diff: {name} hunk headers (with or without counts) are one dimmed token, file headers quiet, a removed "-- one" still removed', json.dumps(d))
+        e = page.js("const pre = document.querySelector('#doc pre.code'); pre.classList.add('text-editing'); const d = getComputedStyle(pre.querySelector('.hljs-addition')).display; pre.classList.remove('text-editing'); return d;")
+        check(e == 'inline', 'diff: while the file is edited the tint is inline, so the caret after a line is drawn at its end', e)
+        page.render(T('b.md'))
+        page.cmd('@wait:0.3')
+        d = page.js(DIFF)
+        check(d['add'] and d['add'][0] == '+new' and d['add'][1] == 'inline-block' and d['del'][0] == '-old' and d['meta'] == ['@@ -1 +1 @@'],
+              'diff: a ```diff fence in Markdown is tinted the same way', json.dumps(d))
+        seen = []
+        for theme in THEMES:
+            for look in ('light', 'dark'):
+                page.cmd('@appearance:' + look)
+                page.apply(theme=theme)
+                page.render(T('x.diff'))
+                page.cmd('@wait:0.2')
+                d = page.js(DIFF)
+                ok = d['add'] and alpha(d['add'][2]) and alpha(d['del'][2]) and d['add'][2] != d['del'][2] and d['add'][3] != d['del'][3] and d['add'][3] != d['fg']
+                seen.append(ok)
+                if not ok:
+                    check(False, f'diff: {theme} {look}', json.dumps(d))
+        check(all(seen) and len(seen) == 2 * len(THEMES), f'diff: added and removed lines tinted apart in all {len(THEMES)} themes, light and dark')
+        page.cmd('@appearance:auto')
+        page.apply(theme='apple')
+
+        # ---- Quick Look: no drag out ----
+        ql = Page()
+        ql.cmd('@size:1100x760')
+        ql.cmd('@root:' + root)
+        ql.render(T('b.md'))
+        ql.cmd('@wait:0.3')
+        r = ql.cmd(f'@nativedrag:{row("a.txt")},60')
+        r['messages'] += ql.cmd('@wait:0.2')['messages']
+        check(not msgs(r, 'dragOut') and not msgs(r, '_navigation'), 'drag out: Quick Look drags nothing out, and a row is not dragged as a link',
+              json.dumps([m.get('type') for m in r['messages']]))
+    finally:
+        page.close()
+        shutil.rmtree(page.out, ignore_errors=True)
+        if ql:
+            ql.close()
+            shutil.rmtree(ql.out, ignore_errors=True)
+
+
 def missing_images(page, check, out):
     """Images that did not load: a placeholder with the alt text, the path as written and why (the extension's ImageCheck); its
     Reveal folder only for a real click on the page's own button; a remote image blocked or failing; a missing image that
@@ -3490,6 +3642,7 @@ def main():
         sandboxed(tree, check)
         sandboxed(tree, check, runtime=True)
         panel_host(check)
+        drag_openwith_diff(check)
     finally:
         if page.proc.poll() is None:
             page.close()

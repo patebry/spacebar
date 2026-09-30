@@ -22,6 +22,11 @@ protocol SpacebarWriterProtocol {
     func reveal(_ url: URL, reply: @escaping (Bool) -> Void)
     /// The display name of the app `open` would use for a file, or nil when LinkPolicy refuses the file or no app claims it.
     func defaultApp(_ url: URL, reply: @escaping (String?) -> Void)
+    /// The toolbar's Open With menu for the file on screen: LinkPolicy.openWithApps as a JSON array of {id, name, icon (a PNG
+    /// data URL), default ("1" on the default app)}, the default app first; nil when LinkPolicy refuses the file. An archive counts, as for openFileOnScreen.
+    func openWithApps(_ url: URL, reply: @escaping (Data?) -> Void)
+    /// Opens the file on screen in the app with bundle ID `appBundleID`, only when openWithApps offers that app for it now.
+    func openWith(_ url: URL, appBundleID: String, reply: @escaping (Bool) -> Void)
     /// The contents of an archive LinkPolicy allows, as ArchiveListing's JSON, or nil when it cannot be listed.
     func listArchive(_ path: String, reply: @escaping (Data?) -> Void)
     /// One file of an archive listArchive allows, read without extracting it (ArchiveEntry): its bytes, at most

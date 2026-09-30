@@ -558,6 +558,31 @@ rec.onMessage = { type, body in
         let cut = selection == nil && currentBody?.truncated == true
         rec.messages.append(["type": "_copied", "text": text, "truncated": cut])
         web.evaluateJavaScript("sb.copied(\(jsonString(["ok": true, "truncated": cut]))); 0")
+    case "openWithList", "openWith":
+        // As the extension and the writer: the file on screen only, and only an app LinkPolicy.openWithApps offers for it now.
+        let u = path.map { URL(fileURLWithPath: $0) }
+        guard let u, path == currentFile, currentKind == .markdown || currentCanOpen, LinkPolicy.fileRefusal(u, allowArchives: currentKind == .archive) == nil else {
+            rec.messages.append(["type": "_openWithRefused", "path": path ?? ""])
+            if type == "openWithList" { web.evaluateJavaScript("sb.openWithApps(\(jsonString(["path": path ?? "", "apps": []]))); 0") }
+            return
+        }
+        let lead = LinkPolicy.opener(for: u, allowArchives: true)?.app
+        let apps = LinkPolicy.openWithApps(for: u, allowArchives: true).map { ["id": Bundle(url: $0)?.bundleIdentifier ?? "", "name": FileManager.default.displayName(atPath: $0.path),
+                                                                              "default": $0 == lead ? "1" : ""] }
+        if type == "openWithList" {
+            rec.messages.append(["type": "_openWithList", "apps": apps.map { $0["id"]! }])
+            web.evaluateJavaScript("sb.openWithApps(\(jsonString(["path": u.path, "apps": apps]))); 0")
+        } else {
+            let id = body["app"] as? String ?? ""
+            rec.messages.append(["type": LinkPolicy.openWith(u, app: id, allowArchives: true) == nil ? "_openWithRefused" : "_openWith", "path": u.path, "app": id])
+        }
+    case "dragOut":
+        // As the viewer (PanelController): a listed or offered file, or the file on screen, and then only from a press still
+        // under way. The drag itself is never started here: it would follow the real pointer into other apps.
+        var st = stat()
+        let p = listedFile(path) ?? (path != nil && path == currentFile && stat(path!, &st) == 0 && st.st_mode & S_IFMT == S_IFREG ? path : nil)
+        guard let p else { rec.messages.append(["type": "_dragRefused", "path": path ?? ""]); return }
+        rec.messages.append(["type": "_dragOut", "path": p, "refusal": web.fileDragRefusal() ?? ""])
     case "openFile", "reveal":
         let u = path.map { URL(fileURLWithPath: $0) }
         let asText = type == "openFile" && currentText && u.map { LinkPolicy.editorRefusal($0) == nil } == true

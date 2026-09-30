@@ -400,7 +400,7 @@ func js(_ source: String) -> Any? {
     spin(until: 3) { done }
     return out
 }
-func zoomLabel() -> Int { Int(((js("(document.querySelector('#doc .img-zoom') || {}).textContent || ''") as? String) ?? "").dropLast()) ?? -1 }
+func zoomLabel() -> Int { Int(((js("(document.querySelector('#kind .img-zoom') || {}).textContent || ''") as? String) ?? "").dropLast()) ?? -1 }
 /// The middle of the image's area, in the panel's coordinates.
 func imageMiddle() -> NSPoint? {
     guard let r = js("(() => { const a = document.querySelector('#doc .img-stage, #doc .pdf-area'); if (!a) return null; const b = a.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; })()") as? [Double],

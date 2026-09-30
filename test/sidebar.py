@@ -337,9 +337,8 @@ def text_editing(page, check, out, view, T):
     tr = page.js("return [...document.querySelectorAll('#doc .json-tree .jt-row')].map((r) => r.textContent)")
     check('editStop' in types(r) and any('false' in x for x in tr) and not page.js("return document.querySelector('#doc pre.text-editing')"),
           'JSON: Raw again ends the edit and shows the tree of the edited text', json.dumps([types(r), tr])[:300])
-    click(page, '#doc .viewer-toggle[data-mode=formatted]')
-    r = click(page, '#doc pre.code')
-    check(not asked(r, 'data.json'), 'JSON: formatted text is not the file, and a click on it edits nothing')
+    r = click(page, '#doc .json-tree .jt-row')
+    check(not asked(r, 'data.json'), 'JSON: the tree is not the file, and a click on it edits nothing')
 
     view(E('table.csv'), root=d)
     page.cmd('@nativeclick:#raw')
@@ -499,9 +498,10 @@ def viewers(page, check, out, st):
 
     # ---- the image viewer ----
     ZOOM = """const s = document.querySelector('#doc .img-stage'), i = s.querySelector('img'), r = i.getBoundingClientRect();
-      return { zoomed: s.classList.contains('zoomed'), label: document.querySelector('#doc .img-zoom').textContent, w: Math.round(r.width),
-        left: Math.round(s.scrollLeft), top: Math.round(s.scrollTop), cap: document.querySelector('#doc figcaption').textContent, aa: document.getElementById('aa').hidden,
-        fits: r.width <= document.getElementById('doc').clientWidth + 1 && r.height <= innerHeight };"""
+      return { zoomed: s.classList.contains('zoomed'), label: document.querySelector('#kind .img-zoom').textContent, w: Math.round(r.width),
+        left: Math.round(s.scrollLeft), top: Math.round(s.scrollTop), cap: document.getElementById('kind').textContent, aa: document.getElementById('aa').hidden,
+        fits: r.width <= document.getElementById('doc').clientWidth + 1 && r.height <= innerHeight,
+        head: getComputedStyle(document.querySelector('#doc .viewer-head')).display, inDoc: !!document.querySelector('#doc .viewer-kind, #doc .img-zoom') };"""
     AT = """(dx, dy, detail) => { const s = document.querySelector('#doc .img-stage'), r = s.querySelector('img').getBoundingClientRect();
       const x = r.left + r.width * dx, y = r.top + r.height * dy;
       for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].concat(detail === 2 ? ['dblclick'] : [])) {
@@ -516,8 +516,9 @@ def viewers(page, check, out, st):
     view('big.png')
     page.cmd('@wait:0.3')
     z = page.js(ZOOM)
-    check(not z['zoomed'] and z['fits'] and z['label'].endswith('%') and int(z['label'][:-1]) < 100 and '2400 × 1600' in z['cap'] and z['aa'],
-          'image: fitted to the panel, its zoom in the caption; no Aa popover for an image', json.dumps(z))
+    check(not z['zoomed'] and z['fits'] and z['label'].endswith('%') and int(z['label'][:-1]) < 100 and z['cap'].startswith('PNG image · 2400 × 1600 · ')
+          and z['cap'].endswith(z['label']) and z['aa'] and z['head'] == 'none' and not z['inDoc'],
+          'image: fitted to the panel; its kind, size and zoom are quiet text in the toolbar, with no caption row over it; no Aa popover', json.dumps(z))
     fit_label = z['label']
     shoot(page, 'image-fit')
     at(0.75, 0.5)
@@ -630,7 +631,7 @@ def viewers(page, check, out, st):
     CSV = """const t = document.querySelector('#doc table.csv'); return { head: [...t.querySelectorAll('thead th')].map((x) => x.textContent),
       rows: [...t.querySelectorAll('tbody tr:not(.pad)')].slice(0, 6).map((r) => [...r.cells].map((c) => c.textContent)),
       align: [...t.querySelectorAll('tbody tr:not(.pad):first-child > *')].map((c) => getComputedStyle(c).textAlign),
-      sort: [...t.querySelectorAll('thead th')].map((x) => x.getAttribute('aria-sort')), kind: document.querySelector('#doc .viewer-kind').textContent,
+      sort: [...t.querySelectorAll('thead th')].map((x) => x.getAttribute('aria-sort')), kind: document.getElementById('kind').textContent,
       notes: [...document.querySelectorAll('#doc .viewer-note')].map((n) => n.textContent) };"""
     view('prices.csv')
     c = page.js(CSV)
@@ -699,7 +700,7 @@ def viewers(page, check, out, st):
     check(at[0] == 5000 and all(abs(v[0] - 5000) <= 2 for v in kept.values()) and abs(kept['reload'][1] - at[1]) <= 1,
           'CSV: where it was scrolled to survives a text size, a theme, a reload and a sort', json.dumps([at, kept]))
     view('ragged.csv')
-    rg = page.js("return [document.querySelectorAll('#doc table.csv thead th').length, document.querySelector('#doc .viewer-kind').textContent]")
+    rg = page.js("return [document.querySelectorAll('#doc table.csv thead th').length, document.getElementById('kind').textContent]")
     check(rg[0] == 4 and '3 columns' in rg[1], 'CSV: a longer row far down widens the table instead of losing its cell', json.dumps(rg))
 
     # ---- JSON ----
@@ -722,6 +723,9 @@ def viewers(page, check, out, st):
     click(page, '#doc .json-all[data-open="1"]')
     t = page.js(TREE)
     check('"e": "end"' in t['rows'] and 'false' not in t['expanded'][:1], 'JSON tree: Expand All opens every level', json.dumps(t['rows'][-8:]))
+    ctl = page.js("return [[...document.querySelectorAll('#doc .viewer-head button:not(.viewer-open)')].map((b) => b.textContent), document.querySelectorAll('#doc .viewer-toggle, #doc .viewer-seg').length, document.getElementById('kind').textContent]")
+    check(ctl[0] == ['Expand All', 'Collapse All'] and ctl[1] == 0 and ctl[2].startswith('JSON · '),
+          'JSON: the tree is the one view, with only Expand All and Collapse All over it; Raw, in the toolbar, is its text', json.dumps(ctl))
     shoot(page, 'json-tree')
     view('large.json')
     lj = page.js("return [!!document.querySelector('#doc .json-tree'), !!document.querySelector('#doc pre.code'), [...document.querySelectorAll('#doc .viewer-note')].map((n) => n.textContent)]")
@@ -733,11 +737,11 @@ def viewers(page, check, out, st):
       prompts: [...d.querySelectorAll('.nb-prompt')].map((p) => p.textContent), kw: d.querySelectorAll('.nb-code .hljs-keyword').length,
       outs: [...d.querySelectorAll('.nb-out')].map((o) => o.textContent), imgs: [...d.querySelectorAll('.nb-img')].map((i) => [i.src.slice(0, 22), i.naturalWidth]),
       bad: d.querySelectorAll('script, iframe, [onclick], [onerror], b').length, notes: [...d.querySelectorAll('.nb-note')].map((n) => n.textContent),
-      modes: [...d.querySelectorAll('.viewer-toggle')].map((b) => [b.textContent, b.getAttribute('aria-pressed')]), src: d.querySelectorAll('.nb-md [data-src]').length };""")
+      modes: d.querySelectorAll('.viewer-toggle, .json-all').length, src: d.querySelectorAll('.nb-md [data-src]').length };""")
     check(nb['h1'] == 'Notebook title' and nb['katex'] >= 1 and nb['task'] == [True, False] and nb['prompts'] == ['[1]:', '[2]:', '[3]:', '[4]:', '[ ]:'] and nb['kw'] > 0
           and nb['outs'] == ['42\n', '2', 'ZeroDivisionError: division by zero'] and nb['imgs'] == [['data:image/png;base64,', 40]]
           and nb['bad'] == 0 and nb['notes'] == ['HTML output is not shown.'] and nb['src'] == 0
-          and nb['modes'] == [['Notebook', 'true'], ['Tree', 'false']] and not page.js('return window.__pwned || null'),
+          and nb['modes'] == 0 and not page.js('return window.__pwned || null'),
           'notebook: Markdown cells rendered and sanitized, code highlighted, text and image outputs, errors without ANSI codes, no HTML output',
           json.dumps(nb)[:600])
     shoot(page, 'notebook')
@@ -804,7 +808,7 @@ def steady_chrome(page, check, out):
     PLACES = """const x = (id) => { const e = document.getElementById(id), r = e.getBoundingClientRect(), cs = getComputedStyle(e);
         return [Math.round(r.left), Math.round(r.width), cs.display !== 'none' && cs.visibility === 'visible'] };
       return { raw: x('raw'), find: x('find-btn'), aa: x('aa'), edit: x('edit'), label: document.getElementById('edit').textContent,
-        title: document.getElementById('edit').title, stats: document.getElementById('stats').textContent };"""
+        title: document.getElementById('edit').title, stats: document.getElementById('kind').textContent + '|' + document.getElementById('stats').textContent };"""
     page.cmd('@size:1100x760')
     places = {}
     for n in ('notes.md', 'code.ts', 'rows.csv', 'data.json', 'pic.png', 'tool'):
@@ -812,7 +816,7 @@ def steady_chrome(page, check, out):
         places[n] = page.js(PLACES)
     slots = {k: {tuple(p[k][:2]) for p in places.values()} for k in ('raw', 'find', 'aa', 'edit')}
     check(all(len(v) == 1 for v in slots.values()) and len({p['stats'] for p in places.values()}) > 2,
-          'toolbar: Raw, Find, Aa and Open keep the same place and width on every file, whatever the stats say', json.dumps(places))
+          'toolbar: Raw, Find, Aa and Open keep the same place and width on every file, whatever the kind and stats say', json.dumps(places))
     check([places[n]['find'][2] for n in ('notes.md', 'pic.png')] == [True, False] and [places[n]['raw'][2] for n in ('data.json', 'code.ts')] == [True, False],
           'toolbar: a tool that does not apply keeps its slot but is not shown', json.dumps({n: [p['raw'][2], p['find'][2]] for n, p in places.items()}))
     view('pic.png')
@@ -2113,7 +2117,7 @@ def main():
         # ---- file views ----
         r = view(T('photo.png'))
         page.cmd('@wait:0.4')
-        im = page.js("const i = document.querySelector('#doc .viewer-image img'); return i && [i.naturalWidth, i.src.startsWith('spacebar://file/'), document.querySelector('#doc figcaption').textContent]")
+        im = page.js("const i = document.querySelector('#doc .viewer-image img'); return i && [i.naturalWidth, i.src.startsWith('spacebar://file/'), document.getElementById('kind').textContent]")
         check(im and im[0] > 0 and im[1] and '×' in im[2] and st()['view'] == 'image', 'image: fitted, with its dimensions and size', json.dumps(im))
         check(page.js("const i = document.querySelector('#doc .viewer-image img'); const r = i.getBoundingClientRect(); return r.height <= innerHeight && r.width <= document.getElementById('doc').clientWidth"),
               'image: never larger than the panel')
@@ -2121,33 +2125,56 @@ def main():
         c = page.js("""return { kw: document.querySelectorAll('#doc .code-view .hljs-keyword').length, gutter: document.querySelector('#doc .gutter').textContent.split('\\n').length,
           text: document.querySelector('#doc pre.code').textContent, edit: (() => { const e = document.getElementById('edit');
             return [getComputedStyle(e).display !== 'none', e.textContent, e.dataset.kind, getComputedStyle(document.querySelector('#doc .viewer-head .viewer-open')).display]; })(), stats: document.getElementById('stats').textContent,
-          kind: document.querySelector('#doc .viewer-kind').textContent, button: document.querySelector('#doc button.viewer-open').textContent }""")
-        check(c['kind'].startswith('Source code') and c['button'] == 'Open', '.ts is named as source; it opens as text in an editor, never as a video', json.dumps(c))
+          kind: document.getElementById('kind').textContent, button: document.querySelector('#doc button.viewer-open').textContent }""")
+        check(c['kind'].startswith('Source code · ') and c['button'] == 'Open', '.ts is named as source; it opens as text in an editor, never as a video', json.dumps(c))
         r = page.cmd("@eval:window.webkit.messageHandlers.sb.postMessage({type:'openFile', path: " + json.dumps(T('code.ts')) + "}); 0")
         page.cmd('@wait:0.1')
         check('_openText' in [m.get('type') for m in r['messages'] + page.cmd('@eval:0')['messages']], 'openFile for a .ts file goes to the text opener, not its default app')
         check(c['kw'] > 0 and c['gutter'] == 6 and c['text'] == open(T('code.ts')).read() and c['edit'] == [True, 'Open', 'file', 'none']
-              and c['stats'] == '6 lines',
+              and c['stats'] == '',
               'code: highlighted, with line numbers; the toolbar offers the viewer\'s action (not "Open in editor"), the viewer\'s own button moves there', json.dumps({k: v for k, v in c.items() if k != 'text'}))
+        page.apply(stats=True)
+        page.cmd('@wait:0.2')
+        on = page.js("return [document.getElementById('stats').textContent, getComputedStyle(document.getElementById('stats'), '::before').content]")
+        page.apply(stats=False)
+        check(on == ['6 lines', '"· "'], 'code: with reading stats turned on, the line count follows the kind in the toolbar', json.dumps(on))
+
+        # ---- the Space helper's hint: one quiet line in the status area, a click opens Settings, gone on the next file ----
+        HINT = "const s = document.getElementById('status'); return [s.textContent, 'hint' in s.dataset, getComputedStyle(s).cursor]"
+        page.cmd('@eval:sb.helperHint(); 0')
+        h1 = page.js(HINT)
+        r = click(page, '#status')
+        o = [m for m in r['messages'] if m.get('type') == 'openSettings']
+        h2 = page.js(HINT)
+        page.cmd('@eval:sb.helperHint(); 0')
+        view(T('README.md'))
+        h3 = page.js(HINT)
+        page.cmd('@eval:sb.status("Copied"); sb.helperHint(); 0')
+        h4 = page.js(HINT)
+        check(h1 == ['Space helper is off: open spacebar Settings', True, 'pointer'] and [x.get('tab') for x in o] == ['general'] and h2 == ['', False, 'auto']
+              and h3 == ['', False, 'auto'] and h4[:2] == ['Copied', False],
+              'Space helper hint: one line; a click opens Settings, General and takes it down; the next file clears it; it never covers another status',
+              json.dumps([h1, o, h2, h3, h4]))
+        view(T('code.ts'))
         r = click(page, '#doc pre.code')
         check('editBlock' not in [m.get('type') for m in r['messages']] and 'editText' in [m.get('type') for m in r['messages']]
               and not page.js("return document.querySelector('#doc .md-editing')"), 'code: a click edits the whole file, not a Markdown block')
         page.cmd('@eval:sb.editEnd({}); 0')
         view(T('data.json'))
         tree_rows = page.js("return [...document.querySelectorAll('#doc .json-tree .jt-row')].map((r) => r.textContent)")
-        mode = lambda m: click(page, f'#doc .viewer-toggle[data-mode={m}]')
-        mode('formatted')
-        pretty = page.js("return document.querySelector('#doc pre.code').textContent")
         click(page, '#raw')
-        raw = page.js("return [document.querySelector('#doc pre.code').textContent, document.getElementById('raw').getAttribute('aria-pressed'), document.querySelectorAll('#doc .viewer-toggle').length]")
+        raw = page.js("return [document.querySelector('#doc pre.code').textContent, document.getElementById('raw').getAttribute('aria-pressed'), document.querySelectorAll('#doc .json-all').length]")
         click(page, '#raw')
-        back = page.js("return [document.querySelector('#doc pre.code').textContent, document.querySelector('#doc .viewer-toggle[aria-pressed=true]').textContent]")
-        mode('tree')
         again = page.js("return [...document.querySelectorAll('#doc .json-tree .jt-row')].map((r) => r.textContent)")
-        check(tree_rows[:3] == ['▾{ 3 keys }', '"name": "spacebar"', '▾"list": [ 2 items ]'] and pretty == json.dumps(json.load(open(T('data.json'))), indent=2)
-              and raw == [open(T('data.json')).read(), 'true', 0] and back == [pretty, 'Formatted'] and again == tree_rows
-              and page.js("return document.querySelectorAll('#doc .hljs-attr').length") > 0,
-              "JSON: a tree first, then formatted text; the toolbar's Raw shows the file as is, and back", json.dumps([tree_rows, raw[1:]])[:300])
+        check(tree_rows[:3] == ['▾{ 3 keys }', '"name": "spacebar"', '▾"list": [ 2 items ]']
+              and raw == [open(T('data.json')).read(), 'true', 0] and again == tree_rows and page.js("return document.querySelectorAll('#doc .hljs-attr').length") > 0,
+              "JSON: the tree; the toolbar's Raw shows the file as is, without the tree's buttons, and back", json.dumps([tree_rows, raw[1:]])[:300])
+        for name, text in (('scalar.json', '"just a string"\n'), ('broken.json', '{"a": 1,,}\n')):
+            open(T(name), 'w').write(text)
+            view(T(name))
+            sc = page.js("return [!!document.querySelector('#doc .json-tree'), (document.querySelector('#doc pre.code') || {}).textContent, document.getElementById('raw').hidden, document.querySelectorAll('#doc .viewer-head button:not(.viewer-open)').length]")
+            check(sc == [False, text, True, 0], f'JSON: {name} is its text, with no Raw to switch and no tree buttons', json.dumps(sc))
+            os.remove(T(name))
         view(T('table.csv'))
         t = page.js("return [[...document.querySelectorAll('#doc table.csv thead th')].map((x) => x.textContent), [...document.querySelectorAll('#doc table.csv tbody tr')].map((r) => [...r.cells].map((c) => c.textContent))]")
         check(t == [['', 'name', 'qty', 'note'], [['1', 'apple', '3', 'red, crisp'], ['2', 'pear', '5', 'says "hi"'], ['3', 'fig', '', 'line one\nline two']]],
@@ -2180,15 +2207,19 @@ def main():
         check(card and card['name'] == 'blob.dat' and card['dt'] == ['Size', 'Modified', 'Where'] and card['size'] == '4.1 KB (4,096 bytes)'
               and card['icon'] and card['button'] == 'Reveal in Finder', 'other: an info card with icon, name, kind, size and date; unknown data only reveals',
               json.dumps(card))
+        # The card's own button is Minimal chrome's; the toolbar row has Open instead.
+        page.apply(minimalChrome=True)
         r = click(page, '#doc .info-card button')
         synthetic = [m for m in r['messages'] if m.get('type') in ('reveal', 'openFile')]
         r = page.cmd('@nativeclick:#doc .info-card button')
+        page.apply(minimalChrome=False)
         check(not synthetic and [m.get('type') for m in r['messages'] if m.get('type', '').startswith('_')] == ['_reveal'] and
               [m for m in r['messages'] if m.get('type') == 'reveal'][0].get('path') == T('blob.dat'),
               'Reveal in Finder posts reveal for the file on screen, for a real click only', json.dumps(r['messages'])[:300])
         # A file still being read (an iCloud download): a quiet "Loading…" with no Open button, then, when it could not be
         # downloaded, the info card with Reveal in Finder, for a Markdown file too.
-        stub = {'path': T('notes.md'), 'base': 'spacebar://file' + tree + '/', 'name': 'notes.md', 'root': tree, 'rootName': os.path.basename(tree), 'reason': 'open'}
+        stub = {'path': T('notes.md'), 'base': 'spacebar://file' + tree + '/', 'name': 'notes.md', 'root': tree, 'rootName': os.path.basename(tree), 'reason': 'open',
+                'folder': '~/Projects/tree'}
         page.cmd('@eval:sb.render(' + json.dumps(dict(stub, view='loading', cloud=True)) + '); 0')
         ld = page.js("""const l = document.querySelector('#doc .viewer-loading'); const s = l && l.querySelector('.spinner');
           return l && { view: document.documentElement.dataset.view, role: l.getAttribute('role'), text: l.querySelector('.loading-text').textContent,
@@ -2200,14 +2231,18 @@ def main():
                                                      note='This file is in iCloud and couldn’t be downloaded.')) + '); 0')
         card = page.js("""const c = document.querySelector('#doc .info-card'); return c && [c.querySelector('.viewer-note').textContent,
           c.querySelector('button').textContent, c.querySelector('button').dataset.action]""")
+        page.apply(minimalChrome=True)
         r = page.cmd('@nativeclick:#doc .info-card button')
+        page.apply(minimalChrome=False)
         check(card == ['This file is in iCloud and couldn’t be downloaded.', 'Reveal in Finder', 'reveal']
               and [m.get('path') for m in r['messages'] if m.get('type') == 'reveal'] == [T('notes.md')],
               'iCloud: the card for a file that could not be downloaded, with Reveal in Finder (a Markdown file too)', json.dumps([card, r['messages']])[:300])
         view(T('movie.webm'))
         r = page.cmd("@eval:sb.setOpener({ path: " + json.dumps(T('movie.webm')) + ", app: 'QuickTime Player' }); 0")
         b = page.js("return [document.querySelector('#doc .info-card button').textContent, document.querySelector('#doc .info-card button').dataset.action]")
+        page.apply(minimalChrome=True)
         r = page.cmd('@nativeclick:#doc .info-card button')
+        page.apply(minimalChrome=False)
         check(b == ['Open with QuickTime Player', 'openFile'] and '_openFile' in [m.get('type') for m in r['messages']],
               'a document the link policy allows: "Open with <default app>", through the writer', json.dumps(b))
         view(T('tool'))
@@ -2241,7 +2276,7 @@ def main():
         pdf = page.cmd('@pdf')['result']
         area = page.js(PDF_AREA)
         check(pdf['open'] and pdf['placed'] and not pdf['hidden'] and pdf['above'] and pdf['inContainer'] and near(pdf['frame'], area)
-              and area[0] >= 240 and area[1] > 60 and area[1] + area[3] == 800 - EDGE,
+              and area[0] >= 240 and 40 <= area[1] <= 42 and area[1] + area[3] == 800 - EDGE,
               'PDF: a native view laid exactly over the area the page reserves, right of the sidebar and under the breadcrumb',
               f"frame {pdf.get('frame')} area {area}")
         check(pdf['pages'] == 1 and pdf['text'] == 'Hello PDF' and pdf['autoScales'] and pdf['continuous'] and pdf.get('pixel')
@@ -2315,7 +2350,8 @@ def main():
         MEDIA = """const d = document.getElementById('doc'), a = d.querySelector('.pdf-area'), r = a && a.getBoundingClientRect();
           return { view: document.documentElement.dataset.view, area: r && [r.left, r.top, r.width, r.height], docMid: Math.round(d.getBoundingClientRect().left + d.getBoundingClientRect().width / 2),
             frames: document.querySelectorAll('iframe, embed, object, video, audio').length, aa: document.getElementById('aa').hidden,
-            buttons: [...d.querySelectorAll('button')].map((b) => [b.textContent, b.dataset.action]), kind: (d.querySelector('.viewer-kind') || {}).textContent,
+            buttons: [...d.querySelectorAll('button')].map((b) => [b.textContent, b.dataset.action]), kind: document.getElementById('kind').textContent,
+            head: d.querySelector('.viewer-head') && getComputedStyle(d.querySelector('.viewer-head')).display,
             fits: document.scrollingElement.scrollHeight <= innerHeight && document.scrollingElement.scrollWidth <= innerWidth }"""
 
         def media(path):
@@ -2324,9 +2360,9 @@ def main():
             rects = [m for m in r['messages'] + w['messages'] if m.get('type') == 'pdfRect' and 'x' in m]
             return page.js(MEDIA), (rects[-1] if rects else None)
         v, rect = media(T('movie.mp4'))
-        check(v['view'] == 'video' and v['aa'] and v['frames'] == 0 and v['buttons'] == [['Open', 'openFile']] and v['kind'].startswith('MPEG-4')
-              and v['area'][0] >= 240 and v['area'][1] > 60 and v['area'][1] + v['area'][3] == 800 - EDGE and v['fits'],
-              'video: the page reserves the rest of the panel under its toolbar, with a labelled Open button and no <video>', json.dumps(v))
+        check(v['view'] == 'video' and v['aa'] and v['frames'] == 0 and v['buttons'] == [['Open', 'openFile']] and v['kind'].startswith('MPEG-4') and v['head'] == 'none'
+              and v['area'][0] >= 240 and 40 <= v['area'][1] <= 42 and v['area'][1] + v['area'][3] == 800 - EDGE and v['fits'],
+              'video: the page reserves the rest of the panel under its toolbar, no caption row, a labelled Open button and no <video>', json.dumps(v))
         check(rect and rect['path'] == T('movie.mp4') and near([float(rect[k]) for k in 'xywh'], v['area']) and rect['hide'] in ('0', 'false'),
               'video: the page posts the area for the native player', json.dumps(rect))
         v, rect = media(T('song.wav'))
@@ -2352,13 +2388,13 @@ def main():
         page.cmd('@root:' + pics)
         for name in ('photo.heic', 'photo.tiff', 'shot.dng'):
             v, rect = media(os.path.join(pics, name))
-            check(v['view'] == 'bitmap' and v['aa'] and v['frames'] == 0 and v['area'][1] > 60 and v['area'][1] + v['area'][3] == 800 - EDGE and v['fits']
+            check(v['view'] == 'bitmap' and v['aa'] and v['frames'] == 0 and 40 <= v['area'][1] <= 42 and v['area'][1] + v['area'][3] == 800 - EDGE and v['fits']
                   and not page.js("return !!document.querySelector('#doc img')") and rect and rect['path'] == os.path.join(pics, name)
                   and near([float(rect[k]) for k in 'xywh'], v['area']) and rect['hide'] in ('0', 'false'),
                   f'{name}: view bitmap, the area reserved and posted for the native image view, no <img>, Aa hidden', json.dumps([v, rect]))
         page.cmd("@eval:sb.imageZoom({ path: '" + os.path.join(pics, 'shot.dng') + "', zoom: 37 }); sb.imageZoom({ path: '/elsewhere.dng', zoom: 99 }); 0")
-        cap = page.js("return document.querySelector('#doc .viewer-kind').textContent")
-        check(cap.endswith('37%') and '99' not in cap, 'bitmap: the native view\'s zoom shows in the caption, only for the file on screen', json.dumps(cap))
+        cap = page.js("return document.getElementById('kind').textContent")
+        check(cap.endswith('37%') and '99' not in cap, 'bitmap: the native view\'s zoom shows in the toolbar, only for the file on screen', json.dumps(cap))
         v, rect = media(os.path.join(pics, 'plain.png'))
         check(v['view'] == 'image' and v['area'] is None and page.js("return !!document.querySelector('#doc .img-stage img')"),
               'bitmap -> PNG: back to the page\'s own <img> viewer, no native area', json.dumps(v))
@@ -2372,7 +2408,7 @@ def main():
         page.cmd('@root:' + ql)
         v, rect = media(memo)
         check(v['view'] == 'quicklook' and v['aa'] and v['frames'] == 0 and v['buttons'] == [['Open', 'openFile']]
-              and v['area'][1] > 60 and v['area'][1] + v['area'][3] == 800 - EDGE and v['fits'],
+              and 40 <= v['area'][1] <= 42 and v['area'][1] + v['area'][3] == 800 - EDGE and v['fits'],
               'Word document: the page reserves the rest of the panel under its toolbar for Apple\'s preview, no frame', json.dumps(v))
         check(rect and rect['path'] == memo and near([float(rect[k]) for k in 'xywh'], v['area']) and rect['hide'] in ('0', 'false'),
               'Word document: the page posts the area for the native preview', json.dumps(rect))
@@ -2427,13 +2463,19 @@ def main():
         card = dict(stub, path=T('deck.key'), name='deck.key', view='info', icon='other', kindName='Keynote Presentation', canOpen=True, size=5000)
         THUMB = """const c = document.querySelector('#doc .info-card'), i = c && c.querySelector('img.info-thumb');
           return c && { thumb: i ? [i.naturalWidth, i.naturalHeight, i.getBoundingClientRect().width <= 320, !!(i.compareDocumentPosition(c.querySelector('dl')) & 4)] : null,
-            icon: !!c.querySelector('svg.ic'), button: c.querySelector('button').textContent,
+            icon: !!c.querySelector('svg.ic'), button: c.querySelector('button').textContent, shown: getComputedStyle(c.querySelector('button')).display !== 'none',
+            where: [...c.querySelectorAll('dt')].filter((d) => d.textContent === 'Where').map((d) => d.nextElementSibling.textContent),
             fits: document.scrollingElement.scrollWidth <= innerWidth }"""
         page.cmd('@eval:sb.render(' + json.dumps(dict(card, thumb=png)) + '); 0')
         page.cmd('@wait:0.2')
         t = page.js(THUMB)
-        check(t and t['thumb'] == [64, 48, True, True] and not t['icon'] and t['button'] == 'Open' and t['fits'],
-              "info card: the file's thumbnail in the icon's place, above its details, the Open button kept", json.dumps(t))
+        check(t and t['thumb'] == [64, 48, True, True] and not t['icon'] and t['button'] == 'Open' and not t['shown'] and t['where'] == ['~/Projects/tree'] and t['fits'],
+              "info card: the file's thumbnail in the icon's place, above its details; Where is the folder; Open only in the toolbar", json.dumps(t))
+        page.apply(minimalChrome=True)
+        page.cmd('@wait:0.2')
+        m = page.js(THUMB)
+        page.apply(minimalChrome=False)
+        check(m and m['shown'] and m['button'] == 'Open', 'info card: Minimal chrome, with no Open in the toolbar, keeps the card\'s', json.dumps(m))
         dmg = dict(stub, path=T('disk.dmg'), name='disk.dmg', view='info', icon='app', kindName='Disk Image', canOpen=False, size=7892,
                    details=[['Format', 'Compressed (zlib)'], ['Encrypted', 'No'], ['<b>x</b>', 5], 'bad'])
         page.cmd('@eval:sb.render(' + json.dumps(dmg) + '); 0')

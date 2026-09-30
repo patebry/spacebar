@@ -35,6 +35,9 @@ protocol SpacebarWriterProtocol {
     func updateOffer(reply: @escaping (Data?) -> Void)
     /// Puts the install command, which also updates, on the clipboard.
     func copyInstallCommand(reply: @escaping (Bool) -> Void)
+    /// Whether the Space helper is on in the settings but not taking Space (not running, or without Accessibility), so Space
+    /// falls back to Apple's Quick Look.
+    func spaceHelperPaused(reply: @escaping (Bool) -> Void)
     /// Puts `text` on the clipboard as plain text: the file on screen, or the page's selection. Neither sandbox the page lives in
     /// is asked to touch the pasteboard.
     func copyText(_ text: String, reply: @escaping (Bool) -> Void)

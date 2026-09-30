@@ -149,7 +149,7 @@ struct PageState {
 func page() -> PageState {
     PageState(raw: jsJSON("""
       const d = document.getElementById('doc'), q = (s) => [...d.querySelectorAll(s)];
-      const kind = d.querySelector('.viewer-kind, .viewer-head');
+      const kind = document.getElementById('kind');
       return { path: current.path || '', view: current.path ? (current.view || 'markdown') : '', kindName: current.kindName || '', encoding: current.encoding || '',
         truncated: current.truncated === true, text: d.textContent.slice(0, 40000), head: kind ? kind.textContent : '',
         notes: q('.viewer-note').map((n) => n.textContent), status: document.getElementById('status').textContent,
@@ -411,7 +411,7 @@ if flows.contains("2") {
     let semi = space([corpus.appendingPathComponent("semicolon-decimal.csv")])
     _ = js("document.querySelector('#doc .csv-sort[data-col=\"1\"]').click(); 0")
     spin(0.3)
-    let first = jsJSON("return { head: document.querySelector('#doc .viewer-kind').textContent, first: document.querySelector('#doc table.csv tbody tr:not(.pad) td').textContent };")
+    let first = jsJSON("return { head: document.getElementById('kind').textContent, first: document.querySelector('#doc table.csv tbody tr:not(.pad) td').textContent };")
     check("2: semicolon CSV with decimal commas: named as such, sorted by value (0,99 first)",
           semi.view == "csv" && (first["head"] as? String ?? "").contains("semicolon-separated") && first["first"] as? String == "Kirschen", "view \(semi.view) \(first)")
     noErrors("2", page())
@@ -430,7 +430,7 @@ if flows.contains("3") {
     info(String(format: "2 MB JSON painted in %.0f ms", big.painted ?? .nan))
     let tree = { jsJSON("""
       const rows = document.querySelectorAll('#doc .json-tree .jt-row');
-      return { rows: rows.length, mode: (document.querySelector('#doc .viewer-toggle[aria-pressed=true]') || {}).textContent || '',
+      return { rows: rows.length, mode: document.querySelector('#doc .json-tree') ? 'Tree' : '',
         closed: [...document.querySelectorAll('#doc .jt-row[aria-expanded=false] .jt-tw')].length, deepest: Math.max(0, ...[...rows].map((r) => +r.getAttribute('aria-level'))) };
       """) }
     let t1 = tree()
@@ -531,7 +531,7 @@ if flows.contains("4") {
             if first != h { problems.append("first header '\(first ?? "nil")'") }
         }
         if let mode = spec["mode"] as? String, spec["knownBug"] == nil {
-            let pressed = js("(document.querySelector('#doc .viewer-toggle[aria-pressed=true]') || {}).dataset?.mode || 'raw'") as? String
+            let pressed = js("(document.querySelector('#doc .json-tree') ? 'tree' : document.querySelector('#doc .notebook') ? 'notebook' : 'raw')") as? String
             if pressed != mode { problems.append("JSON mode \(pressed ?? "nil"), expected \(mode)") }
         }
         if let n = spec["images"] as? Int {
@@ -574,7 +574,7 @@ if flows.contains("4") {
             problems.append("offered to another app, though .env often holds secrets")
         }
         if name == "comments.jsonc" {
-            let pressed = js("(document.querySelector('#doc .viewer-toggle[aria-pressed=true]') || {}).dataset?.mode || 'raw'") as? String
+            let pressed = js("(document.querySelector('#doc .json-tree') ? 'tree' : document.querySelector('#doc .notebook') ? 'notebook' : 'raw')") as? String
             known("BUG-jsonc", "4: comments.jsonc (JSON with comments) opens as a tree", pressed == "tree" && !p.notes.contains { $0.contains("Not valid") },
                   "mode \(pressed ?? "nil"), notes \(p.notes)")
         }

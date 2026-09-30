@@ -1559,6 +1559,7 @@ class PreviewController: NSViewController {
             }
             finishPrepare(nil)
             checkForUpdate()
+            checkSpaceHelper()
         case "rendered":
             let parse = m.double("parseMs") ?? 0, total = m.double("totalMs") ?? 0
             let reason = m.string("reason", max: 32) ?? ""
@@ -1854,6 +1855,27 @@ class PreviewController: NSViewController {
                     default:
                         // None newer, or an update from this Mac still running: nothing to offer.
                         break
+                    }
+                }
+            }
+        }
+    }
+
+    /// Once per extension process, a quiet line when the Space helper is on in the settings but Space fell back to Quick Look.
+    /// Asked of the writer at most every 30 s, and only while the setting is on.
+    private static var helperHinted = false
+    private static var helperAsked = Date.distantPast
+    private func checkSpaceHelper() {
+        guard WebHost.pageHost == "quicklook", !Self.helperHinted, SettingsStore.shared.settings.spaceHelper,
+              Date().timeIntervalSince(Self.helperAsked) > 30 else { return }
+        Self.helperAsked = Date()
+        helper {
+            $0.spaceHelperPaused { paused in
+                DispatchQueue.main.async {
+                    guard paused, !Self.helperHinted, self.host.controller === self else { return }
+                    // Spent only once the page has put it up: a status already showing keeps it for a later preview.
+                    self.host.web.evaluateJavaScript("sb.helperHint()") { shown, _ in
+                        if shown as? Bool == true { Self.helperHinted = true }
                     }
                 }
             }

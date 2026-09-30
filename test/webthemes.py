@@ -396,6 +396,10 @@ def main():
         # ---- stats ----
         page.render(demo)
         page.cmd('@wait:0.3')
+        s0 = page.js("return document.getElementById('stats').textContent")
+        check(s0 == '', 'reading stats are off by default', repr(s0))
+        page.apply(stats=True)
+        page.cmd('@wait:0.3')
         s = page.js("return document.getElementById('stats').textContent")
         check(s and 'words' in s and 'min read' in s, 'reading stats shown', repr(s))
         page.apply(stats=False)

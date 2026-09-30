@@ -197,6 +197,10 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         }
     }
 
+    func spaceHelperPaused(reply: @escaping (Bool) -> Void) {
+        reply(SettingsFile.load().spaceHelper && !HelperTap.taking())
+    }
+
     func copyText(_ text: String, reply: @escaping (Bool) -> Void) {
         guard text.utf8.count <= EditableText.maxMarkdownBytes else { return reply(false) }
         DispatchQueue.main.async {
@@ -375,6 +379,25 @@ final class Writer: NSObject, SpacebarWriterProtocol {
 
     func endFilter(_ session: Int) {
         DispatchQueue.main.async { FilterSession.end(owner: self, session: session, "host") }
+    }
+}
+
+/// Whether the Space helper takes Space: an enabled event tap owned by a process running spacebar Helper.app, read from the
+/// window server's list of taps, so nothing connects to the helper. Secure input is not counted: it is another app's, and
+/// passes; Settings, General names it.
+enum HelperTap {
+    static func taking() -> Bool {
+        var n: UInt32 = 0
+        guard CGGetEventTapList(0, nil, &n) == .success, n > 0 else { return false }
+        var taps = [CGEventTapInformation](repeating: CGEventTapInformation(), count: Int(n))
+        guard CGGetEventTapList(n, &taps, &n) == .success else { return false }
+        return taps.prefix(Int(n)).contains { $0.enabled && isHelper($0.tappingProcess) }
+    }
+
+    private static func isHelper(_ pid: pid_t) -> Bool {
+        var buf = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        guard proc_pidpath(pid, &buf, UInt32(buf.count)) > 0 else { return false }
+        return String(cString: buf).contains("/spacebar Helper.app/Contents/MacOS/")
     }
 }
 

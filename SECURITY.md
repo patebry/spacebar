@@ -11,7 +11,7 @@ within a week. Fixes ship in the next release, and the advisory is published onc
 Only the latest release is supported. [FINDINGS.md](FINDINGS.md#security-model) describes the threat model: a Markdown file,
 and whatever sits beside it, is treated as hostile.
 
-Seven features reach further than a rendered page, and are in scope:
+Nine features reach further than a rendered page, and are in scope:
 
 - **Editing files in place.** The unsandboxed writer saves what is typed. It writes only to an existing regular file whose
   name, and the name of the file it resolves to, is of a type spacebar edits: Markdown, the code, JSON, CSV and text types
@@ -80,6 +80,9 @@ Seven features reach further than a rendered page, and are in scope:
   the page supplies; ⌘C with a selection copies the page's selection, taken only within a second of the host handing the page
   that ⌘C. The extension takes a copy only for the path of the
   file on screen, and only a text view or a Markdown file has a whole-file copy.
+- **The helper hint.** Whether the Space helper is taking Space comes from the Quick Look extension's writer, which reads
+  the window server's list of event taps (each tap's owner, matched by its executable's path). Nothing connects to the
+  helper, and no key is seen.
 - **The Space helper** ("Use spacebar for every file", off until you turn it on) holds Accessibility and an event tap. Its
   threat model is below.
 

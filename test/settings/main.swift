@@ -73,7 +73,14 @@ check("panel allow-list takes theme", afterPanel.theme == "solarized")
 check("panel allow-list drops userTheme/editor/customCSS/editing/rawHTML/remoteImages",
       afterPanel.userTheme == nil && afterPanel.editorBundleID == nil && afterPanel.customCSS && afterPanel.inlineEditing
       && afterPanel.rawHTML == "sanitized" && !afterPanel.remoteImages)
-check("panel keys are cosmetic only", Settings.panelKeys.isSubset(of: ["theme", "appearance", "fontSize", "width", "bodyFont", "lineHeight", "sidebarCollapsed", "sidebarWidth", "folderSort"]))
+check("panel keys are cosmetic only", Settings.panelKeys.isSubset(of: ["theme", "appearance", "fontSize", "width", "bodyFont", "lineHeight", "sidebarCollapsed", "sidebarWidth", "folderSort",
+                                                                     "rawMarkdown", "rawJSON", "rawNotebook", "rawCSV", "rawXML", "rawCSS"]))
+check("raw views: off by default, bools only, panel keys", Settings.rawKeys.allSatisfy { k in
+    !(Settings().dictionary[k] as? Bool ?? true) && Settings(dictionary: [k: true]).dictionary[k] as? Bool == true
+        && [1, "true", NSNull()].allSatisfy { Settings(dictionary: [k: $0]).dictionary[k] as? Bool == false }
+        && decode("{\"\(k)\":true}")?.dictionary[k] as? Bool == true
+        && Settings.panelPatch(k, true).map { obj(String(data: $0, encoding: .utf8)!)[k] as? Bool } == true && Settings.panelPatch(k, 1) == nil
+})
 check("folderSort: a panel key, name or modified only", Settings.panelPatch("folderSort", "modified").map { obj(String(data: $0, encoding: .utf8)!)["folderSort"] as? String } == "modified"
       && [NSNumber(value: 1), "size", NSNull(), ["name"]].allSatisfy { Settings.panelPatch("folderSort", $0) == nil })
 check("welcomeShown: off by default, a bool only, not a panel key, kept by the file", !Settings().welcomeShown && Settings(dictionary: ["welcomeShown": true]).welcomeShown

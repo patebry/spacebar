@@ -216,6 +216,7 @@ struct KeyRoute {
             default: return nil
             }
         }
+        if e.mods == [.command, .option] { return e.chars == "f" ? "filter" : nil }
         // ⌘+ is ⌘⇧= on most layouts.
         guard e.mods.contains(.command), e.mods.isSubset(of: [.command, .shift]) else { return nil }
         if e.code == KeyCode.keypadPlus || e.chars == "=" || e.chars == "+" { return "zoomIn" }
@@ -224,6 +225,7 @@ struct KeyRoute {
         if e.code == KeyCode.keypad0 || e.chars == "0" { return "zoomReset" }
         if e.chars == "o" { return "open" }
         if e.chars == "f" { return "find" }
+        if e.chars == "c" { return "copy" }
         return nil
     }
 }

@@ -238,6 +238,15 @@ final class WriterKeySource: KeySource {
     func end(_ id: Int) { controller?.helper { $0.endFilter(id) } }
 }
 
+/// A session of the writer's key panel (or, a list session, of a local key source) and the keys it may send.
+struct KeySession {
+    let id: Int
+    let seq: Int
+    let list: Bool
+    let find: Bool
+    var keys: Set<String> { find ? FilterKeys.findNames : list ? FilterKeys.listNames.union(FilterKeys.listCommands) : FilterKeys.names }
+}
+
 /// The preview, whatever hosts it: `start` shows a file or folder, and the host reports its view appearing and going.
 class PreviewController: NSViewController {
     /// The page has painted the first preview since `start`.
@@ -263,6 +272,11 @@ class PreviewController: NSViewController {
     /// the chosen editor.
     private var shownText = false
     static let textViews: Set<String> = ["code", "json", "csv", "text"]
+    /// The text of the text view on screen, as it was sent to the page (its first 2 MB when `truncated`), for the Copy button.
+    private var shownBody: (text: String, truncated: Bool)?
+    /// When a ⌘C was last handed to the page: the only time it may send its selection to be copied.
+    private var copyAsked: Date?
+    func armCopy() { copyAsked = Date() }
     /// The PDF on screen, drawn natively over the page's PDF area; nil for every other view.
     private var pdfPane: PDFPane?
     /// The HTML file on screen, rendered natively over the same reserved area; nil for every other view.
@@ -390,8 +404,9 @@ class PreviewController: NSViewController {
     private var edit: (id: Int, seq: Int, start: Int, lines: Int)?
     /// The session a click just replaced: keys typed into it before the writer switched arrive late and are still applied.
     private var retired: [(id: Int, seq: Int, start: Int, lines: Int)] = []
-    /// The sidebar filter holding the keyboard: writer session id (from editCounter) and the page's sequence number.
-    private var filter: (id: Int, seq: Int, list: Bool)?
+    /// The sidebar filter, the sidebar's list or the find field holding the keyboard: writer session id (from editCounter) and
+    /// the page's sequence number.
+    private var filter: KeySession?
 
     /// Moves every retired range that starts at or below `line` by `delta` lines.
     private func shiftRetired(from line: Int, by delta: Int) {
@@ -620,6 +635,14 @@ class PreviewController: NSViewController {
     /// ⌘+, ⌘− or ⌘0 (`key` zoomIn, zoomOut, zoomReset) for a native view on screen that zooms; whether it took the key.
     func zoomKey(_ key: String) -> Bool { fileKind == .image && imagePane?.key(key) == true }
 
+    /// Puts the file on screen on the clipboard as a file, as Finder's ⌘C does, for a host whose ⌘C found no text to copy.
+    func copyFileOnScreen() {
+        guard let url = fileURL else { return }
+        NSPasteboard.general.clearContents()
+        let ok = NSPasteboard.general.writeObjects([url as NSURL])
+        status(ok ? "Copied \(url.lastPathComponent)" : "Could not copy")
+    }
+
     /// The Open button's action for the file on screen, for a host with a key for it (⌘O).
     func openOnScreen() {
         guard let url = fileURL else { return }
@@ -793,6 +816,7 @@ class PreviewController: NSViewController {
         shownStamp = nil
         shownCanOpen = false
         shownText = false
+        shownBody = nil
         showingOverview = true
         loader.cancel()
         unavailablePath = nil
@@ -920,6 +944,7 @@ class PreviewController: NSViewController {
         shownStamp = nil
         shownCanOpen = false
         shownText = false
+        shownBody = nil
         docText = nil
         diskText = nil
         textSource = nil
@@ -1021,6 +1046,7 @@ class PreviewController: NSViewController {
         shownStamp = nil
         shownCanOpen = false
         shownText = false
+        shownBody = nil
         unavailablePath = url.path
         render(FileView.unavailable(path: url.path, kind: fileKind, root: rootDir, reason: reason, cloud: cloud))
     }
@@ -1195,6 +1221,7 @@ class PreviewController: NSViewController {
             if doc != nil || text != nil || ["video", "audio", "html", "quicklook", "bitmap"].contains(p["view"] as? String), gen != self.pdfGen { return }
             self.shownCanOpen = p["canOpen"] as? Bool == true
             self.shownText = Self.textViews.contains(p["view"] as? String ?? "")
+            self.shownBody = self.shownText ? (p["text"] as? String).map { ($0, p["truncated"] as? Bool == true) } : nil
             self.finishShow(url, p, pdf: doc, rich: text, reason: reason)
             if p["view"] as? String == "info", !cloud, self.thumbPending != url.path { self.addThumbnail(url, icon: kind == .app) }
         }
@@ -1630,8 +1657,8 @@ class PreviewController: NSViewController {
                 status("Updating…")
                 return js("sb.filterEnd", ["seq": seq])
             }
-            let list = m.bool("list") == true
-            beginFilter(seq, text: list ? "" : FilterKeys.clean(m.string("text", max: 4 * FilterKeys.maxLength) ?? ""), list: list, m)
+            let list = m.bool("list") == true, find = !list && m.bool("find") == true
+            beginFilter(seq, text: list ? "" : FilterKeys.clean(m.string("text", max: 4 * FilterKeys.maxLength) ?? ""), list: list, find: find, m)
         case "filterStop":
             guard let f = filter, m.int("seq") == f.seq else { return }
             stopFilter(notifyWriter: true)
@@ -1668,6 +1695,21 @@ class PreviewController: NSViewController {
             qlPane?.place(message: body, in: host.web)
             if fileKind == .rtf { richPane?.place(message: body, in: host.web) }
             if fileKind == .image { imagePane?.place(message: body, in: host.web) }
+        case "copy":
+            // The Copy button (the file on screen, as shown) or ⌘C (the page's selection, when there is one). Text from the page
+            // is taken only just after this controller handed it a ⌘C.
+            let failed = { (why: String) in self.refuse("copy", why); self.js("sb.copied", ["ok": false]) }
+            guard let url = fileURL, m.string("path", max: 4096) == url.path else { return failed("not the file on screen") }
+            let asked = copyAsked.map { -$0.timeIntervalSinceNow < 1 } ?? false
+            copyAsked = nil
+            let selection = m.string("text")
+            guard body["text"] == nil || (selection != nil && asked) else { return failed("selection not asked for, or too large") }
+            let whole: (text: String, truncated: Bool)? = fileKind == .markdown ? docText.map { ($0, false) } : shownBody
+            guard let text = selection ?? whole?.text, !text.isEmpty else { return failed("nothing to copy") }
+            let cut = selection == nil && whole?.truncated == true
+            helper(onError: { failed("writer unavailable") }) {
+                $0.copyText(text) { ok in DispatchQueue.main.async { self.js("sb.copied", ["ok": ok, "truncated": cut]) } }
+            }
         case "copyInstall":
             helper { $0.copyInstallCommand { ok in DispatchQueue.main.async { self.js("sb.installCopied", ["ok": ok]) } } }
         case "installUpdate":
@@ -2120,6 +2162,7 @@ class PreviewController: NSViewController {
         // Re-sync the page with docText, the authority, in case the two drifted while it owned the view.
         if let url = fileURL, let text = docText { push(text: text, path: url.path, reason: "editEnd") }
         if FilterKeys.relists(afterEnding: reason, list: false) { wantListKeys() }
+        if reason == "find" { js("sb.editFind", [:]) }
     }
 
     // MARK: editing a whole text file
@@ -2184,6 +2227,7 @@ class PreviewController: NSViewController {
         if reason == "not-key" { status("inline editing unavailable") }
         renderText("editEnd")
         if FilterKeys.relists(afterEnding: reason, list: false) { wantListKeys() }
+        if reason == "find" { js("sb.editFind", [:]) }
     }
 
     /// Backspace at the start of the block: the page names the block above (it owns the block structure), then mergeBackward joins them.
@@ -2319,7 +2363,7 @@ class PreviewController: NSViewController {
         }
     }
 
-    private func beginFilter(_ seq: Int, text: String, list: Bool, _ m: PageMessage) {
+    private func beginFilter(_ seq: Int, text: String, list: Bool, find: Bool, _ m: PageMessage) {
         // The writer ends a previous filter session itself, keeping its panel key for this one; a session held elsewhere, or
         // one the writer loses to a session held elsewhere, is ended here.
         if let f = filter {
@@ -2328,7 +2372,7 @@ class PreviewController: NSViewController {
         }
         editCounter += 1
         let id = editCounter
-        filter = (id, seq, list)
+        filter = KeySession(id: id, seq: seq, list: list, find: find)
         // The panel goes over the field (or the row): never wider than the page, nor taller than a line.
         let clamp = { (k: String, hi: Double) in min(max(m.double(k) ?? 0, 0), hi) }
         let w = clamp("width", Double(host.web.bounds.width)), h = clamp("height", 48)
@@ -2338,7 +2382,11 @@ class PreviewController: NSViewController {
         }
         let replied = { (ok: Bool) in DispatchQueue.main.async { if !ok { failed() } } }
         helper(onError: failed) {
-            $0.beginFilter(id, text: text, clickX: clamp("clickX", w), clickY: clamp("clickY", h), fieldWidth: w, fieldHeight: h, reply: replied)
+            if find {
+                $0.beginFind(id, text: text, clickX: clamp("clickX", w), clickY: clamp("clickY", h), fieldWidth: w, fieldHeight: h, reply: replied)
+            } else {
+                $0.beginFilter(id, text: text, clickX: clamp("clickX", w), clickY: clamp("clickY", h), fieldWidth: w, fieldHeight: h, reply: replied)
+            }
         }
     }
 
@@ -2348,31 +2396,32 @@ class PreviewController: NSViewController {
     }
 
     func filterKey(_ id: Int, key: String, isRepeat: Bool) {
-        guard let f = filter, f.id == id, (f.list ? FilterKeys.listNames : FilterKeys.names).contains(key) else { return }
+        guard let f = filter, f.id == id, f.keys.contains(key) else { return }
+        if key == "copy" { armCopy() }
         js("sb.filterKey", ["seq": f.seq, "key": key, "repeat": isRepeat])
     }
 
     func filterEnded(_ id: Int, reason: String) {
         guard let f = filter, f.id == id else { return }
         log.info("filter \(id) ended: \(reason, privacy: .public)")
-        stopFilter(notifyWriter: false)
+        stopFilter(notifyWriter: false, reason: reason)
         if FilterKeys.relists(afterEnding: reason, list: f.list) { wantListKeys() }
         else if f.list { listSessionEnded(reason: reason) }
     }
 
     /// `notifyWriter` false: the writer already ended its session (or went away). A session held by a local key source is
     /// told regardless.
-    private func stopFilter(notifyWriter: Bool) {
+    private func stopFilter(notifyWriter: Bool, reason: String = "") {
         guard let f = filter else { return }
         filter = nil
         if notifyWriter || heldLocally(f) { endKeys(f) }
-        js("sb.filterEnd", ["seq": f.seq])
+        js("sb.filterEnd", ["seq": f.seq, "reason": reason])
     }
 
-    private func heldLocally(_ f: (id: Int, seq: Int, list: Bool)) -> Bool { f.list && keySource.local }
+    private func heldLocally(_ f: KeySession) -> Bool { f.list && keySource.local }
 
     /// Tells whoever holds the keys of filter session `f` that it ended.
-    private func endKeys(_ f: (id: Int, seq: Int, list: Bool)) {
+    private func endKeys(_ f: KeySession) {
         if f.list { keySource.end(f.id) } else { helper { $0.endFilter(f.id) } }
     }
 

@@ -198,6 +198,39 @@ tv.layoutManager!.ensureLayout(for: tv.textContainer!)
 _ = press(right, 124, .command)
 check("a Markdown block again: Cmd+Right stops at the visual line", tv.selectedRange().location < long.count - 1)
 
+// ⌘F, ⌥⌘F and ⌘C in a list session go to the page as commands; nothing is copied or typed.
+set("", caret: 0)
+listed = []
+tv.listKeys = true
+tv.onFilterKey = { k, _ in listed.append(k) }
+NSPasteboard.general.clearContents()
+check("list: ⌘F, ⌥⌘F and ⌘C are find, filter and copy", letter("f") && letter("f", [.command, .option]) && letter("c") && listed == ["find", "filter", "copy"]
+      && NSPasteboard.general.string(forType: .string) == nil && tv.string.isEmpty)
+listed = []
+check("list: ⌘V and ⇧⌘F are swallowed and go nowhere", letter("v") && letter("F", [.command, .shift]) && listed.isEmpty && tv.string.isEmpty)
+tv.listKeys = false
+
+// The find field: Return and Shift+Return (⌘G, ⇧⌘G) step through the matches; the text is the field's; Esc ends it.
+set("needle", caret: 6)
+listed = []
+ends = 0
+tv.findKeys = true
+tv.onEscape = { ends += 1 }
+key("\r", 36); key("\r", 36, [.shift]); key("\r", 76, [.numericPad])
+check("find: Return is next, Shift+Return prev, and neither types", listed == ["next", "prev", "next"] && tv.string == "needle")
+listed = []
+check("find: ⌘G next, ⇧⌘G prev", letter("g") && letter("G", [.command, .shift]) && listed == ["next", "prev"])
+listed = []
+key(arrow(down), 125, arrowFlags); key(arrow(NSHomeFunctionKey), 115, [.function])
+check("find: the arrows and Home stay in the field", listed.isEmpty)
+NSPasteboard.general.setString("pasted", forType: .string)
+check("find: ⌘A and ⌘V still edit the field", letter("a") && letter("v") && tv.string == "pasted" && listed.isEmpty)
+key("\u{1b}", 53)
+check("find: Esc ends it", ends == 1)
+tv.findKeys = false
+tv.onFilterKey = nil
+tv.onEscape = {}
+
 privateBoard.releaseGlobally()
 print("\n\(failures == 0 ? "all" : "\(failures) FAILED of") edit key checks")
 exit(failures == 0 ? 0 : 1)

@@ -109,12 +109,15 @@ for (code, name) in routed {
 }
 check("open: every routed name is one the viewer accepts", Set(routed.map(\.1)).isSubset(of: HelperKeys.list))
 let commands: [(KeyEvent, String)] = [(key(31, "o", mods: .command), "open"), (key(3, "f", mods: .command), "find"),
+                                      (key(3, "f", mods: [.command, .option]), "filter"), (key(8, "c", mods: .command), "copy"),
                                       (key(24, "=", mods: .command), "zoomIn"), (key(24, "+", mods: [.command, .shift]), "zoomIn"),
                                       (key(KeyCode.keypadPlus, "+", mods: .command), "zoomIn"), (key(27, "-", mods: .command), "zoomOut"),
                                       (key(29, "0", mods: .command), "zoomReset"), (key(KeyCode.keypad0, "0", mods: .command), "zoomReset")]
 for (e, name) in commands { check("open: \(e.mods.contains(.shift) ? "⌘⇧" : "⌘")\(e.chars) is \(name)", routeOnce(e, open) == .forward(name)) }
 check("open: every command is one the viewer accepts", Set(commands.map(\.1)) == HelperKeys.commands)
-check("open: ⌘C passes (copy in Finder)", routeOnce(key(8, "c", mods: .command), open) == .pass)
+check("open: ⌘⇧C, ⌘⌥C and ⌃⌘C pass", [HelperMods([.command, .shift]), [.command, .option], [.command, .control]].allSatisfy { routeOnce(key(8, "c", mods: $0), open) == .pass })
+check("open: ⌘⇧F and ⌃⌥⌘F pass", routeOnce(key(3, "f", mods: [.command, .shift]), open) == .pass && routeOnce(key(3, "f", mods: [.command, .option, .control]), open) == .pass)
+check("closed: ⌘C and ⌘F pass (Finder's copy and search)", routeOnce(key(8, "c", mods: .command), closed) == .pass && routeOnce(key(3, "f", mods: .command), closed) == .pass)
 check("open: ⌘⌥O passes", routeOnce(key(31, "o", mods: [.command, .option]), open) == .pass)
 check("open: ⌘⇧O passes", routeOnce(key(31, "o", mods: [.command, .shift]), open) == .pass)
 check("open: ⇧↓ passes", routeOnce(key(KeyCode.down, mods: .shift), open) == .pass)
@@ -137,6 +140,8 @@ for (code, n) in [(KeyCode.space, "Space"), (KeyCode.escape, "Esc"), (KeyCode.do
     check("open, Finder text field focused: \(n) passes", routeOnce(key(code), typing) == .pass)
 }
 check("open, Finder text field focused: keys to the viewer are still routed", routeOnce(key(KeyCode.down, to: viewer), typing) == .forward("down"))
+check("open, Finder text field focused: ⌘C, ⌘F and ⌥⌘F stay the field's", [key(8, "c", mods: .command), key(3, "f", mods: .command),
+      key(3, "f", mods: [.command, .option])].allSatisfy { routeOnce($0, typing) == .pass })
 
 // sidebarKeys off: the arrows move Finder's selection, and the helper follows it.
 let noSidebar = PanelContext(open: true, finderPid: finder, viewerPid: viewer, sidebarKeys: false)

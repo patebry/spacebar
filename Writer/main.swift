@@ -197,6 +197,14 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         }
     }
 
+    func copyText(_ text: String, reply: @escaping (Bool) -> Void) {
+        guard text.utf8.count <= EditableText.maxMarkdownBytes else { return reply(false) }
+        DispatchQueue.main.async {
+            NSPasteboard.general.clearContents()
+            reply(NSPasteboard.general.setString(text, forType: .string))
+        }
+    }
+
     func installUpdate(_ version: String, reply: @escaping (String?) -> Void) {
         if let why = Updates.installRefusal(version, current: currentVersion, enabled: SettingsFile.load().checkUpdates && updatesAllowed) {
             log.error("refused update to \(version, privacy: .private): \(why, privacy: .public)")
@@ -334,8 +342,12 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         beginKeys(session, text: "", list: true, clickX: clickX, clickY: clickY, width: rowWidth, height: rowHeight, reply: reply)
     }
 
-    private func beginKeys(_ session: Int, text: String, list: Bool, clickX: Double, clickY: Double, width fieldWidth: Double, height fieldHeight: Double,
-                           reply: @escaping (Bool) -> Void) {
+    func beginFind(_ session: Int, text: String, clickX: Double, clickY: Double, fieldWidth: Double, fieldHeight: Double, reply: @escaping (Bool) -> Void) {
+        beginKeys(session, text: text, list: false, find: true, clickX: clickX, clickY: clickY, width: fieldWidth, height: fieldHeight, reply: reply)
+    }
+
+    private func beginKeys(_ session: Int, text: String, list: Bool, find: Bool = false, clickX: Double, clickY: Double, width fieldWidth: Double,
+                           height fieldHeight: Double, reply: @escaping (Bool) -> Void) {
         let host = connection?.remoteObjectProxyWithErrorHandler { err in
             log.error("filter host gone: \(err.localizedDescription, privacy: .public)")
             DispatchQueue.main.async { FilterSession.end(owner: self, "host-gone") }
@@ -351,7 +363,7 @@ final class Writer: NSObject, SpacebarWriterProtocol {
             FilterSession.current?.end("replaced", notify: true, hide: false)
             let mouse = NSEvent.mouseLocation
             let frame = NSRect(x: mouse.x - clickX, y: mouse.y + clickY - fieldHeight, width: max(fieldWidth, 40), height: max(fieldHeight, 16))
-            let s = FilterSession(owner: self, id: session, text: list ? "" : FilterKeys.clean(text), list: list, frame: frame, host: host)
+            let s = FilterSession(owner: self, id: session, text: list ? "" : FilterKeys.clean(text), list: list, find: find, frame: frame, host: host)
             FilterSession.current = s
             reply(true)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
@@ -461,8 +473,10 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         textView.delegate = self
         textView.onEscape = { [weak self] in self?.end("escape", notify: true) }
         textView.onHoldTimeout = { [weak self] in self?.end("hold-timeout", notify: true) }
+        textView.onFind = { [weak self] in self?.end("find", notify: true) }
         textView.onFilterKey = nil
         textView.listKeys = false
+        textView.findKeys = false
         textView.onMergeBackward = plain ? nil : { [weak self] in
             guard let self, !self.ended else { return }
             self.flush(force: true)
@@ -553,6 +567,7 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         if textView.delegate === self {
             textView.delegate = nil
             textView.onEscape = {}
+            textView.onFind = nil
             textView.onMergeBackward = nil
             textView.onSplit = nil
             textView.onHoldTimeout = {}
@@ -566,11 +581,13 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
 
 /// The sidebar's filter field while it holds the keyboard: the edit panel and text view, with the text streamed to the host and
 /// the list keys forwarded. A list session (a click on a row) has no text: it forwards the list keys only, and Esc or Space
-/// ends it. It has no path to any file.
+/// ends it. A find session is the find field's: its text, and the next and previous keys; Esc ends it. It has no path to any
+/// file.
 final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
     static var current: FilterSession?
     let id: Int
     let list: Bool
+    let find: Bool
     weak var owner: Writer?
     private let surface = EditSurface.shared
     private var textView: EditTextView { surface.textView }
@@ -583,10 +600,11 @@ final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         s.end(reason, notify: true)
     }
 
-    init(owner: Writer, id: Int, text: String, list: Bool = false, frame: NSRect, host: SpacebarEditHostProtocol) {
+    init(owner: Writer, id: Int, text: String, list: Bool = false, find: Bool = false, frame: NSRect, host: SpacebarEditHostProtocol) {
         self.owner = owner
         self.id = id
         self.list = list
+        self.find = find
         self.host = host
         super.init()
         let panel = surface.panel
@@ -605,7 +623,9 @@ final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         textView.delegate = self
         textView.onEscape = { [weak self] in self?.escape() }
         textView.onHoldTimeout = {}
+        textView.onFind = nil
         textView.listKeys = list
+        textView.findKeys = find
         textView.onFilterKey = { [weak self] key, isRepeat in
             guard let self, !self.ended else { return }
             if !self.list { self.flush() }
@@ -620,7 +640,7 @@ final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
     @objc private func appActivated(_ n: Notification) { end("app-activated", notify: true) }
 
     private func escape() {
-        if list || FilterKeys.escapeEnds(text: textView.string) { return end("escape", notify: true) }
+        if list || find || FilterKeys.escapeEnds(text: textView.string) { return end("escape", notify: true) }
         textView.string = ""
         textView.undoManager?.removeAllActions()
         flush()
@@ -656,8 +676,10 @@ final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         if textView.delegate === self {
             textView.delegate = nil
             textView.onEscape = {}
+            textView.onFind = nil
             textView.onFilterKey = nil
             textView.listKeys = false
+            textView.findKeys = false
         }
         if hide { surface.panel.orderOut(nil) }
         if notify { host.filterEnded(id, reason: reason) }

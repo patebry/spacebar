@@ -44,6 +44,13 @@ struct Settings: Codable, Equatable {
     var spaceHelper = false
     /// The welcome sheet has offered the helper once; an upgrade that already dismissed the sheet sees only that step.
     var helperOffered = false
+    /// The toolbar's Formatted/Raw toggle, remembered per kind: on shows the file's text as it is.
+    var rawMarkdown = false
+    var rawJSON = false
+    var rawNotebook = false
+    var rawCSV = false
+    var rawXML = false
+    var rawCSS = false
 
     /// 2: folder previews became on by default. A file written before that stores the old default, false, so it reads as on
     /// until SettingsFile.update rewrites it; a user who turns them off afterwards stays off.
@@ -69,9 +76,10 @@ struct Settings: Codable, Equatable {
     ]
     static let intRanges: [String: ClosedRange<Int>] = ["fontSize": 12...24, "sidebarWidth": 160...480]
     static let doubleRanges: [String: ClosedRange<Double>] = ["lineHeight": 1.2...2.0]
-    static let boolKeys: Set<String> = ["customCSS", "inlineEditing", "taskToggles", "folderMode", "folderReadmeFirst", "stats", "math",
+    static let boolKeys: Set<String> = Set(["customCSS", "inlineEditing", "taskToggles", "folderMode", "folderReadmeFirst", "stats", "math",
                                         "mermaid", "remoteImages", "sidebarCollapsed", "sidebarKeys", "showHiddenFiles", "minimalChrome", "checkUpdates",
-                                        "welcomeShown", "spaceHelper", "helperOffered"]
+                                        "welcomeShown", "spaceHelper", "helperOffered"]).union(rawKeys)
+    static let rawKeys: Set<String> = ["rawMarkdown", "rawJSON", "rawNotebook", "rawCSV", "rawXML", "rawCSS"]
     /// Keys whose value is a string or null, each checked by its own pattern.
     static let optionalKeys: Set<String> = ["userTheme", "editorBundleID"]
     static var allKeys: Set<String> { Set(choices.keys).union(intRanges.keys).union(doubleRanges.keys).union(boolKeys).union(optionalKeys) }
@@ -79,7 +87,8 @@ struct Settings: Codable, Equatable {
     /// so even a page that was somehow scripted can restyle the preview but never pick a CSS file, an editor app, or what is
     /// rendered or opened. folderSort only reorders what is listed; showHiddenFiles would list, and so open, more, so it is
     /// changed in the settings window only.
-    static let panelKeys: Set<String> = ["theme", "appearance", "fontSize", "width", "bodyFont", "sidebarCollapsed", "sidebarWidth", "folderSort"]
+    static let panelKeys: Set<String> = Set(["theme", "appearance", "fontSize", "width", "bodyFont", "sidebarCollapsed", "sidebarWidth", "folderSort"])
+        .union(rawKeys)
 
     /// A panel change as the JSON patch the writer takes, or nil when the key is not a panel key or the value does not
     /// sanitize (sidebarCollapsed takes a JSON boolean only, never a number or a string; sidebarWidth a number, clamped).
@@ -162,6 +171,8 @@ struct Settings: Codable, Equatable {
         take(.toc, \.toc); take(.stats, \.stats); take(.mdLinks, \.mdLinks); take(.webLinks, \.webLinks)
         take(.math, \.math); take(.mermaid, \.mermaid); take(.rawHTML, \.rawHTML); take(.remoteImages, \.remoteImages); take(.checkUpdates, \.checkUpdates); take(.htmlScripts, \.htmlScripts)
         take(.welcomeShown, \.welcomeShown); take(.spaceHelper, \.spaceHelper); take(.helperOffered, \.helperOffered)
+        take(.rawMarkdown, \.rawMarkdown); take(.rawJSON, \.rawJSON); take(.rawNotebook, \.rawNotebook); take(.rawCSV, \.rawCSV)
+        take(.rawXML, \.rawXML); take(.rawCSS, \.rawCSS)
         self = s
     }
 

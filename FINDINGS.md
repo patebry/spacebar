@@ -141,9 +141,12 @@ uses the same path: while the writer's panel has the keys, the helper passes eve
   lays out only the block it touches, and are highlighted again when the edit ends. In the offscreen page harness, a
   keystroke's paint and layout took 2–5 ms for a 20 KB file, highlighted, and 1–3 ms for a 2 MB file; drawing the 2 MB file as
   one text node took about 100 ms.
-- **JSON and CSV** keep their tree and table; an **Edit** toggle flips them to the file's text to edit, and back. While JSON does
-  not parse, a note says where (line and column, found by a scan without recursion) and that it is saved as typed; `.jsonc`
-  and `.json5` get no warning.
+- **JSON and CSV** keep their tree and table; the toolbar's **Raw** shows the file's text, and a click in it edits it, as in any
+  code or text file (there is no separate Edit button: one way to the text, one way to edit it). XML and minified CSS shown
+  formatted edit the same way, through Raw; Markdown source under Raw stays read only, since the rendered view edits blocks.
+  ⌘F while editing ends the edit (every change is already saved) and opens find; ⌘C copies the edit's selection. While JSON
+  does not parse, a note says where (line and column, found by a scan without recursion) and that it is saved as typed;
+  `.jsonc` and `.json5` get no warning.
 - **Live reload and conflicts** are as for Markdown: a read that finds the bytes this preview saved is dropped, one that may
   predate a write in flight is dropped (the write reads again), anything else ends the edit ("changed on disk"), and a
   conflicting save reloads the file's own text. `.env` is editable: the risk behind keeping it in the preview was handing it
@@ -155,7 +158,7 @@ uses the same path: while the writer's panel has the keys, the helper passes eve
 - **A writer that restarts** forgets what was typed, so unsaved text it did not see written (a refused character, a failed
   save) can no longer be saved: the preview says so, keeps the text on screen to copy, and lets the user leave the file.
 
-Checked in `test/sidebar.py` (click-to-edit per type, the Edit toggles, the JSON warning, saving in the file's encoding through
+Checked in `test/sidebar.py` (click-to-edit per type, Raw as the way to edit JSON, CSV and XML, the JSON warning, saving in the file's encoding through
 the harness's stand-in for the extension, 60 changes in a row kept exact in both drawings, and what is never editable).
 
 ## Double-click recognizer fix

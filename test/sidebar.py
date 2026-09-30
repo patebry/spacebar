@@ -236,7 +236,7 @@ EDITOR = """const p = document.querySelector('#doc pre.code.text-editing');
 def text_editing(page, check, out, view, T):
     """Click-to-edit for every text-like file: a click on the text starts an edit of the whole file (the page asks with "editText"),
     changes arrive as the extension sends them and are saved in the file's own encoding (the harness's @type stands in for the
-    writer and the extension), the JSON and CSV views' Edit toggle, the quiet invalid-JSON warning, and what is never editable."""
+    writer and the extension), Raw on the JSON, CSV and XML views as the way to their text to edit, the quiet invalid-JSON warning, and what is never editable."""
     types = lambda r: [m.get('type') for m in r['messages']]
     d = os.path.join(out, 'edit')
     os.makedirs(d)
@@ -254,13 +254,19 @@ def text_editing(page, check, out, view, T):
 
     for n in ('notes.txt', 'conf.yaml', 'Cargo.toml', 'pom.xml', 'setup.ini', 'nginx.conf', '.env', 'Makefile', 'code.ts', 'notes.tsv'):
         view(E(n), root=d)
-        if n == 'notes.tsv':
-            click(page, '#doc .viewer-edit')
+        formatted = n in ('notes.tsv', 'pom.xml')
+        if formatted:
+            page.cmd('@nativeclick:#raw')
         r = click(page, '#doc pre.code')
         e = page.js(EDITOR)
         check(asked(r, n) and e and e['text'] == files[n] and e['caret'] and int(asked(r, n)[0]['len']) == len(files[n]),
-              f'click-to-edit: {n} is edited in place, the whole file', json.dumps([types(r), e])[:300])
+              f'click-to-edit: {n} is edited in place, the whole file{" (Raw)" if formatted else ""}', json.dumps([types(r), e])[:300])
         end()
+        if formatted:
+            page.cmd('@nativeclick:#raw')
+    view(E('pom.xml'), root=d)
+    r = click(page, '#doc pre.code')
+    check(not asked(r, 'pom.xml'), 'XML: the indented view is not the file, and a click on it edits nothing')
 
     view(E('code.ts'), root=d)
     click(page, '#doc pre.code')
@@ -311,10 +317,10 @@ def text_editing(page, check, out, view, T):
     end()
 
     view(E('data.json'), root=d)
-    b = page.js("const b = document.querySelector('#doc .viewer-edit'); return b && [b.textContent, b.getAttribute('aria-pressed'), !!document.querySelector('#doc .json-tree')]")
-    click(page, '#doc .viewer-edit')
-    raw = page.js("return [!!document.querySelector('#doc pre.code[data-file-text]'), document.querySelector('#doc .viewer-edit').getAttribute('aria-pressed'), (document.querySelector('#doc pre.code') || {}).textContent]")
-    check(b == ['Edit', 'false', True] and raw == [True, 'true', files['data.json']], 'JSON: the Edit toggle flips the tree to the file\'s text', json.dumps([b, raw]))
+    b = page.js("const b = document.getElementById('raw'); return [b.hidden, b.getAttribute('aria-pressed'), !!document.querySelector('#doc .json-tree'), !document.querySelector('#doc .viewer-edit')]")
+    page.cmd('@nativeclick:#raw')
+    raw = page.js("return [!!document.querySelector('#doc pre.code[data-file-text]'), document.getElementById('raw').getAttribute('aria-pressed'), (document.querySelector('#doc pre.code') || {}).textContent]")
+    check(b == [False, 'false', True, True] and raw == [True, 'true', files['data.json']], 'JSON: Raw flips the tree to the file\'s text, which a click edits; there is no separate Edit button', json.dumps([b, raw]))
     r = click(page, '#doc pre.code')
     bad = '{"a": [1, 2], "b": {"c": tru}}\n'
     res = typ(bad, 25)
@@ -326,32 +332,35 @@ def text_editing(page, check, out, view, T):
     typ('{"a": [1, 2], "b": {"c": false}}\n', 30)
     page.cmd('@wait:0.4')
     check(page.js("return document.querySelectorAll('#doc .json-warn').length") == 0, 'JSON: the warning goes once the text is JSON again')
-    r = click(page, '#doc .viewer-edit')
+    r = page.cmd('@nativeclick:#raw')
     page.cmd('@wait:0.2')
     tr = page.js("return [...document.querySelectorAll('#doc .json-tree .jt-row')].map((r) => r.textContent)")
     check('editStop' in types(r) and any('false' in x for x in tr) and not page.js("return document.querySelector('#doc pre.text-editing')"),
-          'JSON: the toggle again ends the edit and shows the tree of the edited text', json.dumps([types(r), tr])[:300])
+          'JSON: Raw again ends the edit and shows the tree of the edited text', json.dumps([types(r), tr])[:300])
     click(page, '#doc .viewer-toggle[data-mode=formatted]')
     r = click(page, '#doc pre.code')
     check(not asked(r, 'data.json'), 'JSON: formatted text is not the file, and a click on it edits nothing')
 
     view(E('table.csv'), root=d)
-    click(page, '#doc .viewer-edit')
+    page.cmd('@nativeclick:#raw')
     r = click(page, '#doc pre.code')
     res = typ('name,qty\napple,3\npear,5\nfig,7\n', 30)
-    click(page, '#doc .viewer-edit')
+    page.cmd('@nativeclick:#raw')
     page.cmd('@wait:0.2')
     rows = page.js("return [...document.querySelectorAll('#doc table.csv tbody tr')].map((r) => [...r.cells].map((c) => c.textContent))")
     check(asked(r, 'table.csv') and res == 'saved' and rows == [['1', 'apple', '3'], ['2', 'pear', '5'], ['3', 'fig', '7']]
-          and open(E('table.csv')).read().endswith('fig,7\n'), 'CSV: the Edit toggle flips the table to its text to edit, and back to the edited table', json.dumps([res, rows]))
+          and open(E('table.csv')).read().endswith('fig,7\n'), 'CSV: Raw flips the table to its text to edit, and back to the edited table', json.dumps([res, rows]))
 
     page.apply(inlineEditing=False)
     view(E('code.ts'), root=d)
     r = click(page, '#doc pre.code')
     off = page.js("return [!!document.querySelector('#doc pre.text-editing'), getComputedStyle(document.querySelector('#doc pre.code')).cursor]")
     view(E('data.json'), root=d)
-    check(not asked(r, 'code.ts') and off == [False, 'auto'] and not page.js("return document.querySelector('#doc .viewer-edit')"),
-          'inline editing off: no click-to-edit and no Edit toggle', json.dumps(off))
+    page.cmd('@nativeclick:#raw')
+    rj = click(page, '#doc pre.code')
+    page.cmd('@nativeclick:#raw')
+    check(not asked(r, 'code.ts') and not asked(rj, 'data.json') and off == [False, 'auto'],
+          'inline editing off: no click-to-edit, in code or in raw JSON', json.dumps(off))
     page.apply(inlineEditing=True)
 
     for n, why in (('huge.log', 'over 2 MB, shown cut'), ('hosts.txt', 'a link to a file of another name'), ('blob.dat', 'binary')):
@@ -728,7 +737,7 @@ def viewers(page, check, out, st):
     check(nb['h1'] == 'Notebook title' and nb['katex'] >= 1 and nb['task'] == [True, False] and nb['prompts'] == ['[1]:', '[2]:', '[3]:', '[4]:', '[ ]:'] and nb['kw'] > 0
           and nb['outs'] == ['42\n', '2', 'ZeroDivisionError: division by zero'] and nb['imgs'] == [['data:image/png;base64,', 40]]
           and nb['bad'] == 0 and nb['notes'] == ['HTML output is not shown.'] and nb['src'] == 0
-          and nb['modes'] == [['Notebook', 'true'], ['Tree', 'false'], ['Raw', 'false']] and not page.js('return window.__pwned || null'),
+          and nb['modes'] == [['Notebook', 'true'], ['Tree', 'false']] and not page.js('return window.__pwned || null'),
           'notebook: Markdown cells rendered and sanitized, code highlighted, text and image outputs, errors without ANSI codes, no HTML output',
           json.dumps(nb)[:600])
     shoot(page, 'notebook')
@@ -737,6 +746,261 @@ def viewers(page, check, out, st):
     r = page.cmd('@nativeclick:#doc .nb-bait')
     check(page.js("return !!document.querySelector('#doc .nb-bait')") and not [m for m in r['messages'] if m.get('type') in ('reveal', 'openFile', '_reveal', '_openFile')],
           "notebook: a Markdown cell's data-action markup reveals and opens nothing")
+    page.cmd('@root:')
+
+
+def make_tools(out):
+    """Files for the toolbar's tools: Markdown, JSON with matches deep in the tree and past a chunk, a notebook, a long table, a
+    2 MB script, a property list, a minified and a plain stylesheet, TypeScript and an image."""
+    d = os.path.join(out, 'tools')
+    os.makedirs(d)
+    put = lambda n, data: open(os.path.join(d, n), 'wb' if isinstance(data, bytes) else 'w').write(data)
+    put('notes.md', '# Needle notes\n\nA needle, a NEEDLE and a haystack.\n\n```js\nconst needle = 1;\n```\n\n- [ ] find the needle\n')
+    put('tree.json', json.dumps({'items': [{'k': 'x'}] * 900 + [{'k': 'needle'}], 'deep': {'a': {'b': {'c': {'needle': 1}}}}, 'flat': 'hay'}))
+    put('cells.ipynb', json.dumps({'nbformat': 4, 'nbformat_minor': 5, 'metadata': {}, 'cells': [
+        {'cell_type': 'markdown', 'metadata': {}, 'source': ['# Needle cell\n']},
+        {'cell_type': 'code', 'execution_count': 1, 'metadata': {}, 'source': ['needle = 1'], 'outputs': []}]}))
+    put('rows.csv', 'n,word\n' + ''.join(f'{i},{"needle" if i % 1000 == 7 else "hay"}\n' for i in range(20000)))
+    lines = [f'function f{i}(a) {{ return a + {i}; }} // {"needle " + str(i) if i % 2000 == 999 else "hay"}\n' for i in range(60000)]
+    big = ''
+    for l in lines:
+        if len(big) + len(l) > 2 * 1000 * 1000:
+            break
+        big += l
+    put('big.js', big)
+    put('info.plist', '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>Name</key><string>a &amp; b</string>'
+                      '<key>List</key><array><integer>1</integer><integer>2</integer></array><!-- note --></dict></plist>')
+    put('min.css', ('.a{color:red;background:url(data:image/png;base64,AA;BB)}.b>c,d:hover{margin:0 auto;content:"x;}{y"}'
+                    '@media (max-width:10px){.e{top:0}}') * 40)
+    put('plain.css', '.a {\n  color: red;\n}\n')
+    put('code.ts', 'export const needle = 1;\n')
+    shutil.copy(os.path.join(ROOT, 'test', 'fixtures', 'img.png'), os.path.join(d, 'pic.png'))
+    return d, big
+
+
+def tools(page, check, out):
+    """The toolbar's Copy, Find and Formatted/Raw: which views show them, what Copy copies (the harness records it; the clipboard
+    is never touched), find's matches, count and steps in the text on screen, a windowed table, a 2 MB script and a JSON tree,
+    its key sessions, and the Raw toggle per kind, remembered as a panel setting."""
+    d, big = make_tools(out)
+    D = lambda n: os.path.join(d, n)
+    msgs = lambda r, t: [m for m in r['messages'] if m.get('type') == t]
+    flag = lambda m, k: str(m.get(k)).lower() in ('1', 'true')
+    TOOLS = "return ['raw', 'find-btn', 'copy'].map((id) => document.getElementById(id).hidden ? '' : id).filter(Boolean)"
+    STATE = """const c = CSS.highlights, n = (k) => (c.get(k) ? c.get(k).size : 0);
+      return { open: !document.getElementById('find').hidden, count: document.getElementById('find-count').textContent, all: n('sb-find'), cur: n('sb-find-cur'),
+        text: c.get('sb-find-cur') && c.get('sb-find-cur').size ? [...c.get('sb-find-cur')][0].toString() : null };"""
+
+    def view(name):
+        page.cmd('@root:' + d)
+        r = page.render(D(name))
+        page.cmd('@wait:0.3')
+        return r
+
+    def find(text):
+        page.cmd("@eval:(() => { const q = document.getElementById('find-q'); q.value = " + json.dumps(text) + "; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
+        page.cmd('@wait:0.2')
+        return page.js(STATE)
+
+    def cmd(c, wait=0.3):
+        r = page.cmd(c)
+        w = page.cmd(f'@wait:{wait}')
+        return {'result': r['result'], 'messages': r['messages'] + w['messages']}
+
+    def key(k, **mods):
+        opts = dict(key=k, bubbles=True, cancelable=True, **mods)
+        return cmd('@eval:(() => { const e = new KeyboardEvent("keydown", ' + json.dumps(opts) + '); document.body.dispatchEvent(e); return String(e.defaultPrevented); })()')
+
+    def enter(shift=False):
+        page.cmd("@eval:(() => { document.getElementById('find-q').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: " + ('true' if shift else 'false')
+                 + ", bubbles: true, cancelable: true })); return 0; })()")
+        page.cmd('@wait:0.1')
+        return page.js(STATE)
+
+    page.cmd('@size:1100x760')
+    # ---- which view shows which tool ----
+    shown = {}
+    for n in ('notes.md', 'tree.json', 'cells.ipynb', 'rows.csv', 'info.plist', 'min.css', 'plain.css', 'code.ts', 'big.js', 'pic.png'):
+        view(n)
+        shown[n] = page.js(TOOLS)
+    check(shown == {'notes.md': ['raw', 'find-btn', 'copy'], 'tree.json': ['raw', 'find-btn', 'copy'], 'cells.ipynb': ['raw', 'find-btn', 'copy'],
+                    'rows.csv': ['raw', 'find-btn', 'copy'], 'info.plist': ['raw', 'find-btn', 'copy'], 'min.css': ['raw', 'find-btn', 'copy'],
+                    'plain.css': ['find-btn', 'copy'], 'code.ts': ['find-btn', 'copy'], 'big.js': ['find-btn', 'copy'], 'pic.png': []},
+          'toolbar: Copy and Find for every text view, Raw only where the view is formatted, none for an image', json.dumps(shown))
+
+    # ---- Copy ----
+    view('notes.md')
+    r = click(page, '#copy')
+    check(not msgs(r, 'copy'), 'copy: a synthetic click copies nothing')
+    r = page.cmd('@nativeclick:#copy')
+    c = msgs(r, '_copied')
+    st = page.js("return [document.getElementById('status').textContent, document.getElementById('copy').classList.contains('done')]")
+    check(len(msgs(r, 'copy')) == 1 and len(c) == 1 and c[0]['text'] == open(D('notes.md')).read() and st == ['Copied', True],
+          'copy: the button copies the Markdown source, and says so', json.dumps([c, st])[:300])
+    view('rows.csv')
+    r = page.cmd('@nativeclick:#copy')
+    c = msgs(r, '_copied')
+    check(len(c) == 1 and c[0]['text'] == open(D('rows.csv')).read(), 'copy: a table copies its file text, not the table', str(len(c)))
+    page.cmd("@eval:getSelection().removeAllRanges(); 0")
+    r = key('c', metaKey=True)
+    c = msgs(r, '_copied')
+    check(r['result'] == 'true' and len(c) == 1 and c[0]['text'] == open(D('rows.csv')).read(), '⌘C with nothing selected copies the whole file', json.dumps(r['result']))
+    page.cmd("@eval:(() => { const td = document.querySelector('#doc table.csv tbody td'); getSelection().selectAllChildren(td); return 0; })()")
+    r = key('c', metaKey=True)
+    check(r['result'] == 'false' and not msgs(r, 'copy'), '⌘C with a selection is left to the ordinary copy', json.dumps(r['result']))
+    page.cmd("@eval:getSelection().removeAllRanges(); 0")
+    r = cmd('@eval:window.webkit.messageHandlers.sb.postMessage(' + json.dumps({'type': 'copy', 'path': D('notes.md')}) + '); 0')
+    check(msgs(r, '_copyRefused') and not msgs(r, '_copied'), 'copy: only the file on screen is copied')
+    view('pic.png')
+    r = cmd('@eval:window.webkit.messageHandlers.sb.postMessage(' + json.dumps({'type': 'copy', 'path': D('pic.png')}) + '); 0')
+    check(msgs(r, '_copyRefused') and not msgs(r, '_copied'), 'copy: an image has no text to copy')
+
+    # ---- Find: the text on screen ----
+    view('notes.md')
+    r = page.cmd('@nativeclick:#find-btn')
+    fb = msgs(r, 'filterBegin')
+    seq = int(fb[0]['seq']) if fb else -1
+    check(len(fb) == 1 and flag(fb[0], 'find') and not flag(fb[0], 'list') and page.js("return document.getElementById('find-q').classList.contains('held')")
+          and page.js(STATE)['open'], 'find: the button opens the bar and asks for the key panel over its field', json.dumps(fb))
+    page.cmd('@eval:sb.filterText(' + json.dumps({'seq': seq, 'text': 'needle'}) + '); 0')
+    page.cmd('@wait:0.2')
+    f1 = page.js(STATE)
+    page.cmd('@eval:sb.filterKey(' + json.dumps({'seq': seq, 'key': 'next'}) + '); 0')
+    f2 = page.js(STATE)
+    page.cmd('@eval:sb.filterKey(' + json.dumps({'seq': seq, 'key': 'prev'}) + '); sb.filterKey(' + json.dumps({'seq': seq, 'key': 'prev'}) + '); 0')
+    f3 = page.js(STATE)
+    page.cmd('@eval:sb.filterKey(' + json.dumps({'seq': seq + 5, 'key': 'next'}) + '); sb.filterKey(' + json.dumps({'seq': seq, 'key': 'down'}) + '); 0')
+    f4 = page.js(STATE)
+    check(f1['count'] == '1 of 5' and f1['cur'] == 1 and f1['all'] == 4 and f1['text'] == 'Needle' and f2['count'] == '2 of 5'
+          and f3['count'] == '5 of 5' and f4['count'] == '5 of 5' and not page.js("return document.querySelector('#doc mark')"),
+          'find: case-insensitive matches in headings, text, code and tasks, counted; next, previous and around; stray keys ignored; the DOM untouched',
+          json.dumps([f1, f2, f3, f4]))
+    check(enter()['count'] == '1 of 5' and enter(shift=True)['count'] == '5 of 5', 'find: ↵ and ⇧↵ in the field when the page has the keys')
+    steps = []
+    for k in ('next', 'next', 'prev'):
+        # As the writer does: the field's text again before each key.
+        page.cmd('@eval:sb.filterText(' + json.dumps({'seq': seq, 'text': 'needle'}) + '); sb.filterKey(' + json.dumps({'seq': seq, 'key': k}) + '); 0')
+        steps.append(page.js(STATE)['count'])
+    check(steps == ['1 of 5', '2 of 5', '1 of 5'], 'find: the text sent again before each key does not start the search over', json.dumps(steps))
+    check(find('haystack!')['count'] == 'No matches' and find('')['count'] == '' and page.js(STATE)['all'] == 0, 'find: no matches, and an empty field, say so')
+    r = page.cmd('@eval:sb.filterEnd(' + json.dumps({'seq': seq, 'reason': 'escape'}) + '); 0')
+    f = page.js(STATE)
+    check(not f['open'] and f['all'] == 0 and f['cur'] == 0 and not page.js("return document.getElementById('find-q').classList.contains('held')"),
+          'find: Esc in the key panel closes the bar and clears the matches', json.dumps(f))
+    r = key('f', metaKey=True)
+    fb = msgs(r, 'filterBegin')
+    check(r['result'] == 'true' and page.js(STATE)['open'] and len(fb) == 1 and flag(fb[0], 'find'), '⌘F opens find when the page has the keys', json.dumps(fb))
+    r = key('ƒ', metaKey=True, altKey=True, code='KeyF')
+    fb = msgs(r, 'filterBegin')
+    check(r['result'] == 'true' and len(fb) == 1 and not flag(fb[0], 'find') and page.js("return document.getElementById('side-q').classList.contains('held')"),
+          "⌥⌘F takes the sidebar's filter field instead", json.dumps(fb))
+    page.cmd('@eval:sb.filterEnd({ all: true }); 0')
+    lb = msgs(cmd('@eval:sb.listKeysWanted(' + json.dumps({'root': d}) + '); 0'), 'filterBegin')
+    lseq = int(lb[0]['seq']) if lb else -1
+    r = cmd('@eval:sb.filterKey(' + json.dumps({'seq': lseq, 'key': 'find'}) + '); 0')
+    types_ = [m.get('type') for m in r['messages']]
+    fb = msgs(r, 'filterBegin')
+    check(lb and flag(lb[0], 'list') and 'filterStop' in types_ and len(fb) == 1 and flag(fb[0], 'find') and types_.index('filterStop') < types_.index('filterBegin'),
+          '⌘F in a list session: the list session ends and a find session begins', json.dumps(types_))
+    r = cmd("@eval:document.getElementById('find-close').click(); 0")
+    check(not page.js(STATE)['open'] and msgs(r, 'filterStop'), 'find: the close button closes it and lets the key panel go')
+
+    # ---- Find in a windowed table: the model is searched, the row scrolled to and drawn ----
+    view('rows.csv')
+    page.cmd('@nativeclick:#find-btn')
+    f1 = find('needle')
+    for _ in range(14):
+        enter()
+    row = page.js("""const r = [...CSS.highlights.get('sb-find-cur')][0], tr = r.startContainer.parentElement.closest('tr'), s = document.querySelector('#doc .csv-scroll');
+      const a = tr.getBoundingClientRect(), b = s.getBoundingClientRect();
+      return [tr.cells[0].textContent, r.toString(), a.top >= b.top && a.bottom <= b.bottom, s.scrollTop > 0, document.querySelectorAll('#doc table.csv tbody tr:not(.pad)').length < 200];""")
+    f2 = page.js(STATE)
+    check(f1['count'] == '1 of 20' and f2['count'] == '15 of 20' and row == ['14008', 'needle', True, True, True],
+          'find in a windowed CSV: 20 matches in 20,000 rows; the 15th row is scrolled to, drawn and highlighted', json.dumps([f1, f2, row]))
+    f3 = enter(shift=True)
+    f4 = find('HAY')
+    check(f3['count'] == '14 of 20' and f4['count'] == '1 of 10,000+' and f4['cur'] == 1, 'find in a CSV: back one; a common word stops counting at 10,000', json.dumps([f3, f4]))
+    page.cmd('@nativeclick:#raw')
+    f5 = find('needle')
+    check(f5['count'] == '1 of 20' and page.js("return !!document.querySelector('#doc .viewer-csv-raw pre.code')"), 'find in a raw CSV: the text is searched', json.dumps(f5))
+    page.cmd('@nativeclick:#raw')
+
+    # ---- Find in 2 MB of code ----
+    view('big.js')
+    page.cmd('@wait:0.5')
+    check(page.js(STATE)['open'], 'find: stays open on the next text file')
+    key('f', metaKey=True)
+    t = page.js("""finder.q = 'NEEDLE'; const t0 = performance.now(); findSearch(false); findGo(0); const t1 = performance.now(); findStep(-1); const t2 = performance.now();
+      const r = [...CSS.highlights.get('sb-find-cur')][0].getBoundingClientRect();
+      return [Math.round(t1 - t0), Math.round(t2 - t1), document.getElementById('find-count').textContent, r.top > 0 && r.bottom < innerHeight, window.scrollY > 0];""")
+    n = big.lower().count('needle')
+    check(t[2] == f'{n} of {n}' and t[3] and t[4] and t[0] < 400 and t[1] < 400,
+          f'find in 2 MB of code: {n} matches, the last scrolled into view, each step well under half a second', json.dumps(t))
+    f = find('function')
+    check(f['count'] == '1 of 10,000+' and f['all'] <= 150, 'find in 2 MB of code: only the matches near the screen are drawn', json.dumps(f))
+
+    # ---- Find in a JSON tree: the model is searched, and a closed branch opens to the match ----
+    view('tree.json')
+    key('f', metaKey=True)
+    f1 = find('needle')
+    rows = lambda: page.js("""const r = [...CSS.highlights.get('sb-find-cur')][0], row = r.startContainer.parentElement.closest('.jt-row');
+      return [row.dataset.ptr, r.toString(), row.getBoundingClientRect().top > 0 && row.getBoundingClientRect().bottom < innerHeight];""")
+    r1 = rows()
+    f2 = enter()
+    r2 = rows()
+    check(f1['count'] == '1 of 2' and r1 == ['/items/900/k', 'needle', True] and f2['count'] == '2 of 2' and r2 == ['/deep/a/b/c/needle', 'needle', True],
+          'find in a JSON tree: a match past the first 500 items and one four levels down are opened, drawn and scrolled to', json.dumps([f1, r1, r2]))
+    page.cmd("@eval:document.getElementById('find-close').click(); 0")
+
+    # ---- Formatted / Raw, per kind, remembered ----
+    view('notes.md')
+    r = page.cmd('@nativeclick:#raw')
+    m = page.js("""const b = document.getElementById('raw'); return [b.getAttribute('aria-pressed'), b.title, (document.querySelector('#doc .viewer-source pre.code') || {}).textContent,
+      document.querySelectorAll('#doc > [data-src]').length];""")
+    written = [x.get('patch') for x in msgs(r, '_written')]
+    check(m[:3] == ['true', 'Show formatted', open(D('notes.md')).read()] and m[3] == 0 and written == ['{"rawMarkdown":true}'],
+          'raw: Markdown shows its source, read only, and the choice is saved as a panel setting', json.dumps([m[:2], m[3], written]))
+    r = click(page, '#doc .viewer-source pre.code')
+    check(not msgs(r, 'editBlock'), 'raw: a click in the source edits nothing')
+    view('tree.json')
+    check(page.js("return [!!document.querySelector('#doc .json-tree'), document.getElementById('raw').getAttribute('aria-pressed')]") == [True, 'false'],
+          'raw: remembered per kind (JSON is still a tree)')
+    saved = json.load(open(os.path.join(page.support, 'settings.json')))
+    view('notes.md')
+    check(saved.get('rawMarkdown') is True and saved.get('rawJSON') is not True
+          and page.js("return [!!document.querySelector('#doc .viewer-source'), document.getElementById('raw').getAttribute('aria-pressed')]") == [True, 'true'],
+          'raw: settings.json keeps it for the next preview, and Markdown opens as source again', json.dumps({k: v for k, v in saved.items() if k.startswith('raw')}))
+    page.cmd('@nativeclick:#raw')
+    check(page.js("return [document.querySelector('#doc > h1').textContent, document.getElementById('raw').title]") == ['Needle notes', 'Show Markdown source'],
+          'raw: and back to rendered')
+    view('cells.ipynb')
+    page.cmd('@nativeclick:#raw')
+    nb = page.js("return [(document.querySelector('#doc pre.code') || {}).textContent, document.querySelectorAll('#doc .nb-cell, #doc .viewer-toggle').length]")
+    page.cmd('@nativeclick:#raw')
+    check(nb == [open(D('cells.ipynb')).read(), 0] and page.js("return document.querySelectorAll('#doc .nb-cell').length") == 2,
+          'raw: a notebook shows its JSON, then its cells again', json.dumps(nb)[:200])
+    view('info.plist')
+    pretty = page.js("return document.querySelector('#doc pre.code').textContent")
+    page.cmd('@nativeclick:#raw')
+    raw = page.js("return document.querySelector('#doc pre.code').textContent")
+    page.cmd('@nativeclick:#raw')
+    check(pretty.startswith('<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0">\n  <dict>\n    <key>Name</key>\n    <string>a &amp; b</string>')
+          and '    <array>\n      <integer>1</integer>' in pretty and raw == open(D('info.plist')).read(),
+          'raw: a property list is indented, or shown as is', json.dumps(pretty[:200]))
+    view('min.css')
+    pretty = page.js("return document.querySelector('#doc pre.code').textContent")
+    page.cmd('@nativeclick:#raw')
+    raw = page.js("return document.querySelector('#doc pre.code').textContent")
+    page.cmd('@nativeclick:#raw')
+    check(pretty.startswith('.a {\n  color:red;\n  background:url(data:image/png;base64,AA;BB)\n}\n\n.b>c,d:hover {\n  margin:0 auto;\n  content:"x;}{y"\n}\n\n@media (max-width:10px) {\n  .e {\n    top:0\n  }\n}')
+          and raw == open(D('min.css')).read(), 'raw: minified CSS is laid out a declaration to a line (strings and url() kept whole), or shown as is', json.dumps(pretty[:160]))
+    t = page.js("""const t0 = performance.now(); const a = prettyXML('<!DOCTYPE a ' + '[]'.repeat(100000)), b = prettyCSS('/* '.repeat(700000));
+      const c = prettyXML('<plist><dict><string>  two spaces </string></dict></plist>');
+      return [Math.round(performance.now() - t0), a, b.length > 0, c];""")
+    check(t[0] < 1000 and t[1] is None and t[2] and '<string>  two spaces </string>' in t[3],
+          'raw: hostile XML and CSS format in linear time; a string value keeps its spaces', json.dumps(t)[:200])
+    r = cmd('@eval:window.webkit.messageHandlers.sb.postMessage(' + json.dumps({'type': 'setting', 'key': 'rawJSON', 'value': 'yes'}) + '); 0')
+    check(msgs(r, '_settingRefused') and not msgs(r, '_written'), 'raw: a setting that is not a boolean is refused')
     page.cmd('@root:')
 
 
@@ -824,7 +1088,9 @@ def keys_and_filter(page, check, T, st, types):
     check(ed and not any(k['taken'] or opened(k) for k in during) and 'editStop' not in sum((k['types'] for k in during), []),
           'keys: nothing is taken while a block is being edited', json.dumps([k['types'] for k in during]))
     fk = key('f', metaKey=True)
-    check(not fk['taken'] and page.js(CURSOR)['focus'] != 'side-q', 'keys: ⌘F is not bound (Quick Look never passes it to the page)')
+    check(fk['taken'] and page.js(CURSOR)['focus'] != 'side-q' and not st()['editing'] and not page.js("return document.getElementById('find').hidden"),
+          "keys: ⌘F finds in the file, ending the edit, and never takes the sidebar's filter")
+    page.cmd("@eval:document.getElementById('find-close').click(); 0")
     page.cmd('@eval:sb.editEnd({}); 0')
 
     # ---- the filter, typed into the page's own field ----
@@ -1236,9 +1502,31 @@ def panel_host(check):
               'panel: zoom on a document, ← and unknown keys are left to the panel')
         r = page.cmd("@eval:sb.hostKey({ key: 'find' })")
         fb = msgs(r, 'filterBegin')
-        check(r['result'] in (True, 'true', 1) and len(fb) == 1 and 'list' not in fb[0] and page.js("return document.getElementById('side-q').classList.contains('held')"),
-              "panel: ⌘F asks for the writer's key panel over the filter field", json.dumps([r['result'], fb]))
+        check(r['result'] in (True, 'true', 1) and len(fb) == 1 and flag(fb[0], 'find') and 'list' not in fb[0] and not page.js("return document.getElementById('find').hidden")
+              and page.js("return document.getElementById('find-q').classList.contains('held')"),
+              "panel: ⌘F opens find in the file and asks for the writer's key panel over its field", json.dumps([r['result'], fb]))
+        seq = int(fb[0]['seq']) if fb else -1
+        page.cmd('@eval:sb.filterText(' + json.dumps({'seq': seq, 'text': 'paragraph 29'}) + '); 0')
+        y0 = page.js('return window.scrollY')
+        page.cmd('@eval:sb.filterKey(' + json.dumps({'seq': seq, 'key': 'next'}) + '); 0')
+        f = page.js("return [document.getElementById('find-count').textContent, window.scrollY, CSS.highlights.get('sb-find-cur').size]")
+        check(f[0] == '2 of 11' and f[1] > y0 and f[2] == 1, 'panel: typed into the key panel, the matches are counted; ↵ goes to the next, scrolled to', json.dumps([y0, f]))
+        r = page.cmd("@eval:sb.hostKey({ key: 'filter' })")
+        fb = msgs(r, 'filterBegin')
+        check(r['result'] in (True, 'true', 1) and len(fb) == 1 and 'list' not in fb[0] and 'find' not in fb[0] and page.js("return document.getElementById('side-q').classList.contains('held')")
+              and not page.js("return document.getElementById('find-q').classList.contains('held')") and 'filterStop' in [m.get('type') for m in r['messages']],
+              "panel: ⌥⌘F moves the key panel to the sidebar's filter field", json.dumps([r['result'], fb]))
         page.cmd('@eval:sb.filterEnd({ all: true }); 0')
+        page.cmd("@eval:getSelection().removeAllRanges(); 0")
+        r = page.cmd("@eval:sb.hostKey({ key: 'copy' })")
+        c = msgs(r, '_copied')
+        check(r['result'] in (True, 'true', 1) and len(c) == 1 and c[0]['text'] == long_doc, 'panel: ⌘C with nothing selected copies the whole file', json.dumps(r['result']))
+        page.cmd("@eval:(() => { const p = document.querySelector('#doc p'); getSelection().selectAllChildren(p); return 0; })()")
+        r = page.cmd("@eval:sb.hostKey({ key: 'copy' })")
+        c = msgs(r, '_copied')
+        check(len(c) == 1 and c[0]['text'] == 'Paragraph 0.', 'panel: ⌘C with a selection copies the selection', json.dumps(c)[:200])
+        page.cmd("@eval:getSelection().removeAllRanges(); 0")
+        page.cmd("@eval:document.getElementById('find-close').click(); 0")
     finally:
         page.close()
         shutil.rmtree(page.out, ignore_errors=True)
@@ -1702,13 +1990,16 @@ def main():
         mode = lambda m: click(page, f'#doc .viewer-toggle[data-mode={m}]')
         mode('formatted')
         pretty = page.js("return document.querySelector('#doc pre.code').textContent")
-        mode('raw')
-        raw = page.js("return [document.querySelector('#doc pre.code').textContent, document.querySelector('#doc .viewer-toggle[aria-pressed=true]').textContent]")
+        click(page, '#raw')
+        raw = page.js("return [document.querySelector('#doc pre.code').textContent, document.getElementById('raw').getAttribute('aria-pressed'), document.querySelectorAll('#doc .viewer-toggle').length]")
+        click(page, '#raw')
+        back = page.js("return [document.querySelector('#doc pre.code').textContent, document.querySelector('#doc .viewer-toggle[aria-pressed=true]').textContent]")
         mode('tree')
         again = page.js("return [...document.querySelectorAll('#doc .json-tree .jt-row')].map((r) => r.textContent)")
         check(tree_rows[:3] == ['▾{ 3 keys }', '"name": "spacebar"', '▾"list": [ 2 items ]'] and pretty == json.dumps(json.load(open(T('data.json'))), indent=2)
-              and raw == [open(T('data.json')).read(), 'Raw'] and again == tree_rows and page.js("return document.querySelectorAll('#doc .hljs-attr').length") > 0,
-              'JSON: a tree first, then formatted and raw text, highlighted', json.dumps([tree_rows, raw[1]])[:300])
+              and raw == [open(T('data.json')).read(), 'true', 0] and back == [pretty, 'Formatted'] and again == tree_rows
+              and page.js("return document.querySelectorAll('#doc .hljs-attr').length") > 0,
+              "JSON: a tree first, then formatted text; the toolbar's Raw shows the file as is, and back", json.dumps([tree_rows, raw[1:]])[:300])
         view(T('table.csv'))
         t = page.js("return [[...document.querySelectorAll('#doc table.csv thead th')].map((x) => x.textContent), [...document.querySelectorAll('#doc table.csv tbody tr')].map((r) => [...r.cells].map((c) => c.textContent))]")
         check(t == [['', 'name', 'qty', 'note'], [['1', 'apple', '3', 'red, crisp'], ['2', 'pear', '5', 'says "hi"'], ['3', 'fig', '', 'line one\nline two']]],
@@ -2303,6 +2594,7 @@ def main():
         check('overview' in types(r) and st()['view'] == 'overview', "the sidebar's folder name brings the overview back", json.dumps(types(r)))
         page.cmd('@root:')
         viewers(page, check, page.out, st)
+        tools(page, check, page.out)
         missing_images(page, check, page.out)
 
         csp = [l for l in page.logs if 'csp blocked' in l]

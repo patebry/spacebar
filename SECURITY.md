@@ -74,6 +74,11 @@ Seven features reach further than a rendered page, and are in scope:
   running one, only into `~/Applications/spacebar.app`, and only after the downloaded zip's SHA-256 matches the release's.
   The version check reads just the version number of GitHub's latest release, at most once a day. The uninstaller, started
   from Settings, quits the extensions' helpers before it deletes anything and does not start while an update runs.
+- **Copy** puts plain text on the clipboard through the writer (the sandboxed extension and viewer never touch the
+  pasteboard). The Copy button, and ⌘C with nothing selected, copy the file on screen as the extension read it, never text
+  the page supplies; ⌘C with a selection copies the page's selection, taken only within a second of the host handing the page
+  that ⌘C. The extension takes a copy only for the path of the
+  file on screen, and only a text view or a Markdown file has a whole-file copy.
 - **The Space helper** ("Use spacebar for every file", off until you turn it on) holds Accessibility and an event tap. Its
   threat model is below.
 
@@ -131,9 +136,9 @@ refused.
   opening closes spacebar's panel.
 
 **No key characters leave the helper.** The tap reads a key's code and modifier flags. It reads the character only for a
-key pressed with ⌘, to tell ⌘W, ⌘., ⌘O, ⌘F and the zoom keys apart, and keeps it in that one event. What crosses to the
-viewer is a name from a fixed list (`up`, `down`, `left`, `right`, `home`, `end`, `pageup`, `pagedown`, `return`, `open`,
-`find`, `zoomIn`, `zoomOut`, `zoomReset`), and a repeat flag; the viewer drops any other name. The helper logs
+key pressed with ⌘, to tell ⌘W, ⌘., ⌘O, ⌘F, ⌥⌘F, ⌘C and the zoom keys apart, and keeps it in that one event. What crosses to
+the viewer is a name from a fixed list (`up`, `down`, `left`, `right`, `home`, `end`, `pageup`, `pagedown`, `return`, `open`,
+`find`, `filter`, `copy`, `zoomIn`, `zoomOut`, `zoomReset`), and a repeat flag; the viewer drops any other name. The helper logs
 decisions and timings, never a key.
 
 **Secure input.** While a password field or another app has secure input on, macOS sends no key events to event taps, so the

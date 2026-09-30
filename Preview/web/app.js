@@ -17,7 +17,7 @@ const el = (tag, cls, text) => {
 const DEFAULTS = { theme: 'apple', appearance: 'auto', codeTheme: 'auto', bodyFont: 'system', monoFont: 'system', fontSize: 15,
   lineHeight: 1.6, width: 'medium', frontMatter: 'table', toc: 'auto', stats: true, math: true, mermaid: true, rawHTML: 'sanitized',
   remoteImages: false, inlineEditing: true, taskToggles: true, sidebarCollapsed: false, sidebarWidth: 240, minimalChrome: false, customCSSURL: null,
-  userThemeURL: null };
+  userThemeURL: null, rawMarkdown: false, rawJSON: false, rawNotebook: false, rawCSV: false, rawXML: false, rawCSS: false };
 let settings = { ...DEFAULTS, ...(window.__sbInitial || {}) };
 const THEMES = { apple: 'Apple', github: 'GitHub', paper: 'Paper', solarized: 'Solarized', nord: 'Nord', contrast: 'High Contrast' };
 const theme = window.sbTheme && typeof window.sbTheme.apply === 'function' ? window.sbTheme : {
@@ -683,9 +683,10 @@ function blockRange(b) {
 /** Every redraw makes new diagram nodes holding their source; each is drawn here, whatever redrew the document. */
 let drawnMermaid = Promise.resolve();
 function draw() {
-  if (!isMarkdown(current)) {
+  if (editing && !editing.whole && rawOn(current)) { stopEditing(); return; }
+  if (!isMarkdown(current) || rawOn(current)) {
     $('doc').replaceChildren(viewNode(current));
-    // The view no longer shows the file's text (another JSON mode): the edit ends.
+    // The view no longer shows the file's text (Raw turned off, another JSON mode): the edit ends.
     if (editing && editing.whole && !paintTextEditor()) {
       const seq = editing.seq;
       endTextEditing();
@@ -693,6 +694,7 @@ function draw() {
     }
     decorate();
     syncPdf();
+    findAfterDraw();
     return;
   }
   const heights = [...document.querySelectorAll('#doc pre.mermaid')].map((n) => n.getBoundingClientRect().height);
@@ -702,6 +704,7 @@ function draw() {
   if (editing) spliceEditor([editing.start, editing.start + editing.lines]);
   decorate();
   syncPdf();
+  findAfterDraw();
   if (settings.mermaid && document.querySelector('#doc pre.mermaid.mm-wait')) drawnMermaid = runMermaid(false);
 }
 
@@ -1103,8 +1106,8 @@ let statsTimer = 0;
 function updateStats() {
   clearTimeout(statsTimer);
   if (!settings.stats) { $('stats').textContent = ''; return; }
-  if (!isMarkdown(current)) {
-    const code = TEXT_VIEWS.has(current.view) && $('doc').querySelector('.viewer > .code-view pre.code');
+  if (!isMarkdown(current) || rawOn(current)) {
+    const code = $('doc').querySelector(':scope > .viewer > .code-view pre.code');
     const n = code ? lineCount(code.textContent) : 0;
     $('stats').textContent = n ? `${n.toLocaleString()} ${n === 1 ? 'line' : 'lines'}` : '';
     return;
@@ -1128,7 +1131,8 @@ function decorate() {
 // ---------- settings ----------
 
 // Keys that change what is rendered (a redraw) and keys that only change colours or fonts (mermaid draws its own).
-const RENDER_KEYS = ['frontMatter', 'toc', 'stats', 'math', 'mermaid', 'rawHTML', 'inlineEditing', 'taskToggles', 'remoteImages'];
+const RENDER_KEYS = ['frontMatter', 'toc', 'stats', 'math', 'mermaid', 'rawHTML', 'inlineEditing', 'taskToggles', 'remoteImages', 'rawMarkdown', 'rawJSON',
+  'rawNotebook', 'rawCSV', 'rawXML', 'rawCSS'];
 const LOOK_KEYS = ['theme', 'codeTheme', 'appearance', 'bodyFont', 'userThemeURL', 'customCSSURL'];
 
 window.sb = {
@@ -1159,6 +1163,7 @@ window.sb = {
     root.dataset.view = isMarkdown(p) ? 'markdown' : p.view;
     syncOpen(p);
     syncAa(p);
+    syncTools(p);
     showFolder(p);
     showCrumbs(p);
     draw();
@@ -1181,6 +1186,7 @@ window.sb = {
     syncPopover();
     syncToggle();
     syncSideMenu();
+    syncRaw(current);
     if (RENDER_KEYS.some((k) => prev[k] !== settings[k]) && current.path) {
       const y = window.scrollY;
       draw();
@@ -1247,6 +1253,8 @@ window.sb = {
     endTextEditing();
     draw();
   },
+  /** ⌘F ended the edit, whose text is saved: find opens in its place. */
+  editFind() { openFind(); },
   /** A change to the text of a whole-file edit, as UTF-16 offsets: [from, to) became `insert`. Keys of an edit that has ended
    *  still land in the view's text. */
   textUpdate(u) {
@@ -1345,6 +1353,14 @@ window.sb = {
       for (const b of boxes) if (b.isConnected) imageReason(b, path, s);
     }
   },
+  /** The writer's answer to a copy: the Copy button shows a check for a moment, and the status line says what was copied. */
+  copied(r) {
+    const ok = !!r && r.ok === true, b = $('copy');
+    window.sb.status(ok ? (r.truncated === true ? 'Copied the first 2 MB' : 'Copied') : 'Could not copy');
+    b.classList.toggle('done', ok);
+    clearTimeout(copyTimer);
+    copyTimer = setTimeout(() => b.classList.remove('done'), 1500);
+  },
   installCopied(r) {
     const b = $('aa-copy');
     b.textContent = r && r.ok ? 'Copied' : 'Could not copy';
@@ -1440,7 +1456,6 @@ function viewerAction(b, e) {
   const a = b.dataset.action;
   if ((a === 'openFile' || a === 'reveal') && e.isTrusted) post({ type: a, path: current.path });
   else if (a === 'csvSort') csvSortBy(+b.dataset.col);
-  else if (a === 'textMode') textMode();
   else if (a === 'jsonMode' || a === 'jsonToggle' || a === 'jsonAll' || a === 'jsonMore') jsonAction(a, b);
   else if (a === 'archiveDir' && archiveOpen) {
     const path = b.dataset.path;
@@ -1461,29 +1476,6 @@ function viewHead(p, ...extra) {
 
 function note(text) { return el('div', 'viewer-note', text); }
 
-/** The JSON and CSV views' Edit toggle: the file's text in place of the tree or table, where a click edits it; again to go back. */
-function editToggle(p, on) {
-  if (p.editable !== true || !settings.inlineEditing) return null;
-  const b = el('button', 'viewer-edit', 'Edit');
-  b.type = 'button';
-  b.dataset.action = 'textMode';
-  b.setAttribute('aria-pressed', String(on));
-  return b;
-}
-
-// CSV files flipped to their text by the Edit toggle.
-const csvAsText = new Set();
-
-function textMode() {
-  const m = jsonState;
-  if (current.view === 'json' && m && m.p === current) {
-    if (m.mode !== 'raw') { m.back = m.mode; m.mode = 'raw'; } else m.mode = m.modes.includes(m.back) ? m.back : m.modes[0];
-  } else if (current.view === 'csv' && !csvAsText.delete(current.path)) csvAsText.add(current.path);
-  const y = window.scrollY;
-  draw();
-  window.scrollTo(0, y);
-}
-
 function truncNote(p) { return p.truncated ? note(`Showing the first 2 MB of ${fmtSize(p.size)}.`) : null; }
 
 const highlighted = (text, lang) => DOMPurify.sanitize(hljs.highlight(text, { language: lang, ignoreIllegals: true }).value,
@@ -1500,8 +1492,20 @@ function codeBlock(text, lang, file = false) {
   const pre = el('pre', 'code');
   if (file) pre.dataset.fileText = '';
   const code = el('code', 'hljs');
-  const highlight = () => code.replaceChildren(highlighted(text, lang));
-  code.textContent = text;
+  const highlight = () => {
+    code.replaceChildren(highlighted(text, lang));
+    // The matches drawn in the plain text are on nodes just replaced.
+    if (code.isConnected) findAfterDraw();
+  };
+  // Plain text goes in as many text nodes, a few thousand characters each at line ends: WebKit measures a range in one of them
+  // (find's matches) in time that grows with the node.
+  for (let at = 0; at < text.length;) {
+    let end = text.indexOf('\n', at + 8192);
+    end = end >= 0 && end < at + 16384 ? end + 1 : Math.min(text.length, at + 8192);
+    if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) end++;
+    code.append(text.slice(at, end));
+    at = end;
+  }
   if (lang && window.hljs && hljs.getLanguage(lang) && text.length <= HIGHLIGHT_MAX) {
     pre.dataset.lang = lang;
     // A long file is painted plain first: highlighting it would hold the first paint.
@@ -1530,10 +1534,11 @@ function jsonModel(p) {
   let value, ok = false;
   if (!p.truncated) { try { value = JSON.parse(p.text); ok = true; } catch (e) { ok = false; } }
   const nb = ok && /\.ipynb$/i.test(p.name || '') && isBranch(value) && Array.isArray(value.cells);
-  const modes = nb ? ['notebook', 'tree', 'raw'] : ok && isBranch(value) ? ['tree', 'formatted', 'raw'] : ok ? ['formatted', 'raw'] : ['raw'];
+  // Raw is the toolbar's toggle (rawOn); these are the formatted views.
+  const modes = nb ? ['notebook', 'tree'] : ok && isBranch(value) ? ['tree', 'formatted'] : ['formatted'];
   const same = jsonState && jsonState.p.path === p.path;
   const mode = same && modes.includes(jsonState.mode) ? jsonState.mode : modes[0];
-  jsonState = { p, value, ok, nb, modes, mode, back: same ? jsonState.back : null, open: same ? jsonState.open : new Set(), more: same ? jsonState.more : new Map(), pretty: null };
+  jsonState = { p, value, ok, nb, modes, mode, open: same ? jsonState.open : new Set(), more: same ? jsonState.more : new Map(), pretty: null };
   if (!same && ok && isBranch(value)) jsonOpenLevels(jsonState, JSON_AUTO_ROWS);
   return jsonState;
 }
@@ -1557,9 +1562,10 @@ function jsonOpenLevels(m, budget) {
 
 function jsonView(p) {
   const m = jsonModel(p);
+  const raw = !m.ok || rawOn(p);
   const box = el('div', 'viewer viewer-code viewer-json');
   const extra = [];
-  if (m.mode === 'tree') {
+  if (!raw && m.mode === 'tree') {
     for (const [label, open] of [['Expand All', '1'], ['Collapse All', '0']]) {
       const b = el('button', 'json-all', label);
       b.type = 'button';
@@ -1567,13 +1573,11 @@ function jsonView(p) {
       extra.push(b);
     }
   }
-  if (m.modes.length > 1) {
-    const edit = editToggle(p, m.mode === 'raw');
-    if (edit) extra.push(edit);
+  if (!raw && m.modes.length > 1) {
     const seg = el('span', 'viewer-seg');
     seg.setAttribute('role', 'group');
     seg.setAttribute('aria-label', 'View as');
-    const names = { notebook: 'Notebook', tree: 'Tree', formatted: 'Formatted', raw: 'Raw' };
+    const names = { notebook: 'Notebook', tree: 'Tree', formatted: 'Formatted' };
     for (const mode of m.modes) {
       const b = el('button', 'viewer-toggle', names[mode]);
       b.type = 'button';
@@ -1592,12 +1596,13 @@ function jsonView(p) {
     n.classList.add('json-warn');
     box.append(n);
   }
-  if (m.mode === 'tree') box.append(jsonTree(m));
+  if (raw) box.append(codeBlock(p.text, 'json', p.editable === true));
+  else if (m.mode === 'tree') box.append(jsonTree(m));
   else if (m.mode === 'notebook') box.append(notebookView(m.value));
   else if (m.mode === 'formatted') {
     if (m.pretty === null) m.pretty = JSON.stringify(m.value, null, 2);
     box.append(codeBlock(m.pretty, 'json'));
-  } else box.append(codeBlock(p.text, 'json', p.editable === true));
+  }
   return box;
 }
 
@@ -1630,6 +1635,7 @@ function jsonTree(m) {
 
 function jsonRow(it, branch, open) {
   const row = el('div', 'jt-row');
+  row.dataset.ptr = it.ptr;
   row.setAttribute('role', 'treeitem');
   row.setAttribute('aria-level', String(it.depth + 1));
   row.style.setProperty('--d', it.depth);
@@ -1648,11 +1654,8 @@ function jsonRow(it, branch, open) {
   if (branch) {
     const n = branchSize(v), arr = Array.isArray(v);
     row.append(el('span', 'jt-sum', `${arr ? '[' : '{'} ${n.toLocaleString()} ${arr ? (n === 1 ? 'item' : 'items') : (n === 1 ? 'key' : 'keys')} ${arr ? ']' : '}'}`));
-  } else if (typeof v === 'string') {
-    const s = v.length > JSON_STR_MAX ? v.slice(0, JSON_STR_MAX) + '…' : v;
-    row.append(el('span', 'jt-val hljs-string', JSON.stringify(s)));
   } else {
-    row.append(el('span', `jt-val ${typeof v === 'number' ? 'hljs-number' : 'hljs-literal'}`, String(v)));
+    row.append(el('span', `jt-val ${typeof v === 'string' ? 'hljs-string' : typeof v === 'number' ? 'hljs-number' : 'hljs-literal'}`, jsonLeaf(v)));
   }
   return row;
 }
@@ -1902,9 +1905,12 @@ function sortCsv(m) {
 }
 
 function csvView(p) {
-  if (csvAsText.has(p.path) && editToggle(p, true)) {
-    const box = el('div', 'viewer viewer-code viewer-csv');
-    box.append(viewHead(p, editToggle(p, true)), codeBlock(p.text, null, true));
+  if (rawOn(p)) {
+    const box = el('div', 'viewer viewer-code viewer-csv-raw');
+    box.append(viewHead(p));
+    const t = truncNote(p);
+    if (t) box.append(t);
+    box.append(codeBlock(p.text, null, p.editable === true));
     return box;
   }
   const m = csvModel(p);
@@ -1912,7 +1918,7 @@ function csvView(p) {
   const shape = m.head.length ? `${Math.max(0, m.total - 1).toLocaleString()} ${m.total === 2 ? 'row' : 'rows'} × ${m.cols} ${m.cols === 1 ? 'column' : 'columns'}` : '';
   const head = el('div', 'viewer-head');
   const sepName = m.sep === ',' || (m.sep === '\t' && p.tsv === true) ? '' : `${DELIMITER_NAMES[m.sep]}-separated`;
-  head.append(el('span', 'viewer-kind', [p.kindName, fmtSize(p.size), shape, sepName].filter(Boolean).join(' · ')), ...[editToggle(p, false)].filter(Boolean), openButton(p));
+  head.append(el('span', 'viewer-kind', [p.kindName, fmtSize(p.size), shape, sepName].filter(Boolean).join(' · ')), openButton(p));
   box.append(head);
   const t = truncNote(p);
   if (t) box.append(t);
@@ -1945,6 +1951,7 @@ function csvView(p) {
   scroll.append(table);
   box.append(scroll);
   const drawRows = () => csvRows(m, scroll, tb, virtual);
+  m.shown = { scroll, draw: drawRows };
   let queued = false, restoring = true;
   scroll.addEventListener('scroll', () => {
     if (restoring) return;
@@ -2049,8 +2056,9 @@ function csvRows(m, scroll, tb, virtual) {
   if (virtual) {
     const first = tb.querySelector('tr:not(.pad)');
     const got = first ? first.getBoundingClientRect().height : 0;
-    if (got > 0 && Math.abs(got - h) > 0.5) { m.rowH = got; delete tb.dataset.win; csvRows(m, scroll, tb, virtual); }
+    if (got > 0 && Math.abs(got - h) > 0.5) { m.rowH = got; delete tb.dataset.win; csvRows(m, scroll, tb, virtual); return; }
   }
+  if (finder.how === 'csv' && findOpen() && tb.isConnected) { finder.ranges = null; paintFind(); }
 }
 
 function csvSortBy(col) {
@@ -2451,6 +2459,11 @@ function syncPdf() {
 }
 
 function viewNode(p) {
+  if (isMarkdown(p)) {
+    const box = el('div', 'viewer viewer-code viewer-source');
+    box.append(codeBlock(p.text, 'markdown'));
+    return box;
+  }
   switch (p.view) {
     case 'image': if (typeof p.src === 'string') return imageView(p); break;
     case 'pdf': case 'html': case 'video': case 'audio': case 'rtf': case 'quicklook': case 'bitmap': return pdfView(p);
@@ -2466,7 +2479,9 @@ function viewNode(p) {
         const t = truncNote(p);
         if (t) box.append(t);
         if (p.view === 'code' && p.lang && p.text.length > HIGHLIGHT_MAX) box.append(note('Highlighting is off for files over 512 KB.'));
-        box.append(codeBlock(p.text, p.view === 'code' ? p.lang : null, p.editable === true));
+        const kind = rawKind(p), pretty = kind && !rawOn(p) ? prettyText(p, kind) : null;
+        if (kind && !rawOn(p) && pretty === null) box.append(note(kind === 'xml' ? 'Not well-formed XML: shown as is.' : 'Shown as is.'));
+        box.append(codeBlock(pretty ?? p.text, p.view === 'code' ? p.lang : null, pretty === null && p.editable === true));
         return box;
       }
       break;
@@ -2585,7 +2600,7 @@ function resetTree(rootPath, name) {
   tree = { root: rootPath, name: name || rootPath.split('/').pop() || rootPath, session: 0, dirs: new Map() };
   requested.clear();
   treeVersion++;
-  if (filterSession) endFilter();
+  if (filterSession && !filterSession.find) endFilter();
   sideQuery = '';
   $('side-q').value = '';
 }
@@ -2825,7 +2840,7 @@ function sidebarShown() { return narrow.matches ? root.classList.contains('sb-pe
 function syncToggle() {
   const open = sidebarShown(), t = $('side-toggle');
   // The filter must not keep the keyboard for a sidebar that is gone: collapsed, peeked away, or narrowed out of view.
-  if (!open) endFilter();
+  if (!open && filterSession && !filterSession.find) endFilter();
   t.setAttribute('aria-expanded', String(open));
   t.title = open ? 'Hide sidebar' : 'Show sidebar';
 }
@@ -2988,9 +3003,11 @@ document.addEventListener('keydown', (e) => {
 // uses) to hold them over the field: it sends back the text and the list keys, and Esc on an empty field, a click outside the
 // sidebar, an edit, or another preview ends it. Return opens a file and keeps the field, like the arrows do.
 const FILTER_KEYS = { up: 'ArrowUp', down: 'ArrowDown', home: 'Home', end: 'End', return: 'Enter', left: 'ArrowLeft', right: 'ArrowRight' };
+// ⌘F, ⌥⌘F and ⌘C while a list session holds the keys.
+const LIST_COMMANDS = new Set(['find', 'filter', 'copy']);
 
 function beginFilter(e) {
-  if (filterSession && filterSession.list) endFilter();
+  if (filterSession && (filterSession.list || filterSession.find)) endFilter();
   if (filterSession || editing || !tree.root) return;
   if (updateBusy) { window.sb.status('Updating…'); return; }
   const r = filterField.getBoundingClientRect();
@@ -3036,6 +3053,7 @@ function endFilter() {
 function filterDone() {
   filterSession = null;
   filterField.classList.remove('held');
+  findField.classList.remove('held');
   // Esc in the writer's panel ends the session; the page never sees that key, so the sort menu opened meanwhile closes here.
   if (!sidePop.hidden) showSideMenu(false);
 }
@@ -3044,22 +3062,33 @@ const ofFilter = (m) => !!m && !!filterSession && m.seq === filterSession.seq;
 Object.assign(window.sb, {
   filterText(m) {
     if (!ofFilter(m) || filterSession.list || typeof m.text !== 'string') return;
+    // The writer sends the text again before each ↵; only a change searches again.
+    if (filterSession.find) { findField.value = m.text; if (m.text !== finder.q) findInput(m.text); return; }
     filterField.value = m.text;
     sideQuery = m.text.trim().toLowerCase();
     renderSidebar();
   },
   filterKey(m) {
-    if (!ofFilter(m) || !Object.hasOwn(FILTER_KEYS, m.key) || (!filterSession.list && (m.key === 'left' || m.key === 'right'))) return;
+    if (!ofFilter(m)) return;
+    if (filterSession.find) { if (m.key === 'next' || m.key === 'prev') findStep(m.key === 'next' ? 1 : -1); return; }
+    if (filterSession.list && LIST_COMMANDS.has(m.key)) { hostCommand(m.key); return; }
+    if (!Object.hasOwn(FILTER_KEYS, m.key) || (!filterSession.list && (m.key === 'left' || m.key === 'right'))) return;
     sideKey(FILTER_KEYS[m.key], !filterSession.list, m.repeat === true);
   },
   listKeysWanted(m) {
     autoKeysRoot = m && typeof m.root === 'string' ? m.root : '';
     autoListKeys();
   },
-  /** One session's end, or with `all` any session: a new preview's controller never began the one the page may hold. */
-  filterEnd(m) { if (ofFilter(m) || (m && m.all === true && filterSession)) filterDone(); },
+  /** One session's end, or with `all` any session: a new preview's controller never began the one the page may hold. Esc in
+   *  the find field closes the find bar. */
+  filterEnd(m) {
+    if (!ofFilter(m) && !(m && m.all === true && filterSession)) return;
+    const find = filterSession.find;
+    filterDone();
+    if (find && m.reason === 'escape') closeFind();
+  },
 });
-document.addEventListener('click', (e) => { if (filterSession && !e.target.closest('#sidebar')) endFilter(); }, true);
+document.addEventListener('click', (e) => { if (filterSession && !e.target.closest(filterSession.find ? '#find' : '#sidebar')) endFilter(); }, true);
 
 // The Space helper's panel is never key either: the helper takes Finder's keys and the panel sends them here. The list keys
 // reach the sidebar through filterKey while a list session holds them (it starts on its own, as in Quick Look); these are the
@@ -3075,12 +3104,7 @@ Object.assign(window.sb, {
   hostKey(m) {
     const key = m && m.key;
     if (HOST !== 'panel' || typeof key !== 'string') return false;
-    if (key === 'find') {
-      if (editing || updateBusy || !tree.root || !sidebarShown()) return false;
-      const r = filterField.getBoundingClientRect();
-      beginFilter({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 });
-      return !!filterSession && !filterSession.list;
-    }
+    if (LIST_COMMANDS.has(key)) return hostCommand(key);
     if (Object.hasOwn(HOST_ZOOM, key)) return zoomImage(HOST_ZOOM[key]);
     const page = Math.max(40, window.innerHeight * 0.9), max = document.scrollingElement.scrollHeight;
     const by = { up: -40, down: 40, pageup: -page, pagedown: page, home: -max, end: max }[key];
@@ -3088,6 +3112,484 @@ Object.assign(window.sb, {
     window.scrollBy({ top: by, behavior: 'instant' });
     return true;
   },
+});
+
+// ---------- the toolbar's tools: Formatted or Raw, Find and Copy, each shown only for the views they apply to ----------
+
+// The Raw toggle's panel key for each kind of formatted view. Raw is always the file's own text, read only, in the code view.
+const RAW_KEYS = { markdown: 'rawMarkdown', json: 'rawJSON', notebook: 'rawNotebook', csv: 'rawCSV', xml: 'rawXML', css: 'rawCSS' };
+const RAW_NAMES = { markdown: 'Markdown source', json: 'raw JSON', notebook: 'raw JSON', csv: 'raw text', xml: 'raw XML', css: 'raw CSS' };
+const XML_FILES = /\.(xml|plist|xsd|xslt?)$/i;
+const minified = (t) => t.length > 2000 && t.length / Math.max(1, lineCount(t)) > 300;
+const hasText = (p) => !!p.path && typeof p.text === 'string' && (isMarkdown(p) || TEXT_VIEWS.has(p.view) || p.view === 'csv');
+
+/** The kind of formatted view `p` is shown in, with the file's text behind it; '' when the view is that text already. */
+function rawKind(p) {
+  if (!hasText(p)) return '';
+  if (isMarkdown(p)) return 'markdown';
+  if (p.view === 'csv') return 'csv';
+  if (p.view === 'json') { const m = jsonModel(p); return !m.ok ? '' : m.nb ? 'notebook' : 'json'; }
+  if (p.view !== 'code' || p.truncated) return '';
+  if (p.lang === 'xml' && XML_FILES.test(p.name || '')) return 'xml';
+  if (p.lang === 'css' && minified(p.text)) return 'css';
+  return '';
+}
+const rawOn = (p) => { const k = rawKind(p); return !!k && settings[RAW_KEYS[k]] === true; };
+
+function syncRaw(p) {
+  const b = $('raw'), k = rawKind(p), on = rawOn(p);
+  b.hidden = !k;
+  b.setAttribute('aria-pressed', String(on));
+  b.title = on ? 'Show formatted' : `Show ${RAW_NAMES[k] || 'raw text'}`;
+}
+
+function syncTools(p) {
+  const text = hasText(p);
+  $('copy').hidden = !text;
+  $('find-btn').hidden = !text;
+  if (!text) closeFind();
+  syncRaw(p);
+}
+
+$('raw').addEventListener('click', () => {
+  const k = rawKind(current);
+  if (!k) return;
+  if (editing) stopEditing();
+  choose(RAW_KEYS[k], settings[RAW_KEYS[k]] !== true);
+});
+
+let prettyMemo = { p: null, kind: '', text: null };
+/** The formatted text of an XML file or a minified stylesheet, made once per payload; null when it cannot be made. */
+function prettyText(p, kind) {
+  if (prettyMemo.p !== p || prettyMemo.kind !== kind) prettyMemo = { p, kind, text: kind === 'xml' ? prettyXML(p.text) : prettyCSS(p.text) };
+  return prettyMemo.text;
+}
+
+/** XML indented two spaces a level: a tag, comment or declaration to a line, an element holding only text on one line. A
+ *  scan of the text, never a parse into a document, so no entity is expanded and nothing loads; null when the tags do not nest. */
+function prettyXML(text) {
+  const tok = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>|<!DOCTYPE[^[>]*(?:\[[\s\S]*?\][^[>]*)?>|<\/?[A-Za-z_:][^<>"']*(?:(?:"[^"]*"|'[^']*')[^<>"']*)*>|[^<]+/y;
+  const out = [], open = [];
+  const pad = () => '  '.repeat(open.length);
+  let pos = 0;
+  while (pos < text.length) {
+    tok.lastIndex = pos;
+    const m = tok.exec(text);
+    if (!m) return null;
+    const t = m[0];
+    pos = tok.lastIndex;
+    if (t[0] !== '<') { if (t.trim()) out.push(pad() + t.replace(/^\s*\n|\n\s*$/g, '')); continue; }
+    if (t[1] === '!' || t[1] === '?') { out.push(pad() + t); continue; }
+    const name = /^<\/?\s*([^\s/>]+)/.exec(t)[1];
+    if (t[1] === '/') {
+      if (open.pop() !== name) return null;
+      out.push(pad() + t);
+      continue;
+    }
+    if (/\/\s*>$/.test(t)) { out.push(pad() + t); continue; }
+    const lt = text.indexOf('<', pos), gt = lt < 0 ? -1 : text.indexOf('>', lt);
+    if (gt > 0 && text.startsWith('</' + name, lt) && !text.slice(lt + 2 + name.length, gt).trim()) {
+      out.push(pad() + t + text.slice(pos, lt) + text.slice(lt, gt + 1));
+      pos = gt + 1;
+      continue;
+    }
+    out.push(pad() + t);
+    open.push(name);
+  }
+  return open.length ? null : out.join('\n') + '\n';
+}
+
+/** A minified stylesheet laid out: a selector and each declaration to a line, indented by nesting. Strings, comments and
+ *  parentheses (url(), calc()) are kept whole. */
+function prettyCSS(text) {
+  const tok = /\/\*[\s\S]*?(?:\*\/|$)|"(?:[^"\\]|\\[\s\S])*(?:"|$)|'(?:[^'\\]|\\[\s\S])*(?:'|$)|[{};]|\s+|(?:[^{};"'/\s()]|\((?:[^()"']|"(?:[^"\\]|\\[\s\S])*"|'(?:[^'\\]|\\[\s\S])*')*\))+|[\s\S]/y;
+  const out = [];
+  let line = '', depth = 0, pos = 0;
+  const flush = () => { if (line.trim()) out.push('  '.repeat(depth) + line.trim()); line = ''; };
+  while (pos < text.length) {
+    tok.lastIndex = pos;
+    const t = tok.exec(text)[0];
+    pos = tok.lastIndex;
+    if (t === '{') { line += ' {'; flush(); depth++; } else if (t === ';') { line += ';'; flush(); } else if (t === '}') {
+      flush();
+      depth = Math.max(0, depth - 1);
+      out.push('  '.repeat(depth) + '}');
+      if (!depth) out.push('');
+    } else if (t.startsWith('/*')) { flush(); out.push('  '.repeat(depth) + t); } else if (/^\s+$/.test(t)) { if (line) line += ' '; } else line += t;
+  }
+  flush();
+  return out.join('\n').replace(/\n+$/, '') + '\n';
+}
+
+// ---------- find in the file ----------
+// Where a view draws only part of its model (a long table's rows in view, a JSON tree's open nodes) the model is searched and
+// a match is scrolled into view before it is drawn; anywhere else, the text on screen. Matches are drawn with the CSS Custom
+// Highlight API: the sanitized DOM is never changed.
+const FIND_MAX = 10000;
+// Matches drawn at once, those on and near the screen: WebKit repaints every registered range on each frame.
+const FIND_PAINT = 150;
+const FIND_SKIP = '.viewer-head, .viewer-note, .gutter, .katex-mathml, .md-editing, pre.mermaid, svg, button, .jt-sum';
+const findBar = $('find'), findField = $('find-q');
+const highlights = typeof CSS !== 'undefined' && CSS.highlights && typeof Highlight === 'function' ? CSS.highlights : null;
+// q: the text looked for; how: 'dom', 'csv' or 'json'; hits: { s, e } in the text (dom), with { k, c } a table cell (k -1 the
+// header) or { ptr, part } a JSON row's key or value; at: the current match, -1 before the first step.
+let finder = { q: '', path: '', how: 'dom', hits: [], at: -1, more: false, index: null, ranges: null };
+let findTimer = 0, findQuiet = false;
+const findOpen = () => !findBar.hidden;
+const reEscape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const jsonLeaf = (v) => (typeof v === 'string' ? JSON.stringify(v.length > JSON_STR_MAX ? v.slice(0, JSON_STR_MAX) + '…' : v) : String(v));
+
+function findHow() {
+  if (current.view === 'csv' && !rawOn(current) && csvState && csvState.p === current && csvState.shown) return 'csv';
+  if (current.view === 'json' && !rawOn(current) && jsonState && jsonState.p === current && jsonState.ok && jsonState.mode === 'tree') return 'json';
+  return 'dom';
+}
+
+/** The text on screen as one string, and where each of its text nodes starts in it. */
+function domIndex() {
+  const code = $('doc').querySelector(':scope > .viewer > .code-view pre.code > code');
+  const nodes = [], starts = [], parts = [];
+  const walk = document.createTreeWalker(code || $('doc'), NodeFilter.SHOW_TEXT, code ? null
+    : { acceptNode: (n) => (n.parentElement && n.parentElement.closest(FIND_SKIP) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+  let len = 0;
+  while (walk.nextNode()) {
+    const n = walk.currentNode;
+    if (!n.data) continue;
+    nodes.push(n);
+    starts.push(len);
+    parts.push(n.data);
+    len += n.data.length;
+  }
+  return { nodes, starts, text: parts.join('') };
+}
+
+function domRange(ix, s, e) {
+  const node = (off, end) => {
+    let lo = 0, hi = ix.starts.length - 1;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (end ? ix.starts[mid] < off : ix.starts[mid] <= off) lo = mid; else hi = mid - 1; }
+    return lo;
+  };
+  const a = node(s, false), b = node(e, true), r = document.createRange();
+  r.setStart(ix.nodes[a], s - ix.starts[a]);
+  r.setEnd(ix.nodes[b], e - ix.starts[b]);
+  return r;
+}
+
+function csvFind(m, scan) {
+  for (let c = 0; c < m.head.length && c < m.cols; c++) if (m.head[c] && !scan(m.head[c], (s, e) => ({ k: -1, c, s, e }))) return;
+  for (let k = 0; k < m.order.length; k++) {
+    const r = m.body[m.order[k]];
+    for (let c = 0; c < m.cols; c++) if (r[c] && !scan(r[c], (s, e) => ({ k, c, s, e }))) return;
+  }
+}
+
+/** Keys and values in the order the tree shows them, each as its row shows it. */
+function jsonFind(m, scan) {
+  const stack = [{ ptr: '', key: null, index: false, v: m.value }];
+  while (stack.length) {
+    const it = stack.pop();
+    if (it.key !== null && !scan(it.index ? String(it.key) : JSON.stringify(String(it.key)), (s, e) => ({ ptr: it.ptr, part: 'key', s, e }))) return;
+    if (isBranch(it.v)) {
+      const arr = Array.isArray(it.v), keys = arr ? null : Object.keys(it.v);
+      for (let i = (arr ? it.v.length : keys.length) - 1; i >= 0; i--) {
+        const k = arr ? i : keys[i];
+        stack.push({ ptr: `${it.ptr}/${ptrKey(k)}`, key: k, index: arr, v: it.v[k] });
+      }
+    } else if (!scan(jsonLeaf(it.v), (s, e) => ({ ptr: it.ptr, part: 'val', s, e }))) return;
+  }
+}
+
+/** Searches again for finder.q; `keep` keeps the current match's number (a redraw), else the first match is current. */
+function findSearch(keep) {
+  const f = finder;
+  f.how = findHow();
+  f.hits = [];
+  f.more = false;
+  f.index = null;
+  f.ranges = null;
+  if (f.q) {
+    const re = new RegExp(reEscape(f.q), 'gi');
+    const scan = (text, hit) => {
+      re.lastIndex = 0;
+      for (let m; (m = re.exec(text));) {
+        if (f.hits.length >= FIND_MAX) { f.more = true; return false; }
+        f.hits.push(hit(m.index, m.index + m[0].length));
+      }
+      return true;
+    };
+    if (f.how === 'csv') csvFind(csvState, scan);
+    else if (f.how === 'json') jsonFind(jsonState, scan);
+    else { f.index = domIndex(); scan(f.index.text, (s, e) => ({ s, e })); }
+  }
+  // A redraw of the same file keeps the current match's number; another file starts before its first match.
+  f.at = !f.hits.length ? -1 : !keep ? 0 : f.path === current.path ? Math.min(f.at, f.hits.length - 1) : -1;
+  f.path = current.path;
+}
+
+/** The matches that can be drawn now: `keys`, their numbers in order, and `get(i)`, a range. Every match of the text on screen
+ *  (each range made when asked for, so few are ever alive), or those in the table rows or tree rows drawn (kept until the
+ *  next search or redraw). */
+function findRanges() {
+  const f = finder;
+  if (f.how === 'dom') return { keys: f.hits.map((_, i) => i), get: (i) => (f.hits[i] ? domRange(f.index, f.hits[i].s, f.hits[i].e) : undefined) };
+  if (f.ranges) return f.ranges;
+  const out = new Map();
+  const range = (node, h) => {
+    if (!node || node.nodeType !== 3 || h.e > node.length) return null;
+    const r = document.createRange();
+    r.setStart(node, h.s);
+    r.setEnd(node, h.e);
+    return r;
+  };
+  if (f.how === 'csv') {
+    const box = csvState.shown.scroll, rows = new Map();
+    for (const tr of box.querySelectorAll('tbody tr[aria-rowindex]')) rows.set(+tr.getAttribute('aria-rowindex') - 2, tr);
+    f.hits.forEach((h, i) => {
+      const cell = h.k < 0 ? box.querySelector(`thead .csv-sort[data-col="${h.c}"] .csv-h`) : rows.has(h.k) && rows.get(h.k).cells[h.c + 1];
+      const r = cell && range(cell.firstChild, h);
+      if (r) out.set(i, r);
+    });
+  } else {
+    const rows = new Map();
+    for (const row of $('doc').querySelectorAll('.json-tree .jt-row[data-ptr]')) rows.set(row.dataset.ptr, row);
+    f.hits.forEach((h, i) => {
+      const row = rows.get(h.ptr), span = row && row.querySelector(h.part === 'key' ? '.jt-key, .jt-index' : '.jt-val');
+      const r = span && range(span.firstChild, h);
+      if (r) out.set(i, r);
+    });
+  }
+  f.ranges = { keys: [...out.keys()], get: (i) => out.get(i) };
+  return f.ranges;
+}
+
+/** The match numbers among `ranges` on screen or within a screen of it, found by their position (matches run top to bottom). */
+function visibleMatches(ranges) {
+  const idx = ranges.keys;
+  if (idx.length <= FIND_PAINT) return idx;
+  const rect = (i) => ranges.get(idx[i]).getBoundingClientRect();
+  let lo = 0, hi = idx.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (rect(mid).bottom < -innerHeight) lo = mid + 1; else hi = mid; }
+  const out = [];
+  for (let i = lo; i < idx.length && out.length < FIND_PAINT && rect(i).top <= 2 * innerHeight; i++) out.push(idx[i]);
+  return out;
+}
+
+function paintFind() {
+  const ranges = findRanges(), cur = ranges.get(finder.at);
+  if (highlights) {
+    highlights.set('sb-find', new Highlight(...visibleMatches(ranges).filter((i) => i !== finder.at).map((i) => ranges.get(i))));
+    const h = cur ? new Highlight(cur) : new Highlight();
+    h.priority = 1;
+    highlights.set('sb-find-cur', h);
+  }
+  return cur;
+}
+
+function findLabel() {
+  const n = finder.hits.length, more = finder.more ? '+' : '';
+  $('find-count').textContent = !finder.q ? '' : !n ? 'No matches'
+    : finder.at < 0 ? `${n.toLocaleString()}${more} ${n === 1 ? 'match' : 'matches'}` : `${(finder.at + 1).toLocaleString()} of ${n.toLocaleString()}${more}`;
+}
+
+/** Opens a JSON match's ancestors and shows enough of each to reach it; whether the tree must be drawn again. */
+function jsonReveal(m, ptr) {
+  let v = m.value, at = '', changed = false;
+  for (const part of ptr.split('/').slice(1)) {
+    if (!m.open.has(at)) { m.open.add(at); changed = true; }
+    const key = part.replace(/~1/g, '/').replace(/~0/g, '~');
+    const i = Array.isArray(v) ? +key : Object.keys(v).indexOf(key);
+    if (i >= (m.more.get(at) || JSON_CHUNK)) { m.more.set(at, Math.ceil((i + 1) / JSON_CHUNK) * JSON_CHUNK); changed = true; }
+    v = v[key];
+    at = `${at}/${part}`;
+  }
+  return changed;
+}
+
+/** Scrolls a windowed table to a match's row, draws the rows now in view, and puts the row a third of the way down. */
+function csvReveal(m, h) {
+  const { scroll, draw: rows } = m.shown;
+  if (!scroll.isConnected) return;
+  const r0 = scroll.getBoundingClientRect();
+  if (r0.top < 0 || r0.bottom > innerHeight) scroll.scrollIntoView({ block: 'nearest' });
+  if (h.k < 0) { scroll.scrollTop = 0; rows(); return; }
+  const head = scroll.querySelector('thead'), headH = head ? head.getBoundingClientRect().height : 0;
+  const tr = () => scroll.querySelector(`tbody tr[aria-rowindex="${h.k + 2}"]`);
+  if (!tr()) { scroll.scrollTop = Math.max(0, headH + h.k * (m.rowH || 26) - scroll.clientHeight / 3); rows(); }
+  const t = tr();
+  if (!t) return;
+  const b = t.getBoundingClientRect(), s = scroll.getBoundingClientRect();
+  if (b.top < s.top + headH || b.bottom > s.bottom) { scroll.scrollTop += b.top - s.top - headH - (s.height - headH) / 3; rows(); }
+}
+
+/** Scrolls a match into view: sideways in a box that scrolls on its own (code, a table, the tree), then the page. */
+function revealRange(r) {
+  if (!r.getClientRects().length) return;
+  const node = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement;
+  const box = node && node.closest('.code-view, .csv-scroll, .json-tree');
+  let b = r.getBoundingClientRect();
+  if (box && box.scrollWidth > box.clientWidth) {
+    const bb = box.getBoundingClientRect(), side = box.querySelector(':scope > .gutter, th.rn');
+    const left = bb.left + (side ? side.getBoundingClientRect().width : 0);
+    if (b.left < left + 8 || b.right > bb.right - 8) { box.scrollLeft += b.left - left - (bb.right - left) / 3; b = r.getBoundingClientRect(); }
+  }
+  if (b.top < 96 || b.bottom > innerHeight - 24) window.scrollBy({ top: b.top - Math.max(96, innerHeight / 3), behavior: 'instant' });
+}
+
+/** Makes match `i` (wrapping around) current, scrolls to it and draws the matches. */
+function findGo(i) {
+  const f = finder, n = f.hits.length;
+  if (!n) return findLabel();
+  f.at = ((i % n) + n) % n;
+  const h = f.hits[f.at];
+  if (f.how === 'csv') csvReveal(csvState, h);
+  else if (f.how === 'json' && jsonReveal(jsonState, h.ptr)) {
+    findQuiet = true;
+    try { draw(); } finally { findQuiet = false; }
+    f.ranges = null;
+  }
+  const cur = paintFind();
+  if (cur) {
+    revealRange(cur);
+    if (!highlights) { const sel = getSelection(); sel.removeAllRanges(); sel.addRange(cur); }
+  }
+  findLabel();
+}
+
+/** The field's text changed: every key searches at once in a small file; in a large one, once the typing pauses. */
+function findInput(q) {
+  finder.q = q;
+  clearTimeout(findTimer);
+  findTimer = 0;
+  const run = () => { findTimer = 0; if (!findOpen()) return; findSearch(false); if (finder.at >= 0) findGo(finder.at); else { paintFind(); findLabel(); } };
+  if (current.text && current.text.length > 256 * 1024) findTimer = setTimeout(run, 120); else run();
+}
+
+function findStep(d) {
+  if (!findOpen()) return;
+  if (findTimer) {
+    clearTimeout(findTimer);
+    findTimer = 0;
+    findSearch(false);
+    if (finder.at >= 0) return findGo(0);
+    paintFind();
+    return findLabel();
+  }
+  const n = finder.hits.length;
+  if (n) findGo(finder.at < 0 ? (d > 0 ? 0 : n - 1) : finder.at + d);
+}
+
+/** After every draw: the matches are found again in what is now on screen, and the current one keeps its number. */
+function findAfterDraw() {
+  if (!findOpen() || findQuiet) return;
+  if (!hasText(current)) return closeFind();
+  findSearch(true);
+  paintFind();
+  findLabel();
+}
+
+/** Shows the find bar; with `keys` its field asks for the writer's key panel (the page itself never has the keyboard). */
+function openFind(keys = true) {
+  if (!hasText(current)) return false;
+  if (editing) stopEditing();
+  if (!findOpen()) {
+    findBar.hidden = false;
+    $('find-btn').setAttribute('aria-expanded', 'true');
+    if (!pop.hidden) showPopover(false);
+    findField.value = finder.q;
+    findSearch(false);
+    paintFind();
+    findLabel();
+  }
+  // Only a page with the keyboard (a browser) types into the field itself; in the hosts the key panel does.
+  if (document.hasFocus()) { findField.focus({ preventScroll: true }); findField.select(); }
+  if (keys) beginFind();
+  return true;
+}
+
+function closeFind() {
+  if (!findOpen()) return;
+  findBar.hidden = true;
+  $('find-btn').setAttribute('aria-expanded', 'false');
+  clearTimeout(findTimer);
+  findTimer = 0;
+  if (filterSession && filterSession.find) endFilter();
+  if (document.activeElement === findField) findField.blur();
+  Object.assign(finder, { hits: [], at: -1, more: false, index: null, ranges: null });
+  if (highlights) { highlights.delete('sb-find'); highlights.delete('sb-find-cur'); }
+}
+
+/** The find field holding the writer's key panel, as the sidebar's filter does: its text comes back through sb.filterText,
+ *  ↵ and ⇧↵ (⌘G, ⇧⌘G) through sb.filterKey as next and prev, and Esc closes the bar. */
+function beginFind() {
+  if (filterSession && filterSession.find) return;
+  if (editing || updateBusy) return;
+  if (filterSession) endFilter();
+  const r = findField.getBoundingClientRect();
+  filterSession = { seq: ++filterSeq, find: true };
+  findField.classList.add('held');
+  post({ type: 'filterBegin', find: true, seq: filterSession.seq, text: findField.value, clickX: r.width / 2, clickY: r.height / 2, width: r.width, height: r.height });
+}
+
+findField.addEventListener('input', () => findInput(findField.value));
+let findScrollQueued = false;
+window.addEventListener('scroll', () => {
+  if (findScrollQueued || !findOpen() || finder.hits.length <= FIND_PAINT) return;
+  findScrollQueued = true;
+  requestAnimationFrame(() => { findScrollQueued = false; if (findOpen()) paintFind(); });
+}, { passive: true });
+$('find-btn').addEventListener('click', (e) => { if (findOpen()) closeFind(); else openFind(e.isTrusted); });
+$('find-next').addEventListener('click', () => findStep(1));
+$('find-prev').addEventListener('click', () => findStep(-1));
+$('find-close').addEventListener('click', () => closeFind());
+
+// ---------- copy: the file's text (a Markdown file's source) or the selection, put on the clipboard by the writer ----------
+
+let copyTimer = 0;
+function copyFile() {
+  if (!hasText(current)) return false;
+  post({ type: 'copy', path: current.path });
+  return true;
+}
+
+/** ⌘C: the selection when there is one, else the whole file. */
+function copyNow() {
+  const sel = getSelection().toString();
+  if (sel && current.path) { post({ type: 'copy', path: current.path, text: sel }); return true; }
+  return copyFile();
+}
+
+$('copy').addEventListener('click', (e) => { if (e.isTrusted) copyFile(); });
+
+/** ⌥⌘F: the sidebar's filter field takes the keys, as a click in it does. */
+function focusFilter() {
+  if (editing || updateBusy || !tree.root || !sidebarShown()) return false;
+  const r = filterField.getBoundingClientRect();
+  beginFilter({ clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 });
+  return !!filterSession && !filterSession.list && !filterSession.find;
+}
+
+/** ⌘F, ⌥⌘F and ⌘C, from the Space helper's panel or from the writer's key panel while spacebar holds the keys. */
+function hostCommand(key) {
+  if (key === 'find') return openFind();
+  if (key === 'filter') return focusFilter();
+  if (key === 'copy') return copyNow();
+  return false;
+}
+
+// The same keys when the page itself has the keyboard (a browser, the test harness): the hosts never give it any.
+document.addEventListener('keydown', (e) => {
+  if (e.defaultPrevented || e.isComposing || e.ctrlKey) return;
+  if (e.metaKey) {
+    const k = (e.altKey ? e.code.replace(/^Key/, '') : e.key).toLowerCase();
+    let used = false;
+    if (k === 'f' && !e.shiftKey) used = e.altKey ? focusFilter() : openFind();
+    else if (k === 'g' && !e.altKey && findOpen()) { findStep(e.shiftKey ? -1 : 1); used = true; }
+    else if (k === 'c' && !e.altKey && !e.shiftKey && !getSelection().toString() && !(e.target instanceof Element && e.target.closest('input, textarea'))) used = copyFile();
+    if (used) e.preventDefault();
+    return;
+  }
+  if (e.target !== findField || e.altKey) return;
+  if (e.key === 'Enter') { findStep(e.shiftKey ? -1 : 1); e.preventDefault(); } else if (e.key === 'Escape') { closeFind(); e.preventDefault(); }
 });
 
 // ---------- the sidebar's menu: sort order (a panel key) and hidden files (the settings window's, never the page's) ----------
@@ -3271,6 +3773,7 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (e.target === filterField) { if (e.isTrusted) beginFilter(e); return; }
+  if (e.target === findField) { if (e.isTrusted) beginFind(); return; }
   if (e.target.closest('#side-head') && tree.root) { e.preventDefault(); peek(false); post({ type: 'overview' }); return; }
   const row = e.target.closest('#side-list a.row');
   if (row) {

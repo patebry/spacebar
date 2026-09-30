@@ -35,6 +35,9 @@ protocol SpacebarWriterProtocol {
     func updateOffer(reply: @escaping (Data?) -> Void)
     /// Puts the install command, which also updates, on the clipboard.
     func copyInstallCommand(reply: @escaping (Bool) -> Void)
+    /// Puts `text` on the clipboard as plain text: the file on screen, or the page's selection. Neither sandbox the page lives in
+    /// is asked to touch the pasteboard.
+    func copyText(_ text: String, reply: @escaping (Bool) -> Void)
     /// Starts the installer bundled in the app, detached, to update to `version`: only a release newer than this one, and only
     /// while the update check is on. Replies nil once it is running, or why it is not. It logs to ~/Library/Logs/spacebar-update.log.
     func installUpdate(_ version: String, reply: @escaping (String?) -> Void)
@@ -63,6 +66,9 @@ protocol SpacebarWriterProtocol {
     /// come back through filterKey and nothing is typed. Esc or Space ends it (FilterKeys.listEnds), and so does whatever ends a
     /// filter. Ended by endFilter.
     func beginListKeys(_ session: Int, clickX: Double, clickY: Double, rowWidth: Double, rowHeight: Double, reply: @escaping (Bool) -> Void)
+    /// The same session over the find field: text through filterChanged, and ↵ and ⇧↵ (⌘G and ⇧⌘G too) as FilterKeys.findNames
+    /// through filterKey. Esc ends it whatever the field holds. Ended by endFilter.
+    func beginFind(_ session: Int, text: String, clickX: Double, clickY: Double, fieldWidth: Double, fieldHeight: Double, reply: @escaping (Bool) -> Void)
     func endFilter(_ session: Int)
 }
 
@@ -79,7 +85,8 @@ protocol SpacebarEditHostProtocol {
     func editSplit(_ session: Int, before: String, after: String, tail: String)
     /// The filter field's text (FilterKeys.clean) after each change.
     func filterChanged(_ session: Int, text: String)
-    /// A key the sidebar moves with, one of FilterKeys.names; `isRepeat` for a held key's auto-repeat.
+    /// A key the sidebar moves with, one of FilterKeys.names (a list session: listNames and listCommands; the find field:
+    /// findNames); `isRepeat` for a held key's auto-repeat.
     func filterKey(_ session: Int, key: String, isRepeat: Bool)
     /// Sent for every filter session end; nothing more arrives for `session`.
     func filterEnded(_ session: Int, reason: String)
@@ -90,16 +97,41 @@ protocol SpacebarEditHostProtocol {
 enum FilterKeys {
     static let names: Set<String> = ["up", "down", "home", "end", "return"]
     static let listNames: Set<String> = names.union(["left", "right"])
+    /// ⌘F, ⌥⌘F and ⌘C while a list session holds the keys: the page finds in the file, filters the sidebar or copies.
+    static let listCommands: Set<String> = ["find", "filter", "copy"]
+    /// The find field's keys: the next and the previous match.
+    static let findNames: Set<String> = ["next", "prev"]
     static let maxLength = 256
     private static let byCode: [UInt16: String] = [126: "up", 125: "down", 115: "home", 119: "end", 36: "return", 76: "return"]
     private static let listByCode: [UInt16: String] = [123: "left", 124: "right"]
     /// NSEvent.ModifierFlags shift, control, option and command: with any of them the key edits the field's text instead.
     private static let editing: UInt = 1 << 17 | 1 << 18 | 1 << 19 | 1 << 20
+    private static let shiftFlag: UInt = 1 << 17, optionFlag: UInt = 1 << 19, commandFlag: UInt = 1 << 20
 
     /// The sidebar key for a key pressed in the field (or, `list`, over the list), or nil when the field keeps it.
     static func name(keyCode: UInt16, modifiers: UInt, list: Bool = false) -> String? {
         guard modifiers & editing == 0 else { return nil }
         return byCode[keyCode] ?? (list ? listByCode[keyCode] : nil)
+    }
+
+    /// The find field's key for a key pressed in it: Return is the next match and Shift+Return the previous one; nil when the
+    /// field keeps it.
+    static func findName(keyCode: UInt16, modifiers: UInt) -> String? {
+        guard keyCode == 36 || keyCode == 76, modifiers & (editing & ~shiftFlag) == 0 else { return nil }
+        return modifiers & shiftFlag == 0 ? "next" : "prev"
+    }
+
+    /// A Command shortcut by its character without modifiers: in a list session one of listCommands, in the find field ⌘G and
+    /// ⇧⌘G; nil for any other.
+    static func command(_ chars: String, modifiers: UInt, find: Bool) -> String? {
+        let mods = modifiers & editing
+        if find { return chars == "g" && mods & ~shiftFlag == commandFlag ? (mods & shiftFlag == 0 ? "next" : "prev") : nil }
+        switch (chars, mods) {
+        case ("f", commandFlag): return "find"
+        case ("f", commandFlag | optionFlag): return "filter"
+        case ("c", commandFlag): return "copy"
+        default: return nil
+        }
     }
 
     /// Whether a key ends a list session: Esc, and Space, which Quick Look closes the preview on. The extension cannot close

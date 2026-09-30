@@ -1807,13 +1807,13 @@ class PreviewController: NSViewController {
         search = nil
     }
 
-    /// A file the page may drag out of the panel: one the sidebar listed or the overview or a wikilink offered, or the file on
-    /// screen (the toolbar's kind), a regular file now.
+    /// A file the page may drag out of the panel: one the sidebar listed, the overview or a wikilink offered or the Contents
+    /// search found, or the file on screen (the toolbar's kind) unless a file inside it, an archive, is shown; a regular file now.
     func dragOutFile(_ body: [String: Any]) -> URL? {
         let m = PageMessage(body: body)
         let url: URL
-        if let p = listedFile(m) ?? offeredFile(m) { url = URL(fileURLWithPath: p) } else {
-            guard let f = fileURL, m.string("path", max: 4096) == f.path, unavailablePath != f.path else { return nil }
+        if let p = listedFile(m) ?? offeredFile(m) ?? searchedFile(m) { url = URL(fileURLWithPath: p) } else {
+            guard let f = fileURL, m.string("path", max: 4096) == f.path, unavailablePath != f.path, entryShown == nil else { return nil }
             url = f
         }
         var st = stat()
@@ -1894,8 +1894,9 @@ class PreviewController: NSViewController {
                 helper { $0.openFileOnScreen(url, reply: done) }
             }
         case "openWithList", "openWith":
-            // The toolbar's Open With menu, for the file on screen only; the writer lists and checks the apps again.
-            guard let url = fileURL, m.string("path", max: 4096) == url.path, fileKind == .markdown || shownCanOpen,
+            // The toolbar's Open With menu, for the file on screen only, never a file inside an archive; the writer lists and
+            // checks the apps again.
+            guard let url = fileURL, m.string("path", max: 4096) == url.path, entryShown == nil, fileKind == .markdown || shownCanOpen,
                   LinkPolicy.fileRefusal(url, allowArchives: fileKind == .archive) == nil else {
                 if type == "openWithList" { js("sb.openWithApps", ["path": m.string("path", max: 4096) ?? "", "apps": []]) }
                 return refuse(type, "not the file on screen or not allowed")

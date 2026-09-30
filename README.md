@@ -58,9 +58,9 @@ what Open allows and no more: nothing for a script, an app or an executable; bey
 script runner, a web browser, an office suite or an app outside the Applications folders, and for a text file only text
 editors.
 
-In the Space panel (Unreleased, 0.4), drag a file's row in the sidebar or the overview, or its kind in the toolbar, into
-Finder, Mail, a chat or an editor to hand it the file, as a drag from Finder would; Finder copies it. Quick Look's own window
-does not offer this. `.diff` and `.patch` files and Markdown `diff` fences are
+In the Space panel (Unreleased, 0.4), drag a file's row in the sidebar (a Contents search result too), the overview or the
+grid, or its kind in the toolbar, into Finder, Mail, a chat or an editor to hand it the file, as a drag from Finder would;
+Finder copies it. A file inside an archive is not on disk and does not drag. Quick Look's own window does not offer this. `.diff` and `.patch` files and Markdown `diff` fences are
 tinted line by line: added lines green, removed lines red, hunk headers dimmed.
 
 Text over 2 MB shows its first 2 MB; a CSV or TSV table reads up to 16 MB, and one over 2 MB is shown but not edited. WebM,
@@ -421,7 +421,8 @@ disk, the external change wins.
   archive is not on disk, so it has neither Open With nor drag out.
 - Open With lists apps by the file's type, never by the file, so a per-file binding saved on a downloaded file cannot add an
   app; the writer lists them again when one is chosen and opens only an app it offers. Dragging out hands another app only a
-  file the sidebar lists, the overview offers or the panel shows, and only while you hold the mouse button.
+  file the sidebar lists (a grid tile is one), the Contents search found, the overview offers or the panel shows, and only
+  while you hold the mouse button.
 - The preview extension has a read-only sandbox exception for the whole disk, so relative images beside a document load and
   the sidebar can show the folder's files.
 - The Space helper, when you turn it on, has Accessibility and sees every key event, so it is kept small: it acts only on

@@ -4682,15 +4682,16 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !owPop.h
 
 // ---------- dragging a file out of the Space panel: the page names the row, and the viewer starts a native file drag ----------
 
-// Rows are links: WebKit would drag their "#" as a URL. In the panel a press that moves on a file row, an overview row or the
-// toolbar's kind asks the viewer to drag that file out; the viewer checks the file and that the button is still down.
-document.addEventListener('dragstart', (e) => { if (e.target.closest && e.target.closest('#side-list a.row, #doc .overview a.ov-row, #kind')) e.preventDefault(); });
+// Rows are links: WebKit would drag their "#" as a URL. In the panel a press that moves on a file row (a search result too), an
+// overview row, a grid tile or the toolbar's kind asks the viewer to drag that file out; the viewer checks the file and that the
+// button is still down. A file inside an archive is not on disk, so its kind drags nothing.
+document.addEventListener('dragstart', (e) => { if (e.target.closest && e.target.closest('#side-list a.row, #doc .overview a.ov-row, #doc .ov-grid a.gt, #kind')) e.preventDefault(); });
 if (HOST === 'panel') {
   let press = null, dragged = 0;
   const source = (t) => {
-    const row = t.closest('#side-list a.row.file:not(.broken), #doc .overview a.ov-row');
+    const row = t.closest('#side-list a.row.file:not(.broken), #doc .overview a.ov-row, #doc .ov-grid a.gt');
     if (row) return row.dataset.path;
-    return t.closest('#kind') && current.path && !['overview', 'loading'].includes(current.view) ? current.path : null;
+    return t.closest('#kind') && current.path && !current.entry && !['overview', 'loading'].includes(current.view) ? current.path : null;
   };
   document.addEventListener('pointerdown', (e) => {
     const path = e.button === 0 && e.isTrusted && !editing && e.target.closest ? source(e.target) : null;

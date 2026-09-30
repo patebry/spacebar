@@ -2280,6 +2280,95 @@ def drag_openwith_diff(check):
             shutil.rmtree(ql.out, ignore_errors=True)
 
 
+def release_interactions(check):
+    """0.4's features together, in the panel: a grid tile and a Contents result drag out (the result from a folder never opened,
+    as the search found it) while nothing inside an archive does; while the grid is on screen a filter session's arrows move
+    through the results, not the tiles; a file inside an archive has no Open With and its diff is tinted."""
+    import zipfile
+    page = Page(host='panel')
+    try:
+        root = os.path.join(page.out, 'mix')
+        photos = os.path.join(root, 'Photos')
+        os.makedirs(os.path.join(photos, 'deep'))
+        for i in range(8):
+            open(os.path.join(photos, f'p{i}.png'), 'wb').write(make_png(30 + i, 20))
+        open(os.path.join(photos, 'deep', 'note.txt'), 'w').write('a wombat lives here\n')
+        zpath = os.path.join(root, 'arc.zip')
+        with zipfile.ZipFile(zpath, 'w') as z:
+            z.writestr('fix.diff', '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n')
+            z.writestr('notes.txt', 'plain\n')
+        msgs = lambda r, t: [m for m in r['messages'] if m.get('type') == t]
+        P = lambda n: os.path.join(photos, n)
+        page.cmd('@size:1100x760')
+
+        # ---- the grid and the search ----
+        r = page.cmd('@folder:' + photos)
+        page.cmd('@wait:0.6')
+        check(r['result'] == 'overview' and page.js('return gridShown()'), 'together: the folder of pictures opens on its grid', r['result'])
+        r = page.cmd(f'@nativedrag:#doc .ov-grid a.gt[data-path="{P("p1.png")}"],60')
+        r['messages'] += page.cmd('@wait:0.2')['messages']
+        check([m.get('path') for m in msgs(r, '_dragOut')] == [P('p1.png')] and not msgs(r, 'open'),
+              'together: a grid tile drags its picture out, and the press opens nothing', json.dumps(r['messages'])[:300])
+        click(page, '#side-mode')
+        page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.value = 'wombat'; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
+        for _ in range(40):
+            page.cmd('@wait:0.05')
+            if page.js("return document.querySelectorAll('#side-list a.row.hit').length"):
+                break
+        hit = P(os.path.join('deep', 'note.txt'))
+        check(page.js("return [...document.querySelectorAll('#side-list a.row.hit')].map((a) => a.dataset.path)") == [hit] and page.js('return gridShown()'),
+              'together: a Contents search with the grid on screen finds the file in a folder under it, the grid stays')
+        page.cmd('@nativeclick:#side-q')
+        sel = page.js("return (document.querySelector('#doc a.gt.sel') || {}).dataset?.path || null")
+        seq = page.js('return filterSession && !filterSession.list ? filterSession.seq : null')
+        r = page.cmd(f"@eval:sb.filterKey({{ seq: {json.dumps(seq)}, key: 'down' }}); 0")
+        r['messages'] += page.cmd('@wait:0.4')['messages']
+        after = page.js("return (document.querySelector('#doc a.gt.sel') || {}).dataset?.path || null")
+        check(seq is not None and after == sel and [m.get('path') for m in msgs(r, 'open')] == [hit],
+              "together: with the grid on screen the filter session's ↓ moves through the results, not the tiles", json.dumps([seq, sel, after, r['messages']])[:300])
+        page.cmd('@eval:sb.filterEnd({ all: true }); 0')
+        r = page.cmd(f'@nativedrag:#side-list a.row.hit[data-path="{hit}"],60')
+        r['messages'] += page.cmd('@wait:0.2')['messages']
+        check([m.get('path') for m in msgs(r, '_dragOut')] == [hit], 'together: a Contents result drags out, from a folder the sidebar never opened',
+              json.dumps(r['messages'])[:300])
+        click(page, '#side-mode')
+
+        # ---- a file inside an archive ----
+        page.cmd('@root:' + root)
+        page.render(zpath)
+        page.cmd('@wait:0.4')
+        r = page.cmd('@nativedrag:#doc .arc-entry[data-entry="notes.txt"],60')
+        r['messages'] += page.cmd('@wait:0.2')['messages']
+        check(not msgs(r, 'dragOut'), 'together: a file in an archive listing does not drag out', json.dumps([m.get('type') for m in r['messages']]))
+        page.cmd("@eval:(() => { document.querySelector('#doc .arc-entry[data-entry=\"fix.diff\"]').click(); return 0; })()")
+        page.cmd('@wait:0.6')
+        tint = page.js("""const a = document.querySelector('#doc .hljs-addition'), d = document.querySelector('#doc .hljs-deletion');
+          return [document.documentElement.dataset.view, a && a.textContent, a && getComputedStyle(a).display, d && getComputedStyle(d).backgroundColor,
+            a && getComputedStyle(a).backgroundColor, !!current.entry];""")
+        check(tint[0] == 'code' or tint[0] == 'text', 'together: the diff inside the archive opens', json.dumps(tint))
+        check(tint[1] == '+new' and tint[2] == 'inline-block' and tint[3] != tint[4] and tint[5], 'together: a diff inside an archive is tinted line by line', json.dumps(tint))
+        check(page.js("return [document.getElementById('edit').hidden, document.getElementById('open-with').hidden]") == [True, True],
+              'together: a file inside an archive has no Open and no Open With')
+        r = page.cmd("@eval:window.webkit.messageHandlers.sb.postMessage({ type: 'openWithList', path: " + json.dumps(zpath) + " }); 0")
+        r['messages'] += page.cmd('@wait:0.2')['messages']
+        check(msgs(r, '_openWithRefused') and not msgs(r, '_openWithList'), 'together: Open With is refused while a file inside the archive is shown',
+              json.dumps(r['messages'])[:300])
+        r = page.cmd('@nativedrag:#kind,60')
+        r['messages'] += page.cmd('@wait:0.2')['messages']
+        check(not msgs(r, 'dragOut'), "together: the toolbar's kind drags nothing out while a file inside the archive is shown",
+              json.dumps([m.get('type') for m in r['messages']]))
+        page.cmd('@nativeclick:#doc .viewer-back')
+        page.cmd('@wait:0.4')
+        r = page.cmd('@nativedrag:#kind,60')
+        r['messages'] += page.cmd('@wait:0.2')['messages']
+        check([m.get('path') for m in msgs(r, '_dragOut')] == [zpath], "together: back at the listing, the kind drags the archive itself",
+              json.dumps(r['messages'])[:300])
+        page.cmd('@root:')
+    finally:
+        page.close()
+        shutil.rmtree(page.out, ignore_errors=True)
+
+
 def missing_images(page, check, out):
     """Images that did not load: a placeholder with the alt text, the path as written and why (the extension's ImageCheck); its
     Reveal folder only for a real click on the page's own button; a remote image blocked or failing; a missing image that
@@ -3643,6 +3732,7 @@ def main():
         sandboxed(tree, check, runtime=True)
         panel_host(check)
         drag_openwith_diff(check)
+        release_interactions(check)
     finally:
         if page.proc.poll() is None:
             page.close()

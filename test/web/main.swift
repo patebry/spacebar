@@ -561,7 +561,7 @@ rec.onMessage = { type, body in
     case "openWithList", "openWith":
         // As the extension and the writer: the file on screen only, and only an app LinkPolicy.openWithApps offers for it now.
         let u = path.map { URL(fileURLWithPath: $0) }
-        guard let u, path == currentFile, currentKind == .markdown || currentCanOpen, LinkPolicy.fileRefusal(u, allowArchives: currentKind == .archive) == nil else {
+        guard let u, path == currentFile, entryShown == nil, currentKind == .markdown || currentCanOpen, LinkPolicy.fileRefusal(u, allowArchives: currentKind == .archive) == nil else {
             rec.messages.append(["type": "_openWithRefused", "path": path ?? ""])
             if type == "openWithList" { web.evaluateJavaScript("sb.openWithApps(\(jsonString(["path": path ?? "", "apps": []]))); 0") }
             return
@@ -577,10 +577,11 @@ rec.onMessage = { type, body in
             rec.messages.append(["type": LinkPolicy.openWith(u, app: id, allowArchives: true) == nil ? "_openWithRefused" : "_openWith", "path": u.path, "app": id])
         }
     case "dragOut":
-        // As the viewer (PanelController): a listed or offered file, or the file on screen, and then only from a press still
-        // under way. The drag itself is never started here: it would follow the real pointer into other apps.
+        // As the viewer (PanelController): a listed, offered or searched file, or the file on screen unless it is an archive
+        // showing a file inside it, and then only from a press still under way. The drag itself is never started here: it would
+        // follow the real pointer into other apps.
         var st = stat()
-        let p = listedFile(path) ?? (path != nil && path == currentFile && stat(path!, &st) == 0 && st.st_mode & S_IFMT == S_IFREG ? path : nil)
+        let p = listedFile(path) ?? (path != nil && path == currentFile && entryShown == nil && stat(path!, &st) == 0 && st.st_mode & S_IFMT == S_IFREG ? path : nil)
         guard let p else { rec.messages.append(["type": "_dragRefused", "path": path ?? ""]); return }
         rec.messages.append(["type": "_dragOut", "path": p, "refusal": web.fileDragRefusal() ?? ""])
     case "openFile", "reveal":

@@ -36,9 +36,10 @@ Each release's notes on GitHub also list its commits. This file keeps what chang
 
 ### Drag out, Open With, diffs
 
-- **Drag a file out of the Space panel.** Drag a row of the sidebar, a row of a folder's overview, or the file's kind in the
-  toolbar into Finder, Mail, a chat or an editor: the drop gets the file, as a drag from Finder does, except that Finder
-  copies it rather than moving it. Only files the sidebar lists (or the overview offers) and the file on screen can be dragged.
+- **Drag a file out of the Space panel.** Drag a row of the sidebar, a Contents search result, a row of a folder's overview,
+  a tile of its grid, or the file's kind in the toolbar into Finder, Mail, a chat or an editor: the drop gets the file, as a
+  drag from Finder does, except that Finder copies it rather than moving it. Only files the sidebar lists, the search found or
+  the overview offers, and the file on screen, can be dragged; a file inside an archive is not on disk and cannot.
   This is the Space panel's; Quick Look's own window does not offer it.
 - **Open With.** The chevron beside Open lists the apps that open the file, its default app first, at most 12, with their
   icons. It offers exactly what Open allows: nothing for a script, an app, an executable or a file that often holds secrets

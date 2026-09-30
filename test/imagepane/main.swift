@@ -116,13 +116,19 @@ check("the payload names the kind", payload("photo.heic")["kindName"] as? String
 // ---- the pane in a real (off-screen) window above a WKWebView, as in the extension ----
 let window = NSWindow(contentRect: NSRect(x: -20000, y: -20000, width: 1000, height: 800), styleMask: [.borderless], backing: .buffered, defer: false)
 let container = NSView(frame: NSRect(x: 0, y: 0, width: 1000, height: 800))
-let webView = WKWebView(frame: container.bounds)
+/// The page under the pane: counts the scrolls it is handed.
+final class Page: WKWebView {
+    var scrolls = 0
+    override func scrollWheel(with e: NSEvent) { scrolls += 1 }
+}
+let webView = Page(frame: container.bounds)
 webView.autoresizingMask = [.width, .height]
 container.addSubview(webView)
 window.contentView = container
 window.orderBack(nil)
 
 let pane = ImagePane()
+ImagePane.zoomDuration = 0
 var zooms: [(String, Int)] = []
 pane.onZoom = { zooms.append(($0, $1)) }
 let largePath = dir.appendingPathComponent("large.tiff").path
@@ -142,7 +148,7 @@ check("fitted: the whole image in the area (800 wide of 4000: 20%), from the scr
 let doc = pane.imageView
 pane.toggle(at: NSPoint(x: 3000, y: 500))
 spin(0.05)
-check("a click zooms to actual size about the point clicked", !pane.fitted && abs(pane.view.magnification - 1) < 0.001 && zooms.last?.1 == 100
+check("a double-click zooms to actual size about the point", !pane.fitted && abs(pane.view.magnification - 1) < 0.001 && zooms.last?.1 == 100
       && pane.view.contentView.bounds.midX > 2000, "\(pane.view.magnification) \(pane.view.contentView.bounds)")
 spin(until: 5) { pane.decodedWidth == 4000 }
 check("at 100% the whole image is decoded in place of the screen-sized one", pane.decodedWidth == 4000
@@ -170,10 +176,67 @@ let after = pane.view.contentView.bounds.origin
 check("a drag moves the zoomed image and does not zoom back out", !pane.fitted && after.x > before.x + 100, "\(before) \(after)")
 pane.view.mouseDown(with: mouse(.leftMouseDown, mid))
 pane.view.mouseUp(with: mouse(.leftMouseUp, mid))
-check("a click on a zoomed image fits it again", pane.fitted && zooms.last?.1 == 20)
+check("a single click leaves the zoom alone", !pane.fitted && abs(pane.view.magnification - 1) < 0.001)
 pane.view.mouseDown(with: mouse(.leftMouseDown, mid, clicks: 2))
 pane.view.mouseUp(with: mouse(.leftMouseUp, mid, clicks: 2))
-check("the second click of a double-click is not another toggle", pane.fitted)
+check("a double-click on a zoomed image fits it again", pane.fitted && zooms.last?.1 == 20)
+
+// ---- the trackpad and the mouse through NSApp.sendEvent, as real input arrives, in a window that is not key of an app that
+// is not active: the Space viewer's case ----
+check("the harness is as the viewer is: not active, its window not key", !NSApp.isActive && !window.isKeyWindow)
+let mag = { pane.view.magnification }
+let left = pane.view.convert(NSPoint(x: 200, y: 300), to: nil)
+Synth.send(Synth.pinch(window, at: left, by: 0.1))
+check("without GestureRouter AppKit drops the pinch (the Space panel's zoom failure)", pane.fitted && abs(mag() - 0.2) < 0.001, "\(mag())")
+GestureRouter.install()
+let under = doc.convert(left, from: nil)
+Synth.send(Synth.pinch(window, at: left, by: 0.1))
+let underAfter = doc.convert(left, from: nil)
+check("a pinch zooms smoothly, step by step, reported for the caption", mag() > 0.26 && !pane.fitted && (zooms.last?.1 ?? 0) > 26, "\(mag()) \(zooms.suffix(3))")
+check("a pinch zooms about the pointer", hypot(under.x - underAfter.x, under.y - underAfter.y) < 40, "\(under) \(underAfter)")
+Synth.send(Synth.pinch(window, at: left, by: -0.3, steps: 8))
+spin(0.5)
+check("a pinch never leaves the image smaller than fitted", abs(mag() - 0.2) < 0.01 && pane.fitted, "\(mag())")
+Synth.send([Synth.smartMagnify(window, at: left)])
+check("a two-finger double tap zooms a fitted image to 100% about the pointer", abs(mag() - 1) < 0.001 && !pane.fitted
+      && abs(doc.convert(left, from: nil).x - under.x) < 40, "\(mag()) \(doc.convert(left, from: nil)) \(under)")
+let origin = pane.view.contentView.bounds.origin
+let pageScrolls = webView.scrolls
+Synth.send(Synth.scroll(window, at: left, dx: -60, dy: -120))
+spin(0.5)
+let moved = pane.view.contentView.bounds.origin
+check("two fingers move a zoomed image, not the page", abs(moved.y - origin.y) > 80 && abs(moved.x - origin.x) > 30 && webView.scrolls == pageScrolls,
+      "\(origin) \(moved) \(webView.scrolls)")
+Synth.send([Synth.smartMagnify(window, at: left)])
+check("a two-finger double tap on a zoomed image fits it", pane.fitted && abs(mag() - 0.2) < 0.001)
+Synth.send(Synth.scroll(window, at: left, dy: -120))
+check("two fingers over a fitted image scroll the page under it", webView.scrolls > pageScrolls && pane.fitted, "\(webView.scrolls)")
+Synth.send(Synth.scroll(window, at: left, dy: 40, precise: false, control: true))
+check("a wheel with ctrl zooms", mag() > 0.21 && !pane.fitted, "\(mag())")
+_ = pane.key("zoomReset")
+Synth.send(Synth.click(window, at: left, 1))
+check("a click through the window leaves the zoom alone", pane.fitted)
+Synth.send(Synth.click(window, at: left, 1) + Synth.click(window, at: left, 2))
+check("a double-click through the window zooms to 100% once", abs(mag() - 1) < 0.001 && !pane.fitted, "\(mag())")
+Synth.send(Synth.click(window, at: left, 1) + Synth.click(window, at: left, 2))
+check("another double-click fits it again", pane.fitted)
+
+// Double-click and the keys animate, unless the user asks for reduced motion; a key during the animation steps from where it goes.
+ImagePane.zoomDuration = 0.25
+pane.toggle(at: under)
+if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+    check("reduced motion: a double-click zooms at once", abs(mag() - 1) < 0.001)
+} else {
+    let midway = mag()
+    spin(0.5)
+    check("a double-click zooms in an animation", midway < 0.99 && abs(mag() - 1) < 0.001, "\(midway) \(mag())")
+}
+_ = pane.key("zoomIn"); _ = pane.key("zoomIn")
+spin(0.6)
+check("⌘+ twice in a row, animated, steps twice", abs(mag() - 1.5625) < 0.001 && zooms.last?.1 == 156, "\(mag())")
+_ = pane.key("zoomReset")
+spin(0.6)
+ImagePane.zoomDuration = 0
 
 // A resize while fitted fits again; a small image shown whole starts at 100% and a click doubles it.
 pane.place(message: msg.merging(["w": 400]) { _, n in n }, in: webView)
@@ -186,7 +249,7 @@ spin(0.05)
 check("another image starts fitted: a small one at 100%, centred", pane.fitted && abs(pane.view.magnification - 1) < 0.001 && zooms.last.map { $0.0 == photo && $0.1 == 100 } == true
       && abs(pane.view.contentView.bounds.midX - 60) < 1 && abs(pane.view.contentView.bounds.midY - 40) < 1, "\(pane.view.contentView.bounds)")
 pane.toggle(at: NSPoint(x: 60, y: 40))
-check("a click on an image already whole doubles it", abs(pane.view.magnification - 2) < 0.001 && zooms.last?.1 == 200)
+check("a double-click on an image already whole doubles it", abs(pane.view.magnification - 2) < 0.001 && zooms.last?.1 == 200)
 pane.show(loaded("photo.heic")!, path: photo)
 check("the same file again (a change on disk) keeps its zoom", abs(pane.view.magnification - 2) < 0.001 && !pane.fitted)
 pane.place(message: ["path": photo, "hide": true], in: webView)

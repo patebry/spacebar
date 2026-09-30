@@ -1011,6 +1011,14 @@ window.sb = {
     try { render('# a\n\n**b** [c](#d) `e`\n\n- [ ] f\n\n| g | h |\n|---|---|\n| 1 | 2 |\n\n$x^2$\n\n```js\nconst i = 1;\n```\n'); codeBlock('let j = 1\n', 'swift'); }
     catch (e) { /* a warm-up only */ }
   },
+  /** A two-finger double tap at (x, y), in CSS pixels of the viewport: the image viewer toggles as on a double-click. */
+  smartZoom(m) {
+    if (current.view !== 'image' || !m || !Number.isFinite(m.x) || !Number.isFinite(m.y)) return false;
+    const stage = document.querySelector('#doc .img-stage'), img = stage && stage.querySelector('img'), label = document.querySelector('#doc .img-zoom');
+    if (!stage || !img || !img.naturalWidth || !stage.contains(document.elementFromPoint(m.x, m.y))) return false;
+    animateZoom(stage, img, label, toggleTarget(stage, img), m.x, m.y);
+    return true;
+  },
   /** The zoom of the image the extension draws (a bitmap view), as a whole percentage, for the caption. */
   imageZoom(z) {
     if (!z || z.path !== current.path || current.view !== 'bitmap' || !Number.isInteger(z.zoom)) return;
@@ -1836,7 +1844,7 @@ function applyZoom(stage, img, label, scale, ax, ay) {
   }
   const shown = scale === null ? fit : scale;
   label.textContent = img.naturalWidth ? `${Math.round(shown * 100)}%` : '';
-  stage.title = scale === null ? 'Click to zoom to actual size' : 'Click to fit. Drag to move.';
+  stage.title = scale === null ? 'Double-click to zoom to actual size' : 'Double-click to fit. Drag to move.';
   if (scale !== null && ax !== undefined && before.width > 0) {
     const fx = Math.min(1, Math.max(0, (ax - before.left) / before.width)), fy = Math.min(1, Math.max(0, (ay - before.top) / before.height));
     const after = img.getBoundingClientRect();
@@ -1845,14 +1853,49 @@ function applyZoom(stage, img, label, scale, ax, ay) {
   }
 }
 
-/** Click (or double-click) toggles fitted and actual size; a drag moves a zoomed image; a pinch, ⌘+ and ⌘− zoom. */
+/** Where a double-click goes: fitted to actual size (twice that when actual size is about the fitted size), else to fitted. */
+function toggleTarget(stage, img) {
+  const fit = fitScale(stage, img);
+  return imgScale === null ? (fit < 0.8 ? 1 : Math.min(IMG_MAX, 2)) : null;
+}
+
+// A running zoom animation (double-click, a two-finger double tap, ⌘ keys): where it goes, and its frame request.
+let imgAnim = null;
+const IMG_ANIM_MS = 180;
+
+/** Zooms to `scale` (null: fitted) about (ax, ay) in an animation, or at once when the user asks for reduced motion. */
+function animateZoom(stage, img, label, scale, ax, ay) {
+  if (imgAnim) cancelAnimationFrame(imgAnim.frame);
+  imgAnim = null;
+  const fit = fitScale(stage, img), from = imgScale === null ? fit : imgScale, to = scale === null ? fit : scale;
+  if (reducedMotion.matches || Math.abs(to - from) < 0.001) return applyZoom(stage, img, label, scale, ax, ay);
+  const start = performance.now(), anim = { to: scale };
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / IMG_ANIM_MS), k = 1 - (1 - t) ** 3;
+    if (!stage.isConnected) { imgAnim = null; return; }
+    if (t >= 1) { imgAnim = null; applyZoom(stage, img, label, scale, ax, ay); return; }
+    applyZoom(stage, img, label, from + (to - from) * k, ax, ay);
+    anim.frame = requestAnimationFrame(step);
+  };
+  imgAnim = anim;
+  anim.frame = requestAnimationFrame(step);
+}
+
+/** The zoom a step starts from: where a running animation is going, else the zoom on screen. */
+function zoomFrom(stage, img) {
+  const goal = imgAnim ? imgAnim.to : imgScale;
+  return goal === null ? fitScale(stage, img) : goal;
+}
+
+/** A double-click toggles fitted and actual size; a drag moves a zoomed image, and so do two fingers; a pinch zooms about the
+ *  pointer, and so does a wheel with ctrl. */
 function imageControls(stage, img, label) {
   let drag = null, moved = false;
   const clamp = (x) => Math.min(IMG_MAX, Math.max(fitScale(stage, img), x));
   stage.addEventListener('pointerdown', (e) => {
+    moved = false;
     if (e.button !== 0 || imgScale === null) return;
     drag = { x: e.clientX, y: e.clientY, l: stage.scrollLeft, t: stage.scrollTop, id: e.pointerId };
-    moved = false;
   });
   stage.addEventListener('pointermove', (e) => {
     if (!drag || e.pointerId !== drag.id) return;
@@ -1865,28 +1908,30 @@ function imageControls(stage, img, label) {
   const end = () => { drag = null; stage.classList.remove('panning'); };
   stage.addEventListener('pointerup', end);
   stage.addEventListener('pointercancel', end);
-  stage.addEventListener('click', (e) => {
-    if (moved) { moved = false; return; }
-    // The second click of a double-click is not another toggle.
-    if (e.detail > 1 || !img.naturalWidth) return;
-    const fit = fitScale(stage, img);
-    applyZoom(stage, img, label, imgScale === null ? (fit < 1 ? 1 : Math.min(IMG_MAX, 2)) : null, e.clientX, e.clientY);
+  stage.addEventListener('dblclick', (e) => {
+    if (moved || !img.naturalWidth) return;
+    e.preventDefault();
+    animateZoom(stage, img, label, toggleTarget(stage, img), e.clientX, e.clientY);
   });
-  // A trackpad pinch reaches the page as a wheel event with ctrlKey (and, in WebKit, as gesture events).
+  // WebKit sends a pinch as gesture events and, beside them, as wheel events with ctrl; the gesture events alone drive it.
+  let pinchFrom = null;
   stage.addEventListener('wheel', (e) => {
     if (!e.ctrlKey || !img.naturalWidth) return;
     e.preventDefault();
-    const from = imgScale === null ? fitScale(stage, img) : imgScale;
-    applyZoom(stage, img, label, clamp(from * Math.exp(-e.deltaY * 0.01)), e.clientX, e.clientY);
+    if (pinchFrom !== null) return;
+    applyZoom(stage, img, label, clamp(zoomFrom(stage, img) * Math.exp(-e.deltaY * 0.01)), e.clientX, e.clientY);
   }, { passive: false });
-  let pinchFrom = null;
-  stage.addEventListener('gesturestart', (e) => { e.preventDefault(); pinchFrom = imgScale === null ? fitScale(stage, img) : imgScale; });
+  stage.addEventListener('gesturestart', (e) => {
+    e.preventDefault();
+    if (imgAnim) { cancelAnimationFrame(imgAnim.frame); imgAnim = null; }
+    pinchFrom = imgScale === null ? fitScale(stage, img) : imgScale;
+  });
   stage.addEventListener('gesturechange', (e) => {
     if (pinchFrom === null || !img.naturalWidth) return;
     e.preventDefault();
     applyZoom(stage, img, label, clamp(pinchFrom * e.scale), e.clientX, e.clientY);
   });
-  stage.addEventListener('gestureend', () => { pinchFrom = null; });
+  stage.addEventListener('gestureend', (e) => { e.preventDefault(); pinchFrom = null; });
 }
 
 /** ⌘+, ⌘− and ⌘0 (`key` '+', '-' or '0') on the image on screen, about the middle of what is shown. Whether it applied. */
@@ -1894,14 +1939,14 @@ function zoomImage(key) {
   if (current.view !== 'image') return false;
   const stage = document.querySelector('#doc .img-stage'), img = stage && stage.querySelector('img'), label = document.querySelector('#doc .img-zoom');
   if (!stage || !img || !img.naturalWidth) return false;
-  const r = stage.getBoundingClientRect(), from = imgScale === null ? fitScale(stage, img) : imgScale;
+  const r = stage.getBoundingClientRect(), from = zoomFrom(stage, img);
   const cx = r.left + Math.min(r.width, window.innerWidth) / 2, cy = r.top + Math.min(r.height, window.innerHeight - r.top) / 2;
   let to;
   if (key === '+') to = Math.min(IMG_MAX, from * 1.25);
   else if (key === '-') to = Math.max(fitScale(stage, img), from / 1.25);
   else if (key === '0') to = null;
   else return false;
-  applyZoom(stage, img, label, to, cx, cy);
+  animateZoom(stage, img, label, to, cx, cy);
   return true;
 }
 document.addEventListener('keydown', (e) => {

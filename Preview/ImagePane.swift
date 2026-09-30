@@ -4,8 +4,9 @@ import WebKit
 
 /// An image WebKit does not decode reliably (HEIC, AVIF, TIFF, camera RAW, PSD, EXR, TGA, JPEG 2000, ICNS), decoded by ImageIO
 /// and drawn in an NSImageView in a scroll view laid over the page's `.pdf-area`, like PDFPane. It behaves as the page's own
-/// image viewer: fitted to the area, a click toggles fitted and actual size about the point clicked, a drag moves a zoomed image,
-/// a pinch or ⌘+ ⌘− ⌘0 zoom, and the zoom is reported for the caption (`onZoom`). 100% is one image pixel per point, as `<img>`.
+/// image viewer: fitted to the area, a double-click or a two-finger double tap toggles fitted and actual size about the point,
+/// a pinch zooms about the pointer, two fingers or a drag move a zoomed image, ⌘+ ⌘− ⌘0 zoom and fit, and the zoom is reported
+/// for the caption (`onZoom`). 100% is one image pixel per point, as `<img>`.
 ///
 /// The first decode is sized for the screen; the whole image is decoded only once a zoom needs more pixels than that.
 final class ImagePane: NSObject {
@@ -27,6 +28,8 @@ final class ImagePane: NSObject {
     static let maxArea = 80_000_000
     static let maxDecodeArea = 40_000_000
     static let maxZoom: CGFloat = 8
+    /// How long a double-click's or a key's zoom takes; none when the user asks for reduced motion.
+    static var zoomDuration: TimeInterval = 0.18
 
     let view: NSScrollView
     let imageView: NSImageView
@@ -44,6 +47,13 @@ final class ImagePane: NSObject {
     private(set) var decodedWidth = 0
     private var upgrading = false
     private var lastPercent = -1
+    /// Where an animated zoom is going, while it runs.
+    private var goal: CGFloat?
+    /// The page under the pane: a scroll over a fitted image scrolls it.
+    weak var web: NSView?
+    private var scrollMonitor: Any?
+    /// The scroll under way, its momentum included, goes to the page: it began over the fitted image.
+    private var scrollToPage = false
     /// The zoom, as a whole percentage, whenever it changes: the page shows it in the caption.
     var onZoom: (String, Int) -> Void = { _, _ in }
     /// ImageIO could not decode the file: the owner shows its info card instead.
@@ -60,6 +70,7 @@ final class ImagePane: NSObject {
         view.borderType = .noBorder
         view.drawsBackground = true
         view.allowsMagnification = true
+        view.usesPredominantAxisScrolling = false
         view.maxMagnification = Self.maxZoom
         view.autoresizingMask = [.width, .height]
         view.isHidden = true
@@ -71,10 +82,29 @@ final class ImagePane: NSObject {
         (view as? ImageScrollView)?.pane = self
         view.contentView.postsBoundsChangedNotifications = true
         NotificationCenter.default.addObserver(self, selector: #selector(boundsChanged), name: NSView.boundsDidChangeNotification, object: view.contentView)
-        NotificationCenter.default.addObserver(self, selector: #selector(liveMagnifyEnded), name: NSScrollView.didEndLiveMagnifyNotification, object: view)
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in self.map { $0.scrollWheel(e) } ?? e }
     }
 
-    deinit { NotificationCenter.default.removeObserver(self) }
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
+    }
+
+    /// Two fingers move a zoomed image and scroll the page under a fitted one; with ctrl a wheel zooms. Taken before the scroll
+    /// view sees the event: a scroll view that overrides scrollWheel loses AppKit's responsive scrolling.
+    private func scrollWheel(_ e: NSEvent) -> NSEvent? {
+        guard path != nil, placed, !view.isHidden, let w = view.window, e.window === w else { return e }
+        let over = view.bounds.contains(view.convert(e.locationInWindow, from: nil))
+        if e.phase.contains(.began) || (e.phase.isEmpty && e.momentumPhase.isEmpty) { scrollToPage = over && fitted }
+        if over, e.modifierFlags.contains(.control), e.momentumPhase.isEmpty {
+            let dy = e.hasPreciseScrollingDeltas ? e.scrollingDeltaY : e.scrollingDeltaY * 10
+            zoom(by: exp(dy * 0.01), at: imageView.convert(e.locationInWindow, from: nil))
+            return nil
+        }
+        guard scrollToPage, let web else { return e }
+        web.scrollWheel(with: e)
+        return nil
+    }
 
     /// The image at `url`, its primary picture (an icon file's largest), decoded off the main thread with EXIF orientation applied,
     /// its longest side at most `maxSide` pixels. Blocks: call it off the main thread.
@@ -174,41 +204,74 @@ final class ImagePane: NSObject {
 
     /// Zooms to `scale` (nil: fitted), keeping `point`, in the image view's coordinates, where it is; the middle of what is
     /// shown when nil.
-    func zoom(to scale: CGFloat?, at point: NSPoint? = nil) {
+    func zoom(to scale: CGFloat?, at point: NSPoint? = nil, animated: Bool = false) {
         guard path != nil else { return }
         let fit = fitScale
         let to = scale.map { min(Self.maxZoom, max(fit, $0)) } ?? fit
         let at = point ?? NSPoint(x: view.contentView.bounds.midX, y: view.contentView.bounds.midY)
-        view.setMagnification(to, centeredAt: at)
         fitted = abs(to - fit) < 0.01
+        let duration = animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? Self.zoomDuration : 0
+        if duration > 0, abs(to - view.magnification) > 0.001 {
+            goal = to
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = duration
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                view.animator().setMagnification(to, centeredAt: at)
+            }, completionHandler: { [weak self] in
+                guard let self, self.goal == to else { return }
+                self.goal = nil
+                self.report()
+            })
+        } else {
+            goal = nil
+            view.setMagnification(to, centeredAt: at)
+        }
         report()
     }
 
-    /// A click: fitted goes to actual size (twice that for an image already shown whole at 100%), anything else back to fitted.
+    /// Double-click: fitted goes to actual size (twice that when actual size is about the fitted size), anything else to fitted.
     func toggle(at point: NSPoint) {
         let fit = fitScale
-        zoom(to: fitted ? (fit < 1 ? 1 : min(Self.maxZoom, 2)) : nil, at: point)
+        zoom(to: fitted ? (fit < 0.8 ? 1 : min(Self.maxZoom, 2)) : nil, at: point, animated: true)
+    }
+
+    /// A wheel with ctrl: `factor` times the zoom, about `point`.
+    func zoom(by factor: CGFloat, at point: NSPoint) {
+        guard path != nil else { return }
+        zoom(to: (goal ?? view.magnification) * factor, at: point)
+    }
+
+    /// One step of a pinch about `point`. It may go a little below fitted while the fingers are down, and springs back after.
+    func pinch(_ delta: CGFloat, phase: NSEvent.Phase, at point: NSPoint) {
+        guard path != nil else { return }
+        let fit = fitScale
+        if phase.contains(.ended) || phase.contains(.cancelled) {
+            view.minMagnification = fit
+            return zoom(to: view.magnification < fit + 0.005 ? nil : view.magnification, at: point, animated: true)
+        }
+        goal = nil
+        view.minMagnification = fit * 0.8
+        let to = min(Self.maxZoom, max(fit * 0.8, view.magnification * (1 + delta)))
+        view.setMagnification(to, centeredAt: point)
+        fitted = false
+        if phase.isEmpty, to < fit { zoom(to: nil, at: point) }
+        report()
     }
 
     /// ⌘+, ⌘− and ⌘0 (`key` zoomIn, zoomOut or zoomReset), about the middle of what is shown. Whether it applied.
     func key(_ key: String) -> Bool {
         guard path != nil, placed, !view.isHidden else { return false }
-        let from = view.magnification
+        let from = goal ?? view.magnification
         switch key {
-        case "zoomIn": zoom(to: from * 1.25)
-        case "zoomOut": zoom(to: from / 1.25)
-        case "zoomReset": zoom(to: nil)
+        case "zoomIn": zoom(to: from * 1.25, animated: true)
+        case "zoomOut": zoom(to: from / 1.25, animated: true)
+        case "zoomReset": zoom(to: nil, animated: true)
         default: return false
         }
         return true
     }
 
     @objc private func boundsChanged() { report() }
-
-    @objc private func liveMagnifyEnded() {
-        fitted = abs(view.magnification - fitScale) < 0.01
-        report()
-    }
 
     private func report() {
         guard let path, placed else { return }
@@ -258,6 +321,7 @@ final class ImagePane: NSObject {
         view.layer?.masksToBounds = radius > 0
         guard let f = PDFPane.frame(css: CGRect(x: x, y: y, width: w, height: h), in: web, zoom: zoom) else { view.isHidden = true; return }
         let resized = view.frame.size != f.size
+        self.web = web
         PDFPane.attach(view, frame: f, over: web)
         if resized || !placed {
             placed = true
@@ -285,6 +349,7 @@ final class ImagePane: NSObject {
         upgrading = false
         fitted = true
         lastPercent = -1
+        goal = nil
     }
 }
 
@@ -299,11 +364,21 @@ final class CenteringClipView: NSClipView {
     }
 }
 
-/// A click toggles fitted and actual size; a drag moves a zoomed image (and is not a click).
+/// A double-click or a two-finger double tap toggles fitted and actual size; a drag moves a zoomed image (and is not a click).
 final class ImageScrollView: NSScrollView {
     weak var pane: ImagePane?
     private var drag: (at: NSPoint, origin: NSPoint)?
     private var moved = false
+
+    override func magnify(with e: NSEvent) {
+        guard let pane, let doc = documentView else { return super.magnify(with: e) }
+        pane.pinch(e.magnification, phase: e.phase, at: doc.convert(e.locationInWindow, from: nil))
+    }
+
+    override func smartMagnify(with e: NSEvent) {
+        guard let pane, let doc = documentView else { return }
+        pane.toggle(at: doc.convert(e.locationInWindow, from: nil))
+    }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
@@ -331,7 +406,7 @@ final class ImageScrollView: NSScrollView {
 
     override func mouseUp(with e: NSEvent) {
         defer { drag = nil; if moved { NSCursor.pop() }; moved = false }
-        guard !moved, e.clickCount == 1, let pane, let doc = documentView else { return }
+        guard !moved, e.clickCount == 2, let pane, let doc = documentView else { return }
         pane.toggle(at: doc.convert(e.locationInWindow, from: nil))
     }
 }

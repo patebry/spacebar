@@ -392,6 +392,57 @@ for _ in 0..<3 {
 }
 print("an undecodable HEIC, renders per show: \(brokenRenders.map(String.init).joined(separator: " "))")
 
+// ---- zoom in the panel as the trackpad, the mouse and the helper's keys reach it: real input's path (NSApp.sendEvent) into a
+// panel that is never key, of an app that is never active ----
+func js(_ source: String) -> Any? {
+    var out: Any?, done = false
+    web.evaluateJavaScript(source) { r, _ in out = r; done = true }
+    spin(until: 3) { done }
+    return out
+}
+func zoomLabel() -> Int { Int(((js("(document.querySelector('#doc .img-zoom') || {}).textContent || ''") as? String) ?? "").dropLast()) ?? -1 }
+/// The middle of the image's area, in the panel's coordinates.
+func imageMiddle() -> NSPoint? {
+    guard let r = js("(() => { const a = document.querySelector('#doc .img-stage, #doc .pdf-area'); if (!a) return null; const b = a.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; })()") as? [Double],
+          r.count == 2 else { return nil }
+    let z = web.pageZoom
+    return web.convert(NSPoint(x: r[0] * z, y: r[1] * z), to: nil)
+}
+func openImage(_ name: String) {
+    request += 1
+    let id = request, url = files.appendingPathComponent(name)
+    painted.last = nil
+    DispatchQueue.global().async { viewer.show([url.path], requestID: id) { _ in } }
+    spin(until: 5) { painted.last?.path == url.path && viewer.panel.alphaValue > 0 && (name.hasSuffix(".png") || nativeUp()) }
+    spin(0.4)
+}
+var zoomFailures: [String] = []
+func zoomCheck(_ name: String, _ ok: Bool) { if !ok { zoomFailures.append(name) } }
+let panelIsViewers = !NSApp.isActive && !viewer.panel.isKeyWindow && !viewer.panel.canBecomeKey
+for name in ["screen.png", "photo.heic"] {
+    openImage(name)
+    let fit = zoomLabel()
+    guard let mid = imageMiddle(), fit > 0, fit < 100 else { zoomFailures.append("\(name): not shown fitted (\(zoomLabel()))"); viewer.close(); spin(settle); continue }
+    Synth.send(Synth.pinch(viewer.panel, at: mid, by: 0.1), pause: 0.03)
+    spin(0.4)
+    zoomCheck("\(name): a pinch zooms (\(fit)% -> \(zoomLabel())%)", zoomLabel() > fit + 5)
+    DispatchQueue.global().async { viewer.key("zoomReset", isRepeat: false) }
+    spin(0.5)
+    zoomCheck("\(name): ⌘0 fits (\(zoomLabel())%)", zoomLabel() == fit)
+    Synth.send([Synth.smartMagnify(viewer.panel, at: mid)])
+    spin(0.5)
+    zoomCheck("\(name): a two-finger double tap zooms to 100% (\(zoomLabel())%)", zoomLabel() == 100)
+    Synth.send(Synth.click(viewer.panel, at: mid, 1) + Synth.click(viewer.panel, at: mid, 2), pause: 0.03)
+    spin(0.5)
+    zoomCheck("\(name): a double-click fits (\(zoomLabel())%)", zoomLabel() == fit)
+    DispatchQueue.global().async { viewer.key("zoomIn", isRepeat: false) }
+    spin(0.5)
+    zoomCheck("\(name): ⌘+ zooms in a step (\(zoomLabel())%)", abs(zoomLabel() - Int((Double(fit) * 1.25).rounded())) <= 1)
+    viewer.close()
+    spin(settle)
+}
+print("\nzoom in the panel (never key, app never active): " + (zoomFailures.isEmpty ? "pinch, two-finger double tap, double-click, ⌘+ and ⌘0 on a PNG and a HEIC" : zoomFailures.joined(separator: "; ")))
+
 // ---- the targets: Space -> frame includes the helper's own decision (7.5 ms p50 measured in Finder, FINDINGS.md), added here ----
 var failures = 0
 func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)"); if !ok { failures += 1 } }
@@ -412,5 +463,7 @@ check("a suspended panel closed never appears again, and a restore after the clo
 check("a suspended panel closed, then shown for another file: the first visible frame has none of the old one", afterClose.allSatisfy { $0 == 0 })
 check("a suspended panel replaced by a show of another file: the first visible frame has none of the old one", replaced.allSatisfy { $0 == 0 })
 check("an image that fell back to its info card is rendered once per show", brokenRenders.allSatisfy { $0 == 1 })
+check("the harness's panel is the viewer's: never key, its app not active", panelIsViewers)
+check("zoom in the panel: pinch, two-finger double tap, double-click, ⌘+ and ⌘0, on <img> and ImagePane", zoomFailures.isEmpty)
 print(failures == 0 ? "viewer latency: all targets met" : "viewer latency: \(failures) targets missed")
 exit(failures == 0 ? 0 : 1)

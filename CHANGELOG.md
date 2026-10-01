@@ -13,7 +13,8 @@ Waits for the Developer ID: the first release with the Space helper is notarized
   welcome sheet or Settings.
 - Space, Esc, ⌘W and ⌘. close the panel in one press; the arrow keys drive the sidebar, or Finder's selection with the
   panel following. Several selected files open with a sidebar of just those files.
-- The panel hides while another app is in front and comes back with Finder, a PDF at its page and a video at its time.
+- The panel hides while another app is in front and comes back with Finder, a PDF at its page and a video at its time,
+  when Finder still has that file selected. A click on the Desktop, or Finder revealing another file, leaves it closed.
 - The panel remembers its size and place on each display.
 - A rename, the search field, ⌘Y, secure input and every other app keep their keys; a Space spacebar cannot answer in
   150 ms is handed back to Finder.

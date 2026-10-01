@@ -445,10 +445,21 @@ shown; WebKit's content process is apart. Target 90 MB. Live, the installed help
 
 **Hide and restore.** Apple's Quick Look hides when Finder goes to the background and comes back with Finder; the panel
 closed instead. Now another app coming forward over an open panel suspends it (`Decision.activated`): the viewer orders it
-out, keeping what it shows, and the helper gives Finder its keys at once. Finder activated again within 10 minutes restores
-it as a new request through the same gate as a show: pending, acknowledged within 150 ms, and taking Finder's keys only
-once `panelState` reports a window the helper sees on screen (with its one retry); a restore that fails the gate closes the
-panel rather than leave it up without keys. A show still on its way when another app comes forward is closed, as before.
+out, keeping what it shows, and the helper gives Finder its keys at once. Finder activated again within 2 minutes restores
+it only when Finder's selection is the one the panel showed (`Decision.resumes`), as Apple's panel comes back only with its
+file. The first version restored on any return of Finder: a click on the Desktop brought back a panel closed by switching
+away, and "Show in Finder" from Telegram brought back the old file over the new selection. The selection is read through AX,
+within the Space budget, 100 ms after Finder comes forward and again 200 ms later, and both reads must match: a reveal or a
+click may still be changing it, and how long Finder takes is not measured. A different or empty selection, a click on the
+Desktop (Finder's focus in no window, and a mouse button down within the last second with the Desktop the first thing under
+the pointer), an AX error or a spent budget drops the panel as a close does, and the next Space shows what is selected then.
+What a restore must find is the selection of the last show the helper accepted on screen, not of one still on its way. A
+show that replaced an open panel's file was never answered (the viewer announced only a panel it revealed), so it stayed
+pending until the helper's 5 s check; the viewer now answers it too. 2 minutes covers answering a message or copying a value
+and coming back; later the panel is a leftover. A restore goes through the same gate as a show: pending, acknowledged within
+150 ms, and taking Finder's keys only once `panelState` reports a window the helper sees on screen (with its one retry); a
+restore that fails the gate closes the panel rather than leave it up without keys. A show still on its way when another app
+comes forward is closed, as before.
 Native views stay while suspended (media paused), so a PDF keeps its page and a video its time. The first version of this
 let the suspend go through the viewer's ordinary hide, which closed the native views: a restored HEIC came back empty and a
 PDF lost its page. `test/helper/run.sh` checks the rule; `test/viewerlatency/run.sh` checks what a restored, closed or

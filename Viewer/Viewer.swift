@@ -283,7 +283,9 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
     }
 
     private func ready(_ id: Int) {
-        guard id == request, panel.isVisible, !open else { return }
+        guard id == request, panel.isVisible else { return }
+        // A show that replaced an open panel's file is answered too, or the helper holds it pending until its 5 s check.
+        if open { return announce(id) }
         reveal(id)
     }
 

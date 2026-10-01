@@ -121,6 +121,17 @@ if want 7; then
   mark; wait_done
   grade "suspended, then restored" "since | grep -q 'suspend (' && since | grep -q 'restore'"
   if ask "Did the video come back paused at the time it had reached?"; then pass "a video keeps its time"; else fail "a video keeps its time"; fi
+  echo "  Press Space on a file on the Desktop, switch to another app with ⌘Tab, then ⌘Tab back to Finder; then Esc."
+  mark; wait_done
+  grade "a Desktop file restored by ⌘Tab" "since | grep -q 'suspend (' && since | grep -q 'restore'"
+  echo "  Press Space on a file, switch to another app, then click an empty part of the Desktop."
+  mark; wait_done
+  grade "suspended, then dropped, not restored" "since | grep -q 'suspend (' && since | grep -q 'forget (' && ! since | grep -q 'restore'"
+  echo "  Press Space on a file, switch to another app, and bring Finder back with another file selected (\"Show in Finder\" from"
+  echo "  another app); then press Space."
+  mark; wait_done
+  grade "dropped, not restored" "since | grep -q 'forget (' && ! since | grep -q 'restore'"
+  if ask "Did Space show the new file, not the one hidden before?"; then pass "Space after another selection"; else fail "Space after another selection"; fi
 fi
 
 if want 8; then

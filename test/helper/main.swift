@@ -320,13 +320,47 @@ check("activation: another app closes a show still on its way", Decision.activat
       && Decision.activated(isFinder: false, open: true, pending: true, suspendedFor: nil) == .close)
 check("activation: another app with nothing open does nothing", Decision.activated(isFinder: false, open: false, pending: false, suspendedFor: 3) == .none
       && Decision.activated(isFinder: false, open: false, pending: false, suspendedFor: nil) == .none)
-check("activation: Finder back brings a hidden panel back", Decision.activated(isFinder: true, open: false, pending: false, suspendedFor: 3) == .restore
-      && Decision.activated(isFinder: true, open: false, pending: false, suspendedFor: Decision.suspendLimit - 1) == .restore)
+check("activation: Finder back within the limit reads its selection", Decision.activated(isFinder: true, open: false, pending: false, suspendedFor: 3) == .check
+      && Decision.activated(isFinder: true, open: false, pending: false, suspendedFor: Decision.suspendLimit - 1) == .check)
+check("activation: a hidden panel waits minutes, not ten", Decision.suspendLimit >= 60 && Decision.suspendLimit <= 180)
 check("activation: Finder back after the limit forgets it", Decision.activated(isFinder: true, open: false, pending: false, suspendedFor: Decision.suspendLimit) == .forget)
 check("activation: Finder with nothing hidden, or a panel open or on its way, does nothing",
       Decision.activated(isFinder: true, open: false, pending: false, suspendedFor: nil) == .none
       && Decision.activated(isFinder: true, open: true, pending: false, suspendedFor: 3) == .none
       && Decision.activated(isFinder: true, open: false, pending: true, suspendedFor: 3) == .none)
+
+// MARK: Finder back: its selection decides
+
+let shownA = ["/Users/u/Desktop/a.pdf"], shownAB = ["/Users/u/Documents/a.md", "/Users/u/Documents/b.md"]
+func resume(_ sel: [String], desktop: Bool = false, clicked: Bool = false, errs: [String] = [], ms: Double = 8, age: TimeInterval = 5,
+            shown: [String] = shownA) -> ActivationAction {
+    Decision.resumes(Decision.ResumeRead(selection: sel, desktop: desktop, clicked: clicked, axErrors: errs, elapsedMs: ms), shown: shown, suspendedFor: age)
+}
+check("resume: the same selection brings the panel back", resume(shownA) == .restore)
+check("resume: the same files in another order bring it back", resume(shownAB.reversed(), shown: shownAB) == .restore)
+check("resume: the same Desktop file brought back by ⌘Tab", resume(shownA, desktop: true) == .restore)
+check("resume: a different selection (\"Show in Finder\" from another app) drops it", resume(["/Users/u/Downloads/new.png"]) == .forget)
+check("resume: a selection that grew or shrank drops it", resume(shownAB, shown: [shownAB[0]]) == .forget && resume([shownAB[0]], shown: shownAB) == .forget)
+check("resume: nothing selected (a click on an empty area) drops it", resume([]) == .forget)
+check("resume: a click on the Desktop never brings it back, even on the file it showed", resume(shownA, desktop: true, clicked: true) == .forget
+      && resume([], desktop: true, clicked: true) == .forget && resume(["/Users/u/Desktop/folder"], desktop: true, clicked: true) == .forget)
+check("resume: a click in a Finder window on the file it showed brings it back", resume(shownA, clicked: true) == .restore)
+check("resume: a name without its folder is no match", resume(["a.pdf"], shown: ["a.pdf"]) == .forget)
+check("resume: any AX error drops it", resume(shownA, errs: ["AXSelectedRows:-25204"]) == .forget)
+check("resume: a read past the 60 ms budget drops it", resume(shownA, ms: Decision.budgetMs + 0.5) == .forget)
+check("resume: past the limit drops it, even on the same selection", resume(shownA, age: Decision.suspendLimit) == .forget
+      && resume(shownA, age: Decision.suspendLimit - 1) == .restore)
+check("resume: nothing shown matches nothing", resume([], shown: []) == .forget && resume(shownA, shown: []) == .forget)
+do {
+    // Dropped for another selection, the next Space shows that selection, never the file that was hidden.
+    let next = ["/Users/u/Downloads/new.png"]
+    var r = KeyRoute()
+    let closedAfter = PanelContext(open: false, finderPid: finder, viewerPid: viewer)
+    check("resume: after a mismatch the panel is closed and Space asks Finder again",
+          resume(next) == .forget && r.route(key(KeyCode.space), panel: closedAfter) == .space)
+    check("resume: after a mismatch Space shows the new selection",
+          Decision.space(SpaceContext(frontIsFinder: true, role: "AXOutline", selection: next)) == .show(next))
+}
 
 // MARK: what the settings window says
 

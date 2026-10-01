@@ -53,11 +53,14 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private var panelOpen = false
     /// When another app came forward over the open panel, which the viewer then ordered out; nil when nothing is suspended.
     private var suspendedAt: Date?
+    /// Counts suspends and Finder's returns, so only the reads of the latest return over the current suspend decide.
+    private var suspendSeq = 0
     /// The request bringing a suspended panel back: if it fails, the panel must not stay up without Finder's keys.
     private var restoring = 0
     /// The show on its way to the viewer: `space` when a swallowed Space asked for it, and so must go back to Finder if it fails.
-    private var pending: (id: Int, finderPid: pid_t, space: Bool, acked: Bool, at: Date)?
+    private var pending: (id: Int, finderPid: pid_t, space: Bool, acked: Bool, at: Date, paths: [String])?
     private var requestSeq = 0
+    /// The selection of the show the helper last accepted on screen: what a restore must find selected in Finder.
     private var lastShown: [String] = []
     private var finderPid: pid_t = 0
     private var launching = false
@@ -231,6 +234,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
             log.error("panel open for request \(requestID): window \(windowNumber) not on screen")
             fail(requestID, "window not on screen")
         case .accept:
+            if let p = pending { lastShown = p.paths }
             pending = nil
             panelOpen = true
             panelWindow = windowNumber
@@ -357,15 +361,14 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     /// Asks the viewer to show `paths`. A viewer that does not answer within 150 ms, or declines, hands a Space back to Finder.
     private func show(_ paths: [String], finderPid: pid_t, space: Bool) {
         if space { suspendedAt = nil }
-        lastShown = paths
-        request(finderPid: finderPid, space: space) { proxy, id, reply in proxy.show(paths, requestID: id, reply: reply) }
+        request(finderPid: finderPid, space: space, paths: paths) { proxy, id, reply in proxy.show(paths, requestID: id, reply: reply) }
     }
 
     /// Makes request `id` pending and sends it with `call`; one not acknowledged within 150 ms, or refused, fails.
-    private func request(finderPid: pid_t, space: Bool, _ call: (SpacebarViewerProtocol, Int, @escaping (Bool) -> Void) -> Void) {
+    private func request(finderPid: pid_t, space: Bool, paths: [String], _ call: (SpacebarViewerProtocol, Int, @escaping (Bool) -> Void) -> Void) {
         requestSeq += 1
         let id = requestSeq
-        pending = (id, finderPid, space, false, Date())
+        pending = (id, finderPid, space, false, Date(), paths)
         guard let proxy = viewerProxy(onError: { [weak self] in self?.fail(id, "xpc error") }) else { return fail(id, "no viewer") }
         call(proxy, id) { ok in
             DispatchQueue.main.async { [weak self] in
@@ -387,6 +390,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         panelWindow = 0
         offscreenMisses = 0
         suspendedAt = Date()
+        suspendSeq += 1
         log.info("suspend (\(why, privacy: .public))")
     }
 
@@ -396,7 +400,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         suspendedAt = nil
         guard viewer != nil, finderPid > 0 else { return }
         log.info("restore")
-        request(finderPid: finderPid, space: false) { proxy, id, reply in
+        request(finderPid: finderPid, space: false, paths: lastShown) { proxy, id, reply in
             restoring = id
             proxy.restore(id, reply: reply)
         }
@@ -471,11 +475,64 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         case .none: break
         case .close: close("\(who) active")
         case .suspend: suspend("\(who) active")
+        case .check: resume(finderPid: app.processIdentifier)
         case .restore: restore()
-        case .forget:
-            suspendedAt = nil
-            viewerProxy()?.close()
+        case .forget: forget("suspended too long")
         }
+    }
+
+    /// Brings the hidden panel back only for the selection it was showing (`Decision.resumes`). A "Show in Finder" or a click
+    /// may still be changing the selection as Finder comes forward, so it is read twice, after 100 ms and again 200 ms later, and
+    /// both reads must match; the first that does not drops the panel.
+    private func resume(finderPid pid: pid_t) {
+        suspendSeq += 1
+        let seq = suspendSeq
+        let clicked = Self.desktopClick()
+        func read(_ delay: Double, then: @escaping () -> Void) {
+            bg.asyncAfter(deadline: .now() + delay) {
+                var r = FinderAX.resumeRead(finderPid: pid)
+                r.clicked = clicked
+                DispatchQueue.main.async {
+                    guard let at = self.suspendedAt, self.suspendSeq == seq, !self.panelOpen, self.pending == nil,
+                          NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
+                    guard Decision.resumes(r, shown: self.lastShown, suspendedFor: Date().timeIntervalSince(at)) == .restore else {
+                        return self.forget("Finder back: selection n=\(r.selection.count) desktop=\(r.desktop) clicked=\(clicked) errors=\(r.axErrors.joined(separator: ",")) in \(String(format: "%.1f", r.elapsedMs))ms")
+                    }
+                    then()
+                }
+            }
+        }
+        read(0.1) {
+            read(0.2) {
+                self.finderPid = pid
+                self.restore()
+            }
+        }
+    }
+
+    /// Whether a mouse button went down in the last second over Finder's Desktop: the first window under the pointer, front to
+    /// back, is below the normal window layer (the Desktop's icons or picture), not a window, the Dock or a menu.
+    private static func desktopClick() -> Bool {
+        let recent = [CGEventType.leftMouseDown, .rightMouseDown, .otherMouseDown].contains {
+            CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) < 1
+        }
+        guard recent, let primary = NSScreen.screens.first?.frame else { return false }
+        let m = NSEvent.mouseLocation
+        let point = CGPoint(x: m.x, y: primary.maxY - m.y)
+        guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return false }
+        for w in info {
+            guard let b = (w[kCGWindowBounds as String] as? NSDictionary).flatMap({ CGRect(dictionaryRepresentation: $0) }), b.contains(point),
+                  (w[kCGWindowAlpha as String] as? Double ?? 1) > 0 else { continue }
+            return (w[kCGWindowLayer as String] as? Int ?? 0) < 0
+        }
+        return false
+    }
+
+    /// Drops a hidden panel as a close does.
+    private func forget(_ why: String) {
+        suspendedAt = nil
+        viewerProxy()?.close()
+        log.info("forget (\(why, privacy: .public))")
     }
 
     /// Finder's selection changes: with sidebarKeys off the arrows move Finder's selection, and the panel follows it. The same
@@ -519,7 +576,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
             let paths = FinderAX.selection(app: AXUIElementCreateApplication(pid), focused: nil, trace: AXTrace(budgetMs: 100)).filter { $0.hasPrefix("/") }
             DispatchQueue.main.async {
                 self.followPending = false
-                guard self.panelOpen, !paths.isEmpty, paths != self.lastShown else { return }
+                guard self.panelOpen, !paths.isEmpty, paths != (self.pending?.paths ?? self.lastShown) else { return }
                 self.show(paths, finderPid: pid, space: false)
             }
         }

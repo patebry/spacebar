@@ -139,8 +139,10 @@ refused.
   and on a display. It checks again every 2 seconds and gives the keys back to Finder when the window is gone.
 - A show the viewer does not acknowledge within 150 ms is dropped and the Space goes to Finder (a Space more than a second
   old is not re-sent).
-- When another app comes forward the panel is suspended and Finder has its keys back at once. Finder coming back restores it
-  only as a new request through the same gate, and a restore that fails the gate closes the panel.
+- When another app comes forward the panel is suspended and Finder has its keys back at once. Finder coming back within
+  2 minutes with the selection the panel showed restores it, only as a new request through the same gate, and a restore that
+  fails the gate closes the panel. Any other selection, a click on the Desktop, or an AX read that fails or runs out drops
+  the suspended panel.
 - Every key passes while Finder's focus is in a text field (a rename, the search field; any Accessibility error counts as a
   text field), while a key is meant for a process other than Finder or the viewer, and while the viewer reports a text
   session. A Space passes while Apple's Quick Look is open, and Apple's Quick Look opening closes spacebar's panel.

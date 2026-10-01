@@ -814,8 +814,8 @@ def viewers(page, check, out, st):
     click(page, '#upd')
     view('sort.csv')
     c = page.js(AA)
-    check(md['aa'] and not md['upd'] and a['upd'] and not a['aa'] and b['open'] and b['mode'] == 'update' and b['parts'] == ['aa-update'] and c['aa'] and not c['upd'],
-          'an update: its dot on Aa where Aa shows; elsewhere a button of its own that opens the update row alone', json.dumps([md, a, b, c]))
+    check(md['aa'] and md['upd'] and a['upd'] and not a['aa'] and b['open'] and b['mode'] == 'update' and b['parts'] == ['aa-update'] and c['aa'] and c['upd'],
+          'an update: always a button of its own, beside Aa or in its place, that opens the update row alone', json.dumps([md, a, b, c]))
     page.cmd('@eval:sb.updateReset(); 0')
     check(not page.js(AA)['upd'], 'no update: no update button')
 
@@ -1282,14 +1282,14 @@ def tools(page, check, out):
           'find in a JSON tree: a match past the first 500 items and one four levels down are opened, drawn and scrolled to', json.dumps([f1, r1, r2]))
     page.cmd("@eval:document.getElementById('find-close').click(); 0")
 
-    # ---- Formatted / Raw, per kind, remembered ----
+    # ---- Formatted / Raw, per kind, while the preview stays open ----
     view('notes.md')
     r = page.cmd('@nativeclick:#raw')
     m = page.js("""const b = document.getElementById('raw'); return [b.getAttribute('aria-pressed'), b.title, (document.querySelector('#doc .viewer-source pre.code') || {}).textContent,
       document.querySelectorAll('#doc > [data-src]').length];""")
     written = [x.get('patch') for x in msgs(r, '_written')]
-    check(m[:3] == ['true', 'Markdown source', open(D('notes.md')).read()] and m[3] == 0 and written == ['{"rawMarkdown":true}'],
-          'raw: Markdown shows its source, read only, and the choice is saved as a panel setting', json.dumps([m[:2], m[3], written]))
+    check(m[:3] == ['true', 'Markdown source', open(D('notes.md')).read()] and m[3] == 0 and written == [],
+          'raw: Markdown shows its source, read only, and the choice is not saved as a setting', json.dumps([m[:2], m[3], written]))
     r = click(page, '#doc .viewer-source pre.code')
     check(not msgs(r, 'editBlock'), 'raw: a click in the source edits nothing')
     view('tree.json')
@@ -1297,12 +1297,19 @@ def tools(page, check, out):
           'raw: remembered per kind (JSON is still a tree)')
     saved = json.load(open(os.path.join(page.support, 'settings.json')))
     view('notes.md')
-    check(saved.get('rawMarkdown') is True and saved.get('rawJSON') is not True
+    check(saved.get('rawMarkdown') is not True and saved.get('rawJSON') is not True
           and page.js("return [!!document.querySelector('#doc .viewer-source'), document.getElementById('raw').getAttribute('aria-pressed')]") == [True, 'true'],
-          'raw: settings.json keeps it for the next preview, and Markdown opens as source again', json.dumps({k: v for k, v in saved.items() if k.startswith('raw')}))
+          'raw: settings.json is left alone, and Markdown opens as source again while the preview stays open',
+          json.dumps({k: v for k, v in saved.items() if k.startswith('raw')}))
     page.cmd('@nativeclick:#raw')
     check(page.js("return [document.querySelector('#doc > h1').textContent, document.getElementById('raw').title, document.getElementById('raw').getAttribute('aria-pressed')]") == ['Needle notes', 'Markdown source', 'false'],
           'raw: and back to rendered')
+    page.cmd('@nativeclick:#raw')
+    page.cmd("@eval:sb.previewClosed(); 0")
+    view('tree.json')
+    view('notes.md')
+    check(page.js("return [!!document.querySelector('#doc > h1'), document.getElementById('raw').getAttribute('aria-pressed')]") == [True, 'false'],
+          'raw: the next preview opens formatted again')
     view('cells.ipynb')
     page.cmd('@nativeclick:#raw')
     titles = [page.js("return document.getElementById('raw').title")]
@@ -3282,7 +3289,7 @@ def main():
 
         # ---- the Space helper's hint: one quiet line in the status area, a click opens Settings, gone on the next file ----
         HINT = "const s = document.getElementById('status'); return [s.textContent, 'hint' in s.dataset, getComputedStyle(s).cursor]"
-        page.cmd('@eval:sb.helperHint(); 0')
+        page.cmd("@eval:sb.helperHint({ state: 'notRunning' }); 0")
         h1 = page.js(HINT)
         r = click(page, '#status')
         o = [m for m in r['messages'] if m.get('type') == 'openSettings']
@@ -3292,7 +3299,15 @@ def main():
         h3 = page.js(HINT)
         page.cmd('@eval:sb.status("Copied"); sb.helperHint(); 0')
         h4 = page.js(HINT)
-        check(h1 == ['Space helper is offSettings…', True, 'pointer'] and [x.get('tab') for x in o] == ['general'] and h2 == ['', False, 'auto']
+        page.cmd('@eval:sb.status(""); 0')
+        page.cmd("@eval:sb.helperHint({ state: 'paused', app: '<b>Terminal</b>' }); 0")
+        h5 = page.js(HINT + ".concat([document.querySelector('#status b') === null])")
+        page.cmd("@eval:document.getElementById('status').click(); 0")
+        page.cmd("@eval:sb.helperHint({ state: 'paused', app: '' }); 0")
+        h6 = page.js(HINT)
+        check(h5[0] == 'Space helper paused while <b>Terminal</b> has secure input onSettings…' and h5[3] and h6[0] == 'Space helper paused: another app has secure input onSettings…',
+              'Space helper hint: paused by secure input names the app, as text, or says another app', json.dumps([h5, h6]))
+        check(h1 == ['Space helper isn’t runningSettings…', True, 'pointer'] and [x.get('tab') for x in o] == ['general'] and h2 == ['', False, 'auto']
               and h3 == ['', False, 'auto'] and h4[:2] == ['Copied', False],
               'Space helper hint: one line; a click opens Settings and takes it down; the next file clears it; it never covers another status',
               json.dumps([h1, o, h2, h3, h4]))

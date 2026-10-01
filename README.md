@@ -10,7 +10,7 @@ preview remembers both. Click a block of Markdown to edit it in place, or tick a
 JSON, CSV and config files edit in place the same way. Obsidian
 vaults read as they do in Obsidian: `[[wikilinks]]`, `![[embeds]]`, callouts and tags. A button at the bottom right copies a file's text; the toolbar
 finds in it (⌘F) and switches a formatted view (Markdown, JSON, a notebook, CSV, XML) to the file as it is. When a new version is out, the
-preview's Aa button shows a dot and one click on Update installs it. Free and open source, for macOS 13 and later (Apple
+preview's toolbar shows an Update button and one click installs it. Free and open source, for macOS 13 and later (Apple
 silicon and Intel).
 
 ### What Space opens in spacebar
@@ -75,8 +75,12 @@ ends). A file is saved in the encoding and with the byte order mark it was read 
 and its last newline; a character the encoding cannot hold is not saved (the preview says which), and nothing is ever
 converted to UTF-8. Files over 2 MB, shown cut, a binary property list, text read with invalid bytes, and anything spacebar
 does not show as text are never editable, and nor are files the shell, git, npm or launchd run on their own (shell profiles
-such as `.zshrc`, `.gitconfig`, `.npmrc`, `.command` scripts, git hooks, LaunchAgents). A change on disk while you edit ends
-the edit, and the file's own text wins.
+such as `.zshrc`, `.gitconfig`, `.npmrc`, `.command` scripts, git hooks, LaunchAgents). JSON, CSV and the other formatted
+views are edited through **Raw**, which lasts while the preview stays open. While you edit, the toolbar says so (Esc
+finishes) and ticks after each save. ⌘Z undoes typing, and past the start of an edit it goes back to the text before the
+last edit, Enter or Backspace that split or joined blocks, or task tick, for as long as the file stays open; once an edit
+has ended, the toolbar's **Undo** does the same. A change on disk while you edit ends the edit; if it displaced text that
+was not saved, a banner keeps that text until you choose **Use Disk Version**, **Copy My Text** or, for Markdown, **Keep Mine**.
 
 The preview sits in a thin outlined page under a toolbar row: the sidebar button and the path on the left, Aa and Open on the
 right, and beside them, in quiet text, the file's kind and size (an image's zoom too), so a PDF or an image fills the page
@@ -96,7 +100,7 @@ place in the toolbar where it does not. A button with a key gives it in its tool
   counted; ↵ and ⇧↵ (or ⌘G and ⇧⌘G) go to the next and previous, Esc closes the bar. A long table and a JSON tree are
   searched whole, not just the rows drawn: a match in a collapsed branch opens it. At most 10,000 matches are counted.
 - **Raw** switches a formatted view to the file as it is: Markdown to its source (read only), JSON and a notebook to their
-  text, a table to its CSV, XML and a minified stylesheet to the file unindented. Each kind remembers its choice.
+  text, a table to its CSV, XML and a minified stylesheet to the file unindented. It lasts while the preview stays open.
   Minified JavaScript is shown as it is: there is no formatter for it.
 
 ### Keys
@@ -119,7 +123,7 @@ you type. In the Space helper's panel (**Use spacebar for every file**, below) t
 
 ### Use spacebar for every file
 
-Quick Look hands spacebar only the types above. Turn on **Use spacebar for every file in Finder** (Settings, or the
+Quick Look hands spacebar only the types above. Turn on **Use spacebar for every file** (Settings, or the
 second step of the welcome sheet) and Space in Finder opens spacebar for any file you select, in the same panel with the same
 sidebar:
 
@@ -143,13 +147,13 @@ With it on:
   and a video at its time.
 - Space in a rename or the search field, with Apple's Quick Look already open, or in any other app is left alone. ⌘Y still
   opens Apple's Quick Look. A Space spacebar cannot answer within 150 ms is handed back to Finder.
-- While a password field or another app has secure input on, macOS gives spacebar no keys, so Space opens Apple's Quick Look;
-  Settings says so.
+- While a password field or another app has secure input on (Terminal's Secure Keyboard Entry, say), macOS gives spacebar no
+  keys, so Space opens Apple's Quick Look; Settings shows the Space helper as Paused and names the app holding secure input.
 
 #### What it asks macOS for
 
-It works through a small helper app inside spacebar, which macOS lists as **spacebar Helper**. Turning the setting on asks
-for two things:
+It works through the Space helper, a small app inside spacebar that macOS lists as **spacebar Helper**. Turning the setting
+on asks for two things, one after the other:
 
 - **Accessibility** (System Settings, Privacy & Security, Accessibility: turn on **spacebar Helper**). This lets the helper
   notice a Space pressed in Finder and read which files are selected. It sees your key presses while it runs, but acts only
@@ -161,14 +165,14 @@ for two things:
 
 The helper never opens a file. A separate viewer does, sandboxed like the Quick Look extension, and the first time it shows a
 file in Documents, Desktop, Downloads or iCloud Drive macOS may ask whether **spacebar** may access that folder. Settings
-shows whether the helper is on, waiting for Accessibility, blocked in Login Items, or paused by secure input. While
-the setting is on but the helper is not taking Space (Accessibility off, or not running), the first Quick Look preview that spacebar draws says so in one quiet
-line, once: "Space helper is off: open spacebar Settings" (a click opens Settings).
+shows whether the Space helper is on, waiting for Accessibility, blocked in Login Items, or paused by secure input. While
+the setting is on but the helper is not taking Space, the first Quick Look preview that spacebar draws says why in one quiet
+line, once (a click opens Settings).
 [SECURITY.md](SECURITY.md#the-space-helper) has how the privileges are split.
 
 #### Turning it off
 
-Turn off **Use spacebar for every file in Finder** in Settings. The helper stops and leaves Login Items, and Space
+Turn off **Use spacebar for every file** in Settings. The helper stops and leaves Login Items, and Space
 in Finder is Quick Look's again. Its Accessibility entry stays, unused, until you remove it in System Settings or
 [uninstall](#uninstall) spacebar, which removes it for you.
 
@@ -236,12 +240,13 @@ Open spacebar to change its settings. The window holds only what most people cha
 
 - **Appearance**: the theme, Automatic, Light or Dark, and the text size. The preview's Aa button changes these too, with the
   font and page width.
-- **Use spacebar for every file in Finder**, and whether the helper is running.
+- **Space Helper**: **Use spacebar for every file**, and whether the Space helper is running.
 - **Open files in**: the editor the preview's Open button uses.
-- **Check for updates**, **Report a Problem…** and **Uninstall spacebar…**.
+- **About**: the version, with **Check Now**; **Check for updates**, **Report a Problem…** and **Uninstall spacebar…**.
 
 Anything wrong with the setup (spacebar turned off in Quick Look, another app's previewer claiming its types, folder previews
-off in System Settings, an unreadable settings file) shows at the top while it is wrong.
+off in System Settings, an unreadable settings file) shows at the top while it is wrong; otherwise a quiet
+row there says Quick Look is on, for files and for folders.
 
 **Advanced**, closed until you open it, holds scripts in HTML files, HTML in Markdown and remote images; editing in the
 preview and checking off tasks; hidden files in the sidebar; a custom theme and `custom.css`; and the settings file with
@@ -303,9 +308,9 @@ Read [`scripts/install.sh`](scripts/install.sh) before you run it. It:
 ### Updates
 
 Once a day spacebar asks GitHub for the latest release's version number, and nothing else (turn this off in Settings:
-**Check for updates**). A newer version shows as a dot on the preview's Aa button; its **Update** button runs the app's own sealed copy of
-`install.sh` for that version, which downloads and checks the release exactly as above. Quick Look shows an error for a moment
-while the installer replaces the extension; press Space again after. An edit in progress is saved first, and no edit, task
+**Check for updates**; **Check Now** in Settings asks at once). A newer version shows as an **Update** button in the preview's toolbar; it runs the app's own sealed copy of
+`install.sh` for that version, which downloads and checks the release exactly as above. The preview closes briefly while
+the installer replaces the extension; press Space again after. An edit in progress is saved first, and no edit, task
 toggle or sidebar filter starts while the update runs. The installer's output goes to `~/Library/Logs/spacebar-update.log`.
 
 The release zip is built by [GitHub Actions](.github/workflows/release.yml) from the tagged commit. Releases after v0.1.0

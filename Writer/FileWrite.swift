@@ -7,28 +7,57 @@ private let writeLock = NSLock()
 /// this writer's own panel, starting from the file as the writer read it, never content of its own.
 final class TypedTexts {
     private let lock = NSLock()
-    private var files: [String: (source: EditableText.Source, texts: [String])] = [:]
+    /// Per file: the recent buffers its edits sent, the texts it held where an edit began or ended (which ⌘Z can go back to
+    /// while the preview stays open), and the bytes a failed write of the writer's own left on disk. Every text is the file as
+    /// the writer read it or a buffer the panel sent.
+    private var files: [String: Record] = [:]
     private var order: [String] = []
-    private static let kept = 16, keptFiles = 4, keptEnded = 2
+    private static let recent = 16, keptFiles = 4, keptEnded = 2, keptMarks = 32
 
-    /// Starts or continues the record of `path` with `text`: the file as on disk, or a text an edit of it already sent.
+    private struct Record {
+        let source: EditableText.Source
+        var texts: [String]
+        var kept: [String]
+        var torn: Data?
+        /// The bytes the writer's own last write put there: a save typed meanwhile names them as its base.
+        var written: Data?
+        func knows(_ t: String) -> Bool { texts.contains { $0.utf16.elementsEqual(t.utf16) } || kept.contains { $0.utf16.elementsEqual(t.utf16) } }
+        func holds(_ data: Data) -> Bool { data == torn || data == written || texts.reversed().contains { source.bytes($0) == data } || kept.reversed().contains { source.bytes($0) == data } }
+        mutating func mark(_ t: String) {
+            kept.removeAll { $0.utf16.elementsEqual(t.utf16) }
+            kept.append(t)
+            if kept.count > TypedTexts.keptMarks { kept.removeFirst() }
+        }
+    }
+
+    /// Starts or continues the record of `path` with `text`: the file as on disk, or a text an edit of it already sent. A record
+    /// continues only while the file still holds something it recorded; a file changed on disk starts a new one.
     func begin(path: String, text: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        if let f = files[path], f.texts.contains(where: { $0.utf16.elementsEqual(text.utf16) }) { return true }
-        guard let o = EditableText.read(path: path), o.text.utf16.elementsEqual(text.utf16) else { return false }
-        files[path] = (o.source, [o.text])
+        let disk = EditableText.read(path: path)
+        if var f = files[path], f.knows(text), let d = disk, f.holds(d.bytes) {
+            if d.text.utf16.elementsEqual(text.utf16) || f.kept.contains(where: { $0.utf16.elementsEqual(text.utf16) }) { f.mark(text) }
+            files[path] = f
+            return true
+        }
+        guard let o = disk, o.text.utf16.elementsEqual(text.utf16) else { return false }
+        files[path] = Record(source: o.source, texts: [o.text], kept: [o.text])
         order.removeAll { $0 == path }
         order.append(path)
         if order.count > Self.keptFiles { files[order.removeFirst()] = nil }
         return true
     }
 
-    /// An edit of `path` ended: only its last buffers can still be saved (the saves in flight) or start the next edit.
+    /// An edit of `path` ended: only its last buffers can still be saved (the saves in flight) or start the next edit, besides
+    /// the texts kept for undo, which now include the last one.
     func ended(path: String) {
         lock.lock()
         defer { lock.unlock() }
-        if var f = files[path], f.texts.count > Self.keptEnded { f.texts.removeFirst(f.texts.count - Self.keptEnded); files[path] = f }
+        guard var f = files[path] else { return }
+        if let last = f.texts.last { f.mark(last) }
+        if f.texts.count > Self.keptEnded { f.texts.removeFirst(f.texts.count - Self.keptEnded) }
+        files[path] = f
     }
 
     func sent(path: String, text: String) {
@@ -37,15 +66,26 @@ final class TypedTexts {
         guard var f = files[path] else { return }
         if let last = f.texts.last, last.utf16.elementsEqual(text.utf16) { return }
         f.texts.append(text)
-        if f.texts.count > Self.kept { f.texts.removeFirst() }
+        if f.texts.count > Self.recent { f.texts.removeFirst() }
         files[path] = f
     }
 
-    func allows(path: String, data: Data) -> Bool {
+    /// `data` may replace `base` only when both are this record's: a text typed or kept, over bytes the file held while the
+    /// writer was recording it (or the bytes its own failed write left). So nothing is written over a change made elsewhere.
+    func allows(path: String, data: Data, base: Data) -> Bool {
         lock.lock()
         defer { lock.unlock() }
         guard let f = files[path] else { return false }
-        return f.texts.reversed().contains { f.source.bytes($0) == data }
+        return f.holds(base) && f.holds(data) && data != f.torn
+    }
+
+    /// The writer's own write of `path` ended: it left `wrote` there, or failed part-way leaving `torn` (a retry may name
+    /// either as its base).
+    func wrote(path: String, _ wrote: Data?, torn: Data?) {
+        lock.lock()
+        defer { lock.unlock() }
+        files[path]?.written = wrote
+        files[path]?.torn = torn
     }
 }
 

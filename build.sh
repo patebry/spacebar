@@ -112,7 +112,7 @@ plist() {
 }
 
 WRITER_BIN=$OBJ/$WRITER_EXE
-compile "$WRITER_BIN" -module-name "$WRITER_EXE" Writer/main.swift Writer/EditTextView.swift Writer/FileWrite.swift Shared/ArchiveListing.swift Shared/FolderListing.swift Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/Updates.swift
+compile "$WRITER_BIN" -module-name "$WRITER_EXE" Writer/main.swift Writer/EditTextView.swift Writer/FileWrite.swift Shared/SecureInput.swift Shared/ArchiveListing.swift Shared/FolderListing.swift Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/Updates.swift
 PREVIEW_BIN=$OBJ/$APPEX_EXE
 PROBE_FLAGS=()
 [ "${PROBE:-0}" = 1 ] && PROBE_FLAGS=(-D PROBE)
@@ -128,7 +128,7 @@ compile "$HELPER_BIN" -module-name "$HELPER_EXE" Helper/*.swift Shared/HelperPro
 VIEWER_BIN=$OBJ/$VIEWER_EXE
 compile "$VIEWER_BIN" -module-name "$VIEWER_EXE" "${PREVIEW_SRC[@]}" Shared/HelperProtocol.swift Viewer/*.swift \
   -framework QuickLookUI -framework WebKit -framework PDFKit -framework AVKit -framework AVFoundation -framework QuickLookThumbnailing
-compile "$APP/Contents/MacOS/$APP_EXE" -parse-as-library -module-name "$APP_EXE" App/*.swift Shared/HelperProtocol.swift Shared/Settings.swift Shared/Updates.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift Shared/QuickLookClaims.swift Shared/LinkPolicy.swift \
+compile "$APP/Contents/MacOS/$APP_EXE" -parse-as-library -module-name "$APP_EXE" App/*.swift Shared/HelperProtocol.swift Shared/Settings.swift Shared/Updates.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift Shared/QuickLookClaims.swift Shared/LinkPolicy.swift Shared/SecureInput.swift \
   -framework WebKit -framework SwiftUI
 plist App/Info.plist "$APP/Contents/Info.plist"
 cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"

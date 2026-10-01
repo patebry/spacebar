@@ -191,7 +191,7 @@ UPDATE_FIT = """const pop = document.getElementById('aa-pop').getBoundingClientR
     if (e.scrollWidth > e.clientWidth || r.left < pop.left + 11 || r.right > pop.right - 11 || (e.tagName === 'BUTTON' && r.height > parseFloat(cs.fontSize) * 2.5))
       bad.push([e.id, e.textContent, Math.round(r.width), e.scrollWidth, e.clientWidth]);
   }
-  return { bad, shown, dot: document.getElementById('aa').dataset.update === '' };"""
+  return { bad, shown, button: !document.getElementById('upd').hidden };"""
 CLICK = """(sel) => { const t = document.querySelector(sel); if (!t) return false; const r = t.getBoundingClientRect();
   for (const type of ['mouseover', 'mousedown', 'mouseup', 'click'])
     t.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: r.left + 3, clientY: r.top + 3, detail: 1 }));
@@ -487,14 +487,15 @@ def main():
         states = [('available', {}), ('elsewhere', {'place': long_place}), ('started', {}), ('inProgress', {}), ('done', {}),
                   ('failed', {'reason': 'The installer stopped with status 1. See ~/Library/Logs/spacebar-update.log.', 'copy': True}),
                   ('failed', {'reason': 'An update is already running.'}), ('failed', {'reason': 'Not started: save failed; edit again to retry.', 'retry': True})]
-        click(page, '#aa')
+        page.js("sb.update({ state: 'available', version: '10.10.10' }); return 0")
+        click(page, '#upd')
         page.cmd('@wait:0.3')
         for state, extra in states:
             page.js('sb.update(' + json.dumps({'state': state, 'version': '10.10.10', **extra}) + '); return 0')
             fit = page.js(UPDATE_FIT)
             want = ['aa-update-title', 'aa-update-sub'] + (['aa-install'] if state in ('available', 'started', 'inProgress') or extra.get('retry') else []) \
                 + (['aa-copy'] if extra.get('copy') else []) + ['aa-notes']
-            check(fit['bad'] == [] and fit['shown'] == want and fit['dot'], f'update row ({state} {sorted(extra)}): shows {want[2:-1] or "no button"}, nothing overflows',
+            check(fit['bad'] == [] and fit['shown'] == want and fit['button'], f'update row ({state} {sorted(extra)}): shows {want[2:-1] or "no button"}, nothing overflows',
                   json.dumps(fit))
         page.js("sb.update({ state: 'available', version: '10.10.10' }); return 0")
         r = click(page, '#aa-install')
@@ -553,7 +554,7 @@ def main():
         rb = page.cmd("@eval:(() => { const b = document.querySelector('#doc input[type=checkbox][data-line]'); b.click(); b.click(); return 0; })()")
         reset = page.js("return [document.getElementById('aa-update').hidden, 'update' in document.getElementById('aa').dataset]")
         check(len([m for m in rb['messages'] if m.get('type') == 'toggle']) == 2 and reset == [True, False],
-              'sb.updateReset clears the busy flag, the update row and the dot', json.dumps([reset, rb['messages']]))
+              'sb.updateReset clears the busy flag, the update row and its button', json.dumps([reset, rb['messages']]))
         click(page, '#doc')
         page.apply(theme='apple', width='medium', bodyFont='system', fontSize=15)
 

@@ -47,7 +47,10 @@ struct Settings: Codable, Equatable {
     var spaceHelper = false
     /// The welcome sheet has offered the helper once; an upgrade that already dismissed the sheet sees only that step.
     var helperOffered = false
-    /// The toolbar's Formatted/Raw toggle, remembered per kind: on shows the file's text as it is.
+    /// The preview has shown its one-time "Click to edit" hint.
+    var editHintShown = false
+    /// What the toolbar's Raw toggle once remembered per kind. Raw now lasts only while the preview stays open, so these are
+    /// read (old files keep sanitizing) but no longer change what is shown.
     var rawMarkdown = false
     var rawJSON = false
     var rawNotebook = false
@@ -90,7 +93,7 @@ struct Settings: Codable, Equatable {
     static let doubleRanges: [String: ClosedRange<Double>] = ["lineHeight": 1.2...2.0]
     static let boolKeys: Set<String> = Set(["customCSS", "inlineEditing", "taskToggles", "folderMode", "folderReadmeFirst", "stats", "math",
                                         "mermaid", "remoteImages", "sidebarCollapsed", "sidebarKeys", "showHiddenFiles", "minimalChrome", "checkUpdates",
-                                        "welcomeShown", "spaceHelper", "helperOffered"]).union(rawKeys).union(wrapKeys)
+                                        "welcomeShown", "spaceHelper", "helperOffered", "editHintShown"]).union(rawKeys).union(wrapKeys)
     static let rawKeys: Set<String> = ["rawMarkdown", "rawJSON", "rawNotebook", "rawCSV", "rawXML", "rawCSS"]
     static let wrapKeys: Set<String> = ["wrapText", "wrapMarkdown", "wrapCode"]
     /// Keys whose value is a string or null, each checked by its own pattern.
@@ -102,14 +105,14 @@ struct Settings: Codable, Equatable {
     /// folder of images shows its grid instead of opening its README); showHiddenFiles would list, and so open, more, so it is
     /// changed in the settings window only.
     static let panelKeys: Set<String> = Set(["theme", "appearance", "fontSize", "width", "bodyFont", "sidebarCollapsed", "sidebarWidth", "folderSort",
-                                             "folderViewMedia", "folderViewOther"])
+                                             "folderViewMedia", "folderViewOther", "editHintShown"])
         .union(rawKeys).union(wrapKeys)
     /// The keys the settings window shows, on its page and under Advanced. Every other key is changed in the preview (panelKeys),
     /// by spacebar itself, or in settings.json only, and keeps its stored value.
     static let windowKeys: Set<String> = ["theme", "appearance", "fontSize", "spaceHelper", "editorBundleID", "checkUpdates"]
     static let advancedKeys: Set<String> = ["htmlScripts", "rawHTML", "remoteImages", "inlineEditing", "taskToggles", "showHiddenFiles", "userTheme", "customCSS"]
     /// Kept by Reset to Defaults: resetting must not bring the welcome sheet back or change the Space helper behind its Login Items entry.
-    static let keptOnReset = ["welcomeShown", "helperOffered", "spaceHelper"]
+    static let keptOnReset = ["welcomeShown", "helperOffered", "spaceHelper", "editHintShown"]
 
     /// Reset to Defaults as a patch: every key at its default, including the ones only settings.json can change. The kept keys
     /// are left out, so the file's own values stand.
@@ -202,6 +205,7 @@ struct Settings: Codable, Equatable {
         take(.toc, \.toc); take(.stats, \.stats); take(.mdLinks, \.mdLinks); take(.webLinks, \.webLinks)
         take(.math, \.math); take(.mermaid, \.mermaid); take(.rawHTML, \.rawHTML); take(.remoteImages, \.remoteImages); take(.checkUpdates, \.checkUpdates); take(.htmlScripts, \.htmlScripts)
         take(.welcomeShown, \.welcomeShown); take(.spaceHelper, \.spaceHelper); take(.helperOffered, \.helperOffered)
+        take(.editHintShown, \.editHintShown)
         take(.rawMarkdown, \.rawMarkdown); take(.rawJSON, \.rawJSON); take(.rawNotebook, \.rawNotebook); take(.rawCSV, \.rawCSV)
         take(.rawXML, \.rawXML); take(.rawCSS, \.rawCSS)
         take(.wrapText, \.wrapText); take(.wrapMarkdown, \.wrapMarkdown); take(.wrapCode, \.wrapCode)

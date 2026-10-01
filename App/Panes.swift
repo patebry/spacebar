@@ -65,6 +65,7 @@ struct SettingsPane: View {
     @State private var confirmUninstall = false
     @State private var purge = false
     @State private var uninstallError: String?
+    @StateObject private var updates = UpdateCheck()
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -84,8 +85,9 @@ struct SettingsPane: View {
     private var form: some View {
         Form {
             problems
+            quickLookStatus
             appearance
-            if HelperAgent.available { everyFile }
+            spaceHelper
             Section {
                 Picker("Open files in", selection: store.binding(\.editorBundleID, "editorBundleID")) {
                     Text(system.defaultEditorName.map { "Default App (\($0))" } ?? "Default App").tag(String?.none)
@@ -101,19 +103,7 @@ struct SettingsPane: View {
                 Text("The preview's Open button uses it for Markdown, code, data and text files. Scripts open here as text, never run. With Default App, a file opens in its own app, or in your default text editor when that app could run it.")
                     .settingsFooter()
             }
-            Section {
-                Toggle("Check for updates", isOn: store.binding(\.checkUpdates, "checkUpdates"))
-                HStack {
-                    Button("Report a Problem…") { NSWorkspace.shared.open(ProblemReport.url(ProblemReport.current(), log: ProblemReport.readLog())) }
-                    Spacer()
-                    Button("Uninstall spacebar…") { purge = false; uninstallError = nil; confirmUninstall = true }
-                }
-            } header: {
-                Text("Updates")
-            } footer: {
-                Text("Once a day spacebar asks GitHub for the latest version number, and nothing else. A newer version shows as a dot on the preview's Aa button. Report a Problem opens a public GitHub issue in your browser; nothing is sent until you submit it.")
-                    .settingsFooter()
-            }
+            about
             Section {
                 Button {
                     withAnimation(.easeInOut(duration: 0.15)) { store.advancedExpanded.toggle() }
@@ -128,6 +118,7 @@ struct SettingsPane: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .keyboardFocusRing(cornerRadius: 4)
                 .accessibilityValue(store.advancedExpanded ? "Expanded" : "Collapsed")
             }
             .id(Self.advancedID)
@@ -148,7 +139,7 @@ struct SettingsPane: View {
                 if store.resetToDefaults(), system.folders == .disabled { system.setFolders(true) }
             }
         } message: {
-            Text("Every setting goes back to how spacebar comes, including those only settings.json changes, and no custom theme or custom.css is chosen. Use spacebar for every file stays as it is, and your theme files and custom.css are kept.")
+            Text("Every setting goes back to how spacebar comes, including those only settings.json changes, and no custom theme or custom.css is chosen. The Space helper stays as it is, and your theme files and custom.css are kept.")
         }
         .sheet(isPresented: $confirmUninstall) { uninstallSheet }
     }
@@ -193,6 +184,25 @@ struct SettingsPane: View {
         if let mismatch {
             Section {
                 NoticeRow(message: mismatch, button: store.settings.folderMode ? "Turn On" : "Turn Off") { system.setFolders(store.settings.folderMode) }
+            }
+        }
+    }
+
+    /// Only once the extension is known to be on; anything wrong shows as a notice above instead.
+    @ViewBuilder private var quickLookStatus: some View {
+        if system.preview == .enabled {
+            Section {
+                LabeledContent("Quick Look") {
+                    HStack(spacing: 14) {
+                        HStack(spacing: 6) { StatusDot(color: .green); Text("Files: On") }
+                        HStack(spacing: 6) {
+                            StatusDot(color: system.folders == .enabled ? .green : .gray)
+                            Text(system.folders == .enabled ? "Folders: On" : "Folders: Off")
+                        }
+                    }
+                    .foregroundStyle(.secondary)
+                }
+                .accessibilityElement(children: .combine)
             }
         }
     }
@@ -254,26 +264,75 @@ struct SettingsPane: View {
         }
     }
 
-    // MARK: Every file
+    // MARK: Space helper
 
-    private var everyFile: some View {
+    private var spaceHelper: some View {
         Section {
             Toggle(isOn: helperToggle) {
-                Text("Use spacebar for every file in Finder")
+                Text("Use spacebar for every file")
                 Text(HelperCopy.what)
             }
-            LabeledContent {
-                HelperStatusView(state: system.helper)
-            } label: {
-                Text("Status")
-                if let why = HelperCopy.detail(system.helper) { Text(why) }
+            .disabled(!HelperAgent.available)
+            if HelperAgent.available {
+                LabeledContent {
+                    HelperStatusView(state: system.helper)
+                } label: {
+                    Text("Status")
+                    if let why = HelperCopy.detail(system.helper) { Text(why) }
+                }
             }
         } header: {
-            Text("Every File")
+            Text("Space Helper")
         } footer: {
-            Text(HelperCopy.privacy).settingsFooter()
-                .background(Color.clear.onAppear { system.watchHelper() }.onDisappear { system.unwatchHelper() })
+            if HelperAgent.available {
+                Text(HelperCopy.privacy).settingsFooter()
+                    .background(Color.clear.onAppear { system.watchHelper() }.onDisappear { system.unwatchHelper() })
+            } else {
+                Text(HelperCopy.unavailable).settingsFooter()
+            }
         }
+    }
+
+    // MARK: About
+
+    private var about: some View {
+        Section {
+            LabeledContent {
+                HStack(spacing: 8) {
+                    if updates.status == .checking { ProgressView().controlSize(.small) }
+                    if let text = updates.status.text { Text(text).foregroundStyle(.secondary) }
+                    Button("Check Now") { updates.checkNow(enabled: store.settings.checkUpdates) }
+                        .disabled(!store.settings.checkUpdates || !UpdateCheck.allowed || updates.status == .checking)
+                }
+            } label: {
+                Text("spacebar \(UpdateCheck.version)")
+                if case .available = updates.status {
+                    Text("Open any preview to install it, or run the install command in Terminal.")
+                }
+            }
+            if case .available = updates.status {
+                HStack {
+                    Spacer()
+                    Button("Copy Install Command") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(Updates.installCommand, forType: .string)
+                    }
+                }
+            }
+            Toggle("Check for updates", isOn: store.binding(\.checkUpdates, "checkUpdates"))
+            HStack {
+                Button("Report a Problem…") { NSWorkspace.shared.open(ProblemReport.url(ProblemReport.current(), log: ProblemReport.readLog())) }
+                Spacer()
+                Button("Uninstall spacebar…") { purge = false; uninstallError = nil; confirmUninstall = true }
+            }
+        } header: {
+            Text("About")
+        } footer: {
+            Text("Once a day spacebar asks GitHub for the latest version number, and nothing else; Check Now asks at once. A newer version shows here and in the preview. Report a Problem opens a public GitHub issue in your browser; nothing is sent until you submit it.")
+                .settingsFooter()
+        }
+        .onAppear { updates.load(enabled: store.settings.checkUpdates) }
+        .onChange(of: store.settings.checkUpdates) { updates.load(enabled: $0) }
     }
 
     private var helperToggle: Binding<Bool> {
@@ -310,7 +369,7 @@ struct SettingsPane: View {
         Section {
             Toggle(isOn: store.binding(\.inlineEditing, "inlineEditing")) {
                 Text("Edit text in the preview")
-                Text("Click the text of Markdown, code, JSON, CSV or a text file to edit it in place. Changes are saved as you type; if the file changes on disk, the change on disk wins.")
+                Text("Click the text of Markdown, code or a text file to edit it in place. For JSON and CSV, click Raw (</>) in the toolbar first. Changes save as you type, and ⌘Z undoes them while the file stays open; if the file changes on disk, you choose which version to keep.")
             }
             Toggle(isOn: store.binding(\.taskToggles, "taskToggles")) {
                 Text("Check off tasks")
@@ -407,7 +466,7 @@ struct SettingsPane: View {
                 Text("~/Library/Application Support/spacebar (and spacebar.md there from older versions), and the Space helper's log").font(.caption).foregroundStyle(.secondary)
             }
             .toggleStyle(.checkbox)
-            Text("Nothing else is touched: your files stay where they are. What the uninstaller did is written to ~/Library/Logs/spacebar-uninstall.log.")
+            Text("Nothing else is touched: your files, and the spacebar Sample Folder in your home folder, stay where they are. What the uninstaller did is written to ~/Library/Logs/spacebar-uninstall.log.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if !Uninstall.isInstalledCopy {
                 Text("This copy of spacebar isn't the one in ~/Applications, so it can't uninstall it.")
@@ -421,6 +480,8 @@ struct SettingsPane: View {
                 Spacer()
                 Button("Cancel", role: .cancel) { confirmUninstall = false }.keyboardShortcut(.cancelAction)
                 Button("Uninstall", role: .destructive) { uninstallError = Uninstall.run(purge: purge) }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
                     .disabled(!Uninstall.isInstalledCopy)
             }
         }
@@ -435,16 +496,19 @@ enum HelperCopy {
     static let what = "Space opens spacebar for any file you select in Finder, images, PDFs and video included, not only the types Quick Look hands it. Space or Esc closes it."
     /// The name System Settings lists the helper under in Accessibility: the bundle's file name, not its display name.
     static let accessibilityName = "spacebar Helper"
-    static let privacy = "This uses Accessibility, listed there as \(accessibilityName), which lets spacebar notice when you press Space in Finder and read which file is selected. It never reads what you type anywhere else. Turning it off removes spacebar from Login Items; Quick Look then previews as before."
+    static let privacy = "The Space helper uses Accessibility, listed there as \(accessibilityName), to notice when you press Space in Finder and read which file is selected. It never reads what you type anywhere else. Turning it off removes spacebar from Login Items; Quick Look then previews as before."
+    static let unavailable = "This copy of spacebar has no Space helper it can run: it needs the signed copy that install.sh puts in ~/Applications."
+    static let securityURL = URL(string: "https://github.com/patebry/spacebar/blob/main/SECURITY.md#the-space-helper")!
 
-    static func title(_ s: HelperState) -> String {
+    /// `owner`: the app holding secure input, when it could be found.
+    static func title(_ s: HelperState, owner: String? = nil) -> String {
         switch s {
         case .off: return "Off"
         case .notRunning: return "Not running"
         case .starting: return "Starting…"
         case .needsLoginItems: return "Blocked in Login Items"
         case .needsAccessibility: return "Waiting for Accessibility"
-        case .secureInput: return "Secure input on"
+        case .secureInput: return owner.map { "Paused while \($0) has secure input on" } ?? "Paused: another app has secure input on"
         case .on: return "On"
         }
     }
@@ -453,8 +517,8 @@ enum HelperCopy {
         switch s {
         case .needsLoginItems: return "Turn on spacebar in System Settings, General, Login Items & Extensions."
         case .needsAccessibility: return "Turn on \(accessibilityName) in System Settings, Privacy & Security, Accessibility."
-        case .secureInput: return "A password field or another app has secure input on, so Space goes to Quick Look until it ends."
-        case .notRunning: return "macOS did not start spacebar's helper, as happens for a while after an update. spacebar starts it again by itself."
+        case .secureInput: return "Space goes to Quick Look until that app turns secure input off (a password field, or Terminal's Secure Keyboard Entry)."
+        case .notRunning: return "macOS did not start the Space helper, as happens for a while after an update. spacebar starts it again by itself."
         default: return nil
         }
     }
@@ -477,7 +541,8 @@ struct HelperStatusView: View {
     var body: some View {
         HStack(spacing: 8) {
             StatusDot(color: HelperCopy.color(state))
-            Text(system.reregistering && state != .on ? "Restarting…" : HelperCopy.title(state))
+            Text(system.reregistering && state != .on ? "Restarting…" : HelperCopy.title(state, owner: system.secureInputOwner))
+                .fixedSize(horizontal: false, vertical: true)
             switch state {
             case .needsLoginItems: Button("Open Login Items…") { HelperAgent.openLoginItems() }
             case .needsAccessibility: Button("Open Accessibility Settings…") { HelperAgent.openAccessibility() }
@@ -556,12 +621,30 @@ struct ThemeCard: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .keyboardFocusRing(cornerRadius: 10)
         .accessibilityLabel(theme.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
+/// A plain-style button draws no focus ring of its own, so with Full Keyboard Access this draws one when it has focus.
+struct KeyboardFocusRing: ViewModifier {
+    let cornerRadius: CGFloat
+    @FocusState private var focused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .focused($focused)
+            .overlay(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(Color(nsColor: .keyboardFocusIndicatorColor), lineWidth: 3)
+                .opacity(focused ? 1 : 0)
+                .allowsHitTesting(false))
+    }
+}
+
 extension View {
+    func keyboardFocusRing(cornerRadius: CGFloat) -> some View { modifier(KeyboardFocusRing(cornerRadius: cornerRadius)) }
+
     func settingsFooter() -> some View {
         font(.footnote)
             .foregroundStyle(.secondary)

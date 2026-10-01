@@ -465,6 +465,27 @@ edit("md: Esc, then a click back in, keeps typing", file: "esc.md", md("Note\n")
     click("#doc > p")
     keys([t(" two")])
 }
+edit("md: ⌘Z in the next edit undoes the last one, after Esc", file: "undoesc.md", md("Note\n"), click: "#doc > p", want: md("Note\n")) {
+    keys([t(" one")])
+    escape()
+    click("#doc > p")
+    keys([k("z", "command")])
+}
+edit("md: ⌘Z right after Enter undoes the split", file: "undosplit.md", md("Alpha beta\n"), click: "#doc > p", want: md("Alpha beta\n")) {
+    keys([k("left", times: 5), t("\n")])
+    keys([k("z", "command")])
+}
+edit("md: the Undo button, after Esc, then ⇧⌘Z in the next edit redoes it", file: "undobtn.md", md("Note\n"), click: "#doc > p",
+     want: md("Note two\n")) {
+    keys([t(" two")])
+    escape()
+    let url = docs.appendingPathComponent("c\(caseN)/undobtn.md")
+    spin(until: 3) { (js("!document.getElementById('undo').hidden") as? Bool) == true }
+    _ = js("document.getElementById('undo').click(); 0")
+    check("md: the Undo button takes the last edit back", settled(url, md("Note\n")) == md("Note\n"))
+    click("#doc > p")
+    keys([k("z", "command", "shift")])
+}
 edit("md: typing fast, Enter included, in one run-loop turn", file: "fast.md", md("Para\n"), click: "#doc > p", want: md("Para quick\n\nfox jumps\n")) {
     keys([["burst": " quick\nfox jumps"]], gap: 0)
 }
@@ -589,6 +610,23 @@ edit("txt: undo and redo across newlines", file: "q.txt", md("line1\nline2\n"), 
           String(data: (try? Data(contentsOf: url)) ?? Data(), encoding: .utf8)?.debugDescription ?? "")
     keys([k("z", "command", "shift", times: 4)])
 }
+edit("txt: ⌘Z in the next edit undoes the last one, after Esc (the writer still takes it)", file: "undoesc.txt", md("line1\nline2\n"), click: code,
+     at: "start", want: md("line1\nline2\n")) {
+    keys([k("right", "command"), t(" more"), k("down"), t(" and more")])
+    escape()
+    click(code, at: "start")
+    keys([k("z", "command")])
+}
+edit("txt: the Undo button after Esc, and redo", file: "undobtn.txt", md("a\n"), click: code, at: "start", want: md("ab\n")) {
+    keys([k("right", "command"), t("b")])
+    escape()
+    let url = docs.appendingPathComponent("c\(caseN)/undobtn.txt")
+    spin(until: 3) { (js("!document.getElementById('undo').hidden") as? Bool) == true }
+    _ = js("document.getElementById('undo').click(); 0")
+    check("txt: the Undo button takes the last edit back", settled(url, md("a\n")) == md("a\n"))
+    click(code, at: "start")
+    keys([k("z", "command", "shift")])
+}
 edit("txt: after Enter, a click on another line moves the caret there", file: "clickin.txt", md("one\ntwo\n"), click: code, at: "start",
      want: md("one\nnew\ntXwo\n")) {
     keys([k("right", "command"), t("\nnew")])
@@ -658,16 +696,16 @@ edit("txt: past the 2 MB cap the save is refused and the file kept", file: "big2
     let url = docs.appendingPathComponent("c\(caseN)/big2.txt")
     keys([t("z")])
     spin(1)
-    let st = js("document.getElementById('status').textContent") as? String ?? ""
-    check("txt: past the cap the page says it is not saved", st.contains("NOT SAVED") && st.contains("2 MB"), st)
+    let st = js("document.getElementById('alert').hidden ? '' : document.getElementById('alert-text').textContent") as? String ?? ""
+    check("txt: past the cap the page's warning banner says it is not saved", st.hasPrefix("Not saved") && st.contains("2 MB"), st)
     check("txt: past the cap the file is as last saved", (try? Data(contentsOf: url)) == md(String(repeating: "y", count: bigRoom) + bigText))
     check("txt: past the cap the edit stays open", (js("!!editing") as? Bool) == true)
     keys([k("backspace"), k("backspace")])
     let back = md(String(repeating: "y", count: bigRoom - 1) + bigText)
     check("txt: back under the cap it is saved again", settled(url, back) == back)
     spin(0.5)
-    let st2 = js("document.getElementById('status').textContent") as? String ?? ""
-    check("txt: and the NOT SAVED status clears", !st2.contains("NOT SAVED"), st2)
+    let st2 = js("document.getElementById('alert').hidden ? '' : document.getElementById('alert-text').textContent") as? String ?? ""
+    check("txt: and the not-saved banner clears", st2.isEmpty, st2)
     keys([t("y")])
 }
 

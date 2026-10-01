@@ -40,11 +40,13 @@
   </svg>
 </button>
 <div id="toolbar">
+  <span id="edit-pill" hidden><span class="ep-label">Editing · Esc to finish</span><span class="ep-saved" aria-hidden="true"><svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 8.6 6.4 11.6 12.8 4.6"/></svg>Saved</span></span>
   <span id="status" role="status" aria-live="polite"></span><span id="selpos"></span><span id="kind"></span><span id="stats"></span>
-  <button id="upd" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="aa-pop" hidden><span class="upd-dot" aria-hidden="true"></span><span class="upd-label">Update</span></button>
+  <button id="undo" type="button" title="Undo the last change to this file" hidden><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 3.5 2.5 6.5l3 3"/><path d="M2.8 6.5h6.7a4 4 0 0 1 0 8H7"/></svg><span>Undo</span></button>
+  <button id="upd" type="button" aria-label="Update available" aria-haspopup="dialog" aria-expanded="false" aria-controls="aa-pop" hidden><span class="upd-dot" aria-hidden="true"></span><span class="upd-label">Update</span></button>
   <button id="raw" class="tb-ic tb-slot" type="button" aria-pressed="false" title="Show raw text" hidden><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4.5 1.8 8 5 11.5M11 4.5 14.2 8 11 11.5M9.2 3.2 6.8 12.8"/></svg></button>
   <button id="find-btn" class="tb-ic tb-slot" type="button" title="Find (⌘F)" aria-controls="find" aria-expanded="false" hidden><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="7" cy="7" r="4.3"/><path d="M10.2 10.2 14 14"/></svg></button>
-  <button id="aa" class="tb-slot" type="button" title="Appearance" aria-haspopup="dialog" aria-expanded="false">Aa</button>
+  <button id="aa" class="tb-slot" type="button" title="Appearance" aria-label="Appearance" aria-haspopup="dialog" aria-expanded="false">Aa</button>
   <button id="edit" class="tb-slot" type="button">Open in editor</button>
   <button id="open-with" class="tb-ic tb-slot" type="button" title="Open With" aria-label="Open With" aria-haspopup="menu" aria-expanded="false" aria-controls="ow-pop" hidden><svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3.8 5 6.8l3-3"/></svg></button>
   <div id="ow-pop" role="menu" aria-label="Open With" hidden></div>
@@ -87,6 +89,18 @@
     <button id="aa-settings" type="button">Settings…</button>
   </div>
 </div>
+<div id="alert" role="alert" hidden>
+  <svg class="alert-ic" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M8 1.8 15 14.2H1L8 1.8z"/><path d="M8 6.2v3.6M8 11.6v.4" stroke-linecap="round"/></svg>
+  <div class="alert-body">
+    <p id="alert-text"></p>
+    <div id="alert-actions" hidden>
+      <button type="button" data-choice="mine">Keep Mine</button>
+      <button type="button" data-choice="disk">Use Disk Version</button>
+      <button type="button" data-choice="copy">Copy My Text</button>
+    </div>
+  </div>
+</div>
+<div id="edit-tip" role="tooltip" hidden>Click to edit · changes save as you type</div>
 <div id="main">
   <nav id="crumbs" aria-label="File path" hidden></nav>
   <main id="doc"></main>

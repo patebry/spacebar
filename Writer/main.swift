@@ -17,7 +17,7 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         // some other file.
         let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
         var why = EditableText.writeRefusal(path: path, data: data, base: base)
-        if why == nil, !(EditableText.isMarkdown(path) && EditableText.isMarkdown(resolved)), !typed.allows(path: resolved, data: data) {
+        if why == nil, !(EditableText.isMarkdown(path) && EditableText.isMarkdown(resolved)), !typed.allows(path: resolved, data: data, base: base) {
             why = "not a text typed in this file's edit"
         }
         if let why {
@@ -27,6 +27,9 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         guard writeGate.begin() else { return reply("write failed (the writer is quitting); file left as it was") }
         defer { writeGate.end() }
         let err = compareAndWrite(data, path: resolved, expecting: base, noFollow: true)
+        if !EditableText.isMarkdown(path) {
+            typed.wrote(path: resolved, err == nil ? data : nil, torn: err?.contains("partly written") == true ? FileManager.default.contents(atPath: resolved) : nil)
+        }
         if let err { log.error("write \(path, privacy: .private): \(err, privacy: .private)") } else { log.info("wrote \(data.count) bytes to \(path, privacy: .private)") }
         reply(err)
     }
@@ -264,8 +267,11 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         }
     }
 
-    func spaceHelperPaused(reply: @escaping (Bool) -> Void) {
-        reply(SettingsFile.load().spaceHelper && !HelperTap.taking())
+    func spaceHelperState(reply: @escaping (String, String?) -> Void) {
+        guard SettingsFile.load().spaceHelper else { return reply("off", nil) }
+        guard HelperTap.taking() else { return reply("notRunning", nil) }
+        guard SecureInput.ownerPID() != nil else { return reply("on", nil) }
+        reply("paused", SecureInput.ownerName())
     }
 
     func copyText(_ text: String, reply: @escaping (Bool) -> Void) {
@@ -450,8 +456,8 @@ func containingApp() -> URL? {
 }
 
 /// Whether the Space helper takes Space: an enabled event tap owned by this app's own spacebar Helper.app, read from the
-/// window server's list of taps, so nothing connects to the helper. Secure input is not counted: it is another app's, and
-/// passes; Settings names it.
+/// window server's list of taps, so nothing connects to the helper. Secure input is another app's, and is read on its own
+/// (SecureInput).
 enum HelperTap {
     static func taking() -> Bool {
         var n: UInt32 = 0
@@ -580,6 +586,11 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
             self.flush(force: true)
             self.host.editSplit(self.id, before: before, after: after, tail: tail)
         }
+        textView.onUndoPastStart = { [weak self] redo in
+            guard let self, !self.ended else { return }
+            self.flush(force: true)
+            self.host.editUndo(self.id, redo: redo)
+        }
         panel.delegate = self
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(textView)
@@ -663,6 +674,7 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
             textView.onFind = nil
             textView.onMergeBackward = nil
             textView.onSplit = nil
+            textView.onUndoPastStart = nil
             textView.onHoldTimeout = {}
             textView.dropHeld()
         }
@@ -713,6 +725,7 @@ final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         textView.firstKeyLogged = true
         textView.onMergeBackward = nil
         textView.onSplit = nil
+        textView.onUndoPastStart = nil
         textView.delegate = self
         textView.onEscape = { [weak self] in self?.escape() }
         textView.onHoldTimeout = {}

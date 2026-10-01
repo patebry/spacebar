@@ -113,6 +113,15 @@ spin()
 check("Cmd+Z undoes the paste", letter("z") && tv.string == " line\nsecond line")
 spin()
 check("Cmd+Shift+Z redoes it", letter("z", [.command, .shift]) && tv.string == " line\nsecond linefirst")
+var pastStart: [Bool] = []
+tv.onUndoPastStart = { pastStart.append($0) }
+spin()
+check("Cmd+Shift+Z with nothing to redo asks the host to redo across sessions", letter("z", [.command, .shift]) && pastStart == [true]
+      && tv.string == " line\nsecond linefirst")
+tv.undoManager?.removeAllActions()
+check("Cmd+Z with the session's undo used up asks the host to undo across sessions, and changes nothing here",
+      letter("z") && pastStart == [true, false] && tv.string == " line\nsecond linefirst")
+tv.onUndoPastStart = nil
 check("panel is still hidden", !panel.isVisible)
 
 // A list session (a click on a sidebar row): only the list keys go anywhere; nothing is typed, no shortcut runs, and Esc or Space

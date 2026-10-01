@@ -170,6 +170,10 @@ jobs:
           # The Gatekeeper paragraph lives in README.md only, between its gatekeeper markers.
           gatekeeper=$(sed -n '/^<!-- gatekeeper/,/^<!-- \/gatekeeper -->/{/^<!--/d;p;}' README.md)
           [ -n "$gatekeeper" ] || { echo "::error::README.md has no gatekeeper paragraph"; exit 1; }
+          v=${GITHUB_REF_NAME#v}
+          if [ "$(printf '0.3.0\n%s\n' "$v" | sort -V | head -1)" = 0.3.0 ] && printf '%s' "$gatekeeper" | grep -qi 'not notarized'; then
+            echo "::error::$GITHUB_REF_NAME is notarized, but README.md's gatekeeper paragraph says it is not"; exit 1
+          fi
           cat > "$RUNNER_TEMP/notes.md" <<EOF
           ## Install
 

@@ -1,17 +1,30 @@
 # spacebar
 
-Press Space. See everything. Space in Finder shows folders, documents, code and data: Markdown rendered properly (headings,
-tables, task lists, code highlighting, math and Mermaid diagrams, in six themes), highlighted source, JSON, logs, archives
-and files with no extension. Press Space on a folder and browse it. The sidebar is a file browser for the folder: its
-subfolders open in place, and a click shows any file in the panel, so you can read the Markdown, images, PDFs, rich text,
-HTML, video, code, JSON, CSV and archives beside a document without leaving Quick Look. While it shows, the arrow keys
-move through the tree and open each file in spacebar; type in its filter to narrow it by name. Drag its edge to resize it; its button collapses it, and every
-preview remembers both. Click a block of Markdown to edit it in place, or tick a task box, and the file is saved; code, text,
-JSON, CSV and config files edit in place the same way. Obsidian
-vaults read as they do in Obsidian: `[[wikilinks]]`, `![[embeds]]`, callouts and tags. A button at the bottom right copies a file's text; the toolbar
-finds in it (⌘F) and switches a formatted view (Markdown, JSON, a notebook, CSV, XML) to the file as it is. When a new version is out, the
-preview's toolbar shows an Update button and one click installs it. Free and open source, for macOS 13 and later (Apple
-silicon and Intel).
+**Quick Look for every file. Press Space.**
+
+spacebar is a free, open-source replacement for Quick Look on macOS 13 and later (Apple silicon and Intel). Space in Finder
+opens Markdown, folders, code, JSON, YAML, logs and archives in spacebar. Turn on
+[**Use spacebar for every file**](#use-spacebar-for-every-file), which is optional and needs Accessibility, and Space opens
+spacebar's own panel for any file: photos and camera RAW, PDFs, video, CSV and the rest. It aims to be the best Quick Look,
+not an IDE.
+
+- **Every file, one panel.** PDF, HEIC and RAW, video, CSV tables, JSON trees, zips without unzipping, Markdown, and the folder beside them.
+- **One press.** About 40 ms to on screen in the helper's panel, warm ([measured on one Mac](FINDINGS.md#space-helper)); Space or Esc closes it.
+- **Find, copy, edit, privately.** ⌘F, Copy and Raw; a click edits text, code and data in place. Sandboxed, no telemetry, MIT.
+
+<!-- dmg: the release does not upload spacebar.dmg yet; this link works once it does -->
+**[Download spacebar.dmg](https://github.com/patebry/spacebar/releases/latest/download/spacebar.dmg)**, or paste this in
+Terminal:
+
+```sh
+curl -fsSL https://spacebar.patebryant.com/install.sh | sh
+```
+
+Then select a file or folder in Finder and press Space. [Install](#install) has the details.
+
+Markdown is rendered properly (tables, task lists, highlighted code, math and Mermaid diagrams, in six themes), and Obsidian
+vaults read as they do in Obsidian. Word, Keynote and other Office and iWork files show in Apple's own preview inside the
+panel. Apps and packages stay with Apple's Quick Look, and ⌘Y still opens it.
 
 ### What Space opens in spacebar
 
@@ -275,16 +288,20 @@ an older version's defaults are applied to it (`stats` is read as off):
 
 ## Install
 
+<!-- dmg: set the .dmg's install steps here once the release uploads it -->
+Download [`spacebar.dmg`](https://github.com/patebry/spacebar/releases/latest/download/spacebar.dmg) from the latest release,
+or run the install command:
+
 ```sh
 curl -fsSL https://spacebar.patebryant.com/install.sh | sh
 ```
 
 Then select a file or folder in Finder and press Space.
 
-<!-- gatekeeper: the release notes copy this paragraph (.github/workflows/release.yml) -->
-spacebar is **not notarized**: there is no Apple Developer ID behind it yet. Use the install command; a browser download
-of the zip will be blocked by Gatekeeper. Files that curl downloads are not quarantined, so Gatekeeper does not stop the app,
-but it also means you are trusting this repository's build rather than Apple's check.
+<!-- gatekeeper: the release notes copy this paragraph (.github/workflows/release.yml); it is the one place that says how a release is signed for Gatekeeper -->
+spacebar is **notarized**: from v0.3 every release is signed with an Apple Developer ID, checked by Apple's notary service
+and stapled, and the release fails if Apple refuses it. A copy downloaded in a browser opens as any notarized app does. The
+install command checks the release's SHA-256 before it changes anything.
 <!-- /gatekeeper -->
 Read [`scripts/install.sh`](scripts/install.sh) before you run it. It:
 

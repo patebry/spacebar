@@ -38,7 +38,7 @@ Space on in Finder:
 | Video (`.mp4`, `.m4v`, `.mov`, `.3gp`, `.mpg`, `.mpeg`, `.m2v`) | played by AVKit in the panel, paused on its first frame until you press play |
 | Audio (`.mp3`, `.m4a`, `.m4b`, `.aac`, `.wav`, `.aif`, `.aiff`, `.flac`, `.caf`, `.amr`) | the same player, under the file's artwork or icon |
 | Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.xml`, `.yaml`, `.toml`, `.sql`, `.plist`, `Makefile` and more) | highlighted source with line numbers, edited in place with a click; a binary property list is shown as XML (not editable). XML and property lists are indented, and a minified stylesheet is laid out a declaration to a line, with Raw for the file as is, where a click edits it. A language with no bundled grammar (`Dockerfile`, `.ps1`, `.bat`, Dart, Scala, Elixir, Haskell, Zig and others) is plain text with line numbers |
-| Archives (`.zip`, `.tar`, `.tgz`, `.tar.gz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz`, `.7z`, `.rar`, `.zst`, `.tzst`) | its files and folders as a tree, with sizes and dates, listed without extracting anything; a click (or ↑ ↓ and Return) opens a text, code, Markdown, JSON, CSV or image file inside it in place, read-only, still without extracting it (0.4); Open with its default app |
+| Archives (`.zip`, `.tar`, `.tgz`, `.tar.gz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz`, `.7z`, `.rar`, `.zst`, `.tzst`) | its files and folders as a tree, with sizes and dates, sortable by any column, listed without extracting anything; a click (or ↑ ↓ and Return) opens a text, code, Markdown, JSON, CSV, image or PDF file inside it in place, read-only, still without extracting it (0.4); anything else inside says to open the archive with Archive Utility; a lone compressed file of text (`server.log.gz`) shows the text itself; Open with its default app |
 | JSON (and `.jsonc`, `.json5`, comments and trailing commas allowed) | a tree, with Expand All and Collapse All; a Jupyter notebook as its cells. Raw shows the file as is, and a click edits it, with a quiet warning while it is not valid JSON |
 | CSV and TSV | a table, first row as the header, up to 50,000 rows and 200 columns; Raw shows its text, and a click edits it |
 | Text (`.txt`, `.log`, `.conf`, `.env`, `LICENSE`, `.env.example`, `.strings`, `.pbxproj` and any other file macOS declares as text) | as is, with line numbers; text of a kind spacebar edits (not `.strings` or `.pbxproj`) is edited in place with a click. Text need not be UTF-8: a byte order mark (UTF-8, UTF-16, UTF-32), UTF-16 without one, and legacy encodings (Windows-1252, Latin-1, Shift JIS, GB 18030, EUC-KR, Big5, Windows-1251 and others) are detected, and the kind line names the encoding |
@@ -65,7 +65,7 @@ tinted line by line: added lines green, removed lines red, hunk headers dimmed.
 
 Text over 2 MB shows its first 2 MB; a CSV or TSV table reads up to 16 MB, and one over 2 MB is shown but not edited. WebM,
 Matroska, Ogg, Opus and AVI files, which macOS cannot play, get the info card and a note saying so. A link that loops or leads
-nowhere is listed greyed in the sidebar, and Space on one says it can't be opened. An archive lists its first 5,000 entries. Images over 50 MB, and PDFs, video and audio over 512 MB, get the info card.
+nowhere is listed greyed in the sidebar, and Space on one says it can't be opened. An archive lists its first 5,000 entries, and says how many it holds. Images over 50 MB, and PDFs, video and audio over 512 MB, get the info card.
 
 **Editing.** With **Edit text in the preview** on (the default; Settings, Advanced; one setting for everything), a click on the text of
 Markdown, code, text, JSON, CSV or TSV, YAML, TOML, XML, an INI or `.conf` file, or dotfile config (`.env`, `.env.local`,
@@ -113,6 +113,7 @@ you type. In the Space helper's panel (**Use spacebar for every file**, below) t
 | Esc | Closes the find bar, clears the filter, or gives the keys back |
 | ⌘C | Copies the selection, or with nothing selected the whole file's text. In the Space helper's panel it copies the file too, as Finder's ⌘C does: paste in Finder for the file, in an editor for the text (an image, a PDF or another file: the file) |
 | ↑ ↓ ← → Home End ↵ | Move through the sidebar, or through a folder's grid (↵ opens the picture) |
+| ← or ⌫ | Back to the grid from a picture opened in it, or to the archive from a file inside it |
 | ⌘O | Open, in the Space helper's panel |
 | ⌘+ ⌘− ⌘0 | Zoom |
 
@@ -173,15 +174,11 @@ in Finder is Quick Look's again. Its Accessibility entry stays, unused, until yo
 
 ### Folders and Obsidian vaults
 
-Press Space on any folder. It opens on:
-
-1. its README;
-2. else its first Markdown file;
-3. else the Markdown file a quick look through its subfolders finds: the nearest the top, then one named like `index` or
-   `Home`, then the newest. It looks at most 3 folders deep and 5,000 items, for at most a quarter of a second, and never inside
-   hidden folders, `node_modules` or packages;
-4. else an overview of the folder: how many folders, notes, images, PDFs and other files it holds, and the files changed most
-   recently, each a click away.
+Press Space on any folder. It opens on its own README (or an `index` or `Home` note, as a vault has) when the folder holds
+one at its top level, and otherwise on an overview of the folder (Unreleased, 0.4: it no longer opens a note found deeper
+down): how many folders, notes, images, PDFs and other files it holds (counted at most 3 folders deep and 5,000 items, never
+inside hidden folders, `node_modules` or packages), then the folder's own files and folders as a list with their sizes and
+dates, each a click away.
 
 A folder mostly of pictures (at least six files, 60% or more of them images or videos) opens on a grid of thumbnails
 instead, like Finder's gallery, even when it has a README (Unreleased, 0.4). The arrows move through the tiles in two
@@ -190,7 +187,9 @@ grid and the list, and spacebar remembers the choice for folders of pictures and
 screen are drawn, so a folder of thousands of pictures opens as fast as a small one.
 
 App bundles and other packages, the top of a volume and system folders (`/System`, `/Library`, `/usr` and the like, and
-`~/Library`) keep Quick Look's usual preview. Click the folder's name at the top of the sidebar to see its overview again.
+`~/Library`) keep Quick Look's usual preview. Click the folder's name at the top of the sidebar, or the first step of the
+breadcrumb, to see its overview again; the breadcrumb's other steps open that folder in the sidebar. A picture opened from the
+grid has a Back button, and ← or ⌫ go back to the grid too.
 Folder previews are on by default; `"folderMode": false` in settings.json turns them off.
 
 While the sidebar shows, it takes the arrow keys as soon as the preview opens, so they move through spacebar's list rather
@@ -200,17 +199,17 @@ opens the file or folder under the cursor. Esc or Space gives the keys back to Q
 preview cannot close Quick Look), and the preview says so: press Space or Esc again to close it. A click in the document
 gives them back too, and a click on a row takes them again. With the sidebar collapsed, or `sidebarKeys` off in
 settings.json, the arrows stay with Finder and Space closes the preview at once. Click the filter field
-at the top and type to narrow the tree to names that match (letters in order, so `rdme` finds `README.md`); ↑, ↓, Home, End
-and Return still work while you type, and Esc clears the field, then goes back to the list.
+at the top and type to narrow the tree to names that match (letters in order, so `rdme` finds `README.md`), in every folder
+under it, opened or not, and past a folder's first 5,000 files (Unreleased, 0.4); ↑, ↓, Home, End and Return still work while
+you type, and Esc clears the field, then goes back to the list. A folder that matches shows what it holds.
 
-**Search the text of the files** (Unreleased, 0.4). The small **Names** button beside the filter switches it to
-**Contents**, for as long as spacebar stays open: type two or more characters and the list becomes the files whose text
+**Search the text of the files** (Unreleased, 0.4). **Names | Contents** under the filter switches it to **Contents**, for as long as spacebar stays open: type two or more characters and the list becomes the files whose text
 holds them, each with its folder, how many times it matches and the first matching line. Matching ignores case and is plain
 text, never a pattern. The files searched are the Markdown, code, JSON, CSV and text files the sidebar lists, in every
 folder under it (open or not), with hidden files only when the sidebar shows them; dependency and build folders
 (`node_modules`, `.build`, `Pods` and the like) are skipped, as are binary files and files iCloud has not downloaded. Each file
 is read to its first 2 MB, the whole search to 64 MB and 2 seconds, and at most 500 files are listed; a search cut short
-says how far it got ("Searched 300 of 900 files"). Every keystroke starts a new search. Opening a result, by a click or the
+says how far it got ("Found in 12 files · 300 of 900 searched"). Every keystroke starts a new search. Opening a result, by a click or the
 arrows, runs Find (⌘F) in it for the same text, on its first match (in rendered Markdown, text that is only in the markup,
 such as a link's address, is not on screen to find; Raw shows it).
 

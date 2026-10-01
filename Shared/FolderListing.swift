@@ -892,6 +892,10 @@ enum FolderListing {
         let modified: Double
         /// A symbolic link that loops or leads nowhere: listed greyed, never opened.
         var broken = false
+        /// A name starting with "." or flagged hidden: listed only when hidden files are shown, and then dimmed.
+        var hidden = false
+        /// What a broken link points at, as it is written (at most 1 KB), for its tooltip.
+        var target: String?
 
         var isMarkdown: Bool { kind == .markdown }
         /// An image or a video: the folder grid shows its thumbnail (ThumbnailPipeline).
@@ -914,6 +918,8 @@ enum FolderListing {
                                          "modified": (e.modified * 1000).rounded()]
                  if e.size >= 0 { d["size"] = e.size }
                  if e.broken { d["broken"] = true }
+                 if e.hidden { d["hidden"] = true }
+                 if let t = e.target { d["target"] = t }
                  if e.hasThumbnail { d["thumb"] = true }
                  return d
              },
@@ -971,12 +977,14 @@ enum FolderListing {
             let path = (dir as NSString).appendingPathComponent(name)
             var st = stat()
             guard lstat(path, &st) == 0 else { continue }
-            if !showHidden && isHidden(name, st) { continue }
+            let hidden = isHidden(name, st)
+            if !showHidden && hidden { continue }
             if st.st_mode & S_IFMT == S_IFLNK {
                 guard let real = realPath(path) else {
                     let e = errno
                     if e == ELOOP || e == ENOENT {
-                        found.append(Entry(name: name, path: path, isDirectory: false, kind: .other, size: -1, modified: 0, broken: true))
+                        found.append(Entry(name: name, path: path, isDirectory: false, kind: .other, size: -1, modified: 0, broken: true, hidden: hidden,
+                                           target: linkTarget(path)))
                     }
                     continue
                 }
@@ -991,7 +999,8 @@ enum FolderListing {
                 && ((try? URL(fileURLWithPath: path).resourceValues(forKeys: [.isPackageKey]))?.isPackage ?? false)
             let kind = FileTypes.kind(name: name, isDirectory: isDir, isPackage: isPackage, executable: st.st_mode & 0o111 != 0)
             let modified = Double(st.st_mtimespec.tv_sec) + Double(st.st_mtimespec.tv_nsec) / 1e9
-            found.append(Entry(name: name, path: path, isDirectory: kind == .folder, kind: kind, size: isDir ? -1 : Int64(st.st_size), modified: modified))
+            found.append(Entry(name: name, path: path, isDirectory: kind == .folder, kind: kind, size: isDir ? -1 : Int64(st.st_size), modified: modified,
+                               hidden: hidden))
         }
         found.sort { a, b in
             if a.isDirectory != b.isDirectory { return a.isDirectory }
@@ -1009,8 +1018,14 @@ enum FolderListing {
         return Listing(dir: dir, entries: shown, more: found.count - shown.count + unseen)
     }
 
-    /// The Markdown file a folder preview opens on when the folder itself holds one: its README, else its first Markdown file in
-    /// the sidebar's order. Nil sends the preview to FolderScan.
+    /// What the symbolic link at `path` holds, as text; nil when it cannot be read or is longer than 1 KB.
+    static func linkTarget(_ path: String) -> String? {
+        var buf = [CChar](repeating: 0, count: 1026)
+        let n = readlink(path, &buf, 1025)
+        guard n > 0, n <= 1024 else { return nil }
+        return String(decoding: buf[0..<n].map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
     /// `l` with only the entries named in `names`: the sidebar of a multiple selection, which moves among the selected items.
     /// Entries past the listing's caps are not in `l` (but for the pinned file on screen).
     /// A selection's view of a listing: the selected items (paths) in it, and the folders on the way to one. A selected folder,
@@ -1036,8 +1051,17 @@ enum FolderListing {
         return Double(files.filter(\.hasThumbnail).count) >= gridMediaShare * Double(files.count)
     }
 
+    /// Names that make a top-level note the one a folder opens on, in order of preference (without extension, lowercased).
+    static let landingNames = ["readme", "index", "home"]
+
+    /// The Markdown file a folder preview opens on: a README (or an index or Home note, as a vault has) in the folder itself.
+    /// Nil shows the folder overview: a note deeper down, or any other note at the top, is the user's to pick.
     static func firstDocument(_ l: Listing) -> Entry? {
-        l.files.first { $0.isMarkdown && isReadme($0.name) } ?? l.files.first(where: \.isMarkdown)
+        let notes = l.files.filter { $0.isMarkdown && !$0.broken }
+        for name in landingNames {
+            if let e = notes.first(where: { ($0.name as NSString).deletingPathExtension.lowercased() == name }) { return e }
+        }
+        return nil
     }
 }
 
@@ -1076,12 +1100,26 @@ final class FolderWatch {
 enum ArchiveEntryView {
     static let maxTextBytes = 2 << 20
     static let maxImageBytes = 20 << 20
+    static let maxPDFBytes = 32 << 20
     /// Decoded by WebKit as `<img>`, from a blob the page makes of one read of `spacebar://entry/<token>`. No SVG.
     static let webImages: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]
     /// Decoded by ImageIO in the extension (ImagePane), from the bytes the writer sent.
     static let nativeImages: Set<String> = ["heic", "heif", "avif", "tif", "tiff"]
 
-    enum Kind: Equatable { case markdown, code, json, csv, text, image, bitmap, archive, other }
+    enum Kind: Equatable { case markdown, code, json, csv, text, image, bitmap, pdf, archive, other }
+    static let textKinds: [Kind] = [.markdown, .code, .json, .csv, .text]
+
+    /// A single compressed file: what bsdtar cannot list unless it holds a tar.
+    static let compressedExtensions: Set<String> = ["gz", "gzip", "bz2", "bz", "xz", "zst"]
+    static func isLoneCompressed(_ path: String) -> Bool {
+        let lower = (path as NSString).lastPathComponent.lowercased()
+        return compressedExtensions.contains((lower as NSString).pathExtension) && !(lower as NSString).deletingPathExtension.hasSuffix(".tar")
+    }
+    /// The name of the one file a lone compressed file holds: its own name without the extension.
+    static func loneName(_ path: String) -> String { ((path as NSString).lastPathComponent as NSString).deletingPathExtension }
+    /// What the writer can decompress a lone file from (Apple's gzip reads gzip, bzip2 and xz; nothing on a stock Mac reads zstd).
+    static let loneExtensions: Set<String> = ["gz", "gzip", "bz2", "bz", "xz"]
+    static func isLoneReadable(_ path: String) -> Bool { isLoneCompressed(path) && loneExtensions.contains((path as NSString).pathExtension.lowercased()) }
 
     static func kind(_ entry: String) -> Kind {
         let name = displayName(entry)
@@ -1094,6 +1132,7 @@ enum ArchiveEntryView {
         case .json: return .json
         case .csv: return .csv
         case .text: return .text
+        case .pdf: return .pdf
         case .archive: return .archive
         default: return .other
         }
@@ -1104,6 +1143,7 @@ enum ArchiveEntryView {
         switch kind(entry) {
         case .markdown, .code, .json, .csv, .text: return maxTextBytes
         case .image, .bitmap: return maxImageBytes
+        case .pdf: return maxPDFBytes
         case .archive, .other: return nil
         }
     }
@@ -1124,15 +1164,18 @@ enum ArchiveEntryView {
         "tooLarge": "This file is too large to preview inside the archive.",
         "bomb": "This file expands far more than its archive could hold, so it wasn’t read.",
         "timedOut": "Reading this file from the archive took too long.",
-        "archive": "An archive inside an archive isn’t opened.",
-        "other": "Only text, code, Markdown, data and images are shown from inside an archive.",
+        "archive": "An archive inside an archive isn’t opened here. To look inside it, open this archive with Archive Utility, then open that one.",
+        "other": "Only text, code, data, images and PDFs are shown from inside an archive. To use this file, open the archive with Archive Utility, which extracts it.",
         "unreadable": "This file couldn’t be read from the archive.",
+        "link": "This is a link to another file in the archive, and has no contents of its own.",
         "binary": "This file isn’t text, so it can’t be shown here.",
     ]
 
     /// What the page is sent for `entry` of the archive at `archive`: its text or image view when `data` was read, else its info
-    /// card saying why (`failure`, one of `notes`' keys, or a reason the writer gave). Never editable, never opened.
-    static func payload(archive: String, root: String, entry: String, size: Int64?, modified: Double?, data: Data?, failure: String?) -> [String: Any] {
+    /// card saying why (`failure`, one of `notes`' keys, or a reason the writer gave). Never editable, never opened. A PDF's
+    /// view is drawn by the extension from `data`. `partial`: `data` is the first part of the file (a lone compressed log).
+    static func payload(archive: String, root: String, entry: String, size: Int64?, modified: Double?, data: Data?, failure: String?,
+                        partial: Bool = false) -> [String: Any] {
         var p = FileView.base(path: archive, root: root, reason: "entry")
         let name = displayName(entry), shown = shownPath(entry)
         let archiveName = (archive as NSString).lastPathComponent
@@ -1154,6 +1197,7 @@ enum ArchiveEntryView {
             p["note"] = notes[why] ?? notes["unreadable"]!
             return p
         }
+        if failure == "link" { return info("link") }
         switch k {
         case .archive: return info("archive")
         case .other: return info("other")
@@ -1166,11 +1210,20 @@ enum ArchiveEntryView {
             p["view"] = k == .image ? "image" : "bitmap"
             p["size"] = NSNumber(value: data.count)
             return p
+        case .pdf:
+            p["view"] = "pdf"
+            p["size"] = NSNumber(value: data.count)
+            return p
         case .markdown, .code, .json, .csv, .text:
-            guard let decoded = data.isEmpty ? TextDecoding.Decoded(text: "", name: "UTF-8") : TextDecoding.decode(data) else { return info("binary") }
+            guard let decoded = data.isEmpty ? TextDecoding.Decoded(text: "", name: "UTF-8") : TextDecoding.decode(data, truncated: partial) else { return info("binary") }
             p["view"] = k == .markdown ? "markdown" : k == .code ? "code" : k == .json ? "json" : k == .csv ? "csv" : "text"
             p["text"] = decoded.text
-            p["size"] = NSNumber(value: data.count)
+            if partial {
+                p["truncated"] = true
+                p["readCap"] = data.count
+            } else {
+                p["size"] = NSNumber(value: data.count)
+            }
             if [.code, .json, .csv, .text].contains(k), UTType(filenameExtension: (name as NSString).pathExtension)?.conforms(to: .text) != true {
                 p["kindName"] = k == .code ? "Source code" : "Plain text"
             }

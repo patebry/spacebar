@@ -13,6 +13,8 @@ enum ArchiveListing {
         let size: Int64?
         let modified: Double?
         let isDir: Bool
+        /// A symbolic or hard link (`l` or `h`): bsdtar extracts nothing for it, so it is never read, only named.
+        var isLink = false
     }
 
     static let tool = "/usr/bin/bsdtar"
@@ -31,10 +33,10 @@ enum ArchiveListing {
     static let timeout: TimeInterval = 5
     /// What the writer lists: FileTypes.archiveExtensions (checked equal by test/settings).
     static let extensions: Set<String> = ["zip", "tar", "gz", "gzip", "tgz", "bz2", "bz", "tbz", "tbz2", "xz", "txz", "7z", "rar", "zst", "tzst"]
-    /// A single compressed file: what bsdtar cannot list unless it holds a tar.
-    static let compressedExtensions: Set<String> = ["gz", "gzip", "bz2", "bz", "xz", "zst"]
 
-    struct Run { var output: Data; var status: Int32; var truncated: Bool }
+    struct Run { var output: Data; var status: Int32; var truncated: Bool; var total: Int? = nil }
+    /// Past the listing's cap, bsdtar runs on this long at most, its lines only counted, so the page can say how many there are.
+    static let countFor: TimeInterval = 1
     /// A name is cut at this many bytes, and a path deeper than `maxDepth` folders keeps the rest as one name (joined with
     /// "∕", not "/"), so a crafted archive cannot hand the page a tree it cannot walk.
     static let maxNameBytes = 4096
@@ -56,6 +58,7 @@ enum ArchiveListing {
         guard let run = runTool(handle) else { return nil }
         var entries = parse(data: run.output, now: Date())
         var truncated = run.truncated
+        let total = run.status == 0 ? run.total : nil
         if run.status != 0 && !run.truncated {
             // bsdtar reads a lone compressed file as a one-line mtree spec and fails: it is the one file inside.
             if isLoneCompressed(path) {
@@ -66,18 +69,15 @@ enum ArchiveListing {
                 truncated = true
             }
         }
-        return json(entries, truncated: truncated)
+        return json(entries, truncated: truncated, total: truncated ? total : nil)
     }
 
-    static func isLoneCompressed(_ path: String) -> Bool {
-        let lower = (path as NSString).lastPathComponent.lowercased()
-        let ext = (lower as NSString).pathExtension
-        return compressedExtensions.contains(ext) && (lower as NSString).deletingPathExtension.lowercased().hasSuffix(".tar") == false
-    }
+    static func loneName(_ path: String) -> String { ArchiveEntryView.loneName(path) }
+    static func isLoneCompressed(_ path: String) -> Bool { ArchiveEntryView.isLoneCompressed(path) }
 
     /// The one file a lone compressed file holds: its name without the extension, and for gzip the size its trailer records.
     static func loneEntry(_ path: String, _ st: stat, _ h: FileHandle) -> Entry {
-        let name = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+        let name = loneName(path)
         var size: Int64?
         if ["gz", "gzip"].contains((path as NSString).pathExtension.lowercased()), st.st_size >= 18,
            (try? h.seek(toOffset: UInt64(st.st_size - 4))) != nil, let t = try? h.read(upToCount: 4), t.count == 4 {
@@ -114,34 +114,49 @@ enum ArchiveListing {
         defer { term.cancel(); kill9.cancel() }
         let lock = NSLock()
         var data = Data()
-        var truncated = false
+        var truncated = false, counted = 0, stopped = false
         let finished = DispatchSemaphore(value: 0)
         DispatchQueue.global().async {
             let reader = out.fileHandleForReading
             var lines = 0
+            var capped = false
             while true {
                 let chunk = reader.availableData
                 if chunk.isEmpty { break }
+                lines += chunk.reduce(0) { $0 + ($1 == 10 ? 1 : 0) }
+                // Past the cap: only counted.
+                if capped { continue }
                 lock.lock()
                 data.append(chunk)
                 let size = data.count
                 lock.unlock()
-                lines += chunk.reduce(0) { $0 + ($1 == 10 ? 1 : 0) }
-                if size >= maxOutputBytes || lines > maxEntries {
-                    lock.lock(); truncated = true; lock.unlock()
+                if size >= maxOutputBytes {
+                    lock.lock(); truncated = true; stopped = true; lock.unlock()
                     if p.isRunning { p.terminate() }
                     break
                 }
+                if lines > maxEntries {
+                    lock.lock(); truncated = true; lock.unlock()
+                    capped = true
+                    // Counted for at most `countFor`, whether or not more output comes.
+                    DispatchQueue.global().asyncAfter(deadline: .now() + countFor) {
+                        guard p.isRunning else { return }
+                        lock.lock(); stopped = true; lock.unlock()
+                        p.terminate()
+                    }
+                }
             }
+            lock.lock(); counted = lines; lock.unlock()
             exited.wait()
             finished.signal()
         }
         guard finished.wait(timeout: .now() + timeout + 2) == .success else { return nil }
         lock.lock(); defer { lock.unlock() }
         let timedOut = p.terminationReason == .uncaughtSignal && !truncated
+        let whole = truncated && !stopped && p.terminationReason == .exit && p.terminationStatus == 0
         // A line cut by the limit is dropped by `parse`, which only takes complete lines.
-        return Run(output: Data(data.prefix(maxOutputBytes)),
-                   status: p.terminationReason == .uncaughtSignal ? -1 : p.terminationStatus, truncated: truncated || timedOut)
+        return Run(output: Data(data.prefix(maxOutputBytes)), status: p.terminationReason == .uncaughtSignal ? -1 : p.terminationStatus,
+                   truncated: truncated || timedOut, total: whole ? counted : nil)
     }
 
     /// Parses `bsdtar -tv` lines: `mode links owner group size month day time-or-year name`. A date with a time is within half
@@ -197,7 +212,8 @@ enum ArchiveListing {
         guard !name.isEmpty, let month = months.firstIndex(of: String(fields[k].0)), let day = Int(fields[k + 1].0) else { return nil }
         let isDir = type == "d" || name.hasSuffix("/")
         return Entry(name: name, size: isDir ? nil : Int64(fields[k - 1].0),
-                     modified: date(month: month + 1, day: day, timeOrYear: fields[k + 2].0, now: now, timeZone: timeZone), isDir: isDir)
+                     modified: date(month: month + 1, day: day, timeOrYear: fields[k + 2].0, now: now, timeZone: timeZone), isDir: isDir,
+                     isLink: !isDir && (type == "l" || type == "h"))
     }
 
     static func date(month: Int, day: Int, timeOrYear: Substring, now: Date, timeZone: TimeZone) -> Double? {
@@ -260,11 +276,14 @@ enum ArchiveListing {
         return bytes
     }
 
-    static func json(_ entries: [Entry], truncated: Bool = false) -> Data {
+    static func json(_ entries: [Entry], truncated: Bool = false, total: Int? = nil) -> Data {
         let list: [[String: Any]] = entries.map {
-            ["name": $0.name, "size": $0.size.map { NSNumber(value: $0) } ?? NSNull(), "modified": $0.modified.map { NSNumber(value: $0) } ?? NSNull(), "isDir": $0.isDir]
+            ["name": $0.name, "size": $0.size.map { NSNumber(value: $0) } ?? NSNull(), "modified": $0.modified.map { NSNumber(value: $0) } ?? NSNull(), "isDir": $0.isDir,
+             "isLink": $0.isLink]
         }
-        return (try? JSONSerialization.data(withJSONObject: ["entries": list, "truncated": truncated] as [String: Any])) ?? Data("{\"entries\":[]}".utf8)
+        var d: [String: Any] = ["entries": list, "truncated": truncated]
+        if let total { d["total"] = total }
+        return (try? JSONSerialization.data(withJSONObject: d)) ?? Data("{\"entries\":[]}".utf8)
     }
 }
 
@@ -285,6 +304,8 @@ enum ArchiveListing {
 enum ArchiveEntry {
     enum Outcome: Equatable {
         case data(Data)
+        /// The first `cap` bytes of a lone compressed file's text: the rest was not read.
+        case partial(Data)
         /// Not asked for: not an archive by name, or a name that is not a plain member name.
         case refused
         case notFound
@@ -297,6 +318,7 @@ enum ArchiveEntry {
         var reason: String? {
             switch self {
             case .data: return nil
+            case .partial: return "partial"
             case .tooLarge: return "tooLarge"
             case .bomb: return "bomb"
             case .timedOut: return "timedOut"
@@ -304,6 +326,11 @@ enum ArchiveEntry {
             }
         }
     }
+
+    /// What decompresses a lone compressed file (ArchiveEntryView.isLoneReadable).
+    static let decompressor = "/usr/bin/gzip"
+    /// ArchiveListing's profile, with the decompressor in place of bsdtar.
+    static let loneProfile = ArchiveListing.profile.replacingOccurrences(of: ArchiveListing.tool, with: decompressor)
 
     static let maxRatio = 1024
     static let ratioFloor = 64 << 10
@@ -347,6 +374,14 @@ enum ArchiveEntry {
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK)
         let ratio = ratioLimit(archiveBytes: Int64(st.st_size))
         let limit = min(cap, ratio)
+        if ArchiveEntryView.isLoneReadable(path), name == ArchiveEntryView.loneName(path) {
+            // The one file of a lone compressed file: decompressed under the same sandbox, and when it is text longer than the cap,
+            // its first `cap` bytes are what is shown (a log), unless the ratio says it is a bomb.
+            guard let r = stream(ArchiveListing.sandboxExec, ["-p", loneProfile, decompressor, "-dc"], input: handle, limit: limit, timeout: timeout) else { return .timedOut }
+            if r.over { return cap > ratio ? .bomb : ArchiveEntryView.textKinds.contains(ArchiveEntryView.kind(name)) ? .partial(r.data) : .tooLarge }
+            if r.timedOut { return .timedOut }
+            return r.status == 0 ? .data(r.data) : .failed
+        }
         guard let r = stream(ArchiveListing.sandboxExec, arguments(pattern: pattern), input: handle, limit: limit, timeout: timeout) else { return .timedOut }
         if r.over { return cap <= ratio ? .tooLarge : .bomb }
         if r.timedOut { return .timedOut }

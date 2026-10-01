@@ -384,7 +384,7 @@ def big_folder(page, check, T):
     page.cmd("@eval:(() => { const l = document.getElementById('side-list'); l.scrollTop = l.scrollHeight; l.dispatchEvent(new Event('scroll')); return 0; })()")
     page.cmd('@wait:0.3')
     b = page.js(ROWS)
-    check(b['last'] == 'm-4999.txt' and b['notes'] == ['50 more not listed'] and b['dom'] < 300,
+    check(b['last'] == 'm-4999.txt' and b['notes'] == ['50 more not listed · Filter finds them'] and b['dom'] < 300,
           'scrolled to its end: the last listed file and the "50 more not listed" note are drawn', json.dumps(b))
     click(page, '#side-list a.row[data-path$="/m-4990.txt"]')
     page.cmd('@wait:0.4')
@@ -428,7 +428,8 @@ def contents_search(page, check, out):
       return { rows: [...l.querySelectorAll('a.row')].map((a) => [a.querySelector('.nm').textContent, (a.querySelector('.hit-dir') || {}).textContent || '',
           (a.querySelector('.hit-n') || {}).textContent || '', (a.querySelector('.hit-snip') || {}).textContent || '', a.offsetHeight]),
         marks: [...l.querySelectorAll('.hit-snip mark')].map((m) => m.textContent), status: document.getElementById('side-more').hidden ? '' : document.getElementById('side-more').textContent,
-        mode: document.getElementById('side-mode').textContent, pressed: document.getElementById('side-mode').getAttribute('aria-pressed'),
+        mode: document.querySelector('#side-mode [aria-checked=true]').textContent, pressed: document.querySelector('#side-mode [data-mode=contents]').getAttribute('aria-checked'),
+        width: Math.round(document.getElementById('side-q').getBoundingClientRect().width),
         placeholder: document.getElementById('side-q').placeholder, cursor: (l.querySelector('a.cursor .nm') || {}).textContent || null };"""
     FIND = """const c = CSS.highlights, cur = c.get('sb-find-cur');
       return { open: !document.getElementById('find').hidden, q: document.getElementById('find-q').value, count: document.getElementById('find-count').textContent,
@@ -451,13 +452,15 @@ def contents_search(page, check, out):
     page.cmd('@wait:0.3')
     h = page.js(HITS)
     check(h['mode'] == 'Names' and h['pressed'] == 'false' and h['placeholder'] == 'Filter', 'contents: the filter starts on Names', json.dumps(h))
-    r = click(page, '#side-mode')
+    names_width = h['width']
+    r = click(page, '#side-mode [data-mode=contents]')
     h = page.js(HITS)
-    check(h['mode'] == 'Contents' and h['pressed'] == 'true' and h['placeholder'] == 'Search contents' and 'search' not in types_of(r),
-          'contents: the toggle switches to Contents, says so, and searches nothing while the field is empty', json.dumps(h))
+    check(h['mode'] == 'Contents' and h['pressed'] == 'true' and h['placeholder'] == 'Search contents' and 'search' not in types_of(r)
+          and h['width'] == names_width,
+          'contents: the toggle switches to Contents, says so, searches nothing while the field is empty, and the field keeps its width', json.dumps(h))
     typed('q')
     h = page.js(HITS)
-    check(h['status'] == 'Type 2 or more characters to search contents' and any(x[0] == 'src' for x in h['rows']),
+    check(h['status'] == 'Type 2 or more characters' and any(x[0] == 'src' for x in h['rows']),
           'contents: one character keeps the tree and asks for more', json.dumps(h))
 
     # A keystroke cancels the search before it: the old one reports nothing more once the next is sent.
@@ -466,7 +469,7 @@ def contents_search(page, check, out):
     typed('quokka')
     h = settle()
     seqs = page.js('return searchSeq')
-    check(h['status'] == 'Found in 4 of 6 files', 'contents: the search finishes and counts the text files searched', json.dumps(h))
+    check(h['status'] == 'Found in 4 files', 'contents: the search finishes and says how many files matched', json.dumps(h))
     stale = page.js("""return (() => { const before = hits.version; sb.searchResults({ seq: searchSeq - 1, hits: [{ path: tree.root + '/notes.txt',
       name: 'stale', snippet: 'x', count: 1, line: 1 }], searched: 1, total: 1, done: true }); return hits.version === before; })()""")
     check(stale and 'search' in types_of(r1) and 'search' in types_of(r2) and seqs >= 3,
@@ -498,7 +501,7 @@ def contents_search(page, check, out):
             break
     h = page.js(HITS)
     n = page.js('return hits.list.length')
-    check(seen and all(m.get('seq') == seq for m in seen) and h['status'] == 'Searched 500 of 2,000 files' and n == 500,
+    check(seen and all(m.get('seq') == seq for m in seen) and h['status'] == 'Showing the first 500 files' and n == 500,
           'contents: a new keystroke cancels the search before it, which reports nothing more; results stop at 500 files',
           json.dumps([seq, [m.get('seq') for m in seen][:10], h['status'], n]))
     page.cmd('@root:' + d)
@@ -535,7 +538,7 @@ def contents_search(page, check, out):
     r = click(page, '#side-list a.row.hit:not(.active)')
     page.cmd('@wait:0.5')
     f = page.js(FIND)
-    check(h['status'] == 'Found in 4 of 6 files' and 'open' in types_of(r) and '_openRefused' not in types_of(r) and f['path'] == other and f['q'] == 'quokka',
+    check(h['status'] == 'Found in 4 files' and 'open' in types_of(r) and '_openRefused' not in types_of(r) and f['path'] == other and f['q'] == 'quokka',
           'contents: after a new preview of the same folder the search runs again and its results open', json.dumps([h['status'], types_of(r), f]))
 
     # Hidden files: searched once they are shown.
@@ -552,15 +555,15 @@ def contents_search(page, check, out):
     typed('quokka')
     h = settle()
     m = h['status']
-    check(m.startswith('Searched ') and ' of 6 files' in m and not m.startswith('Searched 6 '), 'contents: a search cut short by a cap says "Searched N of M files"', m)
+    check(' of 6 searched' in m and ' · 6 of 6' not in m, 'contents: a search cut short by a cap says "N of M searched"', m)
     page.cmd('@searchlimits:' + json.dumps({'budget': 0}))
     typed('quokk')
     h = settle()
-    check(h['status'] in [f'Searched {i} of 6 files' for i in range(2)], 'contents: the time budget ends the search with the partial note', json.dumps(h))
+    check(h['status'] in [f'{f} · {i} of 6 searched' for i in range(2) for f in ('No matches', 'Found in 1 file')], 'contents: the time budget ends the search with the partial note', json.dumps(h))
     page.cmd('@searchlimits:' + json.dumps({'maxFiles': 2}))
     typed('quokka')
     h = settle()
-    check(h['status'] == 'Searched the first 2 files', 'contents: the file cap says how many were searched', h['status'])
+    check(h['status'].endswith(' · first 2 searched'), 'contents: the file cap says how many were searched', h['status'])
     page.cmd('@searchlimits:')
 
     # Esc clears the query and stops the search.
@@ -578,7 +581,8 @@ def contents_search(page, check, out):
     check(page.js(HITS)['mode'] == 'Contents', 'contents: the mode is kept for the session, in the next preview too', json.dumps(page.js(HITS)))
     typed('quokka')
     settle()
-    r = click(page, '#side-mode')
+    r = click(page, '#side-mode [data-mode=names]')
+    page.cmd('@wait:0.3')
     h = page.js(HITS)
     check(h['mode'] == 'Names' and h['placeholder'] == 'Filter' and 'searchStop' in types_of(r) and h['rows'] == [],
           'contents: back to Names, the search stops and the filter matches names only', json.dumps([h, types_of(r)]))
@@ -1451,7 +1455,8 @@ def keys_and_filter(page, check, T, st, types):
           and not {'list', 'unlist'} & set(sum((k['types'] for k in after_right + [left]), [])),
           'filter: → and ← move through the matches without opening or closing a folder', json.dumps([c['cursor'], c['rows'], [k['types'] for k in after_right + [left]]]))
     c = typed('evil.pdf')
-    check(not c['rows'] and c['notes'] == ['No matches'], 'filter: a folder never listed (hostile/) is not scanned for it', json.dumps(c))
+    check([x[0] for x in c['rows']] == ['hostile', 'evil.pdf'] and not c['notes'],
+          'filter: a file in a folder never listed (hostile/) is found by the names search, with its folder', json.dumps(c))
     c = typed('.md')
     k = key('ArrowDown')
     c2 = page.js(CURSOR)
@@ -2125,8 +2130,198 @@ def archive_entries(page, check, out):
     k = dispatch_key(page, 'Enter')
     page.cmd('@wait:0.4')
     check(st()['view'] == 'markdown', 'archive entry: ↵ opens the selected file', json.dumps(st()['view']))
+    kind = page.js("return document.getElementById('kind').textContent")
+    check(kind.endswith(' of ' + str(page.js('return arcFiles.length'))) and ' · ' in kind, 'archive entry: the toolbar says where the file is among the archive\'s files',
+          json.dumps(kind))
+    dispatch_key(page, 'Backspace')
+    page.cmd('@wait:0.4')
+    check(st()['view'] == 'archive', 'archive entry: ⌫ goes back to the listing too', json.dumps(st()['view']))
+
+    # A PDF inside: drawn natively from its bytes. A link inside: named, never read.
+    ppath = os.path.join(d, 'papers.zip')
+    with zipfile.ZipFile(ppath, 'w') as z:
+        z.writestr('paper.pdf', make_pdf('inside'))
+        z.writestr('broken.pdf', b'%PDF-1.4 not really')
+    page.render(ppath)
+    page.cmd('@wait:0.4')
+    entry('paper.pdf', wait=1.0)
+    pdf = page.cmd('@pdf')['result']
+    check(st()['view'] == 'pdf' and st()['back'] and pdf.get('open') and pdf.get('pages') == 1 and 'inside' in (pdf.get('text') or ''),
+          'archive entry: a PDF is shown, drawn from the bytes read out of the archive, with Back', json.dumps([st()['view'], pdf])[:300])
+    back()
+    check(not page.cmd('@pdf')['result'].get('open'), 'archive entry: Back takes the PDF view down')
+    entry('broken.pdf')
+    check(st()['view'] == 'info' and 'can’t be shown' in (st()['note'] or ''), 'archive entry: a PDF that does not parse is its info card', json.dumps(st()))
+    lsrc = os.path.join(out, 'lsrc')
+    os.makedirs(lsrc)
+    open(os.path.join(lsrc, 'target.txt'), 'w').write('target\n')
+    os.symlink('target.txt', os.path.join(lsrc, 'soft.txt'))
+    tpath = os.path.join(d, 'links.tar')
+    subprocess.run(['/usr/bin/tar', '-cf', tpath, 'target.txt', 'soft.txt'], cwd=lsrc, check=True)
+    page.render(tpath)
+    page.cmd('@wait:0.4')
+    entry('soft.txt')
+    check(st()['view'] == 'info' and 'link to another file' in (st()['note'] or ''), 'archive entry: a link inside the archive says it is a link, not an empty file',
+          json.dumps(st()))
+    back()
+    forged = []
+    entry('target.txt')
+    for m in ({'type': 'openFile', 'path': tpath}, {'type': 'openWith', 'path': tpath, 'app': 'com.apple.TextEdit'}):
+        r = page.cmd('@eval:window.webkit.messageHandlers.sb.postMessage(' + json.dumps(m) + '); 0')
+        page.cmd('@wait:0.1')
+        forged += [x.get('type') for x in r['messages'] if x.get('type') in ('_openFile', '_openText', '_openWith', '_dragOut')]
+    check(not forged, 'archive entry: forged Open and Open With messages do nothing while a file of the archive is shown', json.dumps(forged))
+
+    # A lone compressed log: its text, directly.
+    log = os.path.join(d, 'server.log')
+    open(log, 'w').write('GET / 200\nGET /x 404\n')
+    subprocess.run(['/usr/bin/gzip', log], check=True)
+    page.render(log + '.gz')
+    page.cmd('@wait:0.6')
+    g = st()
+    check(g['view'] == 'text' and (g['code'] or '').startswith('GET / 200') and not g['back'] and g['crumbs'] == 'arcs›server.log.gz',
+          'archive: a lone .gz of text shows the text, not a table of one row', json.dumps(g))
     page.cmd('@root:')
 
+
+def sidebar_and_folders(page, check, out):
+    """The Names filter over the whole tree (folders never opened, and past a folder's 5,000), names cut in the middle, hidden
+    files dimmed, empty folders, broken links skipped by the keys, clickable breadcrumbs, the way back from a photo to the grid,
+    and a lone compressed log shown as its text."""
+    msgs = lambda r, t: [m for m in r['messages'] if m.get('type') == t]
+    d = os.path.join(out, 'fixb')
+    for sub in ('src/components', 'many', 'empty-folder', 'docs'):
+        os.makedirs(os.path.join(d, sub))
+    put = lambda n, data: open(os.path.join(d, n), 'wb' if isinstance(data, bytes) else 'w').write(data)
+    put('README.md', '# Readme\n')
+    put('src/components/Button.tsx', 'export const Button = 1;\n')
+    put('src/components/Modal.tsx', 'export const Modal = 1;\n')
+    put('docs/api-reference-for-the-authentication-service-FINAL-reviewed.md', '# API\n')
+    put('.env', 'X=1\n')
+    for i in range(5010):
+        open(os.path.join(d, 'many', f'log-{i:05d}.txt'), 'w').close()
+    os.symlink('nowhere.md', os.path.join(d, 'dangling.md'))
+    D = lambda *n: os.path.join(d, *n)
+    ROWS = """return { rows: [...document.querySelectorAll('#side-list a.row')].map((a) => [a.textContent, +a.getAttribute('aria-level')]),
+      notes: [...document.querySelectorAll('#side-list .row-note')].map((n) => n.textContent), cursor: (document.querySelector('#side-list a.cursor') || {}).textContent || null };"""
+    rows = lambda: page.js(ROWS)
+
+    def filt(q, wait=0.6):
+        r = page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.value = " + json.dumps(q)
+                     + "; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
+        w = page.cmd('@wait:' + str(wait))
+        return {'messages': r['messages'] + w['messages']}
+
+    page.cmd('@size:1100x760')
+    page.cmd('@root:' + d)
+    page.render(D('README.md'))
+    page.cmd('@wait:0.4')
+
+    # Names: a file in a folder never opened, with the folders on the way.
+    r = filt('button')
+    f = rows()
+    check([x[0] for x in f['rows']] == ['src', 'components', 'Button.tsx'] and [x[1] for x in f['rows']] == [1, 2, 3] and not f['notes']
+          and any(m.get('names') in ('1', 'true', True) for m in msgs(r, 'search')),
+          'names: the filter finds a file in folders never opened, with its folders, like a filter result', json.dumps([f, msgs(r, 'search')]))
+    r = click(page, '#side-list a.row[data-path$="/Button.tsx"]')
+    page.cmd('@wait:0.4')
+    check(msgs(r, 'open') and not msgs(r, '_openRefused') and page.js('return current.path') == D('src', 'components', 'Button.tsx'),
+          'names: a file it found opens', json.dumps([m.get('type') for m in r['messages']]))
+    filt('components')
+    f = rows()
+    check([x[0] for x in f['rows']][:4] == ['src', 'components', 'Button.tsx', 'Modal.tsx'],
+          'names: a folder that matches by name shows what it holds while filtered', json.dumps(f))
+    filt('log-05007')
+    f = rows()
+    check([x[0] for x in f['rows']] == ['many', 'log-05007.txt'], 'names: a file past a folder\'s 5,000 is found', json.dumps(f))
+    r = click(page, '#side-list a.row[data-path$="/log-05007.txt"]')
+    page.cmd('@wait:0.4')
+    check(msgs(r, 'open') and not msgs(r, '_openRefused') and page.js('return current.path') == D('many', 'log-05007.txt'),
+          'names: and opens, though the sidebar never listed it', json.dumps([m.get('type') for m in r['messages']]))
+    filt('zzzz-nothing')
+    check(rows()['notes'] == ['No matches'], 'names: nothing anywhere says No matches', json.dumps(rows()))
+    filt('')
+
+    # The folder past its cap says how to reach the rest.
+    page.cmd('@eval:(() => { if (!expanded().has(' + json.dumps(D('many')) + ')) toggleFolder(' + json.dumps(D('many')) + '); return 0; })()')
+    page.cmd('@wait:0.5')
+    page.cmd("@eval:(() => { const l = document.getElementById('side-list'); l.scrollTop = l.scrollHeight; l.dispatchEvent(new Event('scroll')); return 0; })()")
+    page.cmd('@wait:0.3')
+    check(any(n.endswith(' more not listed · Filter finds them') for n in rows()['notes']), 'names: "N more not listed" says the filter finds them',
+          json.dumps(rows()['notes']))
+    page.cmd('@eval:(() => { if (expanded().has(' + json.dumps(D('many')) + ')) toggleFolder(' + json.dumps(D('many')) + '); return 0; })()')
+    page.cmd("@eval:(() => { const l = document.getElementById('side-list'); l.scrollTop = 0; l.dispatchEvent(new Event('scroll')); return 0; })()")
+
+    # Long names are cut in the middle; the active row keeps its weight; an empty folder says so; hidden files are dimmed.
+    page.render(D('docs', 'api-reference-for-the-authentication-service-FINAL-reviewed.md'))
+    page.cmd('@wait:0.4')
+    page.apply(sidebarWidth=200)
+    page.cmd('@wait:0.3')
+    cut = page.js("""const a = document.querySelector('#side-list a.row.active'), h = a.querySelector('.nm-h'), t = a.querySelector('.nm-t');
+      return [a.textContent, t && t.textContent, t && t.getBoundingClientRect().right <= a.getBoundingClientRect().right, h.scrollWidth > h.clientWidth,
+        getComputedStyle(a).fontWeight];""")
+    check(cut[0] == 'api-reference-for-the-authentication-service-FINAL-reviewed.md' and cut[1] == 'eviewed.md' and cut[2] and cut[3] and cut[4] == '400',
+          'names: a long name is cut in the middle, its end and extension shown; the active row is not bold', json.dumps(cut))
+    page.apply(sidebarWidth=240)
+    page.cmd('@eval:toggleFolder(' + json.dumps(D('empty-folder')) + '); 0')
+    page.cmd('@wait:0.5')
+    check('Empty' in rows()['notes'], 'an open empty folder says it is empty', json.dumps(rows()))
+    page.apply(showHiddenFiles=True)
+    page.cmd('@relist')
+    page.cmd('@wait:0.4')
+    dim = page.js("""const a = [...document.querySelectorAll('#side-list a.row')].find((x) => x.dataset.path.endsWith('/.env'));
+      return a && [a.classList.contains('hidden-file'), getComputedStyle(a.querySelector('.nm')).opacity];""")
+    check(dim and dim[0] and float(dim[1]) < 1, 'hidden files are dimmed when shown', json.dumps(dim))
+    page.apply(showHiddenFiles=False)
+    page.cmd('@relist')
+    page.cmd('@wait:0.3')
+
+    # The arrows never rest on a broken link.
+    page.render(D('README.md'))
+    page.cmd('@wait:0.4')
+    page.cmd("@eval:document.getElementById('side-list').querySelector('a.row').click(); 0")
+    seen = []
+    for _ in range(8):
+        dispatch_key(page, 'ArrowDown')
+        seen.append(rows()['cursor'])
+    check('dangling.md' not in seen and seen[-1], 'keys: the arrows skip a broken link', json.dumps(seen))
+
+    # Breadcrumbs: the root shows the overview, a folder opens in the sidebar.
+    page.render(D('src', 'components', 'Modal.tsx'))
+    page.cmd('@wait:0.4')
+    crumbs = page.js("return [...document.querySelectorAll('#crumbs .crumb')].map((c) => [c.tagName, c.textContent, c.title])")
+    check([c[0] for c in crumbs] == ['BUTTON', 'BUTTON', 'BUTTON', 'SPAN'] and crumbs[0][2] == 'Show the folder overview',
+          'crumbs: every step but the file is a button', json.dumps(crumbs))
+    page.cmd('@eval:(() => { if (expanded().has(' + json.dumps(D('src')) + ')) toggleFolder(' + json.dumps(D('src')) + '); return 0; })()')
+    r = page.cmd("@eval:(() => { [...document.querySelectorAll('#crumbs button.crumb')][1].click(); return 0; })()")
+    page.cmd('@wait:0.4')
+    check(rows()['cursor'] == 'src' and page.js("return [...document.querySelectorAll('#side-list a.row.open')].some((a) => a.dataset.path.endsWith('/src'))"),
+          'crumbs: a folder step opens it in the sidebar and moves the cursor to it', json.dumps(rows()['cursor']))
+    r = page.cmd("@eval:(() => { document.querySelector('#crumbs button.crumb').click(); return 0; })()")
+    page.cmd('@wait:0.5')
+    check(msgs(r, 'overview') and page.js('return current.view') == 'overview', 'crumbs: the root step shows the folder overview',
+          json.dumps([m.get('type') for m in r['messages']]))
+
+    # Back from a photo to the grid: a button, ⌫ and ←.
+    photos = os.path.join(out, 'fixb-photos')
+    os.makedirs(photos)
+    for i in range(8):
+        open(os.path.join(photos, f'p{i}.png'), 'wb').write(make_png(30, 20))
+    r = page.cmd('@folder:' + photos)
+    page.cmd('@wait:0.6')
+    for key in ('Backspace', 'ArrowLeft', None):
+        page.cmd(f"@eval:(() => {{ gridOpen({json.dumps(os.path.join(photos, 'p2.png'))}); return 0; }})()")
+        page.cmd('@wait:0.5')
+        head = page.js("return [current.view, (document.querySelector('#doc .viewer-back') || {}).textContent || null]")
+        if key:
+            k = dispatch_key(page, key)
+        else:
+            k = page.cmd('@nativeclick:#doc .viewer-back')
+        page.cmd('@wait:0.5')
+        sel = page.js("return [gridShown(), (document.querySelector('#doc a.gt.sel') || {}).dataset?.path || null]")
+        check(head == ['image', '‹ fixb-photos'] and msgs(k, 'overview') and sel == [True, os.path.join(photos, 'p2.png')],
+              f'grid: from a photo, {key or "the Back button"} goes back to the grid, the photo\'s tile selected', json.dumps([head, sel, [m.get('type') for m in k['messages']]]))
+    page.cmd('@root:')
 
 def drag_openwith_diff(check):
     """0.4: a file dragged out of the panel (only a listed row, an overview row or the file on screen, and only from a press still
@@ -2309,7 +2504,7 @@ def release_interactions(check):
         r['messages'] += page.cmd('@wait:0.2')['messages']
         check([m.get('path') for m in msgs(r, '_dragOut')] == [P('p1.png')] and not msgs(r, 'open'),
               'together: a grid tile drags its picture out, and the press opens nothing', json.dumps(r['messages'])[:300])
-        click(page, '#side-mode')
+        click(page, '#side-mode [data-mode=contents]')
         page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.value = 'wombat'; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
         for _ in range(40):
             page.cmd('@wait:0.05')
@@ -2331,7 +2526,7 @@ def release_interactions(check):
         r['messages'] += page.cmd('@wait:0.2')['messages']
         check([m.get('path') for m in msgs(r, '_dragOut')] == [hit], 'together: a Contents result drags out, from a folder the sidebar never opened',
               json.dumps(r['messages'])[:300])
-        click(page, '#side-mode')
+        click(page, '#side-mode [data-mode=names]')
 
         # ---- a file inside an archive ----
         page.cmd('@root:' + root)
@@ -2991,7 +3186,7 @@ def main():
         dangling = page.js("""const r = [...document.querySelectorAll('#side-list a.row')].find((a) => a.dataset.path.endsWith('/dangling.md'));
           return r && [r.classList.contains('broken'), r.title, r.getAttribute('aria-disabled'), getComputedStyle(r).opacity];""")
         r = click(page, '#side-list a.row.broken')
-        check(dangling and dangling[:3] == [True, 'dangling.md\nBroken link', 'true'] and float(dangling[3]) < 1
+        check(dangling and dangling[0] and dangling[1].startswith('dangling.md\nBroken link → ') and dangling[2] == 'true' and float(dangling[3]) < 1
               and not [m for m in r['messages'] if m.get('type') == 'open'],
               'tree: a dangling link is listed greyed, as a broken link, and a click opens nothing', json.dumps(dangling))
         check(page.js("return document.querySelectorAll('#sidebar svg.ic').length === document.querySelectorAll('#side-list a.row').length"
@@ -3474,8 +3669,20 @@ def main():
         names = [r[0] for r in a1['rows']]
         check(names == ['empty', 'proj', 'src', 'a.js', 'b.js', '<img src=x onerror="window.__pwned=1">.txt', 'README.md', 'top.txt']
               and [r[2] for r in a1['rows']] == [8, 8, 24, 40, 40, 24, 24, 8] and a1['rows'][1][5] == 'true' and a1['rows'][0][1] == 'arc-folder'
-              and a1['rows'][3][3] == '800 bytes' and not a1['rows'][3][4] and a1['rows'][4][3] == '3.0 KB' and a1['rows'][4][4] and a1['rows'][1][3] == '',
-              'archive: folders first, sorted, nested and indented, an implied folder added, sizes and dates, nothing unknown shown', json.dumps(a1['rows']))
+              and a1['rows'][3][3] == '800 bytes' and not a1['rows'][3][4] and a1['rows'][4][3] == '3.0 KB' and a1['rows'][4][4] and a1['rows'][1][3] == '5.0 KB'
+              and a1['rows'][0][3] == '',
+              'archive: folders first, sorted, nested and indented, an implied folder added, sizes (a folder\'s summed) and dates, nothing unknown shown',
+              json.dumps(a1['rows']))
+        heights = page.js("return [...new Set([...document.querySelectorAll('#doc .viewer-archive tbody tr')].map((r) => Math.round(r.getBoundingClientRect().height)))]")
+        check(len(heights) == 1, 'archive: folder and file rows are one height', json.dumps(heights))
+        page.cmd("@eval:document.querySelector('#doc th button[data-col=size]').click(); 0")
+        by_size = [r[0] for r in page.js(ARC)['rows']]
+        page.cmd("@eval:document.querySelector('#doc th button[data-col=size]').click(); 0")
+        by_size_up = [r[0] for r in page.js(ARC)['rows']]
+        page.cmd("@eval:document.querySelector('#doc th button[data-col=name]').click(); 0")
+        check(by_size == ['proj', 'src', 'b.js', 'a.js', 'README.md', '<img src=x onerror="window.__pwned=1">.txt', 'empty', 'top.txt']
+              and by_size_up[:2] == ['empty', 'proj'] and by_size_up[-1] == 'top.txt' and [r[0] for r in page.js(ARC)['rows']] == names,
+              'archive: a header sorts by its column, largest first, then the other way; folders stay first', json.dumps([by_size, by_size_up]))
         check(a1['summary'] == '5 files, 3 folders · 5.0 KB uncompressed' and a1['button'] == 'Open with Archive Utility' and a1['scripts'] == 0
               and not page.js('return window.__pwned || null') and a1['fits'],
               'archive: a header with the count and total size, the Open with button, names only ever text', json.dumps(a1))
@@ -3501,8 +3708,24 @@ def main():
         page.cmd('@eval:sb.setArchive(' + json.dumps({'path': T('pack.zip'), 'entries': big_entries, 'truncated': True}) + '); 0')
         a5 = page.js(ARC)
         check(len(a5['rows']) == 51 and a5['rows'][0][5] == 'true' and a5['rows'][1][5] == 'false' and 'Showing the first 5,000 entries.' in a5['notes']
-              and a5['summary'].startswith('5,000 files, 51 folders'),
+              and a5['summary'].startswith('5,000+ files, 51+ folders · at least'),
               'archive: a large listing opens only its lone top folder, and says it was cut', json.dumps([len(a5['rows']), a5['notes'], a5['summary']]))
+        page.cmd('@eval:sb.render(' + json.dumps(arc) + '); 0')
+        page.cmd('@wait:0.2')
+        page.cmd('@eval:sb.setArchive(' + json.dumps({'path': T('pack.zip'), 'entries': big_entries, 'truncated': True, 'total': 6000}) + '); 0')
+        check('Showing the first 5,000 of 6,000 entries.' in page.js(ARC)['notes'], 'archive: a cut listing whose length was counted says of how many',
+              json.dumps(page.js(ARC)['notes']))
+        page.cmd('@eval:sb.render(' + json.dumps(arc) + '); 0')
+        page.cmd('@wait:0.2')
+        junk = [{'name': 'a/.DS_Store', 'size': 6, 'modified': None, 'isDir': False}, {'name': '__MACOSX/a/._x.txt', 'size': 1, 'modified': None, 'isDir': False},
+                {'name': 'a/x.txt', 'size': 1, 'modified': None, 'isDir': False}, {'name': 'a/link.txt', 'size': 0, 'modified': None, 'isDir': False, 'isLink': True},
+                {'name': 'a/report.docx', 'size': 9, 'modified': None, 'isDir': False}]
+        page.cmd('@eval:sb.setArchive(' + json.dumps({'path': T('pack.zip'), 'entries': junk}) + '); 0')
+        j = page.js(ARC)
+        dim = page.js("return [...document.querySelectorAll('#doc tr.arc-nopreview')].map((r) => [r.querySelector('.arc-label').textContent, r.title])")
+        check([r[0] for r in j['rows']] == ['a', 'link.txt', 'report.docx', 'x.txt'] and dim == [['link.txt', 'A link to another file'],
+              ['report.docx', 'Can’t be shown from inside the archive']],
+              'archive: .DS_Store and __MACOSX are left out; a link and what cannot be shown are dimmed, and say why', json.dumps([j['rows'], dim]))
         # A crafted listing 20,000 folders deep (were the writer's cap ever bypassed): drawn, 64 levels at most, no stack overflow.
         page.cmd('@eval:sb.render(' + json.dumps(arc) + '); 0')
         page.cmd('@wait:0.2')
@@ -3623,10 +3846,12 @@ def main():
         page.cmd('@wait:0.4')
         s = st()
         top = [x[0] for x in s['rows'] if x[1] == 1]
-        check(r['result'] == 'file:' + V('Daily', '2026-09-25.md') and s['title1'] == 'Today' and '.obsidian' not in top
-              and s['active'] == [['2026-09-25.md', 'page']] and 'Daily' in top,
-              'vault with notes only in subfolders: previewed (not declined), opens its newest note nearest the top; .obsidian hidden',
+        check(r['result'] == 'overview' and s['view'] == 'overview' and '.obsidian' not in top and not s['active'] and 'Daily' in top,
+              'vault with notes only in subfolders: previewed (not declined) on its overview, no note picked for it; .obsidian hidden',
               json.dumps([r['result'], top, s['active']]))
+        page.render(V('Daily', '2026-09-25.md'))
+        page.cmd('@wait:0.4')
+        check(st()['title1'] == 'Today' and st()['active'] == [['2026-09-25.md', 'page']], 'a note of the vault opens in it', json.dumps(st()['active']))
         o = page.js("""const d = document.getElementById('doc'); return {
           links: [...d.querySelectorAll('a.wikilink')].map((a) => [a.textContent, a.dataset.wl, a.classList.contains('unresolved')]),
           tags: [...d.querySelectorAll('span.tag')].map((t) => t.textContent),
@@ -3652,12 +3877,12 @@ def main():
         page.cmd('@wait:0.4')
         check(st()['title1'] == 'Plan' and st()['active'] == [['Plan.md', 'page']] and [m.get('path') for m in r['messages'] if m.get('type') == 'open'] == [V('Projects', 'Plan.md')],
               'a wikilink click opens the note in the panel, and the sidebar follows', json.dumps(types(r)))
-        page.cmd('@folder:' + vault)
+        page.render(V('Daily', '2026-09-25.md'))
         r = click(page, '#doc a.wikilink[data-wl="Ideas"]')
         page.cmd('@wait:0.5')
         y = page.js("const h = [...document.querySelectorAll('#doc h2')].find((x) => x.textContent === 'Later'); return [window.scrollY, Math.round(h.getBoundingClientRect().top)]")
         check(st()['title1'] == 'Ideas' and y[0] > 0 and 0 <= y[1] < 120, 'a [[Note#Heading]] link opens the note at its heading', json.dumps(y))
-        page.cmd('@folder:' + vault)
+        page.render(V('Daily', '2026-09-25.md'))
         page.cmd('@wait:0.3')
         r = click(page, '#doc a.wikilink.unresolved')
         page.cmd('@wait:0.2')
@@ -3708,24 +3933,26 @@ def main():
               sub: o.querySelector('.ov-sub').textContent, chips: [...o.querySelectorAll('.ov-chip')].map((c) => c.textContent),
               rows: [...o.querySelectorAll('a.ov-row')].map((a) => a.querySelector('.ov-row-name').textContent), empty: !!o.querySelector('.ov-empty'),
               note: (o.querySelector('.viewer-note') || {}).textContent || '', crumbs: document.getElementById('crumbs').textContent,
+              more: (o.querySelector('.ov-files .ov-note') || {}).textContent || '',
               open: document.getElementById('edit').hidden }"""))
         img = results_by['images']
-        check(img[0] == 'overview' and img[1] == 'overview' and img[2]['chips'] == ['3 images', '1 PDF'] and img[2]['rows'][0] == 'c.png'
+        check(img[0] == 'overview' and img[1] == 'overview' and img[2]['chips'] == ['3 images', '1 PDF'] and img[2]['rows'] == ['a.png', 'b.png', 'c.png', 'scan.pdf']
               and img[2]['sub'] == 'Folder · 4 items' and img[2]['crumbs'] == 'images' and img[2]['open'],
-              'a folder of images: the overview, with counts and the newest files first', json.dumps(img))
+              'a folder of images: the overview, with counts and every file of the folder, as the sidebar lists them', json.dumps(img))
         check(results_by['pdfs'][0] == 'overview' and results_by['pdfs'][2]['chips'] == ['2 PDFs'], 'a folder of PDFs: the overview', json.dumps(results_by['pdfs']))
-        check(results_by['repo'][0] == 'file:' + os.path.join(fx, 'repo', 'docs', 'guide.md'), 'a repository without a README opens its docs, not a dependency',
-              json.dumps(results_by['repo']))
+        check(results_by['repo'][0] == 'overview' and results_by['repo'][2]['rows'] == ['docs', 'node_modules', 'src'],
+              'a repository without a README opens on its overview, not on a note found deeper down', json.dumps(results_by['repo']))
         check(results_by['empty'][0] == 'overview' and results_by['empty'][2]['empty'] and results_by['empty'][2]['sub'] == 'Folder · Empty',
               'an empty folder: an overview that says so', json.dumps(results_by['empty']))
         hg = results_by['huge']
-        check(hg[0] == 'overview' and hg[2]['sub'].endswith('+ items') and 'large folder' in hg[2]['note'] and len(hg[2]['rows']) == 8,
-              'a huge folder: the overview from a bounded scan, marked as partial', json.dumps(hg))
+        check(hg[0] == 'overview' and hg[2]['sub'].endswith('+ items') and 'large folder' in hg[2]['note'] and len(hg[2]['rows']) == 5000
+              and hg[2]['more'] == '1,000 more not listed · Filter finds them',
+              'a huge folder: the overview from a bounded scan, marked as partial; the list as far as the sidebar lists it', json.dumps(hg)[:400])
         check(results_by['Tool.app'][0].startswith('declined'), 'an app bundle is declined', results_by['Tool.app'][0])
         page.cmd('@folder:' + os.path.join(fx, 'images'))
         r = click(page, '#doc a.ov-row')
         page.cmd('@wait:0.4')
-        check(st()['view'] == 'image' and st()['active'] == [['c.png', 'page']] and 'open' in types(r), 'an overview row opens its file', json.dumps(types(r)))
+        check(st()['view'] == 'image' and st()['active'] == [['a.png', 'page']] and 'open' in types(r), 'a row of the list opens its file', json.dumps(types(r)))
         r = click(page, '#side-title')
         page.cmd('@wait:0.4')
         check('overview' in types(r) and st()['view'] == 'overview', "the sidebar's folder name brings the overview back", json.dumps(types(r)))
@@ -3738,6 +3965,7 @@ def main():
         missing_images(page, check, page.out)
         contents_search(page, check, page.out)
         archive_entries(page, check, page.out)
+        sidebar_and_folders(page, check, page.out)
 
         csp = [l for l in page.logs if 'csp blocked' in l]
         errs = [l for l in page.logs if l.startswith(('rejection', 'mermaid')) or ' @' in l]

@@ -21,7 +21,7 @@ enum FolderRules {
         var st = stat(), parent = stat()
         guard stat(real, &st) == 0, st.st_mode & S_IFMT == S_IFDIR else { return "not a folder" }
         if systemFolders.contains(real) || real == (FolderListing.realPath(home) ?? home) + "/Library" { return "a system folder" }
-        if systemTrees.contains(where: real.hasPrefix), !real.hasPrefix("/usr/local/") { return "inside a system folder" }
+        if systemTrees.contains(where: real.hasPrefix), real != "/usr/local", !real.hasPrefix("/usr/local/") { return "inside a system folder" }
         let url = URL(fileURLWithPath: real)
         let values = try? url.resourceValues(forKeys: [.isPackageKey, .isApplicationKey, .isVolumeKey])
         // A mount point sits on another device than its parent.
@@ -53,10 +53,10 @@ enum FolderRules {
     }
 }
 
-/// A bounded, breadth-first look through a folder: the Markdown a folder preview opens on when the folder itself holds none, and
-/// the numbers and recent files of the folder overview. Hidden files and folders (and so `.obsidian` and `.git`) are left out
-/// unless `showHidden`; dependency and build folders are never entered; packages count as one item; a symbolic link is taken only
-/// when it resolves to a file inside the root, and linked folders are never followed. Call it off the main thread.
+/// A bounded, breadth-first look through a folder: the numbers and recent files of the folder overview. Hidden files and folders
+/// (and so `.obsidian` and `.git`) are left out unless `showHidden`; dependency and build folders are never entered; packages count
+/// as one item; a symbolic link is taken only when it resolves to a file inside the root, and linked folders are never followed.
+/// Call it off the main thread.
 enum FolderScan {
     static let maxDepth = 3
     static let maxEntries = 5_000
@@ -65,8 +65,6 @@ enum FolderScan {
     /// Folders a scan or the link index never enters, whatever `showHidden` says.
     static let skipped: Set<String> = [".obsidian", ".git", ".trash", ".Trash", "node_modules", "__pycache__", ".venv", "venv", "Pods",
                                        "DerivedData", ".build", ".next", ".cache", "bower_components"]
-    /// Names that make a note the one to open, in order of preference (compared without extension, lowercased).
-    static let preferredNames = ["readme", "index", "home", "welcome", "start here", "start", "overview", "contents", "00 index", "_index"]
 
     struct Item: Equatable {
         let path: String
@@ -88,22 +86,6 @@ enum FolderScan {
         var scanned = 0
         var hasObsidian = false
         var hasGit = false
-
-        /// The Markdown file to open: shallowest first, then a preferred name (the folder's own name counts), then the newest.
-        var bestMarkdown: Item? {
-            let rootName = (root as NSString).lastPathComponent.lowercased()
-            func rank(_ i: Item) -> Int {
-                let stem = ((i.path as NSString).lastPathComponent as NSString).deletingPathExtension.lowercased()
-                if let n = FolderScan.preferredNames.firstIndex(of: stem) { return n }
-                return stem == rootName ? FolderScan.preferredNames.count : 99
-            }
-            return files.filter { $0.kind == .markdown }.min { a, b in
-                if a.depth != b.depth { return a.depth < b.depth }
-                if rank(a) != rank(b) { return rank(a) < rank(b) }
-                if a.modified != b.modified { return a.modified > b.modified }
-                return a.rel.localizedStandardCompare(b.rel) == .orderedAscending
-            }
-        }
 
         var recent: [Item] { Array(files.sorted { $0.modified != $1.modified ? $0.modified > $1.modified : $0.rel < $1.rel }.prefix(FolderScan.recentCount)) }
 
@@ -387,14 +369,16 @@ final class LinkIndex {
     }
 }
 
-/// The sidebar filter's Contents mode: the text of the files the sidebar lists under the root, matched as case-insensitive
-/// plain text. The files are those FolderListing lists (hidden files by the setting, each folder within the listing caps, links
-/// only inside the root), folder by folder from the root down; dependency and build folders (FolderScan.skipped) are never
-/// entered, and a folder reached twice through a link is searched once. Only Markdown, code, JSON, CSV and text are read, at
-/// most `maxFileBytes` of each (what the text view shows), and only what TextDecoding reads as text: binary is skipped, and a
-/// file iCloud has evicted is skipped rather than downloaded. `Limits` bound the files, the bytes, the results and the time; a
-/// search cut short says why. Searches run one at a time on `queue`; `Cancel` stops one between files. The list of files is
-/// kept for `listTTL`, so the keystrokes of one word walk the tree once.
+/// The sidebar filter's searches of the whole tree under the root, whether or not a folder was ever listed. Contents mode reads
+/// the text of the files, matched as case-insensitive plain text; Names mode matches names alone and reads no file. The files
+/// are those FolderListing lists (hidden files by the setting, each folder up to `FolderListing.statCap` entries, so past the
+/// sidebar's own cap; links only inside the root), folder by folder from the root down; dependency and build folders
+/// (FolderScan.skipped) are never entered, and a folder reached twice through a link is searched once, as is a file reached
+/// through a link to it (its own row kept). Only Markdown, code, JSON, CSV and text are read, at most `maxFileBytes` of each
+/// (what the text view shows), and only what TextDecoding reads as text: binary is skipped, and a file iCloud has evicted is
+/// skipped rather than downloaded. `Limits` bound the files, the bytes, the results and the time; a search cut short says why.
+/// Searches run one at a time on `queue`; `Cancel` stops one between files. The walk is kept for `listTTL`, so the keystrokes
+/// of one word walk the tree once.
 enum ContentSearch {
     struct Limits {
         var maxFiles = 20_000
@@ -412,7 +396,7 @@ enum ContentSearch {
     /// Matches in one file are counted up to this.
     static let maxCount = 9_999
     static let snippetBytes = 160
-    static let snippetLead = 20
+    static let snippetLead = 12
     static let kinds: Set<FileKind> = [.markdown, .code, .json, .csv, .text]
 
     struct Hit: Equatable {
@@ -558,32 +542,82 @@ enum ContentSearch {
         return d
     }
 
-    /// The files to search, in the order they are searched: each folder's files as it lists them, the root's first.
-    static func files(root: String, sort: String, readmeFirst: Bool, showHidden: Bool, only: Set<String>? = nil, limits: Limits,
-                      until deadline: Date, cancel: Cancel) -> (paths: [String], listedOnly: Bool, stopped: String?) {
-        var paths: [String] = [], listedOnly = false
+    /// One item a walk found: a file (of the searched kinds, unless every name is wanted) or, for Names, a folder.
+    struct Found: Equatable {
+        let path: String
+        let isDir: Bool
+        let kind: FileKind
+    }
+    typealias Walk = (found: [Found], listedOnly: Bool, stopped: String?)
+
+    /// The items to search, in the order they are searched: each folder's as it lists them, the root's first. `names`: every file
+    /// and folder, for Names; else only the files Contents reads, each real file once.
+    static func walk(root: String, sort: String, readmeFirst: Bool, showHidden: Bool, only: Set<String>? = nil, names: Bool = false,
+                     limits: Limits, until deadline: Date, cancel: Cancel) -> Walk {
+        var found: [Found] = [], listedOnly = false
         var queue: [(String, Int)] = [(root, 0)], head = 0
         var seen: Set<String> = FolderListing.realPath(root).map { [$0] } ?? []
+        // A file's resolved path to its place in `found`, and whether that row is a link: a link's row gives way to the file's own.
+        var files: [String: (at: Int, link: Bool)] = [:]
+        var st = stat()
         while head < queue.count {
-            if cancel.isCancelled { return (paths, listedOnly, "cancelled") }
-            if Date() > deadline { return (paths, listedOnly, "time") }
+            if cancel.isCancelled { return (found, listedOnly, "cancelled") }
+            if Date() > deadline { return (found, listedOnly, "time") }
             let (dir, depth) = queue[head]
             head += 1
-            var l = FolderListing.list(dir, root: root, sort: sort, readmeFirst: readmeFirst, showHidden: showHidden)
+            var l = FolderListing.list(dir, root: root, sort: sort, readmeFirst: readmeFirst, showHidden: showHidden, cap: FolderListing.statCap)
             if let only { l = FolderListing.only(l, selection: only) }
             if l.more > 0 { listedOnly = true }
-            for e in l.entries where !e.broken {
+            // A folder's own entry before a link to it beside it: the folder is searched under its own name.
+            let entries = l.entries.filter { !$0.isDirectory || !(lstat($0.path, &st) == 0 && st.st_mode & S_IFMT == S_IFLNK) }
+                + l.entries.filter { $0.isDirectory && lstat($0.path, &st) == 0 && st.st_mode & S_IFMT == S_IFLNK }
+            for e in entries where !e.broken {
                 if e.isDirectory {
                     guard depth < limits.maxDepth, !FolderScan.skipped.contains(e.name), let real = FolderListing.realPath(e.path),
                           seen.insert(real).inserted else { continue }
+                    if names {
+                        if found.count >= limits.maxFiles { return (found, listedOnly, "files") }
+                        found.append(Found(path: e.path, isDir: true, kind: .folder))
+                    }
                     queue.append((e.path, depth + 1))
+                } else if names {
+                    if found.count >= limits.maxFiles { return (found, listedOnly, "files") }
+                    found.append(Found(path: e.path, isDir: false, kind: e.kind))
                 } else if kinds.contains(e.kind) {
-                    if paths.count >= limits.maxFiles { return (paths, listedOnly, "files") }
-                    paths.append(e.path)
+                    let link = lstat(e.path, &st) == 0 && st.st_mode & S_IFMT == S_IFLNK
+                    if let real = FolderListing.realPath(e.path), let had = files[real] {
+                        if had.link && !link {
+                            found[had.at] = Found(path: e.path, isDir: false, kind: e.kind)
+                            files[real] = (had.at, false)
+                        }
+                        continue
+                    }
+                    if found.count >= limits.maxFiles { return (found, listedOnly, "files") }
+                    if let real = FolderListing.realPath(e.path) { files[real] = (found.count, link) }
+                    found.append(Found(path: e.path, isDir: false, kind: e.kind))
                 }
             }
         }
-        return (paths, listedOnly, nil)
+        return (found, listedOnly, nil)
+    }
+
+    /// The files Contents searches, in order (see `walk`).
+    static func files(root: String, sort: String, readmeFirst: Bool, showHidden: Bool, only: Set<String>? = nil, limits: Limits,
+                      until deadline: Date, cancel: Cancel) -> (paths: [String], listedOnly: Bool, stopped: String?) {
+        let w = walk(root: root, sort: sort, readmeFirst: readmeFirst, showHidden: showHidden, only: only, limits: limits, until: deadline, cancel: cancel)
+        return (w.found.map(\.path), w.listedOnly, w.stopped)
+    }
+
+    /// Whether `name` matches a Names query as the page's filter does: the query's characters in order anywhere in the name,
+    /// ignoring case. `query` is already lowercased.
+    static func nameMatches(_ name: String, _ query: [Unicode.Scalar]) -> Bool {
+        guard !query.isEmpty else { return true }
+        var i = 0
+        for c in name.lowercased().unicodeScalars where c == query[i] {
+            i += 1
+            if i == query.count { return true }
+        }
+        return false
     }
 
     /// The text of the file at `path` from its first `cap` bytes (nil when it cannot be read without a download, or is not text),
@@ -601,7 +635,58 @@ enum ContentSearch {
     }
 
     /// The last tree walked, reused within `listTTL`. Read and written only on `queue` (or a test's one thread).
-    private static var cached: (key: String, at: Date, files: (paths: [String], listedOnly: Bool, stopped: String?))?
+    private static var cached: (key: String, at: Date, walk: Walk)?
+
+    /// The walk for these arguments, from the cache when it is fresh. Nil when it was cancelled.
+    private static func walked(root: String, sort: String, readmeFirst: Bool, showHidden: Bool, only: Set<String>?, names: Bool,
+                               limits: Limits, cancel: Cancel) -> Walk? {
+        let key = [root, sort, "\(readmeFirst)", "\(showHidden)", only.map { $0.sorted().joined(separator: "\n") } ?? "", "\(limits.maxFiles)",
+                   "\(limits.maxDepth)", "\(names)"].joined(separator: "\0")
+        if let c = cached, c.key == key, Date().timeIntervalSince(c.at) < listTTL { return c.walk }
+        let w = walk(root: root, sort: sort, readmeFirst: readmeFirst, showHidden: showHidden, only: only, names: names, limits: limits,
+                     until: Date().addingTimeInterval(limits.walkBudget), cancel: cancel)
+        if w.stopped == "cancelled" { return nil }
+        cached = (key, Date(), w)
+        return w
+    }
+
+    /// Searches the names under the root for `query` (see `nameMatches`), reading no file, and reports once with every match,
+    /// files and folders, up to `maxResults`. Nothing is reported after `cancel`.
+    static func runNames(query: String, root: String, sort: String = "name", readmeFirst: Bool = false, showHidden: Bool, only: Set<String>? = nil,
+                         limits: Limits = Limits(), cancel: Cancel, report: (NameProgress) -> Void) {
+        if cancel.isCancelled { return }
+        let q = Array(query.lowercased().unicodeScalars)
+        guard !q.isEmpty, query.utf8.count <= maxQueryBytes else { return report(NameProgress()) }
+        guard let w = walked(root: root, sort: sort, readmeFirst: readmeFirst, showHidden: showHidden, only: only, names: true, limits: limits,
+                             cancel: cancel) else { return }
+        var p = NameProgress(searched: w.found.count, listedOnly: w.listedOnly, stopped: w.stopped)
+        for f in w.found where nameMatches((f.path as NSString).lastPathComponent, q) {
+            if cancel.isCancelled { return }
+            if p.hits.count >= limits.maxResults { p.stopped = "results"; break }
+            p.hits.append(f)
+        }
+        if cancel.isCancelled { return }
+        report(p)
+    }
+
+    /// A Names search's one report.
+    struct NameProgress {
+        var hits: [Found] = []
+        var searched = 0
+        var listedOnly = false
+        var stopped: String?
+    }
+
+    /// What the page is sent for Names search `seq`.
+    static func payload(_ p: NameProgress, seq: Int) -> [String: Any] {
+        var d: [String: Any] = ["seq": seq, "names": true, "done": true, "searched": p.searched, "listedOnly": p.listedOnly,
+                                "hits": p.hits.map { f -> [String: Any] in
+                                    let name = (f.path as NSString).lastPathComponent
+                                    return ["path": f.path, "name": name, "dir": f.isDir, "icon": f.isDir ? "folder" : FileTypes.glyph(name: name, kind: f.kind)]
+                                }]
+        if let s = p.stopped { d["stopped"] = s }
+        return d
+    }
 
     /// Searches for `query`, calling `report` (on this thread) with the first hit at once, then at most every `every` seconds,
     /// and once when done. Nothing is reported after `cancel`.
@@ -610,17 +695,9 @@ enum ContentSearch {
         if cancel.isCancelled { return }
         guard let matcher = Matcher(query), let realRoot = FolderListing.realPath(root) else { return report(Progress(done: true)) }
         let inside = realRoot == "/" ? "/" : realRoot + "/"
-        let key = [root, sort, "\(readmeFirst)", "\(showHidden)", only.map { $0.sorted().joined(separator: "\n") } ?? "", "\(limits.maxFiles)", "\(limits.maxDepth)"]
-            .joined(separator: "\0")
-        var found: (paths: [String], listedOnly: Bool, stopped: String?)
-        if let c = cached, c.key == key, Date().timeIntervalSince(c.at) < listTTL {
-            found = c.files
-        } else {
-            found = files(root: root, sort: sort, readmeFirst: readmeFirst, showHidden: showHidden, only: only, limits: limits,
-                          until: Date().addingTimeInterval(limits.walkBudget), cancel: cancel)
-            if found.stopped == "cancelled" { return }
-            cached = (key, Date(), found)
-        }
+        guard let w = walked(root: root, sort: sort, readmeFirst: readmeFirst, showHidden: showHidden, only: only, names: false, limits: limits,
+                             cancel: cancel) else { return }
+        let found = (paths: w.found.map(\.path), listedOnly: w.listedOnly, stopped: w.stopped)
         let start = Date(), deadline = start.addingTimeInterval(limits.budget)
         var p = Progress(total: found.paths.count, listedOnly: found.listedOnly, stopped: found.stopped)
         var bytes = 0, results = 0, sent = start, firstOut = false

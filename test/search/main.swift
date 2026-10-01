@@ -92,6 +92,34 @@ check("a selection across folders searches the selected files in each, and nothi
       names(search("widget", only: nested).hits) == ["data.json", "src/app.ts"], "\(names(search("widget", only: nested).hits))")
 try! fm.removeItem(atPath: fx + "/src/other.ts")
 
+// A link to a file inside the root is the same file: one hit, the file's own row.
+put("docs/guide.md", "a widget guide\n")
+try? fm.createSymbolicLink(atPath: fx + "/a-guide-link.md", withDestinationPath: fx + "/docs/guide.md")
+let dl = names(search("widget guide").hits)
+check("a file reached through a link is searched once, as itself", dl == ["docs/guide.md"], "\(dl)")
+
+// Names: the whole tree, read without opening a file, past the sidebar's cap of a folder.
+func nameSearch(_ q: String, root: String = fx, limits: ContentSearch.Limits = .init()) -> ContentSearch.NameProgress? {
+    var out: ContentSearch.NameProgress?
+    ContentSearch.runNames(query: q, root: root, showHidden: false, limits: limits, cancel: .init()) { out = $0 }
+    return out
+}
+let nm = nameSearch("app.t")
+check("names: files and folders whose names match, in folders never listed", nm.map { names($0.hits.map { ContentSearch.Hit(path: $0.path, count: 0, line: 0, snippet: "") }) } == ["src/app.ts"]
+      && nm?.hits.first?.isDir == false, "\(String(describing: nm))")
+let nd = nameSearch("mre")
+check("names: fuzzy as the page's filter, a folder found as a folder", nd?.hits.contains { $0.path.hasSuffix("/src/deep/more") && $0.isDir } == true, "\(String(describing: nd))")
+check("names: dependency folders and hidden files are skipped", nameSearch("index")?.hits.isEmpty == true && nameSearch("inside")?.hits.isEmpty == true)
+let capped = fx + "-capped"
+try! fm.createDirectory(atPath: capped + "/big", withIntermediateDirectories: true)
+for i in 0..<(FolderListing.cap + 20) { fm.createFile(atPath: capped + "/big/" + String(format: "log-%05d.txt", i), contents: nil) }
+let past = nameSearch("log-05010", root: capped)
+check("names: a file past the sidebar's 5,000 is found", past?.hits.map { ($0.path as NSString).lastPathComponent } == ["log-05010.txt"] && past?.listedOnly == false,
+      "\(String(describing: past))")
+let payload = ContentSearch.payload(past!, seq: 7)
+check("names: the payload names each hit, its icon and whether it is a folder", payload["names"] as? Bool == true && payload["seq"] as? Int == 7
+      && (payload["hits"] as? [[String: Any]])?.first?["dir"] as? Bool == false)
+
 // Caps: each stops the search and says which.
 var lim = ContentSearch.Limits()
 lim.maxFiles = 3

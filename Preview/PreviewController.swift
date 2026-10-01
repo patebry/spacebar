@@ -298,9 +298,16 @@ class PreviewController: NSViewController {
     private var shownView: String?
     /// The archive on screen as last listed: its view with the listing in it, and each file's size and date by name, the only
     /// names an entry may be read by. Nil for anything else.
-    private var archive: (path: String, payload: [String: Any], files: [String: (size: Int64?, modified: Double?)])?
+    private var archive: (path: String, payload: [String: Any], files: [String: EntryInfo])?
+    /// What an archive's listing said of one of its files.
+    private typealias EntryInfo = (size: Int64?, modified: Double?, link: Bool)
     /// The file inside `archive` on screen (ArchiveEntryView), while one is: read-only, never opened, never edited.
     private var entryShown: String?
+    /// A file of the archive is on screen, not the archive: the text of a lone compressed file stands for the file itself.
+    private var entryInside: Bool {
+        guard let e = entryShown, let f = fileURL else { return false }
+        return !(ArchiveEntryView.isLoneReadable(f.path) && e == ArchiveEntryView.loneName(f.path))
+    }
     /// Bumped by every entry asked for and every show, so a read that lands late is dropped.
     private var entryGen = 0
     /// The image the next render hands the `entry` host, and only that render.
@@ -861,8 +868,8 @@ class PreviewController: NSViewController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in if self?.folderPending == false { self?.finishPrepare(nil) } }
     }
 
-    /// A folder preview opens on its README, else its first Markdown file, else the most relevant Markdown a bounded search of
-    /// its subfolders finds, else the folder overview. A folder that is slow to read shows the overview's loading state first.
+    /// A folder preview opens on its own README (or index or Home note), else on the folder overview: a note deeper down, or any
+    /// other note, is the user's to pick. A folder that is slow to read shows the overview's loading state first.
     private func startFolder() {
         folderPending = true
         refreshListing(rootDir, then: { [weak self] l in
@@ -871,12 +878,13 @@ class PreviewController: NSViewController {
             if FolderListing.isMediaFolder(l), SettingsStore.shared.settings.folderViewMedia == "grid" {
                 // A folder of images or video opens on its grid, even when it holds a README.
                 self.overviewRequested = true
-                self.scanFolder(openBest: false)
+                self.scanFolder(opening: true)
             } else if let first = FolderListing.firstDocument(l) {
                 self.folderPending = false
                 self.open(URL(fileURLWithPath: first.path))
             } else {
-                self.scanFolder(openBest: true)
+                self.overviewRequested = true
+                self.scanFolder(opening: true)
             }
         })
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
@@ -885,10 +893,10 @@ class PreviewController: NSViewController {
         }
     }
 
-    /// Scans the root off the main thread (FolderScan: bounded in depth, entries and time), then opens the Markdown it found
-    /// (`openBest`) or shows the overview.
-    private func scanFolder(openBest: Bool) {
-        if scanning { rescan = openBest || rescan == true; return }
+    /// Scans the root off the main thread (FolderScan: bounded in depth, entries and time), then shows the overview: as the
+    /// folder's first view (`opening`), or asked for since.
+    private func scanFolder(opening: Bool = false) {
+        if scanning { rescan = opening || rescan == true; return }
         scanning = true
         scanGen += 1
         let gen = scanGen, root = rootDir, hidden = SettingsStore.shared.settings.showHiddenFiles
@@ -899,22 +907,15 @@ class PreviewController: NSViewController {
                 self.scanning = false
                 if let again = self.rescan {
                     self.rescan = nil
-                    self.scanFolder(openBest: again)
+                    self.scanFolder(opening: again)
                     return
                 }
                 self.rescan = nil
                 // A file opened since the scan started (open() moves scanGen on) wins over what the scan would show.
-                guard gen == self.scanGen, root == self.rootDir, !self.torn,
-                      openBest ? self.folderPending : (self.showingOverview || self.overviewRequested) else { return }
+                guard gen == self.scanGen, root == self.rootDir, !self.torn, self.showingOverview || self.overviewRequested || (opening && self.folderPending) else { return }
                 self.overviewRequested = false
                 log.info("folder scan: \(r.scanned) entries, \(r.files.count) files, complete=\(r.complete)")
-                if openBest, let md = r.bestMarkdown {
-                    self.folderPending = false
-                    self.offer([md.path])
-                    self.open(URL(fileURLWithPath: md.path))
-                    return
-                }
-                self.showOverview(r, reason: openBest ? "open" : "overview")
+                self.showOverview(r, reason: opening ? "open" : "overview")
             }
         }
     }
@@ -1011,7 +1012,7 @@ class PreviewController: NSViewController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
             guard let self else { return }
             self.rescanTimer = false
-            if self.showingOverview, !self.folderPending { self.scanFolder(openBest: false) }
+            if self.showingOverview, !self.folderPending { self.scanFolder() }
         }
     }
 
@@ -1669,15 +1670,26 @@ class PreviewController: NSViewController {
                 guard let self, self.renderGen == gen, self.fileURL?.path == path else { return }
                 if let data, let list = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let entries = list["entries"] as? [[String: Any]] {
                     let truncated = list["truncated"] as? Bool ?? false
-                    var files: [String: (size: Int64?, modified: Double?)] = [:]
+                    var files: [String: EntryInfo] = [:]
                     for e in entries where e["isDir"] as? Bool == false {
-                        if let n = e["name"] as? String, files[n] == nil { files[n] = ((e["size"] as? NSNumber)?.int64Value, (e["modified"] as? NSNumber)?.doubleValue) }
+                        if let n = e["name"] as? String, files[n] == nil {
+                            files[n] = ((e["size"] as? NSNumber)?.int64Value, (e["modified"] as? NSNumber)?.doubleValue, e["isLink"] as? Bool == true)
+                        }
                     }
                     var p = shown
                     p["entries"] = entries
                     p["truncated"] = truncated
+                    let total = (list["total"] as? NSNumber)?.intValue
+                    if let total { p["total"] = total }
                     self.archive = (path, p, files)
-                    self.js("sb.setArchive", ["path": path, "entries": entries, "truncated": truncated])
+                    // A lone compressed file of text (server.log.gz) shows that text, not a table of one row.
+                    if ArchiveEntryView.isLoneReadable(path), files.count == 1, let only = files.first, only.key == ArchiveEntryView.loneName(path),
+                       ArchiveEntryView.textKinds.contains(ArchiveEntryView.kind(only.key)) {
+                        return self.showEntry(url, only.key, only.value)
+                    }
+                    var msg: [String: Any] = ["path": path, "entries": entries, "truncated": truncated]
+                    if let total { msg["total"] = total }
+                    self.js("sb.setArchive", msg)
                 } else {
                     self.js("sb.setArchive", ["path": path, "error": "This archive’s contents can’t be listed."])
                     self.addThumbnail(url)
@@ -1688,11 +1700,18 @@ class PreviewController: NSViewController {
     }
 
     /// A file inside the archive on screen, read by the writer's sandboxed bsdtar into memory (never extracted) and shown
-    /// read-only, as its text or image view or its info card. `info` is what the listing said of it.
-    private func showEntry(_ url: URL, _ name: String, _ info: (size: Int64?, modified: Double?)) {
+    /// read-only, as its text, image or PDF view or its info card. `info` is what the listing said of it. The one file of a lone
+    /// compressed file is shown as that file itself.
+    private func showEntry(_ url: URL, _ name: String, _ info: EntryInfo) {
         entryGen += 1
         let gen = entryGen, path = url.path
+        let lone = ArchiveEntryView.isLoneReadable(path) && name == ArchiveEntryView.loneName(path)
         let done = { [weak self] (data: Data?, why: String?) in
+            // A PDF is parsed here, off the main thread, as a PDF file on disk is.
+            var pdf: Result<PDFDocument, PDFPane.LoadError>?
+            if let data, why == nil, ArchiveEntryView.kind(name) == .pdf {
+                if let doc = PDFDocument(data: data), doc.pageCount > 0 || doc.isLocked { pdf = doc.isLocked ? .failure(.locked) : .success(doc) } else { pdf = .failure(.unreadable) }
+            }
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let next = self.entryNext, gen != self.entryGen {
@@ -1700,13 +1719,24 @@ class PreviewController: NSViewController {
                     return next()
                 }
                 guard gen == self.entryGen, self.fileURL?.path == path, self.archive?.path == path else { return }
-                self.putEntry(path, name, ArchiveEntryView.payload(archive: path, root: self.rootDir, entry: name, size: info.size,
-                                                                   modified: info.modified, data: data, failure: why), data)
+                let partial = why == "partial"
+                var p = ArchiveEntryView.payload(archive: path, root: self.rootDir, entry: name, size: info.size, modified: info.modified, data: data,
+                                                 failure: partial ? nil : why, partial: partial)
+                if lone, let shown = self.archive?.payload {
+                    // Not a file of a listing: the archive's own view, its crumbs and its Open, showing the text inside.
+                    p.removeValue(forKey: "entry")
+                    p["name"] = shown["name"] ?? name
+                    p["canOpen"] = shown["canOpen"] ?? false
+                    p["kindName"] = "\(p["kindName"] as? String ?? "Plain text"), compressed"
+                }
+                self.putEntry(path, name, p, data, pdf: pdf, lone: lone)
             }
         }
-        // Not read at all: a kind shown only as its info card, or a size past the cap before a byte is streamed.
+        // Not read at all: a link (bsdtar extracts nothing for one), a kind shown only as its info card, or a size past the cap
+        // before a byte is streamed. A lone compressed file's text is read up to the cap and shown in part.
+        if info.link { return done(nil, "link") }
         guard let cap = ArchiveEntryView.cap(for: name) else { return done(nil, nil) }
-        if let size = info.size, size > Int64(cap) { return done(nil, "tooLarge") }
+        if !(lone && ArchiveEntryView.textKinds.contains(ArchiveEntryView.kind(name))), let size = info.size, size > Int64(cap) { return done(nil, "tooLarge") }
         if entryBusy {
             entryNext = { [weak self] in self?.showEntry(url, name, info) }
             return
@@ -1719,14 +1749,26 @@ class PreviewController: NSViewController {
         helper(onError: { read(nil, "unreadable") }) { $0.readArchiveEntry(path, entry: name, reply: read) }
     }
 
-    private func putEntry(_ path: String, _ name: String, _ payload: [String: Any], _ data: Data?) {
+    private func putEntry(_ path: String, _ name: String, _ payload: [String: Any], _ data: Data?, pdf: Result<PDFDocument, PDFPane.LoadError>? = nil,
+                          lone: Bool = false) {
         var p = payload
         closePDF()
         entryShown = name
-        shownCanOpen = false
+        shownCanOpen = lone && p["canOpen"] as? Bool == true
         shownText = false
         if let t = p["text"] as? String { p["text"] = TextDecoding.nativeUTF8(t) }
-        shownBody = (p["text"] as? String).map { ($0, false) }
+        shownBody = (p["text"] as? String).map { ($0, p["truncated"] as? Bool == true) }
+        if p["view"] as? String == "pdf" {
+            switch pdf {
+            case .success?: break
+            case .failure(let e)?:
+                p["view"] = "info"
+                p["note"] = e == .locked ? "This PDF is password-protected." : "This PDF can’t be shown here."
+            case nil:
+                p["view"] = "info"
+                p["note"] = "This PDF can’t be shown here."
+            }
+        }
         // WebKit decodes it, so it is held to the pixel bound ImageIO's images have before any decode.
         if p["view"] as? String == "image", data.flatMap({ ImagePane.pixelSize(.data($0)) }) == nil {
             p["view"] = "info"
@@ -1749,6 +1791,12 @@ class PreviewController: NSViewController {
         shownView = p["view"] as? String
         log.info("show archive entry \(self.shownView ?? "", privacy: .public)")
         render(p)
+        if p["view"] as? String == "pdf", case .success(let doc)? = pdf {
+            let pane = PDFPane()
+            pane.onLink = { [weak self] in self?.pdfLink($0) }
+            pane.show(doc, path: path, over: host.web)
+            pdfPane = pane
+        }
         if p["view"] as? String == "bitmap", let data {
             let pane = ImagePane()
             pane.onZoom = { [weak self] _, zoom in self?.js("sb.imageZoom", ["path": path, "zoom": zoom]) }
@@ -1943,25 +1991,42 @@ class PreviewController: NSViewController {
         return p
     }
 
-    /// Searches the text of the files the sidebar lists for `query` off the main thread (ContentSearch), streaming what it finds
-    /// to the page as `sb.searchResults`. A new search, or `stopSearch`, cancels the one before.
-    private func startSearch(_ query: String, seq: Int) {
+    /// Searches the files under the root for `query` off the main thread (ContentSearch): their text, streaming what it finds to
+    /// the page as `sb.searchResults`, or with `names` their names (`sb.nameResults`, once). A new search, or `stopSearch`,
+    /// cancels the one before. What either finds may then be opened.
+    private func startSearch(_ query: String, seq: Int, names: Bool = false) {
         stopSearch()
-        guard !rootDir.isEmpty else { return js("sb.searchResults", ContentSearch.payload(.init(done: true), seq: seq)) }
+        guard !rootDir.isEmpty else {
+            return names ? js("sb.nameResults", ContentSearch.payload(ContentSearch.NameProgress(), seq: seq))
+                : js("sb.searchResults", ContentSearch.payload(.init(done: true), seq: seq))
+        }
         let cancel = ContentSearch.Cancel()
         search = (seq, cancel)
         let root = rootDir, s = SettingsStore.shared.settings, only = selection
+        let found = { [weak self] (paths: [String], done: Bool, send: @escaping (PreviewController) -> Void) in
+            DispatchQueue.main.async {
+                guard let self, self.search?.cancel === cancel, !cancel.isCancelled, root == self.rootDir else { return }
+                // The page replaces its list with this search's at its first report.
+                if self.searchHits.seq != seq { self.searchHits = (seq, []) }
+                self.searchHits.paths.formUnion(paths)
+                if done { self.search = nil }
+                send(self)
+            }
+        }
         ContentSearch.queue.async {
+            if names {
+                ContentSearch.runNames(query: query, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles,
+                                       only: only, cancel: cancel) { p in
+                    let payload = ContentSearch.payload(p, seq: seq), dirs = p.hits.filter(\.isDir).map(\.path)
+                    // A folder found may then be listed, to show what is in it.
+                    found(p.hits.filter { !$0.isDir }.map(\.path), true) { $0.knownDirs.formUnion(dirs); $0.js("sb.nameResults", payload) }
+                }
+                return
+            }
             ContentSearch.run(query: query, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles,
                               only: only, cancel: cancel) { p in
-                DispatchQueue.main.async { [weak self] in
-                    guard let self, self.search?.cancel === cancel, !cancel.isCancelled, root == self.rootDir else { return }
-                    // The page replaces its list with this search's at its first report.
-                    if self.searchHits.seq != seq { self.searchHits = (seq, []) }
-                    self.searchHits.paths.formUnion(p.hits.map(\.path))
-                    if p.done { self.search = nil }
-                    self.js("sb.searchResults", ContentSearch.payload(p, seq: seq))
-                }
+                let payload = ContentSearch.payload(p, seq: seq)
+                found(p.hits.map(\.path), p.done) { $0.js("sb.searchResults", payload) }
             }
         }
     }
@@ -1977,7 +2042,7 @@ class PreviewController: NSViewController {
         let m = PageMessage(body: body)
         let url: URL
         if let p = listedFile(m) ?? offeredFile(m) ?? searchedFile(m) { url = URL(fileURLWithPath: p) } else {
-            guard let f = fileURL, m.string("path", max: 4096) == f.path, unavailablePath != f.path, entryShown == nil else { return nil }
+            guard let f = fileURL, m.string("path", max: 4096) == f.path, unavailablePath != f.path, !entryInside else { return nil }
             url = f
         }
         var st = stat()
@@ -2023,7 +2088,7 @@ class PreviewController: NSViewController {
                 stopSearch()
                 return js("sb.searchResults", ContentSearch.payload(.init(done: true), seq: seq))
             }
-            startSearch(q, seq: seq)
+            startSearch(q, seq: seq, names: m.bool("names") == true)
         case "searchStop":
             stopSearch()
         case "thumbDrop":
@@ -2034,12 +2099,13 @@ class PreviewController: NSViewController {
             // The sidebar's folder name: the overview of the root. Not for a selection, whose root holds more than was selected.
             guard !torn, selection == nil else { return }
             overviewRequested = true
-            scanFolder(openBest: false)
+            scanFolder()
         case "list":
             // A folder expanded in the sidebar: the root or one a listing named, still inside the root once symlinks are resolved.
             guard let p = m.string("path", max: 4096), listings[p] == nil || dirWatches[p] == nil, knownDirs.contains(p), FolderListing.isPlainPath(p, under: rootDir),
                   FolderListing.isInside(p, root: rootDir, allowRoot: true) else { return refuse("list", "not a folder of the tree") }
-            watch(p)
+            // A look into a folder the filter matched is listed once, unwatched: the watches are for folders the user opened.
+            if m.bool("peek") != true { watch(p) }
             refreshListing(p)
         case "unlist":
             // A folder collapsed in the sidebar: no longer watched. The root always is.
@@ -2060,7 +2126,7 @@ class PreviewController: NSViewController {
         case "openWithList", "openWith":
             // The toolbar's Open With menu, for the file on screen only, never a file inside an archive; the writer lists and
             // checks the apps again.
-            guard !gone, let url = fileURL, m.string("path", max: 4096) == url.path, entryShown == nil, fileKind == .markdown || shownCanOpen,
+            guard !gone, let url = fileURL, m.string("path", max: 4096) == url.path, !entryInside, fileKind == .markdown || shownCanOpen,
                   LinkPolicy.fileRefusal(url, allowArchives: fileKind == .archive) == nil else {
                 if type == "openWithList" { js("sb.openWithApps", ["path": m.string("path", max: 4096) ?? "", "apps": []]) }
                 return refuse(type, "not the file on screen or not allowed")
@@ -2223,7 +2289,7 @@ class PreviewController: NSViewController {
             helper { $0.reveal(dir) { ok in if !ok { DispatchQueue.main.async { self.status("could not show \(dir.lastPathComponent) in Finder") } } } }
         case "pdfRect":
             // Where the page reserved the PDF's place, in CSS pixels of the viewport; `hide` while the page has something above it.
-            if fileKind == .pdf { pdfPane?.place(message: body, in: host.web) }
+            if fileKind == .pdf || (fileKind == .archive && entryShown != nil) { pdfPane?.place(message: body, in: host.web) }
             if fileKind == .html { htmlPane?.place(message: body, in: host.web) }
             if [.video, .audio].contains(fileKind) { mediaPane?.place(message: body, in: host.web) }
             qlPane?.place(message: body, in: host.web)
@@ -2255,7 +2321,7 @@ class PreviewController: NSViewController {
             guard let text = selection ?? whole?.text, !text.isEmpty else { return failed("nothing to copy") }
             let cut = selection == nil && whole?.truncated == true
             // A file inside an archive is not a file of its own: its text alone is copied.
-            if selection == nil, asked, entryShown == nil, m.bool("withFile") == true, copyFileAndText(url, text) {
+            if selection == nil, asked, !entryInside, m.bool("withFile") == true, copyFileAndText(url, text) {
                 return js("sb.copied", ["ok": true, "truncated": cut])
             }
             helper(onError: { failed("writer unavailable") }) {

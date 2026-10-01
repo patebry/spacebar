@@ -734,6 +734,7 @@ function draw() {
   const frag = render(current.text);
   mountMermaid(frag, heights);
   $('doc').replaceChildren(frag);
+  if (current.entry) setKind(current, [fmtSize(current.size)]);
   if (editing) spliceEditor([editing.start, editing.start + editing.lines]);
   decorate();
   syncPdf();
@@ -1417,6 +1418,7 @@ window.sb = {
     if (Array.isArray(a.entries)) {
       current.entries = a.entries;
       current.truncated = a.truncated === true;
+      if (typeof a.total === 'number' && isFinite(a.total)) current.total = a.total;
       // The same archive listed again (it changed on disk) keeps its open folders.
       if (archiveOpenPath !== current.path) archiveOpen = null;
     } else {
@@ -1594,6 +1596,8 @@ function viewerAction(b, e) {
     openEntry(b.dataset.entry, row && row.dataset.key);
     if (e && e.isTrusted && row) beginArcKeys(e, row.getBoundingClientRect());
   } else if (a === 'archiveBack') { if (e && e.isTrusted) archiveBack(); }
+  else if (a === 'gridBack') gridBack();
+  else if (a === 'arcSort') arcSortBy(b.dataset.col);
   else if (a === 'archiveDir' && archiveOpen) {
     const path = b.dataset.path;
     const row = b.closest('tr');
@@ -1620,10 +1624,17 @@ function viewHead(p, ...extra) {
     const back = el('button', 'viewer-back', `‹ ${plainName(p.entry.archive || '')}`);
     back.type = 'button';
     back.dataset.action = 'archiveBack';
-    back.title = 'Back to the archive';
+    back.title = 'Back to the archive (← or ⌫)\n↑ ↓ the file before or after this one';
     head.classList.add('entry-head');
     head.append(back, ...extra);
     return head;
+  }
+  if (fromGrid(p)) {
+    const back = el('button', 'viewer-back', `‹ ${plainName(tree.name || '')}`);
+    back.type = 'button';
+    back.dataset.action = 'gridBack';
+    back.title = 'Back to the grid (← or ⌫)';
+    extra.unshift(back);
   }
   if (!extra.length) head.classList.add('bare');
   head.append(...extra, openButton(p));
@@ -1633,17 +1644,24 @@ function viewHead(p, ...extra) {
 /** The file's kind and size (and whatever `more` adds) as quiet text in the toolbar. With `zoom`, the span an image's zoom is
  *  written to follows it; returned with the text's own span. */
 function setKind(p, more = [], zoom = false) {
-  const text = el('span', 'kind-text', [p.kindName, ...more].filter(Boolean).join(' · '));
+  const text = el('span', 'kind-text', [p.kindName, ...more, entryPosition(p)].filter(Boolean).join(' · '));
   const z = zoom ? el('span', 'img-zoom') : null;
   $('kind').replaceChildren(...[text, z].filter(Boolean));
   return { text, zoom: z };
 }
 const zoomLabel = () => document.querySelector('#kind .img-zoom');
 
+/** Where a file of an archive sits among the archive's files ("3 of 10"), which ↑ and ↓ step through. */
+function entryPosition(p) {
+  if (!p.entry || arcFiles.length < 2) return '';
+  const i = arcFiles.findIndex((f) => f.entry === p.entry.name);
+  return i < 0 ? '' : `${(i + 1).toLocaleString()} of ${arcFiles.length.toLocaleString()}`;
+}
+
 function note(text) { return el('div', 'viewer-note', text); }
 
 const readCap = (p) => `${(typeof p.readCap === 'number' ? p.readCap : 2 << 20) >> 20} MB`;
-function truncNote(p) { return p.truncated ? note(`Showing the first ${readCap(p)} of ${fmtSize(p.size)}.`) : null; }
+function truncNote(p) { return p.truncated ? note(`Showing the first ${readCap(p)}${typeof p.size === 'number' ? ` of ${fmtSize(p.size)}` : ''}.`) : null; }
 
 const highlighted = (text, lang) => DOMPurify.sanitize(hljs.highlight(text, { language: lang, ignoreIllegals: true }).value,
   { ALLOWED_TAGS: ['span'], ALLOWED_ATTR: ['class'], RETURN_DOM_FRAGMENT: true });
@@ -2317,7 +2335,7 @@ function imageView(p) {
   // A vector image has the size its file gives it, and no zoom percentage: WebKit's own size for it is a default.
   const vector = /\.svg$/i.test(p.name || '');
   img.addEventListener('load', () => {
-    meta.textContent = [p.kindName, vector ? (typeof p.svgSize === 'string' ? p.svgSize : '') : `${img.naturalWidth} × ${img.naturalHeight}`, fmtSize(p.size)].filter(Boolean).join(' · ');
+    meta.textContent = [p.kindName, vector ? (typeof p.svgSize === 'string' ? p.svgSize : '') : `${img.naturalWidth} × ${img.naturalHeight}`, fmtSize(p.size), entryPosition(p)].filter(Boolean).join(' · ');
     applyZoom(stage, img, vector ? null : zoom, imgScale);
   });
   img.addEventListener('error', () => {
@@ -2480,21 +2498,25 @@ const ARCHIVE_MAX_DEPTH = 64;
 let archiveOpen = null;
 let archiveOpenPath = null;
 
-/** The flat listing as a tree: a folder with no entry of its own is implied by the files in it. */
+/** The flat listing as a tree: a folder with no entry of its own is implied by the files in it. Finder's and macOS's own
+ *  litter (.DS_Store, __MACOSX) is left out unless hidden files are shown. */
 function archiveTree(entries) {
-  const top = { name: '', path: '', dir: true, kids: new Map(), size: null, modified: null };
+  const top = { name: '', path: '', dir: true, kids: new Map(), size: null, modified: null, sum: 0 };
+  const junk = settings.showHiddenFiles !== true;
   for (const e of entries) {
     if (!e || typeof e.name !== 'string') continue;
     const parts = e.name.split('/').filter((x) => x && x !== '.');
+    if (junk && (parts.includes('__MACOSX') || parts[parts.length - 1] === '.DS_Store')) continue;
     if (parts.length > ARCHIVE_MAX_DEPTH) parts.splice(ARCHIVE_MAX_DEPTH - 1, Infinity, parts.slice(ARCHIVE_MAX_DEPTH - 1).join('∕'));
     let node = top;
     parts.forEach((part, i) => {
       const last = i === parts.length - 1;
       let k = node.kids.get(part);
       if (!k) {
-        k = { name: part, path: node.path ? `${node.path}/${part}` : part, dir: !last, kids: new Map(), size: null, modified: null };
+        k = { name: part, path: node.path ? `${node.path}/${part}` : part, dir: !last, kids: new Map(), size: null, modified: null, sum: 0, up: node };
         node.kids.set(part, k);
       }
+      if (last && e.isLink === true) k.link = true;
       if (!last || e.isDir === true) k.dir = true;
       // The name exactly as listed: the one the extension reads the file by (a name listed twice: its first).
       if (last && e.isDir !== true && k.entry === undefined) k.entry = e.name;
@@ -2506,7 +2528,13 @@ function archiveTree(entries) {
     });
   }
   let files = 0, folders = 0, total = 0;
-  for (const k of archiveNodes(top)) if (k.dir) folders++; else { files++; total += k.size || 0; }
+  for (const k of archiveNodes(top)) {
+    if (k.dir) { folders++; continue; }
+    files++;
+    total += k.size || 0;
+    // Each folder's size is what its files add up to.
+    for (let u = k.up; u; u = u.up) u.sum += k.size || 0;
+  }
   return { top, files, folders, total };
 }
 
@@ -2517,7 +2545,30 @@ function archiveNodes(top) {
   return out;
 }
 
-const archiveKids = (n) => [...n.kids.values()].sort((a, b) => (a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name, undefined, { numeric: true })));
+// The archive's sort, by a column's header: folders first, then by name, size or date, either way. Kept while the page lives.
+let arcSort = { col: 'name', dir: 1 };
+function arcOrder(a, b) {
+  if (a.dir !== b.dir) return a.dir ? -1 : 1;
+  const name = a.name.localeCompare(b.name, undefined, { numeric: true });
+  let c = 0;
+  if (arcSort.col === 'size') c = (a.dir ? a.sum : a.size ?? -1) - (b.dir ? b.sum : b.size ?? -1);
+  else if (arcSort.col === 'modified') c = (a.modified ?? 0) - (b.modified ?? 0);
+  // Equal sizes or dates stay in name order whichever way the column runs.
+  return c ? c * arcSort.dir : name * (arcSort.col === 'name' ? arcSort.dir : 1);
+}
+const archiveKids = (n) => [...n.kids.values()].sort(arcOrder);
+
+/** A click on a column's header: sorts by it, and again the other way. Size and date start with the largest and newest. */
+function arcSortBy(col) {
+  if (!['name', 'size', 'modified'].includes(col)) return;
+  arcSort = arcSort.col === col ? { col, dir: -arcSort.dir } : { col, dir: col === 'name' ? 1 : -1 };
+  const y = window.scrollY;
+  draw();
+  window.scrollTo(0, y);
+}
+
+// What cannot be shown from inside an archive, by name: archives, Office and iWork documents, disk images and apps.
+const ARC_NO_PREVIEW = /\.(zip|tar|gz|gzip|tgz|bz2?|tbz2?|xz|txz|7z|rar|zst|tzst|jar|docx?|xlsx?|pptx?|pages|numbers|key|dmg|iso|pkg|app|exe|msi)$/i;
 
 /** Which folders start open: all of them in a small archive; in a large one, only a chain of lone folders from the top. */
 function archiveInitialOpen(tree, count) {
@@ -2596,7 +2647,7 @@ function arcKey(key) {
       if (f && f.key !== arcSel) openEntry(f.entry, f.key);
       return true;
     }
-    if (key === 'left' || key === 'return') { archiveBack(); return true; }
+    if (key === 'left' || key === 'back' || key === 'return') { archiveBack(); return true; }
     return false;
   }
   if (current.view !== 'archive' || !Array.isArray(current.entries)) return false;
@@ -2670,14 +2721,30 @@ function archiveView(p) {
   const dirs = new Set(archiveNodes(tree.top).filter((k) => k.dir).map((k) => k.path));
   if (archiveOpen && archiveOpen.size && ![...archiveOpen].some((d) => dirs.has(d))) archiveOpen = null;
   if (!archiveOpen) { archiveOpen = archiveInitialOpen(tree, p.entries.length); archiveOpenPath = p.path; }
-  const plural = (n, one, many) => `${n.toLocaleString()} ${n === 1 ? one : many}`;
+  // A listing cut short counts only what it holds: "5,000+ files", "at least 20 KB".
+  const more = p.truncated === true ? '+' : '';
+  const plural = (n, one, many) => `${n.toLocaleString()}${more} ${n === 1 && !more ? one : many}`;
   const summary = [plural(tree.files, 'file', 'files'), tree.folders ? plural(tree.folders, 'folder', 'folders') : ''].filter(Boolean).join(', ');
-  box.append(el('div', 'viewer-note archive-summary', [summary, tree.total ? `${fmtSize(tree.total)} uncompressed` : ''].filter(Boolean).join(' · ')));
-  if (p.truncated === true) box.append(note(`Showing the first ${p.entries.length.toLocaleString()} entries.`));
+  box.append(el('div', 'viewer-note archive-summary', [summary, tree.total ? `${more ? 'at least ' : ''}${fmtSize(tree.total)} uncompressed` : ''].filter(Boolean).join(' · ')));
+  if (p.truncated === true) {
+    const all = typeof p.total === 'number' && p.total > p.entries.length ? p.total : null;
+    box.append(note(all ? `Showing the first ${p.entries.length.toLocaleString()} of ${all.toLocaleString()} entries.` : `Showing the first ${p.entries.length.toLocaleString()} entries.`));
+  }
   if (!tree.top.kids.size) { box.append(note('This archive is empty.')); return box; }
   const table = el('table', 'archive');
   const hr = table.appendChild(el('thead')).appendChild(el('tr'));
-  ['Name', 'Size', 'Modified'].forEach((h) => hr.appendChild(el('th', '', h)));
+  for (const [col, label] of [['name', 'Name'], ['size', 'Size'], ['modified', 'Modified']]) {
+    const th = hr.appendChild(el('th'));
+    const b = el('button', 'arc-sort', label);
+    b.type = 'button';
+    b.dataset.action = 'arcSort';
+    b.dataset.col = col;
+    b.title = `Sort by ${label.toLowerCase()}`;
+    const on = arcSort.col === col;
+    th.setAttribute('aria-sort', on ? (arcSort.dir > 0 ? 'ascending' : 'descending') : 'none');
+    b.append(el('span', 'arc-arrow', on ? (arcSort.dir > 0 ? '▲' : '▼') : ''));
+    th.append(b);
+  }
   const tb = table.appendChild(el('tbody'));
   const stack = [];
   const push = (n, depth) => { const kids = archiveKids(n); for (let i = kids.length - 1; i >= 0; i--) stack.push([kids[i], depth]); };
@@ -2700,6 +2767,8 @@ function archiveView(p) {
       td.append(b);
     } else if (typeof k.entry === 'string') {
       // A file opens in place, read by the extension from the archive; nothing is extracted.
+      if (k.link) { tr.classList.add('arc-nopreview'); tr.title = 'A link to another file'; }
+      else if (ARC_NO_PREVIEW.test(k.name)) { tr.classList.add('arc-nopreview'); tr.title = 'Can’t be shown from inside the archive'; }
       const b = el('button', 'arc-entry');
       b.type = 'button';
       b.dataset.action = 'archiveEntry';
@@ -2709,8 +2778,8 @@ function archiveView(p) {
     } else {
       td.append(el('span', 'arc-chevron', ''), icon('other'), el('span', 'arc-label', plainName(k.name)));
     }
-    tr.appendChild(el('td', 'arc-size', k.dir ? '' : fmtSize(k.size)));
-    tr.appendChild(el('td', 'arc-date', fmtDate(k.modified)));
+    tr.appendChild(el('td', k.dir ? 'arc-size arc-sum' : 'arc-size', k.dir ? (k.sum ? fmtSize(k.sum) : '') : fmtSize(k.size)));
+    tr.appendChild(el('td', 'arc-date', fileDate(k.modified)));
     if (open) push(k, depth + 1);
   }
   box.append(table);
@@ -2822,12 +2891,43 @@ const OVERVIEW_KINDS = [['markdown', 'Markdown file', 'Markdown files', 'markdow
   ['code', 'code file', 'code files', 'code'], ['data', 'data file', 'data files', 'data'], ['text', 'text file', 'text files', 'text'],
   ['other', 'other item', 'other items', 'other']];
 
-function shortDate(ms) {
+/** A date as Finder's list shows it: "Today at 7:47 PM", "Yesterday at …", "30 Sep at …" this year, else the date alone. */
+function fileDate(ms) {
   if (typeof ms !== 'number' || !isFinite(ms)) return '';
-  const d = new Date(ms), now = new Date();
-  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-  if (now - d < 6 * 864e5 && now > d) return d.toLocaleDateString(undefined, { weekday: 'short' });
-  return d.toLocaleDateString(undefined, d.getFullYear() === now.getFullYear() ? { day: 'numeric', month: 'short' } : { day: 'numeric', month: 'short', year: 'numeric' });
+  const d = new Date(ms), now = new Date(), day = 864e5;
+  const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (ms >= midnight && ms < midnight + day) return `Today at ${time}`;
+  if (ms >= midnight - day && ms < midnight) return `Yesterday at ${time}`;
+  if (d.getFullYear() === now.getFullYear()) return `${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} at ${time}`;
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+/** The folder's own files and folders, as the sidebar lists the root: List view. Refilled when that listing changes. */
+function ovFiles() {
+  const box = el('div', 'ov-list ov-files');
+  box.setAttribute('role', 'list');
+  ovFill(box);
+  return box;
+}
+
+function ovFill(box) {
+  const d = tree.dirs.get(tree.root);
+  if (!d) { box.replaceChildren(el('div', 'ov-note', 'Loading…')); return; }
+  const rows = d.entries.map((e) => {
+    const a = el('a', `ov-row ov-file${e.dir ? ' ov-dir' : ''}${e.broken ? ' broken' : ''}${e.hidden ? ' hidden-file' : ''}`);
+    a.href = '#';
+    a.dataset.path = e.path;
+    if (e.dir) a.dataset.dir = '1';
+    a.title = rowTitle(e);
+    a.setAttribute('role', 'listitem');
+    a.append(icon(e.dir ? 'folder' : e.icon, 16), el('span', 'ov-row-name', plainName(e.name)), el('span', 'ov-row-size', e.dir ? '' : fmtSize(e.size)),
+      el('span', 'ov-row-date', fileDate(e.modified)));
+    return a;
+  });
+  if (d.more) rows.push(el('div', 'ov-note', moreNote(d.more)));
+  if (!rows.length) rows.push(el('div', 'ov-note', 'Nothing here yet.'));
+  box.replaceChildren(...rows);
 }
 
 function overviewView(p) {
@@ -2853,6 +2953,8 @@ function overviewView(p) {
   }
   if (total || folders) head.append(viewToggle(p));
   document.documentElement.toggleAttribute('data-grid', gridWanted(p));
+  // A folder shown as a list has no grid to go back to.
+  if (!gridWanted(p)) gridReturn = null;
   if (gridWanted(p)) { box.append(gridView(p)); return box; }
   const chips = el('div', 'ov-counts');
   const chip = (ic, n, one, many) => {
@@ -2863,24 +2965,7 @@ function overviewView(p) {
   if (folders) chip('folder', folders, 'folder', 'folders');
   for (const [k, one, many, ic] of OVERVIEW_KINDS) { const n = Math.max(0, +counts[k] || 0); if (n) chip(ic, n, one, many); }
   if (chips.childNodes.length) box.append(chips);
-  const recent = Array.isArray(p.recent) ? p.recent.filter((r) => r && typeof r.path === 'string' && typeof r.name === 'string') : [];
-  if (recent.length) {
-    box.append(el('div', 'ov-section', 'Recently modified'));
-    const list = el('div', 'ov-list');
-    for (const r of recent) {
-      const a = el('a', 'ov-row');
-      a.href = '#';
-      a.dataset.path = r.path;
-      a.title = typeof r.rel === 'string' ? r.rel : r.name;
-      const where = typeof r.rel === 'string' && r.rel.includes('/') ? r.rel.slice(0, r.rel.lastIndexOf('/')) : '';
-      a.append(icon(typeof r.icon === 'string' ? r.icon : 'other', 16), el('span', 'ov-row-name', plainName(r.name)),
-        el('span', 'ov-row-where', plainName(where)), el('span', 'ov-row-date', shortDate(r.modified)));
-      list.append(a);
-    }
-    box.append(list);
-  } else if (!total) {
-    box.append(el('div', 'ov-empty', 'Nothing here yet.'));
-  }
+  box.append(total ? ovFiles() : el('div', 'ov-empty', 'Nothing here yet.'));
   if (p.complete === false) box.append(note(`A large folder: counted what could be read quickly, ${+p.depth || 3} folders deep.`));
   return box;
 }
@@ -3092,8 +3177,26 @@ function gridOpen(path) {
   const e = grid.entries.find((x) => x.path === path);
   if (!e || e.broken) return;
   peek(false);
+  gridReturn = { root: tree.root };
   post({ type: 'open', path });
 }
+
+// The root whose grid a file was opened from: while a file of that root is on screen, Back, ← and ⌫ return to the grid.
+let gridReturn = null;
+const fromGrid = (p) => !!gridReturn && gridReturn.root === tree.root && !!p && typeof p.path === 'string' && !p.entry
+  && p.view !== 'overview' && p.view !== 'loading' && inTree(p.path) && parentOf(p.path) === tree.root;
+
+/** Back to the grid from a file opened in it, with that file's tile selected. */
+function gridBack() {
+  if (!fromGrid(current) || editing) return false;
+  gridCursor.set(tree.root, current.path);
+  peek(false);
+  post({ type: 'overview' });
+  return true;
+}
+
+/** ← when nothing else took it, and ⌫: back to the grid. */
+const gridBackKey = (key) => (key === 'ArrowLeft' || key === 'Backspace') && gridBack();
 
 /** The arrows move through the tiles in two dimensions, Home and End to the first and last, Return opens. */
 function gridKey(key) {
@@ -3168,6 +3271,8 @@ const appChrome = () => root.dataset.chrome !== 'minimal' && !tiny.matches;
 let tree = { root: '', name: '', session: 0, dirs: new Map(), selection: null, selOpened: null };
 const expandedByRoot = new Map();
 const requested = new Set();
+// Folders listed only for the filter to look into (unwatched): opening one asks for it again, to be watched.
+const peeked = new Set();
 let sideDrawn = '';
 let treeVersion = 0;
 // The filter's text, lower-cased, and the row the arrow keys move from (a file or a folder, by path).
@@ -3179,6 +3284,9 @@ let sideMode = 'names';
 // how far it got, and whether it is done (with why it stopped short, if it did). `version` redraws the list.
 let hits = { seq: 0, q: '', list: [], searched: 0, total: 0, done: true, stopped: '', listedOnly: false, fresh: false, version: 0 };
 let searchSeq = 0;
+// The Names filter's search of the whole tree (ContentSearch.runNames): every file and folder under the root whose name matches,
+// listed or not, merged into the filtered tree. `list` holds { path, name, dir, icon }.
+let names = { seq: 0, q: '', list: [], done: true, listedOnly: false, stopped: '', version: 0 };
 // A search result being opened: once it renders, find in the file runs for the same query.
 let findOnOpen = null;
 const SEARCH_MIN = 2, SEARCH_MAX_BYTES = 256;
@@ -3208,11 +3316,14 @@ function expanded() {
 function resetTree(rootPath, name) {
   tree = { root: rootPath, name: name || rootPath.split('/').pop() || rootPath, session: 0, dirs: new Map(), selection: null, selOpened: null };
   requested.clear();
+  peeked.clear();
   treeVersion++;
   if (filterSession && !filterSession.find) endFilter();
   sideQuery = '';
   $('side-q').value = '';
   if (hits.q) searchContents('');
+  names = { ...names, q: '', list: [], done: true, version: names.version + 1 };
+  gridReturn = null;
   findOnOpen = null;
 }
 
@@ -3232,7 +3343,8 @@ function setFolder(f) {
   const entries = Array.isArray(f.entries) ? f.entries.filter((e) => e && typeof e.name === 'string' && typeof e.path === 'string' && parentOf(e.path) === f.dir) : [];
   const num = (v) => (typeof v === 'number' && isFinite(v) ? v : null);
   tree.dirs.set(f.dir, { entries: entries.map((e) => ({ name: e.name, path: e.path, dir: e.dir === true, icon: typeof e.icon === 'string' ? e.icon : 'other',
-    size: num(e.size), modified: num(e.modified), broken: e.broken === true, thumb: e.thumb === true })),
+    size: num(e.size), modified: num(e.modified), broken: e.broken === true, thumb: e.thumb === true, hidden: e.hidden === true,
+    target: e.broken === true && typeof e.target === 'string' ? e.target.slice(0, 1024) : undefined })),
     more: Math.max(0, +f.more || 0), stale: false });
   requested.delete(f.dir);
   if (f.dir === tree.root) {
@@ -3249,6 +3361,8 @@ function setFolder(f) {
   requestFolders();
   renderSidebar();
   if (gridShown() && f.dir === grid.p.root) { gridEntries(); gridLayout(); gridKeysNow(); }
+  const files = f.dir === tree.root && document.querySelector('#doc .ov-files');
+  if (files) ovFill(files);
   autoListKeys();
 }
 
@@ -3256,10 +3370,11 @@ function setFolder(f) {
 function requestFolders() {
   for (const p of expanded()) {
     const d = tree.dirs.get(p);
-    if ((d && !d.stale) || requested.has(p) || !inTree(p)) continue;
+    if ((d && !d.stale && !peeked.has(p)) || requested.has(p) || !inTree(p)) continue;
     const parent = tree.dirs.get(parentOf(p));
     if (!parent || parent.stale || !parent.entries.some((e) => e.dir && e.path === p)) continue;
     requested.add(p);
+    peeked.delete(p);
     post({ type: 'list', path: p });
   }
 }
@@ -3288,8 +3403,21 @@ function showFolder(p) {
 
 /** A row's tooltip: its name, then its size and when it was modified. */
 function rowTitle(e) {
+  if (e.broken) return `${plainName(e.name)}\nBroken link${typeof e.target === 'string' ? ` → ${plainName(e.target)}` : ''}`;
   const facts = [e.dir ? '' : fmtSize(e.size), e.modified !== null && e.modified !== undefined ? `Modified ${fmtDate(e.modified)}` : ''].filter(Boolean);
   return [plainName(e.name), facts.join(' · ')].filter(Boolean).join('\n');
+}
+
+/** A name cut in the middle when it does not fit, as Finder does: its end (the last characters before the extension, and the
+ *  extension) always shows, since that is what tells near-identical names apart. Text only; no measuring. */
+function nameNode(name) {
+  const n = el('span', 'nm'), chars = [...plainName(name)];
+  const dot = chars.lastIndexOf('.');
+  const ext = dot > 0 && chars.length - dot <= 12 ? chars.length - dot : 0;
+  const keep = Math.min(chars.length, ext + 7);
+  if (chars.length <= keep + 4) { n.append(el('span', 'nm-h', chars.join(''))); return n; }
+  n.append(el('span', 'nm-h', chars.slice(0, chars.length - keep).join('')), el('span', 'nm-t', chars.slice(chars.length - keep).join('')));
+  return n;
 }
 
 function treeRow(r) {
@@ -3316,8 +3444,9 @@ function treeRow(r) {
     svg.appendChild(path);
     tw.appendChild(svg);
   }
-  a.append(tw, icon(e.dir ? 'folder' : e.icon), el('span', 'nm', plainName(e.name)));
-  if (e.broken) { a.classList.add('broken'); a.title = `${plainName(e.name)}\nBroken link`; a.setAttribute('aria-disabled', 'true'); }
+  a.append(tw, icon(e.dir ? 'folder' : e.icon), nameNode(e.name));
+  if (e.broken) { a.classList.add('broken'); a.setAttribute('aria-disabled', 'true'); }
+  if (e.hidden) a.classList.add('hidden-file');
   if (!e.dir && e.path === current.path) { a.classList.add('active'); a.setAttribute('aria-current', 'page'); }
   return a;
 }
@@ -3371,6 +3500,69 @@ $('side-list').addEventListener('scroll', () => {
   requestAnimationFrame(() => { sideScrollQueued = false; drawSideWindow(false); });
 }, { passive: true });
 
+/** The note under a folder past the listing's cap: the rest are reached by the Names filter, which searches past it. */
+const moreNote = (n) => `${n.toLocaleString()} more not listed · Filter finds them`;
+const SIDE_FOLDER_ASKS = 16;
+
+/** The rows of the Names filter: every listed folder is searched, expanded or not, along with every file and folder the names
+ *  search found in the rest of the tree, and a folder stays while anything in it matches. A folder that matches by name shows
+ *  what it holds, one level, so it can be looked into while filtered. Sets `notes` for what could not be searched. */
+function filteredRows() {
+  // What the names search found, by folder, with the folders on the way to each.
+  const found = new Map();
+  const put = (e) => {
+    const dir = parentOf(e.path);
+    if (!found.has(dir)) found.set(dir, new Map());
+    found.get(dir).set(e.path, e);
+  };
+  if (names.q && names.q.toLowerCase() === sideQuery) {
+    for (const h of names.list) {
+      put({ name: h.name, path: h.path, dir: h.dir, icon: h.dir ? 'folder' : h.icon, size: null, modified: null });
+      for (let d = parentOf(h.path); d !== tree.root && inTree(d); d = parentOf(d)) put({ name: d.slice(d.lastIndexOf('/') + 1), path: d, dir: true, icon: 'folder', size: null, modified: null });
+    }
+  }
+  const order = (a, b) => (a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name, undefined, { numeric: true }));
+  const entries = (dir) => {
+    const d = tree.dirs.get(dir), listed = d ? d.entries : [], extra = found.get(dir);
+    if (!extra) return listed;
+    const have = new Set(listed.map((e) => e.path));
+    const add = [...extra.values()].filter((e) => !have.has(e.path)).sort(order);
+    if (!add.length) return listed;
+    // Found folders after the listed folders, found files after the listed files.
+    const split = listed.findIndex((e) => !e.dir), at = split < 0 ? listed.length : split;
+    return [...listed.slice(0, at), ...add.filter((e) => e.dir), ...listed.slice(at), ...add.filter((e) => !e.dir)];
+  };
+  let asks = 0;
+  const find = (dir, depth) => {
+    const out = [];
+    for (const e of entries(dir)) {
+      const hit = matches(e.name, sideQuery);
+      let kids = e.dir && depth < 64 ? find(e.path, depth + 1) : [];
+      if (e.dir && hit && !kids.length && depth < 64) {
+        const d = tree.dirs.get(e.path);
+        if (d) kids = d.entries.map((k) => ({ e: k, depth: depth + 1, open: false }));
+        else if (!requested.has(e.path) && asks++ < SIDE_FOLDER_ASKS) { requested.add(e.path); peeked.add(e.path); post({ type: 'list', path: e.path, peek: true }); }
+      }
+      if (kids.length || hit) out.push({ e, depth, open: kids.length > 0 }, ...kids);
+    }
+    return out;
+  };
+  const rows = find(tree.root, 0);
+  // Filtered rows are numbered among the rows shown at their level under the same parent.
+  const seen = new Map();
+  for (const r of rows) { const k = parentOf(r.e.path); r.pos = (seen.get(k) || 0) + 1; seen.set(k, r.pos); }
+  for (const r of rows) r.size = seen.get(parentOf(r.e.path));
+  const searching = names.q.toLowerCase() === sideQuery && !names.done;
+  if (!rows.length) rows.push({ note: searching ? 'Searching all folders…' : 'No matches', depth: 0 });
+  else if (searching) rows.push({ note: 'Searching all folders…', depth: 0 });
+  if (!searching && names.q && names.q.toLowerCase() === sideQuery) {
+    if (names.stopped === 'results') rows.push({ note: `Showing the first ${names.list.length.toLocaleString()} matches`, depth: 0 });
+    else if (names.stopped) rows.push({ note: 'Only part of this folder was searched', depth: 0 });
+    else if (names.listedOnly) rows.push({ note: 'Folders over 10,000 items were searched in part', depth: 0 });
+  }
+  return rows;
+}
+
 function renderSidebar() {
   const on = !!tree.root;
   $('sidebar').hidden = !on;
@@ -3378,66 +3570,51 @@ function renderSidebar() {
   syncToggle();
   syncSideMenu();
   syncSelPos();
-  const key = `${treeVersion}\n${current.path}\n${sideQuery}\n${sideMode}\n${hits.version}`;
+  const key = `${treeVersion}\n${current.path}\n${sideQuery}\n${sideMode}\n${hits.version}\n${names.version}`;
   if (!on || key === sideDrawn) return;
   const moved = sideDrawn.split('\n')[1] !== current.path, refiltered = sideDrawn.split('\n')[2] !== sideQuery;
   sideDrawn = key;
   const sel = tree.selection;
   $('side-title').textContent = sel ? `${sel.count.toLocaleString()} Selected` : tree.name;
   $('side-title').title = `${tree.root}\nClick for an overview of this folder`;
-  const top0 = tree.dirs.get(tree.root), empty = !!top0 && !top0.entries.length && !top0.more;
-  $('side-q').disabled = empty;
-  $('side-mode').disabled = empty;
-  $('side-menu').disabled = empty;
   const list = $('side-list');
   const rows = [];
   const exp = expanded();
+  const top = tree.dirs.get(tree.root);
+  // An empty root has nothing to filter or search.
+  const empty = !!top && !top.entries.length && !top.more;
+  filterField.disabled = empty && !filterField.value;
+  for (const b of $('side-mode').querySelectorAll('button')) b.disabled = filterField.disabled;
+  $('side-menu').disabled = empty;
   const walk = (dir, depth) => {
     const d = tree.dirs.get(dir);
     if (!d) {
       rows.push({ note: 'Loading…', depth });
       return;
     }
-    if (!depth && !d.entries.length && !d.more) rows.push({ note: sel ? 'Nothing selected is here any more' : 'Empty folder', depth });
+    if (!d.entries.length && !d.more) { rows.push({ note: depth ? 'Empty' : sel ? 'Nothing selected is here any more' : 'Empty folder', depth }); return; }
     d.entries.forEach((e, i) => {
       const open = e.dir && exp.has(e.path);
       rows.push({ e, depth, open, pos: i + 1, size: d.entries.length });
       if (open && depth < 64) walk(e.path, depth + 1);
     });
-    if (d.more && depth) rows.push({ note: `${d.more.toLocaleString()} more not listed`, depth });
-  };
-  // Filtered: every listed folder is searched, expanded or not, and a folder stays while anything in it matches. Nothing new
-  // is listed for it, so a folder past the cap is searched in its listed part only, and the list says so.
-  let partial = false;
-  const find = (dir, depth) => {
-    const d = tree.dirs.get(dir), out = [];
-    if (d && d.more) partial = true;
-    for (const e of d ? d.entries : []) {
-      const kids = e.dir && depth < 64 ? find(e.path, depth + 1) : [];
-      if (kids.length || matches(e.name, sideQuery)) out.push({ e, depth, open: kids.length > 0 }, ...kids);
-    }
-    return out;
+    if (d.more && depth) rows.push({ note: moreNote(d.more), depth });
   };
   if (showingHits()) {
     rows.push(...hits.list.map((h, i) => ({ e: { name: h.name, path: h.path, dir: false, icon: h.icon }, hit: h, depth: 0, pos: i + 1, size: hits.list.length })));
   } else if (sideQuery && sideMode === 'names') {
-    rows.push(...find(tree.root, 0));
-    // Filtered rows are numbered among the rows shown at their level under the same parent.
-    const seen = new Map();
-    for (const r of rows) { const k = parentOf(r.e.path); r.pos = (seen.get(k) || 0) + 1; seen.set(k, r.pos); }
-    for (const r of rows) r.size = seen.get(parentOf(r.e.path));
-    if (!rows.length) rows.push({ note: 'No matches', depth: 0 });
-    if (partial) rows.push({ note: 'Only listed files were searched', depth: 0 });
+    rows.push(...filteredRows());
   } else {
     walk(tree.root, 0);
     if (sel && sel.outside) rows.push({ note: `${sel.outside.toLocaleString()} more selected ${sel.outside === 1 ? 'item is' : 'items are'} in other folders`, depth: 0 });
   }
   const hadActive = sideRows.some((r) => r.e && r.e.path === current.path);
   sideRows = rows;
-  const top = tree.dirs.get(tree.root);
   const status = sideMode === 'contents' && sideQuery ? searchStatus() : '';
-  $('side-more').hidden = !status && (!(top && top.more) || !!sideQuery);
-  $('side-more').textContent = status || (top && top.more ? `${top.more.toLocaleString()} more not listed` : '');
+  const more = $('side-more');
+  more.hidden = !status && (!(top && top.more) || !!sideQuery);
+  more.textContent = status || (top && top.more ? moreNote(top.more) : '');
+  more.title = more.textContent;
   // Keep the document on screen in view; the list scrolls on its own, never the page.
   const at = sideRows.findIndex((r) => r.e && !r.e.dir && r.e.path === current.path);
   for (const [p, t] of keyed) if (performance.now() - t > 2000) keyed.delete(p);
@@ -3482,12 +3659,46 @@ function showCrumbs(p) {
   const atRoot = !!r && p.path === r;
   if (!r || typeof p.path !== 'string' || (!atRoot && !p.path.startsWith(r === '/' ? '/' : r + '/'))) { c.hidden = true; c.replaceChildren(); return; }
   const parts = [p.rootName || r.split('/').pop() || r, ...(atRoot ? [] : p.path.slice(r.length + (r === '/' ? 0 : 1)).split('/'))];
+  // Every step but the file itself is a button: the root shows the folder's overview, a folder opens and shows in the sidebar.
+  let at = r;
   c.replaceChildren(...parts.flatMap((name, i) => {
-    const s = el('span', i === parts.length - 1 ? 'crumb here' : 'crumb', plainName(name));
+    if (i) at = at === '/' ? `/${name}` : `${at}/${name}`;
+    let s;
+    if (i === parts.length - 1) s = el('span', 'crumb here', plainName(name));
+    else {
+      s = el('button', 'crumb', plainName(name));
+      s.type = 'button';
+      s.dataset.path = at;
+      s.title = i ? 'Show in the sidebar' : 'Show the folder overview';
+    }
     return i ? [el('span', 'crumb-sep', '›'), s] : [s];
   }));
   c.title = p.path;
   c.hidden = false;
+}
+
+/** A breadcrumb step: the root's overview, or a folder opened and selected in the sidebar (shown if it was hidden). */
+function crumbGo(path) {
+  if (!tree.root) return;
+  if (path === tree.root) { peek(false); post({ type: 'overview' }); return; }
+  revealFolder(path);
+}
+
+/** Opens `path`, a folder of the tree, and the folders above it, and moves the sidebar's cursor to it. */
+function revealFolder(path) {
+  if (!inTree(path)) return;
+  const s = expanded();
+  for (let d = path; d !== tree.root && inTree(d); d = parentOf(d)) s.add(d);
+  treeVersion++;
+  if (sideQuery) { filterField.value = ''; setSideQuery(''); }
+  if (narrow.matches) peek(true);
+  else if (settings.sidebarCollapsed === true) choose('sidebarCollapsed', false);
+  requestFolders();
+  renderSidebar();
+  cursor = path;
+  markCursor();
+  const r = sideRows.find((x) => x.e && x.e.path === path);
+  if (r) revealRow(r);
 }
 
 // The breadcrumb in the toolbar row ends where the toolbar's buttons begin.
@@ -3568,11 +3779,27 @@ function matches(name, q) {
 const filterField = $('side-q');
 filterField.addEventListener('input', () => setSideQuery(filterField.value));
 
-/** The filter's text changed (typed, sent by the key panel, or cleared): Names filters the tree at once; Contents searches. */
+/** The filter's text changed (typed, sent by the key panel, or cleared): Names filters the listed tree at once and searches
+ *  the rest natively; Contents searches the text. */
 function setSideQuery(text) {
   sideQuery = text.trim().toLowerCase();
   if (sideMode === 'contents') searchContents(text.trim());
+  else searchNames(text.trim());
   renderSidebar();
+}
+
+/** Every keystroke starts a new names search, and the native side cancels the one before; matches already found stay on screen
+ *  meanwhile, each checked against the new text. */
+function searchNames(q) {
+  if (q === names.q && names.seq === searchSeq) return;
+  if (!q || !tree.root || new TextEncoder().encode(q).length > SEARCH_MAX_BYTES) {
+    if (names.q && !names.done) post({ type: 'searchStop' });
+    names = { ...names, q: '', list: [], done: true, version: names.version + 1 };
+    return;
+  }
+  searchSeq++;
+  names = { ...names, seq: searchSeq, q, done: false, listedOnly: false, stopped: '', version: names.version + 1 };
+  post({ type: 'search', q, seq: searchSeq, names: true });
 }
 
 // ---------- the filter's Contents mode: the text of the listed files, searched natively (ContentSearch) ----------
@@ -3592,31 +3819,34 @@ function searchContents(q) {
 }
 
 function searchStatus() {
-  if (sideQuery.length < SEARCH_MIN) return `Type ${SEARCH_MIN} or more characters to search contents`;
+  if (sideQuery.length < SEARCH_MIN) return `Type ${SEARCH_MIN} or more characters`;
   if (!hits.q) return hits.tooLong ? 'Too long to search for' : '';
   const h = hits, n = (x) => x.toLocaleString(), files = (x) => `${n(x)} ${x === 1 ? 'file' : 'files'}`;
-  let s;
-  if (!h.done) s = h.total ? `Searching… ${n(h.searched)} of ${files(h.total)}` : 'Searching…';
-  else if (h.stopped === 'files') s = `Searched the first ${files(h.total)}`;
-  else if (h.stopped) s = `Searched ${n(h.searched)} of ${files(h.total)}`;
-  else s = h.list.length ? `Found in ${n(h.list.length)} of ${files(h.total)}` : 'No matches';
-  return h.listedOnly && h.done ? `${s} · only listed files` : s;
+  if (!h.done) return h.total ? `Searching… ${n(h.searched)} of ${files(h.total)}` : 'Searching…';
+  const found = h.list.length ? `Found in ${files(h.list.length)}` : 'No matches';
+  if (h.stopped === 'results') return `Showing the first ${files(h.list.length)}`;
+  if (h.stopped === 'files') return `${found} · first ${n(h.total)} searched`;
+  if (h.stopped) return `${found} · ${n(h.searched)} of ${n(h.total)} searched`;
+  return h.listedOnly ? `${found} · some large folders skipped` : found;
 }
 
 function setSideMode(mode) {
   if (mode === sideMode) return;
   sideMode = mode;
   findOnOpen = null;
-  const b = $('side-mode'), contents = mode === 'contents';
-  b.textContent = contents ? 'Contents' : 'Names';
-  b.setAttribute('aria-pressed', String(contents));
+  const contents = mode === 'contents';
+  for (const b of $('side-mode').querySelectorAll('button')) b.setAttribute('aria-checked', String(b.dataset.mode === mode));
   filterField.placeholder = contents ? 'Search contents' : 'Filter';
   filterField.setAttribute('aria-label', contents ? 'Search the text of the files' : 'Filter files');
-  if (contents) searchContents(filterField.value.trim());
-  else searchContents('');
+  if (contents) { searchNames(''); searchContents(filterField.value.trim()); } else { searchContents(''); searchNames(filterField.value.trim()); }
   renderSidebar();
 }
-$('side-mode').addEventListener('click', (e) => { e.preventDefault(); setSideMode(sideMode === 'names' ? 'contents' : 'names'); });
+$('side-mode').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-mode]');
+  if (!b) return;
+  e.preventDefault();
+  setSideMode(b.dataset.mode);
+});
 
 /** The query's matches in `text` as text and <mark> nodes. */
 function marked(text, q) {
@@ -3645,7 +3875,7 @@ function hitRow(r) {
   a.setAttribute('aria-setsize', r.size);
   a.setAttribute('aria-posinset', r.pos);
   const top = el('span', 'hit-top');
-  top.append(el('span', 'nm', plainName(e.name)));
+  top.append(nameNode(e.name));
   if (dir) top.append(el('span', 'hit-dir', plainName(dir)));
   top.append(el('span', 'hit-n', hit.count >= 9999 ? '9999+' : String(hit.count)));
   const snip = el('span', 'hit-snip');
@@ -3683,10 +3913,26 @@ function findFor(q) {
 Object.assign(window.sb, {
   /** A new preview took over from the one that ran the search on screen: the search runs again, for it. */
   searchAgain() {
-    if (sideMode !== 'contents' || !hits.q) return;
+    if (sideMode === 'names') {
+      if (!names.q) return;
+      names.seq = -1;
+      searchNames(filterField.value.trim());
+      renderSidebar();
+      return;
+    }
+    if (!hits.q) return;
     hits.seq = -1;
     hits.list = [];
     searchContents(filterField.value.trim());
+    renderSidebar();
+  },
+  /** The names search's one report: every file and folder under the root whose name matches, listed or not. */
+  nameResults(m) {
+    if (!m || m.seq !== searchSeq || names.seq !== searchSeq || sideMode !== 'names') return;
+    const list = (Array.isArray(m.hits) ? m.hits : []).filter((h) => h && typeof h.path === 'string' && inTree(h.path) && typeof h.name === 'string'
+      && h.name === h.path.slice(h.path.lastIndexOf('/') + 1)).slice(0, 1000)
+      .map((h) => ({ path: h.path, name: h.name, dir: h.dir === true, icon: typeof h.icon === 'string' ? h.icon : 'other' }));
+    names = { ...names, list, done: true, listedOnly: m.listedOnly === true, stopped: typeof m.stopped === 'string' ? m.stopped : '', version: names.version + 1 };
     renderSidebar();
   },
   /** A report of the Contents search: the files found since the last one, and how far it got. */
@@ -3738,7 +3984,8 @@ function moveCursor(r, open, repeat) {
 /** One of Finder's keys for the tree, by KeyboardEvent key name; false when it does nothing here. */
 function sideKey(key, inFilter, repeat) {
   if (editing || !pop.hidden || !sidePop.hidden || !tree.root || !sidebarShown()) return false;
-  const rows = sideRows.filter((x) => x.e);
+  // A broken link is never where the cursor rests: nothing would open, and two rows would look selected.
+  const rows = sideRows.filter((x) => x.e && !x.e.broken);
   if (!rows.length) return false;
   const i = rows.findIndex((x) => x.e.path === cursor);
   const r = rows[i];
@@ -3789,16 +4036,16 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (inFilter ? !['ArrowUp', 'ArrowDown', 'Enter'].includes(e.key) : e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable]')) return;
-  const arc = !inFilter && { ArrowUp: 'up', ArrowDown: 'down', Home: 'home', End: 'end', ArrowLeft: 'left', ArrowRight: 'right', Enter: 'return' }[e.key];
+  const arc = !inFilter && { ArrowUp: 'up', ArrowDown: 'down', Home: 'home', End: 'end', ArrowLeft: 'left', ArrowRight: 'right', Enter: 'return', Backspace: 'back' }[e.key];
   if (arc && arcKey(arc)) { e.preventDefault(); return; }
   if (!inFilter && !(e.target instanceof Element && e.target.closest('button')) && gridTakesKeys() && gridKey(e.key)) { e.preventDefault(); return; }
-  if (sideKey(e.key, inFilter, e.repeat)) e.preventDefault();
+  if (sideKey(e.key, inFilter, e.repeat) || (!inFilter && gridBackKey(e.key))) e.preventDefault();
 });
 
 // In Quick Look the page never gets keys, so a click in the filter field asks the writer's key panel (the one inline editing
 // uses) to hold them over the field: it sends back the text and the list keys, and Esc on an empty field, a click outside the
 // sidebar, an edit, or another preview ends it. Return opens a file and keeps the field, like the arrows do.
-const FILTER_KEYS = { up: 'ArrowUp', down: 'ArrowDown', home: 'Home', end: 'End', return: 'Enter', left: 'ArrowLeft', right: 'ArrowRight' };
+const FILTER_KEYS = { up: 'ArrowUp', down: 'ArrowDown', home: 'Home', end: 'End', return: 'Enter', left: 'ArrowLeft', right: 'ArrowRight', back: 'Backspace' };
 // ⌘F, ⌥⌘F and ⌘C while a list session holds the keys.
 const LIST_COMMANDS = new Set(['find', 'filter', 'copy']);
 
@@ -3894,9 +4141,9 @@ Object.assign(window.sb, {
     if (filterSession.find) { if (m.key === 'next' || m.key === 'prev') findStep(m.key === 'next' ? 1 : -1); return; }
     if (filterSession.list && LIST_COMMANDS.has(m.key)) { hostCommand(m.key); return; }
     if (filterSession.arc) { arcKey(m.key); return; }
-    if (!Object.hasOwn(FILTER_KEYS, m.key) || (!filterSession.list && (m.key === 'left' || m.key === 'right'))) return;
+    if (!Object.hasOwn(FILTER_KEYS, m.key) || (!filterSession.list && ['left', 'right', 'back'].includes(m.key))) return;
     if (filterSession.list && gridTakesKeys() && gridKey(FILTER_KEYS[m.key])) return;
-    sideKey(FILTER_KEYS[m.key], !filterSession.list, m.repeat === true);
+    if (!sideKey(FILTER_KEYS[m.key], !filterSession.list, m.repeat === true) && filterSession && filterSession.list) gridBackKey(FILTER_KEYS[m.key]);
   },
   listKeysWanted(m) {
     autoKeysRoot = m && typeof m.root === 'string' ? m.root : '';
@@ -3936,6 +4183,7 @@ Object.assign(window.sb, {
     if (LIST_COMMANDS.has(key)) return hostCommand(key);
     if (Object.hasOwn(HOST_ZOOM, key)) return zoomImage(HOST_ZOOM[key]);
     if (Object.hasOwn(FILTER_KEYS, key) && gridTakesKeys() && gridKey(FILTER_KEYS[key])) return true;
+    if (Object.hasOwn(FILTER_KEYS, key) && gridBackKey(FILTER_KEYS[key])) return true;
     const page = Math.max(40, window.innerHeight * 0.9), max = document.scrollingElement.scrollHeight;
     const by = { up: -40, down: 40, pageup: -page, pagedown: page, home: -max, end: max }[key];
     if (by === undefined) return false;
@@ -4679,6 +4927,8 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (e.target.closest('#crumbs .crumb-back')) { e.preventDefault(); if (e.isTrusted) archiveBack(); return; }
+  const crumb = e.target.closest('#crumbs button.crumb[data-path]');
+  if (crumb) { e.preventDefault(); crumbGo(crumb.dataset.path); return; }
   if (e.target.closest('#sidebar, #crumbs')) return;
   const act = e.target.closest('#doc .viewer [data-action]');
   if (act) { e.preventDefault(); if (editing && editing.whole) stopEditing(); viewerAction(act, e); return; }
@@ -4693,7 +4943,12 @@ document.addEventListener('click', (e) => {
     return;
   }
   const ov = e.target.closest('#doc .overview a.ov-row');
-  if (ov) { e.preventDefault(); if (ov.dataset.path !== current.path) post({ type: 'open', path: ov.dataset.path }); return; }
+  if (ov) {
+    e.preventDefault();
+    if (ov.dataset.dir) revealFolder(ov.dataset.path);
+    else if (!ov.classList.contains('broken') && ov.dataset.path !== current.path) post({ type: 'open', path: ov.dataset.path });
+    return;
+  }
   const wl = e.target.closest('#doc a.wikilink');
   if (wl) { e.preventDefault(); followWiki(wl); return; }
   const a = e.target.closest('a[href], a[*|href]');
@@ -4815,7 +5070,7 @@ document.addEventListener('dragstart', (e) => { if (e.target.closest && e.target
 if (HOST === 'panel') {
   let press = null, dragged = 0;
   const source = (t) => {
-    const row = t.closest('#side-list a.row.file:not(.broken), #doc .overview a.ov-row, #doc .ov-grid a.gt');
+    const row = t.closest('#side-list a.row.file:not(.broken), #doc .overview a.ov-row:not(.ov-dir):not(.broken), #doc .ov-grid a.gt');
     if (row) return row.dataset.path;
     return t.closest('#kind') && !t.closest('.pdf-page') && current.path && !current.entry && !['overview', 'loading'].includes(current.view) ? current.path : null;
   };

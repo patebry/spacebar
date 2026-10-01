@@ -19,6 +19,9 @@ final class MediaPane: NSObject {
     private(set) var audio = false
     /// The file cannot be played (not media, or a codec AVFoundation lacks): the owner shows its info card instead.
     var onFailed: (String) -> Void = { _ in }
+    /// What the file holds, for the kind line: a video's size and length, an audio file's title, artist and length.
+    var onInfo: (String, String) -> Void = { _, _ in }
+    private var infoTask: Task<Void, Never>?
     private var status: NSKeyValueObservation?
     private var resume: (time: CMTime, playing: Bool)?
     private var artTask: Task<Void, Never>?
@@ -78,6 +81,43 @@ final class MediaPane: NSObject {
         artTask?.cancel()
         art.image = nil
         if audio { loadArt(item.asset, url) }
+        loadInfo(asset, path: url.path, audio: audio)
+    }
+
+    private func loadInfo(_ asset: AVURLAsset, path: String, audio: Bool) {
+        infoTask?.cancel()
+        infoTask = Task { @MainActor [weak self] in
+            guard let text = await Self.info(asset, audio: audio), !Task.isCancelled, let self, self.path == path else { return }
+            self.onInfo(path, text)
+        }
+    }
+
+    /// "1920 × 1080 · 0:06" for a video; "Title — Artist · 3:12" for audio, with whatever of those the file has.
+    static func info(_ asset: AVAsset, audio: Bool) async -> String? {
+        var parts: [String] = []
+        if audio {
+            let meta = (try? await asset.load(.commonMetadata)) ?? []
+            func text(_ id: AVMetadataIdentifier) async -> String? {
+                guard let item = AVMetadataItem.metadataItems(from: meta, filteredByIdentifier: id).first,
+                      let s = try? await item.load(.stringValue)?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return nil }
+                return String(s.prefix(120))
+            }
+            let title = await text(.commonIdentifierTitle), artist = await text(.commonIdentifierArtist)
+            let named = [title, artist].compactMap { $0 }.joined(separator: " — ")
+            if !named.isEmpty { parts.append(named) }
+        } else if let track = try? await asset.loadTracks(withMediaType: .video).first,
+                  let (size, t) = try? await track.load(.naturalSize, .preferredTransform) {
+            let r = CGRect(origin: .zero, size: size).applying(t)
+            if r.width >= 1, r.height >= 1 { parts.append("\(Int(abs(r.width).rounded())) × \(Int(abs(r.height).rounded()))") }
+        }
+        if let d = try? await asset.load(.duration), d.isNumeric, d.seconds > 0 { parts.append(duration(d.seconds)) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// m:ss, or h:mm:ss from an hour.
+    static func duration(_ seconds: Double) -> String {
+        let t = Int(seconds.rounded()), h = t / 3600, m = t / 60 % 60, s = t % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
     }
 
     private func statusChanged(_ item: AVPlayerItem) {
@@ -153,6 +193,7 @@ final class MediaPane: NSObject {
     /// Stops playback, takes the view down and lets the file go.
     func close() {
         artTask?.cancel()
+        infoTask?.cancel()
         status = nil
         resume = nil
         view.player?.pause()

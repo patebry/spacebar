@@ -21,6 +21,7 @@ let first = NSRect(x: -20000, y: -20000, width: 1000, height: 600)
 Viewer.parkedFrame = first
 let viewer = Viewer.shared
 let panel = viewer.panel
+OffScreen.keepDrawing(WebHost.shared.web)
 
 spin(until: 15) { WebHost.shared.ready }
 guard WebHost.shared.ready else { print("FAIL window: the page never became ready"); exit(1) }

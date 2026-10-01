@@ -269,6 +269,8 @@
   #doc .code-view pre.code { flex: 1 1 auto; }
   #doc .viewer-image { margin: 0; }
   #doc .img-stage { -webkit-user-select: none; user-select: none; }
+  /* Fitted, the picture sits in the middle of the room it has, as the panel's natively drawn images do. */
+  #doc .img-stage:not(.zoomed) { display: flex; align-items: center; justify-content: center; min-height: calc(100vh - var(--img-room)); }
   #doc .img-stage.zoomable { cursor: zoom-in; }
   /* The height around a fitted image: the page's padding, and the head where Minimal chrome keeps Open (fitScale reads it). */
   :root { --img-room: 150px; }
@@ -405,6 +407,9 @@
   #kind .kind-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   #kind .img-zoom { flex: none; font-variant-numeric: tabular-nums; }
   #kind .img-zoom:empty { display: none; }
+  #kind .pdf-page { flex: none; font: inherit; font-variant-numeric: tabular-nums; color: inherit; height: 20px; margin: -2px 0; padding: 0 6px;
+    border: 0; border-radius: 5px; background: none; cursor: default; }
+  #kind .pdf-page:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 8%, transparent); }
   #kind:not(:empty) + #stats:not(:empty)::before { content: "· "; }
   /* Over the page (Minimal chrome, or a very narrow panel) the text sits on the buttons' material, so it stays legible. */
   #toolbar > :is(#status, #selpos, #kind, #stats):not(:empty) { display: flex; height: 24px; align-items: center; padding: 0 8px; border-radius: 6px; background: var(--ui-bg);

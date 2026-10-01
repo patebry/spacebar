@@ -610,6 +610,38 @@ enum FileView {
         return p
     }
 
+    /// An SVG's own size, from its root element's width and height (in px or unitless), else its viewBox: "24 × 24". Read
+    /// from the file's first 16 KB; nil when it names none. WebKit's size for an SVG without one is its default, not the file's.
+    static func svgSize(_ path: String) -> String? {
+        guard !FileTypes.isDataless(path), let h = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? h.close() }
+        guard let d = try? h.read(upToCount: 16 << 10), let text = String(data: d, encoding: .utf8) ?? String(data: d, encoding: .isoLatin1),
+              let open = text.range(of: #"<svg\b[^>]*>"#, options: [.regularExpression, .caseInsensitive]) else { return nil }
+        let tag = String(text[open])
+        func attr(_ name: String) -> String? {
+            guard let r = tag.range(of: #"\b\#(name)\s*=\s*["']([^"']*)["']"#, options: [.regularExpression, .caseInsensitive]) else { return nil }
+            let v = tag[r]
+            guard let q = v.firstIndex(where: { $0 == "\"" || $0 == "'" }) else { return nil }
+            return String(v[v.index(after: q)..<v.index(before: v.endIndex)])
+        }
+        let num = { (s: String) -> Double? in
+            let t = s.trimmingCharacters(in: .whitespaces)
+            let n = t.hasSuffix("px") ? String(t.dropLast(2)) : t
+            return Double(n).flatMap { $0 > 0 && $0.isFinite ? $0 : nil }
+        }
+        let fmt = { (x: Double) in x == x.rounded() ? String(Int(x)) : String(format: "%.1f", x) }
+        if let w = attr("width").flatMap(num), let hgt = attr("height").flatMap(num) { return "\(fmt(w)) × \(fmt(hgt))" }
+        let vb = attr("viewBox")?.split(whereSeparator: { $0 == " " || $0 == "," }).compactMap { Double($0) } ?? []
+        guard vb.count == 4, vb[2] > 0, vb[3] > 0 else { return nil }
+        return "\(fmt(vb[2])) × \(fmt(vb[3]))"
+    }
+
+    /// The card of a video or audio file macOS cannot play: what to do next, by what its buttons offer.
+    static func unplayableNote(canOpen: Bool) -> String {
+        canOpen ? "macOS can’t play this format. Open it in an app that can, such as IINA or VLC."
+            : "macOS can’t play this format. Reveal it in Finder to open it in an app that can, such as IINA or VLC."
+    }
+
     /// Why a regular file cannot be read, found by opening it (never reading): no permission (EACCES), which no app of the
     /// user's gets round, or macOS's privacy protection keeping spacebar out of a folder (EPERM), which Privacy & Security's
     /// Files and Folders can change. Nil when it opens, or when it is in iCloud and not downloaded.
@@ -746,6 +778,8 @@ enum FileView {
         let media = FileTypes.unplayableMedia[ext.lowercased()]
         if let media, type?.isDynamic != false { p["kindName"] = media }
         if regular, ext.isEmpty || type?.isDynamic == true, let k = machOKind(path) { p["kindName"] = k }
+        // The system's name for .m4b is its DRM type's ("protected MPEG-4 audio"), whatever the file holds.
+        if ext.lowercased() == "m4b" { p["kindName"] = "Audiobook" }
         p["icon"] = FileTypes.glyph(name: (path as NSString).lastPathComponent, kind: kind)
         p["canOpen"] = canOpen
         // A text file whose extension the system takes for something else (.ts is also an MPEG transport stream) is named by
@@ -762,6 +796,7 @@ enum FileView {
         case .image where regular && size <= FileTypes.maxImageBytes:
             view = "image"
             p["src"] = FileTypes.fileURL(path, version: version)!.absoluteString
+            if ext.lowercased() == "svg", let d = svgSize(path) { p["svgSize"] = d }
         case .pdf where regular && size <= FileTypes.maxFileBytes:
             view = "pdf"
         case .html where regular && size <= FolderListing.maxDocumentBytes:
@@ -823,7 +858,7 @@ enum FileView {
             p["note"] = r.note
             if r.privacy { p["privacy"] = true } else { p["canOpen"] = false }
         }
-        if view == "info", regular, media != nil, p["note"] == nil { p["note"] = "macOS can’t play this format; open it in another app." }
+        if view == "info", regular, media != nil, p["note"] == nil { p["note"] = unplayableNote(canOpen: p["canOpen"] as? Bool == true) }
         p["view"] = view
         return (p, opened)
     }

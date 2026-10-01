@@ -694,8 +694,38 @@ class PreviewController: NSViewController {
     /// The web view the page is in.
     var webView: WKWebView { host.web }
 
-    /// ⌘+, ⌘− or ⌘0 (`key` zoomIn, zoomOut, zoomReset) for a native view on screen that zooms; whether it took the key.
-    func zoomKey(_ key: String) -> Bool { fileKind == .image && imagePane?.key(key) == true }
+    /// The PDF or RTF document on screen, drawn natively: the find bar, the zoom keys, the paging keys and ⌘C reach it.
+    private var nativeDoc: NativeDocument? {
+        guard let path = fileURL?.path, entryShown == nil else { return nil }
+        if shownView == "pdf", let p = pdfPane, p.path == path { return p }
+        if shownView == "rtf", let r = richPane, r.path == path { return r }
+        return nil
+    }
+
+    /// ⌘+, ⌘− or ⌘0 (`key` zoomIn, zoomOut, zoomReset) for the native view on screen; whether it took the key. A view that
+    /// cannot zoom (Apple's preview, a video) takes it too, so the toolbar and sidebar are never zoomed in its place.
+    func zoomKey(_ key: String) -> Bool {
+        guard ["zoomIn", "zoomOut", "zoomReset"].contains(key) else { return false }
+        if fileKind == .image, imagePane?.key(key) == true { return true }
+        if let d = nativeDoc { d.zoom(key); return true }
+        if shownView == "html", let h = htmlPane?.view {
+            h.pageZoom = key == "zoomIn" ? min(h.pageZoom * 1.1, 3) : key == "zoomOut" ? max(h.pageZoom / 1.1, 0.5) : 1
+            return true
+        }
+        return ["quicklook", "video", "audio"].contains(shownView ?? "")
+    }
+
+    /// Page Up, Page Down, Home or End for the native document on screen; whether it took the key.
+    func scrollKey(_ key: String) -> Bool { nativeDoc?.scrollKey(key) ?? false }
+
+    /// ⌘C with text selected in the native document on screen: that text is copied. False when nothing is selected there.
+    func copyNativeSelection() -> Bool {
+        guard let text = nativeDoc?.selectedText else { return false }
+        helper(onError: { self.status("Could not copy") }) {
+            $0.copyText(text) { ok in DispatchQueue.main.async { self.status(ok ? "Copied selection" : "Could not copy") } }
+        }
+        return true
+    }
 
     /// Puts the file on screen on the clipboard as a file, as Finder's ⌘C does, for a host whose ⌘C found no text to copy.
     func copyFileOnScreen() {
@@ -1546,6 +1576,8 @@ class PreviewController: NSViewController {
         if let pdf {
             let pane = pdfPane ?? PDFPane()
             pane.onLink = { [weak self] in self?.pdfLink($0) }
+            pane.onPage = { [weak self] path, page, pages in self?.js("sb.pdfPage", ["path": path, "page": page, "pages": pages]) }
+            p["pages"] = pdf.pageCount
             pane.show(pdf, path: url.path, over: host.web)
             pdfPane = pane
         }
@@ -1554,6 +1586,9 @@ class PreviewController: NSViewController {
             pane.onLink = { [weak self] in self?.pdfLink($0) }
             pane.show(rich, path: url.path)
             richPane = pane
+            // Copy takes the document's text, as for a text file.
+            shownBody = (rich.string, false)
+            p["copyable"] = true
         }
         if view == "bitmap" {
             let pane = imagePane ?? ImagePane()
@@ -1565,6 +1600,7 @@ class PreviewController: NSViewController {
         if view == "video" || view == "audio" {
             let pane = mediaPane ?? MediaPane()
             pane.onFailed = { [weak self] in self?.mediaFailed($0, p) }
+            pane.onInfo = { [weak self] path, text in self?.js("sb.mediaInfo", ["path": path, "text": text]) }
             pane.show(url, audio: view == "audio", over: host.web)
             mediaPane = pane
         }
@@ -1796,7 +1832,7 @@ class PreviewController: NSViewController {
         shownView = "info"
         var card = p
         card["view"] = "info"
-        card["note"] = "This file can’t be played here."
+        card["note"] = FileView.unplayableNote(canOpen: shownCanOpen)
         if let o = opener, o.path == path { card["app"] = o.app }
         render(card)
         addThumbnail(url)
@@ -2030,6 +2066,21 @@ class PreviewController: NSViewController {
                 return refuse("reveal", "not the file on screen")
             }
             helper { $0.reveal(url) { ok in if !ok { DispatchQueue.main.async { self.status("could not show \(url.lastPathComponent) in Finder") } } } }
+        case "nativeFind":
+            // The find bar over a PDF or RTF document: the document finds, and the page shows the count.
+            guard let d = nativeDoc, m.string("path", max: 4096) == d.path, let seq = m.int("seq"), let q = m.string("q", max: 1024) else {
+                return refuse("nativeFind", "not the document on screen")
+            }
+            let n = d.find(q)
+            js("sb.nativeFound", ["seq": seq, "count": n, "more": n >= maxMatches])
+        case "nativeFindGo":
+            guard let d = nativeDoc, m.string("path", max: 4096) == d.path, let i = m.int("i") else { return refuse("nativeFindGo", "not the document on screen") }
+            d.findGo(i)
+        case "nativeFindEnd":
+            if let d = nativeDoc, m.string("path", max: 4096) == d.path { d.findClear() }
+        case "pdfGoTo":
+            guard let pane = pdfPane, shownView == "pdf", m.string("path", max: 4096) == pane.path, let n = m.int("page") else { return refuse("pdfGoTo", "not the PDF on screen") }
+            pane.go(toPage: n)
         case "revealFolder":
             // A file gone before it could be shown: its folder, when that is still there and inside the root.
             guard let url = fileURL, unavailablePath == url.path, m.string("path", max: 4096) == url.path,

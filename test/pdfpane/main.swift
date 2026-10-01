@@ -155,6 +155,35 @@ spin(0.1)
 check("reload of the same file keeps the page on screen", pane.view.document === docA2 && pane.view.currentPage.map { docA2.index(for: $0) } == 2,
       "\(pane.view.currentPage.map { docA2.index(for: $0) } ?? -1)")
 
+// ---- the panel's keys: the page counter, go to page, find, zoom, paging, the selection ----
+var pages: [(Int, Int)] = []
+pane.onPage = { _, page, count in pages.append((page, count)) }
+pane.go(toPage: 1)
+spin(0.1)
+check("page counter: going to a page reports it and the count", pages.last.map { $0 == (1, 3) } == true, "\(pages)")
+check("go to page: past the end goes to the last page", { pane.go(toPage: 99); spin(0.1); return pages.last.map { $0 == (3, 3) } == true }(), "\(pages)")
+let hits = pane.find("page")
+check("find: every match, case-insensitive, the first shown and selected", hits == 3 && pane.view.highlightedSelections?.count == 3
+      && pane.selectedText?.lowercased() == "page" && pages.last.map { $0.0 == 1 } == true, "\(hits) \(pages)")
+pane.findGo(2)
+spin(0.1)
+check("find: the next match is shown on its page", pages.last.map { $0.0 == 3 } == true, "\(pages)")
+check("find: nothing found for a word not there", pane.find("absent") == 0 && pane.view.highlightedSelections == nil)
+pane.findClear()
+check("find: cleared, nothing highlighted or selected", pane.view.highlightedSelections == nil && pane.selectedText == nil)
+let s0 = pane.view.scaleFactor
+pane.zoom("zoomIn")
+check("zoom: ⌘+ zooms the PDF", pane.view.scaleFactor > s0 && !pane.view.autoScales, "\(s0) -> \(pane.view.scaleFactor)")
+pane.zoom("zoomReset")
+check("zoom: ⌘0 fits it again", pane.view.autoScales && abs(pane.view.scaleFactor - s0) < 0.01, "\(pane.view.scaleFactor)")
+pane.go(toPage: 1)
+spin(0.1)
+check("paging: End goes to the last page, Home to the first", pane.scrollKey("end") && { spin(0.1); return pages.last?.0 == 3 }()
+      && pane.scrollKey("home") && { spin(0.1); return pages.last?.0 == 1 }(), "\(pages)")
+let y0 = pane.view.documentView?.enclosingScrollView?.contentView.bounds.origin.y ?? 0
+check("paging: Page Down moves the PDF down a screen", pane.scrollKey("pagedown") && (pane.view.documentView?.enclosingScrollView?.contentView.bounds.origin.y ?? 0) != y0)
+check("paging: the arrow keys are left to the sidebar", !pane.scrollKey("down") && !pane.scrollKey("up"))
+
 pane.pdfViewWillClick(onLink: pane.view, with: URL(string: "https://example.com/x")!)
 check("a link goes to the owner, never to NSWorkspace", links == [URL(string: "https://example.com/x")!])
 check("links: web links pass the policy", PDFPane.linkRefusal(URL(string: "https://example.com/x")!) == nil && PDFPane.linkRefusal(URL(string: "HTTP://example.com")!) == nil)

@@ -18,7 +18,7 @@ let out = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath
 let videoDir = CommandLine.arguments.count > 2 && !CommandLine.arguments[2].isEmpty
     ? URL(fileURLWithPath: CommandLine.arguments[2]).resolvingSymlinksInPath() : nil
 let env = ProcessInfo.processInfo.environment
-let flows = Set((env["FLOWS"] ?? "1,2,3,4,5,6,7,8,10").split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) })
+let flows = Set((env["FLOWS"] ?? "1,2,3,4,5,6,7,8,10,11").split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) })
 let timing = env["SCEN_TIMING"] != "0"
 let strict = env["SCEN_STRICT"] == "1"
 let corpus = out.appendingPathComponent("corpus")
@@ -966,6 +966,59 @@ if flows.contains("9"), let dir = env["SCEN_SHOTS"] {
         close()
     }
     NSApp.appearance = nil
+}
+
+// ================= 11. documents drawn natively take the panel's keys =================
+if flows.contains("11") {
+    print("\n== 11. PDF and RTF: page counter, go to page, find, zoom, paging and copy reach the document")
+    func press(_ key: String, settle: Double = 0.3) { DispatchQueue.global().async { viewer.key(key, isRepeat: false) }; spin(settle) }
+    let pdf = space([corpus.appendingPathComponent("pages-500.pdf")], settle: 1.0)
+    let counter = { js("(document.querySelector('#kind .pdf-page') || {}).textContent || ''") as? String ?? "" }
+    check("11: a PDF shows its page counter", counter() == "1 / 500", counter())
+    press("pagedown", settle: 0.5)
+    press("pagedown", settle: 0.5)
+    check("11: Page Down moves the PDF, and the counter follows", counter() != "1 / 500" && counter().hasSuffix("/ 500"), counter())
+    let z0 = web.pageZoom, s0 = natives().pdf?.scaleFactor ?? 0
+    press("zoomIn")
+    check("11: ⌘+ zooms the PDF, not the toolbar", web.pageZoom == z0 && (natives().pdf?.scaleFactor ?? 0) > s0, "page zoom \(web.pageZoom), pdf \(s0) -> \(natives().pdf?.scaleFactor ?? 0)")
+    press("zoomReset")
+    press("find")
+    _ = js("findField.value = 'Page 42'; findInput('Page 42'); 0")
+    spin(1)
+    let found = js("[$('find').hidden, $('find-count').textContent].join('|')") as? String ?? ""
+    check("11: ⌘F finds in the PDF and shows the count", found == "false|1 of 11", found)
+    check("11: the first match is on screen", counter() == "42 / 500", counter())
+    _ = js("findStep(1); 0")
+    spin(0.5)
+    check("11: ↵ goes to the next match", counter() == "420 / 500" && (js("$('find-count').textContent") as? String) == "2 of 11", counter())
+    _ = js("closeFind(); 0")
+    _ = js("document.querySelector('#kind .pdf-page').click(); 0")
+    let gotoBar = js("[$('find').hidden, $('find-q').placeholder, $('find-count').textContent].join('|')") as? String ?? ""
+    check("11: a click on the counter asks for a page", gotoBar == "false|Go to page|of 500", gotoBar)
+    _ = js("findField.value = '250'; findInput('250'); findStep(1); 0")
+    spin(0.5)
+    check("11: go to page", counter() == "250 / 500" && (js("$('find').hidden") as? Bool) == true, counter())
+    if let v = natives().pdf, let pg = v.currentPage, let sel = pg.selection(for: pg.bounds(for: .mediaBox)) {
+        v.setCurrentSelection(sel, animate: false)
+        press("copy", settle: 0.5)
+        let st = page().status
+        check("11: ⌘C with text selected in the PDF copies the text, not the file", st.contains("selection") || st == "Could not copy", st)
+    }
+    noErrors("11 pdf", pdf.page)
+    close()
+    let rtf = space([corpus.appendingPathComponent("letter.rtf")], settle: 0.8)
+    let m0 = natives().text?.enclosingScrollView?.magnification ?? 0
+    press("zoomIn")
+    check("11: ⌘+ zooms the RTF document, not the toolbar", web.pageZoom == z0 && (natives().text?.enclosingScrollView?.magnification ?? 0) > m0)
+    check("11: an RTF document has Find and Copy", (js("[$('find-btn').hidden, $('copy').hidden].join('|')") as? String) == "false|false")
+    press("find")
+    _ = js("findField.value = 'italics'; findInput('italics'); 0")
+    spin(0.5)
+    check("11: ⌘F finds in the RTF document", (js("$('find-count').textContent") as? String) == "1 of 1" && natives().text?.selectedRange().length == 7,
+          js("$('find-count').textContent") as? String ?? "")
+    _ = js("closeFind(); 0")
+    noErrors("11 rtf", rtf.page)
+    close()
 }
 
 if let e = js("(() => { const e = window.__errs || []; window.__errs = []; return e; })()") as? [String] { closingErrors += e }

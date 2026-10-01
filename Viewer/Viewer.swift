@@ -402,8 +402,11 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
     private func route(_ name: String, isRepeat: Bool) {
         if keys.key(name, isRepeat: isRepeat) { return }
         if name == "open" { return controller.openOnScreen() }
-        if name == "copy" { controller.armCopy() }
-        if controller.zoomKey(name) { return }
+        if name == "copy" {
+            if controller.copyNativeSelection() { return }
+            controller.armCopy()
+        }
+        if controller.zoomKey(name) || controller.scrollKey(name) { return }
         let web = controller.webView
         let arg = String(data: try! JSONSerialization.data(withJSONObject: ["key": name]), encoding: .utf8)!
         web.evaluateJavaScript("sb.hostKey && sb.hostKey(\(arg))") { r, _ in

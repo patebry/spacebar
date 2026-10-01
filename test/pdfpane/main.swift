@@ -33,6 +33,7 @@ func openDescriptors(_ path: String) -> Int {
 }
 
 _ = NSApplication.shared
+OffScreen.install()
 let dir = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath()
 let a = dir.appendingPathComponent("a.pdf"), b = dir.appendingPathComponent("b.pdf"), bad = dir.appendingPathComponent("bad.pdf")
 makePDF(a, pages: 3)

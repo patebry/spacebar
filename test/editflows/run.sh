@@ -23,7 +23,7 @@ printf '{"checkUpdates": false}' > "$out/support/settings.json"
 xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 -module-name SpacebarWriter "$out/writer/main.swift" ${WRITER_SRC/Writer\/main.swift/} \
   -o "$xpc/Contents/MacOS/SpacebarWriter"
 # shellcheck disable=SC2086
-xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/editflows/main.swift Helper/Decision.swift Viewer/Viewer.swift Viewer/PanelFrame.swift Viewer/FinderCopy.swift Shared/HelperProtocol.swift $PREVIEW_SRC \
+xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/editflows/main.swift test/offscreen.swift Helper/Decision.swift Viewer/Viewer.swift Viewer/PanelFrame.swift Viewer/FinderCopy.swift Shared/HelperProtocol.swift $PREVIEW_SRC \
   -framework QuickLookUI -framework WebKit -framework PDFKit -framework AVKit -framework AVFoundation -framework QuickLookThumbnailing \
   -o "$app/Contents/MacOS/editflows"
 plist() { printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>%s</string><key>CFBundleExecutable</key><string>%s</string><key>CFBundlePackageType</key><string>%s</string>%s</dict></plist>' "$@"; }

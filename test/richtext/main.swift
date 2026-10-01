@@ -66,6 +66,14 @@ window.contentView = container
 window.orderBack(nil)
 
 let pane = RichTextPane()
+/// The pane's find, which may answer later: waits up to 5 s for it.
+func findNow(_ q: String) -> Int {
+    var n: Int?
+    pane.find(q) { n = $0 }
+    let end = Date().addingTimeInterval(5)
+    while n == nil, Date() < end { spin(0.02) }
+    return n ?? -1
+}
 var links: [URL] = []
 pane.onLink = { links.append($0) }
 pane.show(a, path: rtf.path)
@@ -139,10 +147,10 @@ check("a link goes to the owner (which applies the PDF link policy), never to NS
       links == [URL(string: "https://example.com/rtf")!, URL(string: "https://example.com/s")!] && pane.textView(pane.textView, clickedOnLink: 5, at: 0))
 
 // ---- the panel's keys: find, ⌘C of the selection, zoom, paging, and a reading width on a wide panel ----
-let n = pane.find("quarterly")
+let n = findNow("quarterly")
 check("find: case-insensitive, the first match selected", n >= 1 && pane.selectedText?.lowercased() == "quarterly", "\(n) \(pane.selectedText ?? "nil")")
 pane.findClear()
-check("find: nothing for a word not there", pane.find("zzzabsent") == 0)
+check("find: nothing for a word not there", findNow("zzzabsent") == 0)
 pane.textView.setSelectedRange(NSRange(location: 0, length: 9))
 check("selection: the selected text is what ⌘C copies", pane.selectedText == "Quarterly")
 pane.zoom("zoomIn")

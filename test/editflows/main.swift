@@ -151,7 +151,7 @@ func click(_ sel: String, at: String = "end", char: Int = 0) -> [String: Any] {
     let seqBefore = js("editing ? editing.seq : -1") as? Int ?? -1
     let floorBefore = sessionFloor
     sessionFloor = lastSession
-    let r = jsJSON("""
+    var r = jsJSON("""
       const b = document.querySelector(\(show(sel))); if (!b) return { error: 'no ' + \(show(sel)) };
       const walk = document.createTreeWalker(b, NodeFilter.SHOW_TEXT); const nodes = [];
       while (walk.nextNode()) if (walk.currentNode.textContent.replace(/[\\u200B\\n]/g, '').length) nodes.push(walk.currentNode);
@@ -175,6 +175,13 @@ func click(_ sel: String, at: String = "end", char: Int = 0) -> [String: Any] {
       t.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1, clientX: x, clientY: y }));
       return { x, y, editing: !!editing, seq: editing ? editing.seq : -1, caret: editing ? editing.selStart : -1 };
       """)
+    // A code fence's edit waits out a second click (FENCE_WAIT) before it starts.
+    if r["error"] == nil, r["editing"] as? Bool == false, js("!!document.elementFromPoint(\(r["x"] ?? 0), \(r["y"] ?? 0))?.closest('.blk')") as? Bool == true {
+        spin(until: 1) { (js("!!editing") as? Bool) == true }
+        r["editing"] = js("!!editing") as? Bool ?? false
+        r["seq"] = js("editing ? editing.seq : -1") as? Int ?? -1
+        r["caret"] = js("editing ? editing.selStart : -1") as? Int ?? -1
+    }
     if r["seq"] as? Int == seqBefore { sessionFloor = floorBefore }
     if host == "panel", r["editing"] as? Bool == true { spin(until: 2) { Viewer.shared.textSession } }
     spin(0.25)

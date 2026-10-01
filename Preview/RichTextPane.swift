@@ -58,7 +58,9 @@ final class RichTextPane: NSObject, NSTextViewDelegate, NativeDocument {
         NotificationCenter.default.addObserver(forName: NSScrollView.didEndLiveMagnifyNotification, object: view, queue: .main) { [weak self] _ in self?.layout() }
     }
 
-    func find(_ query: String) -> Int {
+    func find(_ query: String, done: @escaping (Int) -> Void) { done(findNow(query)) }
+
+    private func findNow(_ query: String) -> Int {
         findClear()
         guard !query.isEmpty else { return 0 }
         let text = textView.string as NSString

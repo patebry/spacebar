@@ -27,7 +27,8 @@ Nine features reach further than a rendered page, and are in scope:
   own panel sent, in the file's encoding, over bytes the file held while the writer recorded it (or that its own failed write
   left), so nothing is written over a change made elsewhere. Undo is held to the same rule: the writer also keeps, per file,
   the text each edit began with on disk and the one it ended with (32 at most), and ⌘Z may write back only those; a file
-  changed on disk starts a new record without them. Markdown writes are as before: any content, to Markdown only. Every write names
+  changed on disk starts a new record without them. One limit: a change elsewhere that puts back, byte for byte, a text the writer recorded (a
+  `git checkout` of a version typed in this session) is taken as that text, so a recorded text may then be written over it. Markdown writes are as before: any content, to Markdown only. Every write names
   the bytes it expects on disk (compare-and-swap), and the resolved path is opened without following a link swapped in for
   it. The preview edits a file only when its bytes come back exactly from its text in the encoding and byte order mark they
   were read with; a character that encoding cannot hold is not saved, and a file is never converted to UTF-8. A `.env` is

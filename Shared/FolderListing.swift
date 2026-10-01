@@ -827,11 +827,16 @@ enum FileView {
             let cap = kind == .csv || kind == .json ? FileTypes.maxTableBytes : FileTypes.maxTextBytes
             // A log past the cap shows its end: what was written last is what it is opened for. Not a UTF-16 one: read from an
             // offset, its code units could be split.
-            var head = [UInt8](repeating: 0, count: 2)
-            let utf16 = pread(fd, &head, 2, 0) == 2 && (head == [0xFF, 0xFE] || head == [0xFE, 0xFF])
-            let tail = kind == .text && FileTypes.logExtensions.contains(ext.lowercased()) && size > Int64(cap) && !utf16
+            // The size the descriptor has now, not the stat's: a log rotated in between is never read past its end. Its head is
+            // looked at only in the read, which is where an evicted file may be downloaded.
+            let now = Int64(fst.st_size)
+            var tail = kind == .text && FileTypes.logExtensions.contains(ext.lowercased()) && now > Int64(cap)
             let read = { () -> Data? in
-                if tail { guard (try? h.seek(toOffset: UInt64(size - Int64(cap)))) != nil else { return nil } }
+                if tail {
+                    var head = [UInt8](repeating: 0, count: 2)
+                    if pread(fd, &head, 2, 0) != 2 || head == [0xFF, 0xFE] || head == [0xFE, 0xFF] { tail = false }
+                }
+                if tail { guard (try? h.seek(toOffset: UInt64(now - Int64(cap)))) != nil else { return nil } }
                 guard var d = try? h.read(upToCount: cap) ?? Data() else { return nil }
                 // The read starts mid-line, maybe mid-character: it starts at the next line, or failing one, the next character.
                 if tail, let nl = d.prefix(64 << 10).firstIndex(of: 10) { d = d.subdata(in: d.index(after: nl)..<d.endIndex) }

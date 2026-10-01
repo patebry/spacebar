@@ -1698,15 +1698,18 @@ window.sb = {
   conflict(c) {
     conflictOpen = !!c && c.open === true;
     conflictKeep = conflictOpen && c.keep === true;
+    conflictGone = conflictOpen && c.gone === true;
     syncAlert();
   },
 };
 
-let conflictOpen = false, conflictKeep = false;
+let conflictOpen = false, conflictKeep = false, conflictGone = false;
 function syncAlert() {
   const a = $('alert');
-  $('alert-text').textContent = conflictOpen ? 'This file changed on disk, so your last change wasn’t saved. Your text is kept here until you choose.'
-    : stickyStatus;
+  $('alert-text').textContent = !conflictOpen ? stickyStatus
+    : conflictGone ? 'This file was moved or deleted before your last change was saved. Your text is kept here until you choose.'
+    : 'This file changed on disk, so your last change wasn’t saved. Your text is kept here until you choose.';
+  $('alert-actions').querySelector('[data-choice=disk]').textContent = conflictGone ? 'Discard My Text' : 'Use Disk Version';
   $('alert-actions').querySelector('[data-choice=mine]').hidden = !conflictKeep;
   $('alert-actions').hidden = !conflictOpen;
   a.hidden = !conflictOpen && !stickyStatus;
@@ -3899,7 +3902,7 @@ function renderSidebar() {
   sideDrawn = key;
   const sel = tree.selection;
   $('side-title').textContent = sel ? `${sel.count.toLocaleString()} Selected` : tree.name;
-  $('side-title').title = `${tree.root}\nClick for an overview of this folder`;
+  $('side-title').title = sel ? tree.root : `${tree.root}\nClick for an overview of this folder`;
   const list = $('side-list');
   const rows = [];
   const exp = expanded();
@@ -3987,7 +3990,9 @@ function showCrumbs(p) {
   c.replaceChildren(...parts.flatMap((name, i) => {
     if (i) at = at === '/' ? `/${name}` : `${at}/${name}`;
     let s;
+    // A selection's root holds more than was selected, so it has no overview to show.
     if (i === parts.length - 1) s = el('span', 'crumb here', plainName(name));
+    else if (!i && tree.selection) s = el('span', 'crumb', plainName(name));
     else {
       s = el('button', 'crumb', plainName(name));
       s.type = 'button';
@@ -4003,7 +4008,7 @@ function showCrumbs(p) {
 /** A breadcrumb step: the root's overview, or a folder opened and selected in the sidebar (shown if it was hidden). */
 function crumbGo(path) {
   if (!tree.root) return;
-  if (path === tree.root) { peek(false); post({ type: 'overview' }); return; }
+  if (path === tree.root) { if (!tree.selection) { peek(false); post({ type: 'overview' }); } return; }
   revealFolder(path);
 }
 
@@ -5265,7 +5270,7 @@ document.addEventListener('click', (e) => {
   }
   if (e.target === filterField) { if (e.isTrusted) beginFilter(e); return; }
   if (e.target === findField) { if (e.isTrusted) beginFind(); return; }
-  if (e.target.closest('#side-title') && tree.root) { e.preventDefault(); peek(false); post({ type: 'overview' }); return; }
+  if (e.target.closest('#side-title') && tree.root && !tree.selection) { e.preventDefault(); peek(false); post({ type: 'overview' }); return; }
   const row = e.target.closest('#side-list a.row');
   if (row) {
     e.preventDefault();

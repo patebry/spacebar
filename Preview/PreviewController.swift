@@ -674,7 +674,7 @@ class PreviewController: NSViewController {
     func hostAppeared() {
         appeared = true
         // The page forgot both when the host took the preview away (sb.previewClosed).
-        if !displaced.isEmpty { js("sb.conflict", ["open": true, "keep": textSource == nil && fileKind == .markdown && !gone]) }
+        if !displaced.isEmpty { sendConflict() }
         if !shownSticky.isEmpty { status(shownSticky, sticky: true) }
         htmlPane?.view.setAllMediaPlaybackSuspended(false)
         host.web.setAllMediaPlaybackSuspended(false)
@@ -1223,6 +1223,7 @@ class PreviewController: NSViewController {
         gone = false
         stickyStatus("")
         js("sb.fileGone", ["path": "", "on": false])
+        if !displaced.isEmpty { sendConflict() }
     }
 
     private func fileChanged() {
@@ -2190,8 +2191,7 @@ class PreviewController: NSViewController {
             guard let d = nativeDoc, m.string("path", max: 4096) == d.path, let seq = m.int("seq"), let q = m.string("q", max: 1024) else {
                 return refuse("nativeFind", "not the document on screen")
             }
-            let n = d.find(q)
-            js("sb.nativeFound", ["seq": seq, "count": n, "more": n >= maxMatches])
+            d.find(q) { [weak self] n in self?.js("sb.nativeFound", ["seq": seq, "count": n, "more": n >= maxMatches]) }
         case "nativeFindGo":
             guard let d = nativeDoc, m.string("path", max: 4096) == d.path, let i = m.int("i") else { return refuse("nativeFindGo", "not the document on screen") }
             d.findGo(i)
@@ -2847,7 +2847,13 @@ class PreviewController: NSViewController {
     /// Keeps the user's text that the file on disk replaced, and asks them what to do with it.
     private func displace(_ text: String) {
         if displaced.last != text { displaced.append(text) }
-        js("sb.conflict", ["open": true, "keep": textSource == nil && fileKind == .markdown && !gone])
+        sendConflict()
+    }
+
+    /// The banner over displaced text. Keep Mine is for Markdown that is still on disk; a gone file's text can only be copied or
+    /// let go.
+    private func sendConflict() {
+        js("sb.conflict", ["open": true, "keep": textSource == nil && fileKind == .markdown && !gone, "gone": gone])
     }
 
     private func dropDisplaced() {

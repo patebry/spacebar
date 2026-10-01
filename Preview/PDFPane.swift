@@ -6,8 +6,9 @@ import WebKit
 /// ⌘+ ⌘− ⌘0, Page Up and Page Down, and ⌘C of what is selected in it.
 protocol NativeDocument: AnyObject {
     var path: String? { get }
-    /// Finds `query` (case-insensitive) and shows the first match; how many there are (at most `maxMatches`).
-    func find(_ query: String) -> Int
+    /// Finds `query` (case-insensitive), shows the first match and calls `done` on the main thread with how many there are (at
+    /// most `maxMatches`). A find started after it, or findClear, means `done` is never called.
+    func find(_ query: String, done: @escaping (Int) -> Void)
     /// Shows match `i` of the last find.
     func findGo(_ i: Int)
     func findClear()
@@ -34,7 +35,7 @@ func scrollPage(_ sv: NSScrollView, down: Bool) {
 /// so the sidebar, breadcrumb and toolbar stay web content and WebKit's PDF plugin, with its unlabelled HUD, never loads. The
 /// page reports that area in CSS pixels whenever it moves (`place`); between reports the view keeps its margins to the
 /// container's edges, which is what the page's layout does while the panel is resized.
-final class PDFPane: NSObject, PDFViewDelegate, NativeDocument {
+final class PDFPane: NSObject, PDFViewDelegate, PDFDocumentDelegate, NativeDocument {
     enum LoadError: Error, Equatable { case unreadable, locked }
 
     let view: PDFView
@@ -49,6 +50,8 @@ final class PDFPane: NSObject, PDFViewDelegate, NativeDocument {
     /// The page on screen changed: the file, the page (from 1) and how many there are.
     var onPage: (String, Int, Int) -> Void = { _, _, _ in }
     private var matches: [PDFSelection] = []
+    /// The find running in the background (PDFKit's own thread), and what to call when it ends.
+    private var finding: (doc: PDFDocument, found: [PDFSelection], done: (Int) -> Void)?
     private var reported: (path: String, page: Int, pages: Int)?
     private var scrollWatch: NSObjectProtocol?
 
@@ -94,14 +97,38 @@ final class PDFPane: NSObject, PDFViewDelegate, NativeDocument {
         view.go(to: PDFDestination(page: page, at: NSPoint(x: top.minX, y: top.maxY)))
     }
 
-    func find(_ query: String) -> Int {
+    /// A long PDF takes seconds to search: the search runs off the main thread, so the panel never stalls on a keystroke.
+    func find(_ query: String, done: @escaping (Int) -> Void) {
         findClear()
-        guard !query.isEmpty, let doc = view.document else { return 0 }
-        matches = Array(doc.findString(query, withOptions: [.caseInsensitive]).prefix(maxMatches))
+        guard !query.isEmpty, let doc = view.document else { return done(0) }
+        finding = (doc, [], done)
+        doc.delegate = self
+        doc.beginFindString(query, withOptions: [.caseInsensitive])
+    }
+
+    func didMatchString(_ instance: PDFSelection) {
+        guard Thread.isMainThread else { return DispatchQueue.main.async { self.didMatchString(instance) } }
+        guard var f = finding, instance.pages.first?.document === f.doc else { return }
+        f.found.append(instance)
+        finding = f
+        if f.found.count >= maxMatches { f.doc.cancelFindString(); endFind() }
+    }
+
+    func documentDidEndDocumentFind(_ notification: Notification) {
+        guard Thread.isMainThread else { return DispatchQueue.main.async { self.documentDidEndDocumentFind(notification) } }
+        guard let f = finding, notification.object as? PDFDocument === f.doc else { return }
+        endFind()
+    }
+
+    private func endFind() {
+        guard let f = finding else { return }
+        finding = nil
+        guard view.document === f.doc else { return }
+        matches = f.found
         for m in matches { m.color = NSColor.findHighlightColor.withAlphaComponent(0.45) }
         view.highlightedSelections = matches.isEmpty ? nil : matches
         if !matches.isEmpty { findGo(0) }
-        return matches.count
+        f.done(matches.count)
     }
 
     func findGo(_ i: Int) {
@@ -111,6 +138,7 @@ final class PDFPane: NSObject, PDFViewDelegate, NativeDocument {
     }
 
     func findClear() {
+        if let f = finding { finding = nil; f.doc.cancelFindString() }
         if !matches.isEmpty { view.clearSelection() }
         matches = []
         view.highlightedSelections = nil

@@ -75,6 +75,14 @@ window.contentView = container
 window.orderBack(nil)
 
 let pane = PDFPane()
+/// The pane's find, which may answer later: waits up to 5 s for it.
+func findNow(_ q: String) -> Int {
+    var n: Int?
+    pane.find(q) { n = $0 }
+    let end = Date().addingTimeInterval(5)
+    while n == nil, Date() < end { spin(0.02) }
+    return n ?? -1
+}
 var links: [URL] = []
 pane.onLink = { links.append($0) }
 pane.show(docA, path: a.path, over: web)
@@ -162,13 +170,13 @@ pane.go(toPage: 1)
 spin(0.1)
 check("page counter: going to a page reports it and the count", pages.last.map { $0 == (1, 3) } == true, "\(pages)")
 check("go to page: past the end goes to the last page", { pane.go(toPage: 99); spin(0.1); return pages.last.map { $0 == (3, 3) } == true }(), "\(pages)")
-let hits = pane.find("page")
+let hits = findNow("page")
 check("find: every match, case-insensitive, the first shown and selected", hits == 3 && pane.view.highlightedSelections?.count == 3
       && pane.selectedText?.lowercased() == "page" && pages.last.map { $0.0 == 1 } == true, "\(hits) \(pages)")
 pane.findGo(2)
 spin(0.1)
 check("find: the next match is shown on its page", pages.last.map { $0.0 == 3 } == true, "\(pages)")
-check("find: nothing found for a word not there", pane.find("absent") == 0 && pane.view.highlightedSelections == nil)
+check("find: nothing found for a word not there", findNow("absent") == 0 && pane.view.highlightedSelections == nil)
 pane.findClear()
 check("find: cleared, nothing highlighted or selected", pane.view.highlightedSelections == nil && pane.selectedText == nil)
 let s0 = pane.view.scaleFactor

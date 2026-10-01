@@ -487,14 +487,14 @@ if flows.contains("3") {
     spin(0.3)
     check("3: Collapse All closes it to the root", (tree()["rows"] as? Int ?? 99) <= 2, "\(tree())")
     t0 = now()
-    // The stub writer keeps no settings, so Raw is applied in the page as settings.json would bring it.
-    _ = js("sb.applySettings({ ...settings, rawJSON: true }); 0")
+    // Raw lasts while the preview is open; it is never a setting.
+    _ = js("document.getElementById('raw').click(); 0")
     spin(until: 5) { (jsJSON("return { n: (document.querySelector('#doc pre.code') || {textContent: ''}).textContent.length };")["n"] as? Int ?? 0) > 1_000_000 }
     let rawMs = ms(t0, now())
     let rawLen = jsJSON("return { n: (document.querySelector('#doc pre.code') || {textContent: ''}).textContent.length };")["n"] as? Int ?? 0
     check("3: Raw shows all of the 2 MB line", rawLen > 1_900_000, "\(rawLen) characters")
     target(String(format: "3: Raw is drawn within 1 s (%.0f ms)", rawMs), rawMs <= 1000)
-    _ = js("sb.applySettings({ ...settings, rawJSON: false }); 0")
+    _ = js("document.getElementById('raw').click(); 0")
     noErrors("3 big", page())
     close()
     let nested = space([corpus.appendingPathComponent("nested-500.json")])

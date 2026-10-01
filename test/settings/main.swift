@@ -282,10 +282,10 @@ check("tree: payload names the root, the folder and each entry's icon", payload[
       && pe.first { $0["name"] as? String == "data.csv" }?["size"] is Int64 && pe.first?["size"] == nil
       && pe.first { $0["name"] as? String == "Tool.app" }.map { $0["size"] == nil } == true && (pe.first?["modified"] as? Double ?? 0) > 1e12)
 check("tree: a missing folder lists nothing", FolderListing.list(ld.path + "/nope", sort: "name", readmeFirst: true).entries.isEmpty)
-check("tree: a folder preview opens its README, else its first Markdown file, else nothing (the scan takes over)",
+check("tree: a folder preview opens its own README, never any other note (the overview takes over)",
       FolderListing.firstDocument(byName)?.name == "README.md"
       && FolderListing.firstDocument(FolderListing.list(ld.path, sort: "name", readmeFirst: false))?.name == "README.md"
-      && FolderListing.firstDocument(FolderListing.list(ld.path + "/alpha", root: ld.path, sort: "name", readmeFirst: true))?.name == "inner.md"
+      && FolderListing.firstDocument(FolderListing.list(ld.path + "/alpha", root: ld.path, sort: "name", readmeFirst: true)) == nil
       && FolderListing.firstDocument(FolderListing.list(ld.path + "/alpha/deep", root: ld.path, sort: "name", readmeFirst: true)) == nil)
 check("paths: inside the root, symlinks resolved", FolderListing.isInside(ld.path + "/b.md", root: ld.path) && FolderListing.isInside(ld.path + "/inside-link.md", root: ld.path)
       && !FolderListing.isInside(ld.path + "/outside-link.md", root: ld.path) && !FolderListing.isInside(ld.path + "/etc/hosts", root: ld.path)
@@ -476,16 +476,18 @@ put("Vault/Projects/Deep/a/b/c/d/far.md", "# far\n")
 check("folder rules: a vault whose notes are all in subfolders is previewed (it was declined: no top-level Markdown)",
       FolderRules.declineReason(vault) == nil && FolderListing.firstDocument(FolderListing.list(vault, sort: "name", readmeFirst: true)) == nil)
 let vs = FolderScan.scan(vault)
-check("finder: the vault opens on its newest note nearest the top, never inside .obsidian",
-      vs.bestMarkdown?.rel == "Daily/2026-09-25.md" && !vs.files.contains { $0.rel.hasPrefix(".obsidian") } && vs.hasObsidian && vs.complete)
+check("finder: the vault's overview counts its notes, never inside .obsidian",
+      vs.counts["markdown"] == 5 && !vs.files.contains { $0.rel.hasPrefix(".obsidian") } && vs.hasObsidian && vs.complete)
 check("finder: depth stops at 3", !vs.files.contains { $0.rel.hasSuffix("far.md") } && vs.files.allSatisfy { $0.depth <= FolderScan.maxDepth })
-check("finder: a preferred name wins at the same depth", {
+check("finder: a top-level Home note opens the vault; a stray top-level note or a deeper index does not", {
     put("Vault/Projects/Index.md", "# index\n", age: 99999)
     defer { try? fm.removeItem(atPath: vault + "/Projects/Index.md") }
+    put("Vault/Scratch.md", "# stray\n", age: 1)
+    defer { try? fm.removeItem(atPath: vault + "/Scratch.md") }
+    let stray = FolderListing.firstDocument(FolderListing.list(vault, sort: "name", readmeFirst: true))
     put("Vault/Home.md", "# home\n", age: 99999)
     defer { try? fm.removeItem(atPath: vault + "/Home.md") }
-    return FolderListing.firstDocument(FolderListing.list(vault, sort: "name", readmeFirst: true))?.name == "Home.md"
-        && FolderScan.scan(vault).bestMarkdown?.rel == "Home.md"
+    return stray == nil && FolderListing.firstDocument(FolderListing.list(vault, sort: "name", readmeFirst: true))?.name == "Home.md"
 }())
 let idx = LinkIndex.build(root: vault)
 check("wikilinks: by name anywhere under the root, the current folder first, then the shallowest",
@@ -535,11 +537,12 @@ mkdir("empty")
 let imgs = FolderScan.scan(fx.path + "/images"), pdfs = FolderScan.scan(fx.path + "/pdfs"), repo = FolderScan.scan(fx.path + "/repo"),
     empty = FolderScan.scan(fx.path + "/empty")
 check("overview: a folder of images has no Markdown to open: counts and recent files, newest first",
-      FolderRules.declineReason(fx.path + "/images") == nil && imgs.bestMarkdown == nil && imgs.counts == ["image": 4]
+      FolderRules.declineReason(fx.path + "/images") == nil && imgs.counts == ["image": 4]
       && imgs.recent.map(\.rel) == ["p0.png", "p1.png", "p2.png", "p3.png"])
-check("overview: a folder of PDFs", pdfs.bestMarkdown == nil && pdfs.counts == ["pdf": 3] && (pdfs.payload(reason: "open")["view"] as? String) == "overview")
-check("finder: a repository without a README opens its docs, never a dependency's README, and is labelled",
-      repo.bestMarkdown?.rel == "docs/guide.md" && !repo.files.contains { $0.rel.contains("node_modules") } && repo.hasGit
+check("overview: a folder of PDFs", pdfs.counts == ["pdf": 3] && (pdfs.payload(reason: "open")["view"] as? String) == "overview")
+check("finder: a repository without a README shows its overview, counting no dependency, and is labelled",
+      FolderListing.firstDocument(FolderListing.list(fx.path + "/repo", sort: "name", readmeFirst: true)) == nil
+      && repo.counts["markdown"] == 1 && !repo.files.contains { $0.rel.contains("node_modules") } && repo.hasGit
       && repo.payload(reason: "open")["label"] as? String == "Git repository")
 check("overview: an empty folder is previewed, with nothing in it", FolderRules.declineReason(fx.path + "/empty") == nil && empty.files.isEmpty
       && empty.folders == 0 && (empty.payload(reason: "open")["total"] as? Int) == 0)
@@ -572,6 +575,7 @@ check("declines: an app bundle and packages", FolderRules.declineReason(fx.path 
       && FolderRules.declineReason(fx.path + "/Doc.rtfd") != nil && FolderRules.declineReason(fx.path + "/Proj.xcodeproj") != nil)
 check("declines: the volume root and system folders", ["/", "/System", "/Library", "/usr", "/usr/bin", "/System/Library", "/private/var", "/Volumes",
       "/Applications", FolderRules.home + "/Library"].allSatisfy { FolderRules.declineReason($0) != nil })
+check("declines: not /usr/local itself, nor a folder in it", FolderRules.declineReason("/usr/local") == nil || !fm.fileExists(atPath: "/usr/local"))
 check("declines: not an ordinary folder, a dotted name, the home folder or a folder in /tmp's subtree",
       FolderRules.declineReason(fx.path + "/plain.folder.name") == nil && FolderRules.declineReason(fx.path) == nil
       && FolderRules.declineReason(FolderRules.home) == nil && FolderRules.declineReason(FolderRules.home + "/Library/NoSuchFolder") != nil)

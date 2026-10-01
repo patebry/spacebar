@@ -158,6 +158,8 @@ let exact = work.appendingPathComponent("exact")
 try! fm.createDirectory(at: exact, withIntermediateDirectories: true)
 for i in 0..<(ArchiveListing.maxEntries - 1) { fm.createFile(atPath: exact.appendingPathComponent("f\(i)").path, contents: nil) }
 sh(["/usr/bin/tar", "-cf", "exact.tar", "exact"])
+check("list big.tar: the listing past the cap is counted, so the page can say of how many", listing("big.tar")?["total"] as? Int == ArchiveListing.maxEntries + 201,
+      "\(String(describing: listing("big.tar")?["total"]))")
 check("list exact.tar: exactly \(ArchiveListing.maxEntries) entries is whole", listed("exact.tar")?.count == ArchiveListing.maxEntries && listing("exact.tar")?["truncated"] as? Bool == false)
 
 // The sandbox: bsdtar reads only its standard input, so a path it is handed, or a file it would write, is refused.
@@ -250,10 +252,57 @@ for file in ["h.zip", "h.tgz", "h.7z"] {
     check("entry \(file): a missing name is not found", read("nope.txt") == .notFound)
     check("entry \(file): past its cap it is too large, and no bytes come back", ArchiveEntry.read(path, name: "one.txt", cap: 2) == .tooLarge)
 }
-check("entry: a lone compressed file has no member to read", ArchiveEntry.read(work.appendingPathComponent("notes.txt.gz").path, name: "notes.txt", cap: 1 << 20) != .data(Data(repeating: 65, count: 12345)))
 check("entry: a file not named as an archive is refused", ArchiveEntry.read(work.appendingPathComponent("t.png").path, name: "src/a.txt", cap: 100) == .refused)
 check("entry: reading writes nothing anywhere near the archives", Set((try? fm.contentsOfDirectory(atPath: work.path)) ?? []) == before
       && (try? Data(contentsOf: URL(fileURLWithPath: "/etc/passwd"))) == passwd)
+for lone in ["notes.txt.gz", "notes.txt.bz2"] {
+    let path = work.appendingPathComponent(lone).path
+    check("entry \(lone): a lone compressed file's one file is decompressed whole", ArchiveEntry.read(path, name: "notes.txt", cap: 1 << 20) == .data(Data(repeating: 65, count: 12345)))
+    check("entry \(lone): past the cap, its first part", ArchiveEntry.read(path, name: "notes.txt", cap: 100) == .partial(Data(repeating: 65, count: 100)))
+    check("entry \(lone): no other name is read from it", ArchiveEntry.read(path, name: "other.txt", cap: 1 << 20) != .data(Data(repeating: 65, count: 12345)))
+}
+let loneBomb = work.appendingPathComponent("zeros.log")
+try! Data(count: 8 << 20).write(to: loneBomb)
+sh(["/usr/bin/gzip", "-k", "zeros.log"])
+check("entry zeros.log.gz: a lone file expanding past the ratio is a bomb, not a partial read",
+      ArchiveEntry.read(work.appendingPathComponent("zeros.log.gz").path, name: "zeros.log", cap: 64 << 20) == .bomb)
+let pic = work.appendingPathComponent("pic.png")
+try! Data(repeating: 9, count: 5000).write(to: pic)
+sh(["/usr/bin/gzip", "-k", "pic.png"])
+check("entry pic.png.gz: a lone file that is not text is too large past its cap, never shown in part",
+      ArchiveEntry.read(work.appendingPathComponent("pic.png.gz").path, name: "pic.png", cap: 100) == .tooLarge)
+check("lone: a .zst is listed as its one file but not read (nothing decompresses it)", ArchiveEntryView.isLoneCompressed("/x/a.log.zst")
+      && !ArchiveEntryView.isLoneReadable("/x/a.log.zst") && ArchiveEntryView.isLoneReadable("/x/a.log.xz"))
+check("lone: ArchiveEntryView names the one file and knows a tar in disguise", ArchiveEntryView.isLoneCompressed("/x/server.log.gz") && ArchiveEntryView.loneName("/x/server.log.gz") == "server.log"
+      && !ArchiveEntryView.isLoneCompressed("/x/backup.tar.gz") && !ArchiveEntryView.isLoneCompressed("/x/t.zip"))
+
+// Links inside an archive: listed as links, never read (bsdtar -x -O prints nothing for one), never followed.
+let lsrc = work.appendingPathComponent("lsrc")
+try! fm.createDirectory(at: lsrc, withIntermediateDirectories: true)
+try! Data("target text\n".utf8).write(to: lsrc.appendingPathComponent("target.txt"))
+try! fm.createSymbolicLink(atPath: lsrc.appendingPathComponent("soft.txt").path, withDestinationPath: "target.txt")
+try! fm.createSymbolicLink(atPath: lsrc.appendingPathComponent("out.txt").path, withDestinationPath: "/etc/passwd")
+try! fm.linkItem(at: lsrc.appendingPathComponent("target.txt"), to: lsrc.appendingPathComponent("hard.txt"))
+sh(["/usr/bin/tar", "-cf", work.appendingPathComponent("links.tar").path, "target.txt", "hard.txt", "soft.txt", "out.txt"], in: lsrc)
+let links = Dictionary((listed("links.tar") ?? []).map { ($0["name"] as? String ?? "", $0) }, uniquingKeysWith: { a, _ in a })
+check("links: a symbolic and a hard link are marked as links, not folders; the file itself is not",
+      ["soft.txt", "hard.txt", "out.txt"].allSatisfy { links[$0]?["isLink"] as? Bool == true && links[$0]?["isDir"] as? Bool == false }
+      && links["target.txt"]?["isLink"] as? Bool == false, "\(links)")
+let linksPath = work.appendingPathComponent("links.tar").path
+check("links: bsdtar reads no bytes for a link member (why the preview never asks), and never the file outside",
+      ["soft.txt", "out.txt"].allSatisfy { ArchiveEntry.read(linksPath, name: $0, cap: 1 << 20) == .data(Data()) }
+      && ArchiveEntry.read(linksPath, name: "target.txt", cap: 1 << 20) == .data(Data("target text\n".utf8)))
+let linkNote = ArchiveEntryView.payload(archive: linksPath, root: work.path, entry: "soft.txt", size: 0, modified: nil, data: nil, failure: "link")
+check("links: the entry view says it is a link", linkNote["view"] as? String == "info" && (linkNote["note"] as? String)?.contains("link") == true)
+
+// -n anchors a member's name: a top-level notes.txt listed after sub/notes.txt still reads itself.
+let nsrc = work.appendingPathComponent("nsrc")
+try! fm.createDirectory(at: nsrc.appendingPathComponent("sub"), withIntermediateDirectories: true)
+try! Data("nested\n".utf8).write(to: nsrc.appendingPathComponent("sub/notes.txt"))
+try! Data("top\n".utf8).write(to: nsrc.appendingPathComponent("notes.txt"))
+sh(["/usr/bin/tar", "-cf", work.appendingPathComponent("order.tar").path, "sub/notes.txt", "notes.txt"], in: nsrc)
+check("entry order.tar: notes.txt after sub/notes.txt reads the top-level one", ArchiveEntry.read(work.appendingPathComponent("order.tar").path, name: "notes.txt", cap: 1 << 20)
+      == .data(Data("top\n".utf8)))
 
 // A bomb: 40 MB of zeros that bzip2 packs into a few hundred bytes.
 let bombDir = work.appendingPathComponent("bomb")

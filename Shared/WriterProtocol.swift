@@ -30,7 +30,8 @@ protocol SpacebarWriterProtocol {
     /// The contents of an archive LinkPolicy allows, as ArchiveListing's JSON, or nil when it cannot be listed.
     func listArchive(_ path: String, reply: @escaping (Data?) -> Void)
     /// One file of an archive listArchive allows, read without extracting it (ArchiveEntry): its bytes, at most
-    /// ArchiveEntryView.cap(for: entry), or nil and why (ArchiveEntryView.notes' keys). Never written anywhere.
+    /// ArchiveEntryView.cap(for: entry), or nil and why (ArchiveEntryView.notes' keys); the first cap bytes and "partial" for a
+    /// lone compressed file longer than that. Never written anywhere.
     func readArchiveEntry(_ path: String, entry: String, reply: @escaping (Data?, String?) -> Void)
     /// Creates the support folder, themes/ and a default settings.json if missing.
     func ensureSupportDir(reply: @escaping (Bool) -> Void)
@@ -107,14 +108,15 @@ protocol SpacebarEditHostProtocol {
 /// (a click on a row) has no field: ← and → move through the tree too, and Esc or Space hand the keyboard back.
 enum FilterKeys {
     static let names: Set<String> = ["up", "down", "home", "end", "return"]
-    static let listNames: Set<String> = names.union(["left", "right"])
+    /// A list session's keys: ⌫ ("back") goes from a file of an archive, or opened from the folder grid, back to where it was.
+    static let listNames: Set<String> = names.union(["left", "right", "back"])
     /// ⌘F, ⌥⌘F and ⌘C while a list session holds the keys: the page finds in the file, filters the sidebar or copies.
     static let listCommands: Set<String> = ["find", "filter", "copy"]
     /// The find field's keys: the next and the previous match.
     static let findNames: Set<String> = ["next", "prev"]
     static let maxLength = 256
     private static let byCode: [UInt16: String] = [126: "up", 125: "down", 115: "home", 119: "end", 36: "return", 76: "return"]
-    private static let listByCode: [UInt16: String] = [123: "left", 124: "right"]
+    private static let listByCode: [UInt16: String] = [123: "left", 124: "right", 51: "back"]
     /// NSEvent.ModifierFlags shift, control, option and command: with any of them the key edits the field's text instead.
     private static let editing: UInt = 1 << 17 | 1 << 18 | 1 << 19 | 1 << 20
     private static let shiftFlag: UInt = 1 << 17, optionFlag: UInt = 1 << 19, commandFlag: UInt = 1 << 20

@@ -99,7 +99,8 @@ check("open: ⌘Z (W's key on AZERTY) passes", routeOnce(key(13, "z", mods: .com
 check("open: ⌥Space passes", routeOnce(key(KeyCode.space, mods: .option), open) == .pass)
 check("open: ⇧Esc passes", routeOnce(key(KeyCode.escape, mods: .shift), open) == .pass)
 let routed: [(Int64, String)] = [(KeyCode.up, "up"), (KeyCode.down, "down"), (KeyCode.left, "left"), (KeyCode.right, "right"), (KeyCode.home, "home"),
-                                 (KeyCode.end, "end"), (KeyCode.pageUp, "pageup"), (KeyCode.pageDown, "pagedown"), (KeyCode.returnKey, "return"), (KeyCode.enter, "return")]
+                                 (KeyCode.end, "end"), (KeyCode.pageUp, "pageup"), (KeyCode.pageDown, "pagedown"), (KeyCode.returnKey, "return"), (KeyCode.enter, "return"),
+                                 (KeyCode.delete, "back")]
 for (code, name) in routed {
     var k = KeyRoute()
     check("open: \(name) is routed", k.route(key(code), panel: open) == .forward(name))

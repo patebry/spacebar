@@ -17,7 +17,7 @@ struct KeyEvent: Equatable {
 enum KeyCode {
     static let space: Int64 = 49, escape: Int64 = 53, returnKey: Int64 = 36, enter: Int64 = 76
     static let left: Int64 = 123, right: Int64 = 124, down: Int64 = 125, up: Int64 = 126
-    static let home: Int64 = 115, end: Int64 = 119, pageUp: Int64 = 116, pageDown: Int64 = 121
+    static let home: Int64 = 115, end: Int64 = 119, pageUp: Int64 = 116, pageDown: Int64 = 121, delete: Int64 = 51
     static let keypadPlus: Int64 = 69, keypadMinus: Int64 = 78, keypad0: Int64 = 82
 }
 
@@ -250,6 +250,7 @@ struct KeyRoute {
             case KeyCode.down: return sidebarKeys ? "down" : nil
             case KeyCode.left: return sidebarKeys ? "left" : nil
             case KeyCode.right: return sidebarKeys ? "right" : nil
+            case KeyCode.delete: return sidebarKeys ? "back" : nil
             case KeyCode.home: return "home"
             case KeyCode.end: return "end"
             case KeyCode.pageUp: return "pageup"

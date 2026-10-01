@@ -127,7 +127,8 @@ let gate = RemoteImageGate(config.userContentController)
 var currentFile: String?
 scheme.bodyCurrent = { $0 == currentFile }
 /// As the extension: the archive on screen as listed, and the file of it on screen.
-var archiveState: (path: String, payload: [String: Any], files: [String: (size: Int64?, modified: Double?)])?
+typealias EntryInfo = (size: Int64?, modified: Double?, link: Bool)
+var archiveState: (path: String, payload: [String: Any], files: [String: EntryInfo])?
 var entryShown: String?
 GestureRouter.install()
 let web = PreviewWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 2000), configuration: config)
@@ -343,30 +344,69 @@ func renderFile(_ file: String, listFirst: Bool = true) {
     // As the extension's listArchive: the writer's listing (ArchiveListing, run here unsandboxed but for bsdtar's own sandbox).
     if payload["view"] as? String == "archive", let data = ArchiveListing.list(url.path),
        let list = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let entries = list["entries"] as? [[String: Any]] {
-        var files: [String: (size: Int64?, modified: Double?)] = [:]
+        var files: [String: EntryInfo] = [:]
         for e in entries where e["isDir"] as? Bool == false {
-            if let n = e["name"] as? String, files[n] == nil { files[n] = ((e["size"] as? NSNumber)?.int64Value, (e["modified"] as? NSNumber)?.doubleValue) }
+            if let n = e["name"] as? String, files[n] == nil {
+                files[n] = ((e["size"] as? NSNumber)?.int64Value, (e["modified"] as? NSNumber)?.doubleValue, e["isLink"] as? Bool == true)
+            }
         }
         var p = payload
         p["entries"] = entries
         p["truncated"] = list["truncated"] as? Bool ?? false
+        if let total = list["total"] as? Int { p["total"] = total }
         archiveState = (url.path, p, files)
-        _ = eval(web, "sb.setArchive(\(jsonString(["path": url.path, "entries": entries, "truncated": p["truncated"]!]))); 0")
+        // As listArchive: a lone compressed file of text shows that text.
+        if ArchiveEntryView.isLoneReadable(url.path), files.count == 1, let only = files.first, only.key == ArchiveEntryView.loneName(url.path),
+           ArchiveEntryView.textKinds.contains(ArchiveEntryView.kind(only.key)) {
+            return renderEntry(only.key, only.value)
+        }
+        var msg: [String: Any] = ["path": url.path, "entries": entries, "truncated": p["truncated"]!]
+        if let total = p["total"] { msg["total"] = total }
+        _ = eval(web, "sb.setArchive(\(jsonString(msg))); 0")
     }
 }
 
 /// As the extension's showEntry and putEntry: a listed file of the archive on screen, read through ArchiveEntry.
-func renderEntry(_ name: String, _ info: (size: Int64?, modified: Double?)) {
+func renderEntry(_ name: String, _ info: EntryInfo) {
     guard let a = archiveState else { return }
     var data: Data?, why: String?
-    if let cap = ArchiveEntryView.cap(for: name) {
-        if let size = info.size, size > Int64(cap) { why = "tooLarge" } else {
+    let lone = ArchiveEntryView.isLoneReadable(a.path) && name == ArchiveEntryView.loneName(a.path)
+    if info.link { why = "link" } else if let cap = ArchiveEntryView.cap(for: name) {
+        if !(lone && ArchiveEntryView.textKinds.contains(ArchiveEntryView.kind(name))), let size = info.size, size > Int64(cap) { why = "tooLarge" } else {
             let r = ArchiveEntry.read(a.path, name: name, cap: cap)
-            if case .data(let d) = r { data = d } else { why = r.reason }
+            switch r {
+            case .data(let d): data = d
+            case .partial(let d): data = d; why = "partial"
+            default: why = r.reason
+            }
         }
     }
-    var p = ArchiveEntryView.payload(archive: a.path, root: root, entry: name, size: info.size, modified: info.modified, data: data, failure: why)
+    let partial = why == "partial"
+    var p = ArchiveEntryView.payload(archive: a.path, root: root, entry: name, size: info.size, modified: info.modified, data: data,
+                                     failure: partial ? nil : why, partial: partial)
+    if lone {
+        p.removeValue(forKey: "entry")
+        p["name"] = a.payload["name"] ?? name
+        p["canOpen"] = a.payload["canOpen"] ?? false
+        p["kindName"] = "\(p["kindName"] as? String ?? "Plain text"), compressed"
+    }
+    // As putEntry: the last entry's native view goes, and a PDF is drawn natively from the bytes.
+    pdfPane?.close()
+    pdfPane = nil
+    if p["view"] as? String == "pdf" {
+        if let data, let doc = PDFDocument(data: data), doc.pageCount > 0, !doc.isLocked {
+            let pane = PDFPane()
+            pane.show(doc, path: a.path, over: web)
+            pdfPane = pane
+        } else {
+            p["view"] = "info"
+            p["note"] = "This PDF can’t be shown here."
+        }
+    }
     entryShown = name
+    // As putEntry: nothing opens a file of the archive; the text of a lone compressed file opens the file itself.
+    currentCanOpen = lone && p["canOpen"] as? Bool == true
+    currentText = false
     currentBody = (p["text"] as? String).map { ($0, false) }
     scheme.entryImage = nil
     scheme.filesBlocked = true
@@ -407,7 +447,7 @@ func listedFile(_ p: String?) -> String? {
     return p
 }
 
-/// As the extension's startFolder: the folder's README or first Markdown file, else the scan's best Markdown, else the overview.
+/// As the extension's startFolder: the grid for a folder of media, else the folder's own README (or index or Home), else the overview.
 func startFolder(_ dir: String) -> String {
     if let why = FolderRules.declineReason(dir) { return "declined: \(why)" }
     rootOverride = dir
@@ -426,7 +466,6 @@ func startFolder(_ dir: String) -> String {
     }
     if let first = FolderListing.firstDocument(l) { renderFile(first.path); return "file:" + first.path }
     let r = FolderScan.scan(root, showHidden: s.showHiddenFiles)
-    if let md = r.bestMarkdown { offered.insert(md.path); renderFile(md.path); return "file:" + md.path }
     sendFolder(root)
     renderOverview(r, reason: "open")
     return "overview"
@@ -523,12 +562,15 @@ rec.onMessage = { type, body in
         guard let f = currentFile, path == f, let a = archiveState, a.path == f else { rec.messages.append(["type": "_backRefused"]); return }
         entryShown = nil
         currentBody = nil
+        currentCanOpen = a.payload["canOpen"] as? Bool == true
+        pdfPane?.close()
+        pdfPane = nil
         scheme.filesBlocked = false
         var p = a.payload
         p["reason"] = "back"
         DispatchQueue.main.async { _ = eval(web, "sb.render(\(jsonString(p))); 0") }
     case "pdfRect":
-        if currentKind == .pdf { pdfPane?.place(message: body, in: web) }
+        if currentKind == .pdf || (currentKind == .archive && entryShown != nil) { pdfPane?.place(message: body, in: web) }
     case "search":
         searchCancel?.cancel()
         guard let q = body["q"] as? String, q.utf8.count <= ContentSearch.maxQueryBytes, let seq = body["seq"] as? Int else {
@@ -536,6 +578,22 @@ rec.onMessage = { type, body in
         }
         let cancel = ContentSearch.Cancel(), r = root, s = Settings(dictionary: settingsDict), limits = searchLimits
         searchCancel = cancel
+        if body["names"] as? Bool == true {
+            ContentSearch.queue.async {
+                ContentSearch.runNames(query: q, root: r, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles,
+                                       limits: limits, cancel: cancel) { p in
+                    DispatchQueue.main.async {
+                        guard !cancel.isCancelled, r == root else { return }
+                        if searchHits.seq != seq { searchHits = (seq, []) }
+                        searchHits.paths.formUnion(p.hits.filter { !$0.isDir }.map(\.path))
+                        knownDirs.formUnion(p.hits.filter(\.isDir).map(\.path))
+                        rec.messages.append(["type": "_nameReport", "seq": seq, "hits": p.hits.count])
+                        web.evaluateJavaScript("sb.nameResults(\(jsonString(ContentSearch.payload(p, seq: seq)))); 0")
+                    }
+                }
+            }
+            return
+        }
         ContentSearch.queue.async {
             ContentSearch.run(query: q, root: r, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles,
                               limits: limits, cancel: cancel) { p in

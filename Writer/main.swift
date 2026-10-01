@@ -190,6 +190,7 @@ final class Writer: NSObject, SpacebarWriterProtocol {
             guard !late else { return }
             let outcome = ArchiveEntry.read(url.path, name: entry, cap: cap)
             if case .data(let d) = outcome { return once(d, nil) }
+            if case .partial(let d) = outcome { return once(d, "partial") }
             log.info("readArchiveEntry: \(outcome.reason ?? "", privacy: .public)")
             once(nil, outcome.reason)
         }

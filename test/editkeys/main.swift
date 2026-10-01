@@ -129,8 +129,8 @@ tv.onFilterKey = { k, _ in listed.append(k) }
 tv.onEscape = { ends += 1 }
 let arrow = { (s: Int) in String(Character(UnicodeScalar(s)!)) }
 key(arrow(down), 125, arrowFlags); key(arrow(up), 126, arrowFlags); key(arrow(left), 123, arrowFlags); key(arrow(right), 124, arrowFlags)
-key("\r", 36); key(arrow(NSHomeFunctionKey), 115, [.function]); key(arrow(NSEndFunctionKey), 119, [.function])
-check("list: ↓ ↑ ← → Return Home End are forwarded", listed == ["down", "up", "left", "right", "return", "home", "end"])
+key("\r", 36); key(arrow(NSHomeFunctionKey), 115, [.function]); key(arrow(NSEndFunctionKey), 119, [.function]); key("\u{7F}", 51)
+check("list: ↓ ↑ ← → Return Home End ⌫ are forwarded", listed == ["down", "up", "left", "right", "return", "home", "end", "back"])
 listed = []
 key("a", 0); key("Z", 6, [.shift]); key("\t", 48); key(arrow(down), 125, arrowFlags.union(.shift))
 check("list: letters, Tab and Shift+↓ type nothing and go nowhere", listed.isEmpty && tv.string.isEmpty && ends == 0)

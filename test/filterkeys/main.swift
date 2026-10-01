@@ -35,7 +35,8 @@ check("list: the filter's keys too", [126, 125, 115, 119, 36, 76].allSatisfy { F
 check("list: Shift+← or Command+→ are nothing", FilterKeys.name(keyCode: 123, modifiers: arrowFlags | 1 << 17, list: true) == nil
       && FilterKeys.name(keyCode: 124, modifiers: arrowFlags | 1 << 20, list: true) == nil)
 check("list: Space, letters and Tab are not list keys", [49, 0, 48].allSatisfy { FilterKeys.name(keyCode: UInt16($0), modifiers: 0, list: true) == nil })
-let listNamed = Set([126, 125, 115, 119, 36, 76, 123, 124].compactMap { FilterKeys.name(keyCode: UInt16($0), modifiers: 0, list: true) })
+check("list: ⌫ is back, only in a list session", FilterKeys.name(keyCode: 51, modifiers: 0, list: true) == "back" && FilterKeys.name(keyCode: 51, modifiers: 0) == nil)
+let listNamed = Set([126, 125, 115, 119, 36, 76, 123, 124, 51].compactMap { FilterKeys.name(keyCode: UInt16($0), modifiers: 0, list: true) })
 check("list: every forwarded name is one the extension accepts", listNamed == FilterKeys.listNames && FilterKeys.names.isSubset(of: FilterKeys.listNames))
 check("list: Esc and Space end it", FilterKeys.listEnds(keyCode: 53, modifiers: 0) && FilterKeys.listEnds(keyCode: 49, modifiers: 0))
 check("list: ⌘Space and other keys do not", !FilterKeys.listEnds(keyCode: 49, modifiers: 1 << 20) && !FilterKeys.listEnds(keyCode: 125, modifiers: arrowFlags)

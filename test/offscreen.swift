@@ -53,6 +53,15 @@ enum OffScreen {
         RunLoop.main.add(timer, forMode: .common)
     }
 
+    /// A web view in a window off every screen counts as occluded, and WebKit then stops requestAnimationFrame (the page's
+    /// "rendered" message, a PDF's placement, mermaid): it is told to draw as a visible one would (WKWebView SPI, harness only).
+    static func keepDrawing(_ web: NSView) {
+        let sel = NSSelectorFromString("_setWindowOcclusionDetectionEnabled:")
+        guard web.responds(to: sel) else { return print("SKIP OFFSCREEN: this WebKit cannot be told to draw while occluded") }
+        typealias SetBool = @convention(c) (AnyObject, Selector, Bool) -> Void
+        unsafeBitCast(web.method(for: sel), to: SetBool.self)(web, sel, false)
+    }
+
     /// Aborts if any visible window of this process overlaps a screen.
     static func check() {
         for w in NSApp.windows where w.isVisible { refuse(w) }

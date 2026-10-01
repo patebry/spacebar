@@ -59,6 +59,7 @@ final class Recorder: NSObject, WKScriptMessageHandler {
 }
 let rec = Recorder()
 let web = WebHost.shared.web
+OffScreen.keepDrawing(web)
 spin(until: 15) { WebHost.shared.ready }
 guard WebHost.shared.ready else { print("FAIL the page never became ready"); exit(1) }
 web.configuration.userContentController.removeScriptMessageHandler(forName: "sb")

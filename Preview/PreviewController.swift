@@ -323,6 +323,11 @@ class PreviewController: NSViewController {
     private let loader = FileLoader()
     /// The file on screen shows the info card because it could not be read (Reveal in Finder is allowed for it, Markdown too).
     private var unavailablePath: String?
+    /// The file on screen was moved or deleted while shown: its last content stays, dimmed, with nothing to open or edit.
+    private var gone = false
+    /// The file on screen's inode when it was opened, so a rename in the same folder is followed.
+    private var openedInode: ino_t?
+    private var goneCheck: DispatchWorkItem?
     /// Why the document's local images did not load, the folders their placeholders may reveal, and the watch that renders the
     /// document again when one appears.
     private lazy var images: ImageCheck = {
@@ -702,7 +707,7 @@ class PreviewController: NSViewController {
 
     /// The Open button's action for the file on screen, for a host with a key for it (⌘O).
     func openOnScreen() {
-        guard let url = fileURL, shownView != "info" || shownCanOpen else { return }
+        guard let url = fileURL, !gone, shownView != "info" || shownCanOpen else { return }
         if fileKind == .markdown { return openExternally(url) }
         handle("openFile", ["path": url.path])
     }
@@ -901,6 +906,7 @@ class PreviewController: NSViewController {
         closePDF()
         host.remoteImages.reset()
         images.reset()
+        clearGone()
         fileURL = nil
         fileKind = .other
         quickLookShown = false
@@ -956,6 +962,11 @@ class PreviewController: NSViewController {
             self.indexStale = true
             self.refreshListing(dir)
             if dir == self.rootDir, self.showingOverview, !self.folderPending { self.scheduleRescan() }
+            // The file on screen, gone, is back: watched and read again.
+            if self.gone, let url = self.fileURL, url.deletingLastPathComponent().path == dir, Self.stamp(url) != nil {
+                self.watcher = FileWatcher(path: url.path) { [weak self] in self?.fileChanged() }
+                self.reload(reason: "change")
+            }
         }
     }
 
@@ -1055,6 +1066,8 @@ class PreviewController: NSViewController {
         pendingAnchor = anchor.map { (url.path, $0) }
         fileURL = url
         fileKind = kind
+        openedInode = found ? st.st_ino : nil
+        clearGone()
         quickLookShown = false
         archive = nil
         entryShown = nil
@@ -1097,6 +1110,54 @@ class PreviewController: NSViewController {
         render(FileView.unopenable(path: url.path, root: rootDir, note: note))
     }
 
+    /// The file on screen is missing after a change on disk. A save that replaces the file leaves it missing for a moment, so it
+    /// is looked for again a second later: a file with its inode in the same folder (a rename) is followed; else it is gone.
+    private func missingNow(_ url: URL) {
+        guard !gone, goneCheck == nil else { return }
+        let w = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.goneCheck = nil
+            guard self.fileURL == url, self.host.controller === self, Self.stamp(url) == nil else { return }
+            if let ino = self.openedInode, let moved = Self.renamed(url, inode: ino) {
+                log.info("followed a rename of the file on screen")
+                if !self.holdUntilSaved(.file(moved, anchor: nil)) { self.open(moved) }
+                return
+            }
+            self.markGone(url)
+        }
+        goneCheck = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: w)
+    }
+
+    /// A file in `url`'s folder with `inode`: where a rename put it.
+    private static func renamed(_ url: URL, inode: ino_t) -> URL? {
+        let dir = url.deletingLastPathComponent()
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path), names.count <= FolderListing.statCap else { return nil }
+        for name in names {
+            var st = stat()
+            let u = dir.appendingPathComponent(name)
+            if lstat(u.path, &st) == 0, st.st_ino == inode, st.st_mode & S_IFMT == S_IFREG { return u }
+        }
+        return nil
+    }
+
+    private func markGone(_ url: URL) {
+        gone = true
+        stopEdit(notifyWriter: true)
+        mediaPane?.pause()
+        stickyStatus("\(url.lastPathComponent) was moved or deleted")
+        js("sb.fileGone", ["path": url.path, "on": true])
+    }
+
+    private func clearGone() {
+        goneCheck?.cancel()
+        goneCheck = nil
+        guard gone else { return }
+        gone = false
+        stickyStatus("")
+        js("sb.fileGone", ["path": "", "on": false])
+    }
+
     private func fileChanged() {
         changeSeen = Date()
         guard !reloadPending else { return }
@@ -1113,7 +1174,8 @@ class PreviewController: NSViewController {
         if let why = Self.unreadable(url) {
             log.error("read refused: \(why, privacy: .private)")
             // A save that replaces the file (rename, then write) leaves it missing for a moment: what is on screen stays.
-            return reason == "change" ? status(why) : showUnopenable(url, note: FileView.openRefusal(url.path))
+            guard reason == "change" else { return showUnopenable(url, note: FileView.openRefusal(url.path)) }
+            return Self.stamp(url) == nil ? missingNow(url) : status(why)
         }
         if reason == "change", awaitingDownload(url) { return }
         let epoch = writeEpoch, cloud = FileTypes.isDataless(url.path)
@@ -1161,6 +1223,7 @@ class PreviewController: NSViewController {
 
     /// Takes a Markdown read that is still current: `raw` is the file's text as on disk, `lines` its text as shown.
     private func apply(_ raw: String, _ lines: Lines, url: URL, reason: String) {
+        clearGone()
         if raw == diskText { return }
         if edit == nil, let d = docText, !matchesDisk(d) { status("unsaved text replaced by the version on disk") }
         lineEnding = lines.crlf ? "\r\n" : "\n"
@@ -1222,6 +1285,7 @@ class PreviewController: NSViewController {
     private func render(_ payload: [String: Any]) {
         renderGen += 1
         var payload = payload
+        if let k = payload["kindName"] as? String { payload["kindName"] = FileView.kindName(k) }
         host.scheme.body = PageBody.take(&payload)
         host.scheme.entryImage = pendingEntryImage
         pendingEntryImage = nil
@@ -1323,7 +1387,7 @@ class PreviewController: NSViewController {
     private func show(_ url: URL, reason: String) {
         var st = stat()
         guard stat(url.path, &st) == 0 else {
-            return reason == "change" ? status("cannot read \(url.lastPathComponent)") : showUnopenable(url, note: FileView.openRefusal(url.path))
+            return reason == "change" ? missingNow(url) : showUnopenable(url, note: FileView.openRefusal(url.path))
         }
         let stamp = "\(st.st_size)-\(st.st_mtimespec.tv_sec).\(st.st_mtimespec.tv_nsec)-\(st.st_ino)"
         if reason == "change", stamp == shownStamp || awaitingDownload(url) { return }
@@ -1456,6 +1520,7 @@ class PreviewController: NSViewController {
     }
 
     private func finishShow(_ url: URL, _ payload: [String: Any], pdf: PDFDocument?, rich: NSAttributedString? = nil, reason: String) {
+        clearGone()
         unavailablePath = nil
         archive = nil
         entryShown = nil
@@ -1931,7 +1996,7 @@ class PreviewController: NSViewController {
             dirWatches.removeValue(forKey: p)
         case "openFile":
             // The viewer's "Open with" button, for the file on screen only; the writer applies LinkPolicy again.
-            guard let url = fileURL, m.string("path", max: 4096) == url.path, fileKind != .markdown, shownCanOpen,
+            guard !gone, let url = fileURL, m.string("path", max: 4096) == url.path, fileKind != .markdown, shownCanOpen,
                   LinkPolicy.fileRefusal(url, allowArchives: fileKind == .archive) == nil || (shownText && LinkPolicy.editorRefusal(url) == nil) else {
                 return refuse("openFile", "not the file on screen or not allowed")
             }
@@ -1944,7 +2009,7 @@ class PreviewController: NSViewController {
         case "openWithList", "openWith":
             // The toolbar's Open With menu, for the file on screen only, never a file inside an archive; the writer lists and
             // checks the apps again.
-            guard let url = fileURL, m.string("path", max: 4096) == url.path, entryShown == nil, fileKind == .markdown || shownCanOpen,
+            guard !gone, let url = fileURL, m.string("path", max: 4096) == url.path, entryShown == nil, fileKind == .markdown || shownCanOpen,
                   LinkPolicy.fileRefusal(url, allowArchives: fileKind == .archive) == nil else {
                 if type == "openWithList" { js("sb.openWithApps", ["path": m.string("path", max: 4096) ?? "", "apps": []]) }
                 return refuse(type, "not the file on screen or not allowed")
@@ -1965,6 +2030,20 @@ class PreviewController: NSViewController {
                 return refuse("reveal", "not the file on screen")
             }
             helper { $0.reveal(url) { ok in if !ok { DispatchQueue.main.async { self.status("could not show \(url.lastPathComponent) in Finder") } } } }
+        case "revealFolder":
+            // A file gone before it could be shown: its folder, when that is still there and inside the root.
+            guard let url = fileURL, unavailablePath == url.path, m.string("path", max: 4096) == url.path,
+                  FolderListing.isInside(url.deletingLastPathComponent().path, root: rootDir, allowRoot: true) else {
+                return refuse("revealFolder", "not the missing file on screen")
+            }
+            let dir = url.deletingLastPathComponent()
+            helper { $0.reveal(dir) { ok in if !ok { DispatchQueue.main.async { self.status("could not show \(dir.lastPathComponent) in Finder") } } } }
+        case "openPrivacy":
+            // A file macOS's privacy protection kept spacebar from: Privacy & Security's Files and Folders, where that changes.
+            guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders"),
+                  NSWorkspace.shared.open(url) else {
+                return status("Open System Settings › Privacy & Security › Files and Folders")
+            }
         case "setting":
             // The Aa popover and the sidebar button: cosmetic keys only (Settings.panelKeys), checked here and again by the writer.
             guard let key = m.string("key", max: 32), let raw = body["value"], let patch = Settings.panelPatch(key, raw) else {
@@ -1984,7 +2063,7 @@ class PreviewController: NSViewController {
             guard SettingsTab.all.contains(tab) else { return refuse("openSettings", "unknown tab") }
             helper { $0.openSettings(tab) { ok in if !ok { DispatchQueue.main.async { self.status("could not open settings") } } } }
         case "toggle":
-            guard SettingsStore.shared.settings.taskToggles else { return refuse("toggle", "task toggles are off") }
+            guard SettingsStore.shared.settings.taskToggles, !gone else { repushDoc("toggleRefused"); return refuse("toggle", "task toggles are off or the file is gone") }
             // A refused toggle is already flipped on the page: the document goes back to it as it is.
             guard !updateBusy else { status("Updating…"); return repushDoc("toggleRefused") }
             guard isCurrent(m), let line = m.int("line"), let checked = m.bool("checked"), let text = m.string("text", max: 1 << 16) else {
@@ -1993,7 +2072,7 @@ class PreviewController: NSViewController {
             guard let mapped = mapLine(line, from: m.int("ver")) else { status("not toggled: document changed"); return repushDoc("toggleRefused") }
             toggleTask(line: mapped, text: text, checked: checked)
         case "editBlock":
-            guard SettingsStore.shared.settings.inlineEditing, isCurrent(m) else {
+            guard SettingsStore.shared.settings.inlineEditing, isCurrent(m), !gone else {
                 refuse("editBlock", "not the previewed file")
                 if let seq = m.int("seq") { js("sb.editEnd", ["seq": seq]) }
                 return
@@ -2007,7 +2086,7 @@ class PreviewController: NSViewController {
         case "editText":
             // A click on the text of a code, text, JSON or CSV view: the whole file, edited in the same key panel.
             guard SettingsStore.shared.settings.inlineEditing, let url = fileURL, fileKind != .markdown, m.string("path", max: 4096) == url.path,
-                  textSource != nil, !torn, !tornHalted else {
+                  textSource != nil, !torn, !tornHalted, !gone else {
                 refuse("editText", "not the editable file on screen")
                 if let seq = m.int("seq") { js("sb.editEnd", ["seq": seq]) }
                 return
@@ -2054,7 +2133,7 @@ class PreviewController: NSViewController {
             if let kt = m.double("keyTime") { log.info("keystroke->painted \(uptimeMs(since: kt), privacy: .public)ms") }
         case "edit":
             // The page names the document it shows: while a new file loads it may still show the previous one.
-            if let fileURL, fileKind == .markdown, m.string("path", max: 4096) == fileURL.path { openExternally(fileURL) }
+            if let fileURL, fileKind == .markdown, !gone, m.string("path", max: 4096) == fileURL.path { openExternally(fileURL) }
         case "loadRemoteImages":
             // A blocked image's placeholder: this document's remote images, for this preview only. The setting is not touched.
             guard let p = m.string("path", max: 4096), host.remoteImages.allowOnce(p, current: fileURL?.path) else {

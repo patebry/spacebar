@@ -780,7 +780,7 @@ if flows.contains("7") {
     let txt = space([corpus.appendingPathComponent("unreadable.txt")], settle: 0.5)
     let txtSays = (txt.page.notes + [txt.page.status]).joined(separator: " ")
     let offers = js("current.canOpen === true") as? Bool ?? true
-    check("7: an unreadable (chmod 000) text file says it couldn’t be read, and offers no app", txt.view == "info" && txtSays.contains("couldn’t be read") && !offers,
+    check("7: an unreadable (chmod 000) text file says it has no permission, and offers no app", txt.view == "info" && txtSays.contains("don’t have permission") && !offers,
           "view \(txt.view), card says '\(txt.page.text.replacingOccurrences(of: "\n", with: " ").prefix(160))'")
     close()
     let mdu = corpus.appendingPathComponent("unreadable.md")
@@ -790,8 +790,46 @@ if flows.contains("7") {
     spin(until: 6) { firstRender(mdu.path, from: from) != nil }
     spin(0.5)
     let mp = page()
-    check("7: an unreadable Markdown file says it cannot be read", (mp.notes + [mp.status]).joined().contains("couldn’t be read") || mp.text.contains("couldn’t be read"),
+    check("7: an unreadable Markdown file says why it cannot be read", (mp.notes + [mp.status]).joined().contains("don’t have permission") || mp.text.contains("don’t have permission"),
           "view \(mp.view), notes \(mp.notes), status '\(mp.status)'")
+    close()
+
+    // A file that goes while it is on screen: deleted, renamed, or replaced by a save.
+    let live = out.appendingPathComponent("live")
+    try? FileManager.default.createDirectory(at: live, withIntermediateDirectories: true)
+    let doomed = live.appendingPathComponent("doomed.md")
+    try! "# Doomed\n\nText.\n".write(to: doomed, atomically: true, encoding: .utf8)
+    _ = space([doomed], settle: 0.5)
+    try! FileManager.default.removeItem(at: doomed)
+    spin(2)
+    let g = jsJSON("return { gone: document.documentElement.hasAttribute('data-gone'), open: $('edit').disabled, status: $('status').textContent, text: $('doc').textContent }")
+    check("7: a file deleted while open says so, stays dimmed, and cannot be opened",
+          g["gone"] as? Bool == true && g["open"] as? Bool == true && g["status"] as? String == "doomed.md was moved or deleted" && (g["text"] as? String ?? "").contains("Doomed"), "\(g)")
+    try! "# Doomed again\n".write(to: doomed, atomically: true, encoding: .utf8)
+    spin(until: 3) { (js("document.documentElement.hasAttribute('data-gone')") as? Bool) == false }
+    let back = jsJSON("return { gone: document.documentElement.hasAttribute('data-gone'), status: $('status').textContent, text: $('doc').textContent }")
+    check("7: the file coming back clears it", back["gone"] as? Bool == false && back["status"] as? String == "" && (back["text"] as? String ?? "").contains("again"), "\(back)")
+    close()
+    let before = live.appendingPathComponent("before.md"), after = live.appendingPathComponent("after.md")
+    try! "# Renamed\n".write(to: before, atomically: true, encoding: .utf8)
+    _ = space([before], settle: 0.5)
+    try! FileManager.default.moveItem(at: before, to: after)
+    spin(until: 4) { page().path == after.path }
+    check("7: a file renamed while open is followed", page().path == after.path && (js("document.documentElement.hasAttribute('data-gone')") as? Bool) == false, page().path)
+    close()
+    let saved = live.appendingPathComponent("saved.txt")
+    try! "one\n".write(to: saved, atomically: true, encoding: .utf8)
+    _ = space([saved], settle: 0.5)
+    try! "two\n".write(to: saved, atomically: true, encoding: .utf8)
+    spin(2)
+    check("7: a save that replaces the file is not taken for a deletion", (js("document.documentElement.hasAttribute('data-gone')") as? Bool) == false && page().text.contains("two"), page().text)
+    close()
+    let vanished = live.appendingPathComponent("vanished.md")
+    let v = space([vanished], settle: 0.5)
+    let vs = jsJSON("return { note: (document.querySelector('#doc .viewer-note') || {}).textContent, open: $('edit').textContent, action: $('edit').dataset.action }")
+    check("7: a file missing at open says it is no longer there, and offers its folder", vs["note"] as? String == "This file is no longer there. It may have been moved or deleted."
+          && vs["open"] as? String == "Show Folder" && vs["action"] as? String == "revealFolder", "\(vs)")
+    noErrors("7 gone", v.page)
     close()
 }
 

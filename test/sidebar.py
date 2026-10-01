@@ -3098,7 +3098,7 @@ def main():
         h3 = page.js(HINT)
         page.cmd('@eval:sb.status("Copied"); sb.helperHint(); 0')
         h4 = page.js(HINT)
-        check(h1 == ['Space helper is off: open spacebar Settings', True, 'pointer'] and [x.get('tab') for x in o] == ['general'] and h2 == ['', False, 'auto']
+        check(h1 == ['Space helper is offSettings…', True, 'pointer'] and [x.get('tab') for x in o] == ['general'] and h2 == ['', False, 'auto']
               and h3 == ['', False, 'auto'] and h4[:2] == ['Copied', False],
               'Space helper hint: one line; a click opens Settings and takes it down; the next file clears it; it never covers another status',
               json.dumps([h1, o, h2, h3, h4]))

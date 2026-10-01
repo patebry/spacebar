@@ -123,4 +123,10 @@
     :root:not([data-chrome=minimal]) #doc > :is(h1, h2, h3, h4, h5, h6) { scroll-margin-top: calc(var(--bar-h) + 16px); }
   }
   @media (prefers-reduced-motion: reduce) { :root.sb-anim #frame, :root.sb-anim #crumbs { transition: none !important; } }
+  /* The sidebar shown over a narrow page: an opaque sheet above the page and the path, with its button still on top. */
+  @media (max-width: 639px) {
+    :root.sb-peek:not([data-chrome=minimal]) #sidebar, :root.sb-peek #sidebar { z-index: 11 !important; background: var(--chrome);
+      border-right: 1px solid var(--frame-line); box-shadow: 0 0 24px rgba(0, 0, 0, .22); }
+    :root.sb-peek #side-toggle { z-index: 12 !important; }
+  }
 }

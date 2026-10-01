@@ -278,8 +278,11 @@
     background: color-mix(in srgb, var(--fg) 4%, transparent); }
   #doc .img-stage.zoomed img { flex: none; margin: auto; max-width: none; max-height: none; border-radius: 0; }
   #doc .img-stage.panning { cursor: grabbing; }
-  /* The Space helper's panel closed: emptied until the next file renders. */
-  :root[data-blank] body > * { visibility: hidden !important; }
+  /* The Space helper's panel closed: emptied until the next file renders. The window's shell (the chrome, the sidebar's
+     sheet, the page's outline) stays, so the first frame of the next file is not a bare sheet. */
+  :root[data-blank] :is(#doc, #crumbs, #toolbar, #toc, #copy, #side-head, #side-list, #side-more) { visibility: hidden !important; }
+  /* Moved or deleted while on screen: the last content stays, dimmed. */
+  :root[data-gone] #doc { opacity: .45; }
   /* A PDF fills the rest of the panel under its toolbar, edge to edge; the extension lays its native PDFView over .pdf-area. */
   :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=quicklook], [data-view=rtf], [data-view=bitmap]) body { height: 100vh; overflow: hidden; }
   :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=quicklook], [data-view=rtf], [data-view=bitmap]) #main { display: flex; flex-direction: column; height: 100vh; }
@@ -358,6 +361,7 @@
   #crumbs button.crumb-back:focus-visible { outline: 2px solid var(--accent); }
   #doc .viewer-loading { display: grid; justify-items: center; gap: 10px; padding: 96px 0 24px; font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--muted); }
   #doc .viewer-loading .viewer-note { margin: 0; }
+  #doc .overview .ov-loading { padding-top: 48px; }
   #doc .viewer-loading .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--muted) 25%, transparent);
     border-top-color: var(--muted); animation: sb-spin .8s linear infinite, sb-fade .2s ease-out both; }
   @keyframes sb-spin { to { transform: rotate(360deg); } }
@@ -406,8 +410,10 @@
   #toolbar > :is(#status, #selpos, #kind, #stats):not(:empty) { display: flex; height: 24px; align-items: center; padding: 0 8px; border-radius: 6px; background: var(--ui-bg);
     box-shadow: 0 0 0 .5px var(--ui-edge), 0 1px 2px rgba(0, 0, 0, .06); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); }
   #toolbar > #kind:not(:empty) + #stats:not(:empty)::before { content: none; }
-  #status[data-hint] { cursor: pointer; }
-  #status[data-hint]:hover { color: var(--fg); text-decoration: underline; }
+  #status[data-hint] { cursor: pointer; gap: 6px; align-items: center; }
+  #status .hint-pill { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 6px; color: var(--ui-fg);
+    background: color-mix(in srgb, var(--fg) 7%, transparent); font-weight: 500; }
+  #status[data-hint]:hover .hint-pill { background: color-mix(in srgb, var(--fg) 12%, transparent); }
   #toolbar > button, #side-toggle {
     font: inherit; font-weight: 500; color: var(--ui-fg); height: 24px; padding: 0 10px; border-radius: 6px; cursor: default;
     background: var(--ui-bg); border: 0; box-shadow: 0 0 0 .5px var(--ui-edge), 0 1px 2px rgba(0, 0, 0, .06);
@@ -574,7 +580,7 @@
     :root:not([data-chrome=minimal]):is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=quicklook], [data-view=rtf], [data-view=bitmap]) #doc { padding-top: calc(var(--bar-h) + 1px); }
     :root:not([data-chrome=minimal]) #doc .pdf-area { margin: 0 calc(var(--gap) + 1px) 0 calc(var(--frame-inset) + 1px); border-top: 0; }
     /* The viewer's Open button moves up into the toolbar row, and a head with nothing else in it goes. */
-    :root:not([data-chrome=minimal]) #doc :is(.viewer-head, .info-card) > .viewer-open { display: none; }
+    :root:not([data-chrome=minimal]) #doc :is(.viewer-head, .info-card) > .viewer-open:not(.viewer-privacy) { display: none; }
     :root:not([data-chrome=minimal]) #doc .viewer-head.bare { display: none; }
     :root:not([data-chrome=minimal]) { --img-room: 114px; }
   }

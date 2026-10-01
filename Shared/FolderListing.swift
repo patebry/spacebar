@@ -603,7 +603,61 @@ enum FileView {
         p["canOpen"] = false
         p["view"] = "info"
         p["note"] = cloud ? "This file is in iCloud and couldn’t be downloaded." : "This file couldn’t be read."
+        if !cloud, let r = readRefusal(path) {
+            p["note"] = r.note
+            if r.privacy { p["privacy"] = true }
+        }
         return p
+    }
+
+    /// Why a regular file cannot be read, found by opening it (never reading): no permission (EACCES), which no app of the
+    /// user's gets round, or macOS's privacy protection keeping spacebar out of a folder (EPERM), which Privacy & Security's
+    /// Files and Folders can change. Nil when it opens, or when it is in iCloud and not downloaded.
+    static func readRefusal(_ path: String) -> (note: String, privacy: Bool)? {
+        guard !FileTypes.isDataless(path) else { return nil }
+        let fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+        if fd >= 0 { close(fd); return nil }
+        switch errno {
+        case EACCES: return ("You don’t have permission to read this file. Its owner can change that in Finder’s Get Info.", false)
+        case EPERM: return ("macOS hasn’t let spacebar read \(protectedPlace(path)). Allow it in System Settings › Privacy & Security › Files and Folders.", true)
+        default: return nil
+        }
+    }
+
+    /// What a Mach-O file is, from its header, as Finder names it; nil for anything else (or a file in iCloud, not read).
+    static func machOKind(_ path: String) -> String? {
+        guard !FileTypes.isDataless(path), let h = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? h.close() }
+        guard let d = try? h.read(upToCount: 16), d.count >= 8 else { return nil }
+        let b = [UInt8](d)
+        if b[0...3] == [0xCA, 0xFE, 0xBA, 0xBE] { return "Unix executable" }
+        guard b[0...3] == [0xCF, 0xFA, 0xED, 0xFE] || b[0...3] == [0xCE, 0xFA, 0xED, 0xFE], b.count >= 16 else { return nil }
+        switch UInt32(b[12]) | UInt32(b[13]) << 8 | UInt32(b[14]) << 16 | UInt32(b[15]) << 24 {
+        case 6: return "Dynamic library"
+        case 8: return "Plug-in bundle"
+        default: return "Unix executable"
+        }
+    }
+
+    /// The protected place `path` is in, as the privacy settings name it.
+    static func protectedPlace(_ path: String) -> String {
+        let home = tildePath(path)
+        for (dir, name) in [("~/Desktop/", "your Desktop folder"), ("~/Documents/", "your Documents folder"), ("~/Downloads/", "your Downloads folder"),
+                            ("~/Library/Mobile Documents/", "iCloud Drive")] where home.hasPrefix(dir) { return name }
+        return path.hasPrefix("/Volumes/") ? "files on this volume" : "files in this folder"
+    }
+
+    /// A kind as the toolbar and the info card show it: sentence case, as Finder's own kinds read ("HEIF image", "Application").
+    /// The system's descriptions are passed through as they are otherwise; only these common nouns are lowered.
+    static func kindName(_ s: String) -> String {
+        let lower: Set<String> = ["Image", "Text", "Document", "Movie", "Video", "Audio", "File", "Archive", "Application", "Presentation",
+                                  "Spreadsheet", "Font", "Library", "Executable", "Package", "Data", "Source", "Code", "Script", "List", "Model",
+                                  "Certificate", "Disk", "Playlist", "Folder", "Bundle"]
+        var words = s.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+        guard let first = words.first, !first.isEmpty else { return s }
+        words[0] = first.prefix(1).uppercased() + first.dropFirst()
+        for i in words.indices.dropFirst() where lower.contains(words[i]) { words[i] = words[i].lowercased() }
+        return words.joined(separator: " ")
     }
 
     /// Why an item cannot be opened at all, as the info card says it: a link that loops or leads nowhere, no permission, or not
@@ -615,7 +669,8 @@ enum FileView {
             let err = errno
             if link && err == ELOOP { return "This item can’t be opened (a link that loops)." }
             if link && err == ENOENT { return "This item can’t be opened (a link to an item that is missing)." }
-            if err == EACCES { return "This item can’t be opened (no permission to read it)." }
+            if err == EACCES { return "You don’t have permission to read this item." }
+            if err == ENOENT { return "This file is no longer there. It may have been moved or deleted." }
             return "This item can’t be opened."
         }
         if st.st_mode & S_IFMT != S_IFREG && st.st_mode & S_IFMT != S_IFDIR { return "This item can’t be opened (not a regular file)." }
@@ -634,6 +689,7 @@ enum FileView {
         p["canOpen"] = false
         p["view"] = "info"
         p["note"] = note
+        if !link, lstat(path, &ls) != 0, errno == ENOENT { p["missing"] = true }
         return p
     }
 
@@ -682,12 +738,14 @@ enum FileView {
         let regular = st.st_mode & S_IFMT == S_IFREG
         let size = Int64(st.st_size)
         let ext = (path as NSString).pathExtension
+        let refusal = regular ? readRefusal(path) : nil
         p["size"] = regular ? size : NSNull()
         p["modified"] = Double(st.st_mtimespec.tv_sec) * 1000 + Double(st.st_mtimespec.tv_nsec / 1_000_000)
         let type = (regular ? nil : UTType(filenameExtension: ext, conformingTo: .package)) ?? UTType(filenameExtension: ext)
         p["kindName"] = type.flatMap(\.localizedDescription) ?? (regular ? "Document" : "Folder")
         let media = FileTypes.unplayableMedia[ext.lowercased()]
         if let media, type?.isDynamic != false { p["kindName"] = media }
+        if regular, ext.isEmpty || type?.isDynamic == true, let k = machOKind(path) { p["kindName"] = k }
         p["icon"] = FileTypes.glyph(name: (path as NSString).lastPathComponent, kind: kind)
         p["canOpen"] = canOpen
         // A text file whose extension the system takes for something else (.ts is also an MPEG transport stream) is named by
@@ -722,11 +780,8 @@ enum FileView {
             // O_NONBLOCK and fstat: a file swapped for a FIFO since the stat can neither hang the open nor be read.
             let fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
             // No read permission: no app of the user's can read it either. (A sandbox's refusal is EPERM, and the writer may still open it.)
-            if fd < 0, regular, errno == EACCES {
-                p["note"] = "This file couldn’t be read."
-                p["canOpen"] = false
-                break
-            }
+            if fd < 0, regular, errno == EACCES { p["canOpen"] = false }
+            if fd < 0, refusal != nil { break }
             guard regular, size > 0 || kind != .other, fd >= 0 else { if fd >= 0 { close(fd) }; break }
             var fst = stat()
             guard fstat(fd, &fst) == 0, fst.st_mode & S_IFMT == S_IFREG else { close(fd); break }
@@ -762,6 +817,11 @@ enum FileView {
             if ext.lowercased() == "tsv" { p["tsv"] = true }
         default:
             break
+        }
+        if let r = refusal {
+            view = "info"
+            p["note"] = r.note
+            if r.privacy { p["privacy"] = true } else { p["canOpen"] = false }
         }
         if view == "info", regular, media != nil, p["note"] == nil { p["note"] = "macOS can’t play this format; open it in another app." }
         p["view"] = view

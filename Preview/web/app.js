@@ -1227,6 +1227,7 @@ window.sb = {
     // A re-render of the same file (a change on disk) keeps the app its Open button names; only a new file asks again.
     if (samePath && p.app === undefined && typeof current.app === 'string') p = { ...p, app: current.app };
     current = p;
+    if (goneP && goneP !== p.path) goneP = '';
     delete root.dataset.blank;
     imgStatus = new Map();
     imgAsked = new Set();
@@ -1237,6 +1238,7 @@ window.sb = {
     document.title = p.name;
     root.dataset.view = isMarkdown(p) ? 'markdown' : p.view;
     syncOpen(p);
+    syncGone();
     syncAa(p);
     syncTools(p);
     showFolder(p);
@@ -1358,6 +1360,12 @@ window.sb = {
     const old = document.querySelector('#doc .info-card > svg.ic'), img = thumbNode(current);
     if (old && img) old.replaceWith(img);
   },
+  /** The file on screen was moved or deleted (`on`), or is back: its last content stays, dimmed, with Open and editing off. */
+  fileGone(g) {
+    if (!g || (g.on === true && g.path !== current.path)) return;
+    goneP = g.on === true ? current.path : '';
+    syncGone();
+  },
   /** The panel is going away: nothing of this file may show when it next opens on another, until that one is drawn. */
   blank() { root.dataset.blank = ''; },
   /** Runs the renderers once on a sample, into nothing on screen, so the first document shown does not pay for their first run
@@ -1443,7 +1451,7 @@ window.sb = {
   helperHint() {
     const s = $('status');
     if (s.textContent) return false;
-    s.textContent = 'Space helper is off: open spacebar Settings';
+    s.replaceChildren(document.createTextNode('Space helper is off'), el('span', 'hint-pill', 'Settings…'));
     s.dataset.hint = '';
     s.title = 'Open spacebar Settings';
     return true;
@@ -1542,8 +1550,8 @@ function icon(kind, size = 16) {
 function openButton(p) {
   const b = el('button', 'viewer-open');
   b.type = 'button';
-  b.dataset.action = p.canOpen === true ? 'openFile' : 'reveal';
-  b.textContent = p.canOpen === true ? openLabel(p) : 'Reveal in Finder';
+  b.dataset.action = p.missing === true ? 'revealFolder' : p.canOpen === true ? 'openFile' : 'reveal';
+  b.textContent = p.missing === true ? 'Show Folder' : p.canOpen === true ? openLabel(p) : 'Reveal in Finder';
   return b;
 }
 
@@ -1555,7 +1563,7 @@ function viewerAction(b, e) {
   // A Markdown document can hold a look-alike button; the viewers exist only for other files.
   if (!current.path || isMarkdown(current)) return;
   const a = b.dataset.action;
-  if ((a === 'openFile' || a === 'reveal') && e.isTrusted) post({ type: a, path: current.path });
+  if (['openFile', 'reveal', 'revealFolder', 'openPrivacy'].includes(a) && e.isTrusted) post({ type: a, path: current.path });
   else if (a === 'csvSort') csvSortBy(+b.dataset.col);
   else if (a === 'jsonToggle' || a === 'jsonAll' || a === 'jsonMore') jsonAction(a, b);
   else if (a === 'archiveEntry') {
@@ -2251,6 +2259,12 @@ function infoCard(p, why) {
   if (why) card.append(note(why));
   // Minimal chrome's Open; the toolbar row has its own. A file inside an archive has Back instead.
   card.append(p.entry ? viewHead(p) : openButton(p));
+  if (p.privacy === true && !p.entry) {
+    const b = el('button', 'viewer-open viewer-privacy', 'Open Privacy Settings');
+    b.type = 'button';
+    b.dataset.action = 'openPrivacy';
+    card.append(b);
+  }
   return card;
 }
 
@@ -2797,8 +2811,16 @@ function overviewView(p) {
   title.append(el('div', 'ov-name', plainName(p.name || '')), el('div', 'ov-sub', sub));
   head.append(icon('folder', 40), title);
   box.append(head);
-  if (loading) return box;
-  head.append(viewToggle(p));
+  if (loading) {
+    const spin = el('span', 'spinner');
+    spin.setAttribute('aria-hidden', 'true');
+    const wait = el('div', 'viewer-loading ov-loading');
+    wait.setAttribute('role', 'status');
+    wait.append(spin);
+    box.append(wait);
+    return box;
+  }
+  if (total || folders) head.append(viewToggle(p));
   document.documentElement.toggleAttribute('data-grid', gridWanted(p));
   if (gridWanted(p)) { box.append(gridView(p)); return box; }
   const chips = el('div', 'ov-counts');
@@ -3072,19 +3094,34 @@ const gridTakesKeys = () => gridShown() && (!filterSession || filterSession.auto
  *  is one short word whatever the app, so the toolbar keeps its place from file to file; the tooltip names the app. */
 function syncOpen(p) {
   const b = $('edit');
+  b.disabled = false;
+  $('open-with').disabled = false;
   const doc = isMarkdown(p);
   b.hidden = !!p.entry || (!doc && (p.view === 'overview' || p.view === 'loading' || !p.path));
   b.dataset.kind = doc ? 'doc' : 'file';
-  b.dataset.action = doc ? 'edit' : p.canOpen === true ? 'openFile' : 'reveal';
-  b.textContent = b.dataset.action === 'reveal' ? 'Reveal' : 'Open';
+  b.dataset.action = p.missing === true ? 'revealFolder' : doc ? 'edit' : p.canOpen === true ? 'openFile' : 'reveal';
+  b.textContent = b.dataset.action === 'reveal' ? 'Reveal' : b.dataset.action === 'revealFolder' ? 'Show Folder' : 'Open';
   b.title = openTitle(p, b.dataset.action);
-  $('open-with').hidden = b.hidden || b.dataset.action === 'reveal';
+  $('open-with').hidden = b.hidden || b.dataset.action === 'reveal' || b.dataset.action === 'revealFolder';
   if ($('open-with').hidden || owPop.dataset.path !== p.path) showOpenWith(false);
+}
+
+/** The file on screen, by path, when it was moved or deleted while shown. */
+let goneP = '';
+function syncGone() {
+  const on = !!goneP && goneP === current.path;
+  root.toggleAttribute('data-gone', on);
+  if (!on) return;
+  if (editing) stopEditing();
+  $('edit').disabled = true;
+  $('open-with').disabled = true;
+  showOpenWith(false);
 }
 
 /** ⌘O opens the file only in the Space helper's panel; Quick Look never passes it on. */
 function openTitle(p, action) {
   if (action === 'reveal') return 'Reveal in Finder';
+  if (action === 'revealFolder') return 'Show the folder it was in';
   const key = window.__sbHost === 'panel' ? ' (⌘O)' : '';
   if (action === 'edit') return `Open in your editor${key}`;
   return `${p.app ? openLabel(p) : p.editor === true ? 'Open in your editor' : 'Open in its default app'}${key}`;
@@ -4658,7 +4695,7 @@ function followWiki(a) {
 $('edit').addEventListener('click', (e) => {
   if (isMarkdown(current)) { post({ type: 'edit', path: current.path }); return; }
   const a = $('edit').dataset.action;
-  if ((a === 'openFile' || a === 'reveal') && e.isTrusted && current.path) post({ type: a, path: current.path });
+  if ((a === 'openFile' || a === 'reveal' || a === 'revealFolder') && e.isTrusted && current.path) post({ type: a, path: current.path });
 });
 
 // ---------- Open With: the apps the writer offers for the file on screen, asked for when the chevron is clicked ----------

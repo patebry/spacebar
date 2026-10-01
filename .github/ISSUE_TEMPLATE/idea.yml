@@ -1,0 +1,21 @@
+name: An idea
+description: Something spacebar could do in its panel, sidebar or settings.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        spacebar aims to be the best Quick Look, not an IDE. Ideas that make looking at a file faster or clearer fit best.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you are trying to do
+      description: The moment in your day when spacebar gets in the way or falls short.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+    validations:
+      required: true

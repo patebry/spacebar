@@ -1,0 +1,33 @@
+name: A file type, or something to show better
+description: A file spacebar shows as an info card or plain text, or one it could show better.
+labels: [file type]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        spacebar aims to be the best Quick Look, not an IDE: it shows files, finds in them and makes quick edits.
+        Project views, builds, terminals and running code are out of scope.
+  - type: input
+    id: type
+    attributes:
+      label: File type
+      description: The extension, and the app that makes or opens it.
+      placeholder: .parquet (DuckDB, pandas)
+    validations:
+      required: true
+  - type: textarea
+    id: now
+    attributes:
+      label: What spacebar shows now
+      description: Info card, plain text, Apple's preview, or nothing. A screenshot helps.
+  - type: textarea
+    id: want
+    attributes:
+      label: What you would want to see
+    validations:
+      required: true
+  - type: textarea
+    id: sample
+    attributes:
+      label: A sample file
+      description: A link to a small file that is safe to share, if you have one.

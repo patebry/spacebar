@@ -92,12 +92,21 @@ enum Decision {
             && displays.contains { $0.intersects(w.bounds) }
     }
 
-    /// How long a panel hidden by another app coming forward waits for Finder to come back.
-    static let suspendLimit: TimeInterval = 10 * 60
+    /// How long a panel hidden by another app coming forward waits for Finder to come back. Long enough to answer a message or
+    /// copy a value and come back; past it the panel is a leftover the user no longer expects.
+    static let suspendLimit: TimeInterval = 2 * 60
 
-    /// An app came forward. Another app hides an open panel, as it hides Apple's Quick Look, and closes a show still on its way;
-    /// Finder brings a hidden panel back within `suspendLimit`. The panel brought back is a show like any other: pending, it
-    /// holds the closing and list keys as a Space's show does, and keeps them only once `panelOpened` accepts it.
+    /// What Finder's selection was read to be when Finder came back while a panel was hidden.
+    struct ResumeRead: Equatable {
+        var selection: [String] = []
+        /// Finder's focus is in no window: the Desktop.
+        var desktop = false
+        /// A mouse button went down just before Finder came forward.
+        var clicked = false
+        var axErrors: [String] = []
+        var elapsedMs: Double = 0
+    }
+
     static func tapAction(exists: Bool, trusted: Bool) -> TapAction {
         exists ? (trusted ? .none : .remove) : (trusted ? .create : .none)
     }
@@ -106,10 +115,23 @@ enum Decision {
     /// Accessibility is still granted; otherwise the watch removes it.
     static func reenablesTap(trusted: Bool) -> Bool { trusted }
 
+    /// An app came forward. Another app hides an open panel, as it hides Apple's Quick Look, and closes a show still on its way.
+    /// Finder coming back within `suspendLimit` has its selection read (`resumes`) before anything comes back.
     static func activated(isFinder: Bool, open: Bool, pending: Bool, suspendedFor age: TimeInterval?) -> ActivationAction {
         if !isFinder { return pending ? .close : open ? .suspend : .none }
         guard let age, !open, !pending else { return .none }
-        return age < suspendLimit ? .restore : .forget
+        return age < suspendLimit ? .check : .forget
+    }
+
+    /// Finder is back and its selection read: the hidden panel comes back only for the selection it was showing. Any other
+    /// selection, none, a click on the Desktop, or a read with an AX error or past the budget drops it as a close does, so
+    /// nothing stale comes back later and the next Space shows what is selected then. The panel brought back is a show like
+    /// any other: pending, it holds the closing and list keys as a Space's show does, and keeps them only once `panelOpened`
+    /// accepts it.
+    static func resumes(_ r: ResumeRead, shown: [String], suspendedFor age: TimeInterval) -> ActivationAction {
+        guard age < suspendLimit, r.axErrors.isEmpty, r.elapsedMs <= budgetMs, !(r.desktop && r.clicked) else { return .forget }
+        let selected = Set(r.selection.filter { $0.hasPrefix("/") })
+        return !selected.isEmpty && selected == Set(shown) ? .restore : .forget
     }
 
     /// Whether Finder's focus is a text field. Any AX error, or a budget spent before the role was read, counts as one.
@@ -123,7 +145,8 @@ enum Decision {
 
 enum FailAction: Equatable { case leave, close, closeAndRepost }
 
-enum ActivationAction: Equatable { case none, close, suspend, restore, forget }
+/// `check`: Finder is back within the limit and its selection decides (`Decision.resumes`).
+enum ActivationAction: Equatable { case none, close, suspend, check, restore, forget }
 
 /// What the watch does with the event tap: made once Accessibility is granted, torn down once it is revoked.
 enum TapAction: Equatable { case none, create, remove }

@@ -163,7 +163,7 @@ def sandboxed(tree, check, runtime=False):
     open(ent, 'w').write(ENTITLEMENTS)
     open(plist, 'w').write(f'<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>{SANDBOX_ID}</string></dict></plist>')
     subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-O', '-target', 'arm64-apple-macos13.0'] +
-                   [os.path.join(ROOT, *p) for p in (('test', 'web', 'main.swift'), ('Shared', 'Settings.swift'), ('Shared', 'WebShell.swift'),
+                   [os.path.join(ROOT, *p) for p in (('test', 'web', 'main.swift'), ('test', 'offscreen.swift'), ('Shared', 'Settings.swift'), ('Shared', 'WebShell.swift'),
                                                       ('Shared', 'FolderListing.swift'), ('Shared', 'ArchiveListing.swift'), ('Shared', 'FolderScan.swift'), ('Shared', 'LinkPolicy.swift'), ('Preview', 'PDFPane.swift'),
                                                       ('Preview', 'Gestures.swift'), ('Preview', 'Thumbnail.swift'), ('Preview', 'ImagePane.swift'), ('test', 'nsevents.swift'))] +
                    ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist', '-Xlinker', plist, '-o', exe], check=True)
@@ -1847,8 +1847,8 @@ def calm_header(page, check, host):
     if SHOTS:
         shoot(page, f'header-{host}-clicked')
     mid = idle['bar'] / 2
-    # The panel centres its traffic lights (12 to 66 pt from the left) on the top row: ViewerPanel.rowHeight and lightsLeft.
-    clear_of_lights = idle['toggle'][0] >= 66 + 8 if host == 'panel' else True
+    # The panel centres its traffic lights, close and zoom (12 to 46 pt from the left), on the top row: ViewerPanel.rowHeight and lightsLeft.
+    clear_of_lights = idle['toggle'][0] >= 46 + 8 if host == 'panel' else True
     check(abs(idle['toggle'][1] - mid) <= 2 and clear_of_lights, f'{host}: the sidebar button sits in the top row, centred on it'
           + (", the traffic lights' line, and clear of them" if host == 'panel' else ''),
           json.dumps([idle['toggle'], mid]))
@@ -1902,7 +1902,7 @@ def panel_host(check):
         page.cmd('@wait:0.3')
         g = page.js("""const r = document.documentElement, t = document.getElementById('side-toggle').getBoundingClientRect();
           return [r.dataset.host, getComputedStyle(r).getPropertyValue('--titlebar-inset').trim(), Math.round(t.left)];""")
-        check(g[0] == 'panel' and g[1] == '76px' and g[2] >= 76, "panel: the host is set at document start, and the sidebar button clears the traffic lights", json.dumps(g))
+        check(g[0] == 'panel' and g[1] == '56px' and g[2] >= 56, "panel: the host is set at document start, and the sidebar button clears the traffic lights", json.dumps(g))
         calm_header(page, check, 'panel')
         page.render(T('README.md'))
         page.cmd('@wait:0.3')
@@ -3098,7 +3098,7 @@ def main():
         h3 = page.js(HINT)
         page.cmd('@eval:sb.status("Copied"); sb.helperHint(); 0')
         h4 = page.js(HINT)
-        check(h1 == ['Space helper is off: open spacebar Settings', True, 'pointer'] and [x.get('tab') for x in o] == ['general'] and h2 == ['', False, 'auto']
+        check(h1 == ['Space helper is offSettings…', True, 'pointer'] and [x.get('tab') for x in o] == ['general'] and h2 == ['', False, 'auto']
               and h3 == ['', False, 'auto'] and h4[:2] == ['Copied', False],
               'Space helper hint: one line; a click opens Settings and takes it down; the next file clears it; it never covers another status',
               json.dumps([h1, o, h2, h3, h4]))

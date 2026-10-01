@@ -1227,6 +1227,7 @@ window.sb = {
     // A re-render of the same file (a change on disk) keeps the app its Open button names; only a new file asks again.
     if (samePath && p.app === undefined && typeof current.app === 'string') p = { ...p, app: current.app };
     current = p;
+    if (goneP && goneP !== p.path) goneP = '';
     delete root.dataset.blank;
     imgStatus = new Map();
     imgAsked = new Set();
@@ -1237,6 +1238,7 @@ window.sb = {
     document.title = p.name;
     root.dataset.view = isMarkdown(p) ? 'markdown' : p.view;
     syncOpen(p);
+    syncGone();
     syncAa(p);
     syncTools(p);
     showFolder(p);
@@ -1358,6 +1360,12 @@ window.sb = {
     const old = document.querySelector('#doc .info-card > svg.ic'), img = thumbNode(current);
     if (old && img) old.replaceWith(img);
   },
+  /** The file on screen was moved or deleted (`on`), or is back: its last content stays, dimmed, with Open and editing off. */
+  fileGone(g) {
+    if (!g || (g.on === true && g.path !== current.path)) return;
+    goneP = g.on === true ? current.path : '';
+    syncGone();
+  },
   /** The panel is going away: nothing of this file may show when it next opens on another, until that one is drawn. */
   blank() { root.dataset.blank = ''; },
   /** Runs the renderers once on a sample, into nothing on screen, so the first document shown does not pay for their first run
@@ -1379,6 +1387,29 @@ window.sb = {
     if (!z || z.path !== current.path || current.view !== 'bitmap' || !Number.isInteger(z.zoom)) return;
     const label = zoomLabel();
     if (label) label.textContent = `${z.zoom}%`;
+  },
+  /** The page of the PDF on screen (from 1) and how many it has: the toolbar's counter, which a click turns into Go to page. */
+  pdfPage(m) {
+    if (!m || m.path !== current.path || current.view !== 'pdf' || !Number.isInteger(m.page) || !Number.isInteger(m.pages)) return;
+    current.page = m.page;
+    current.pages = m.pages;
+    const b = document.querySelector('#kind .pdf-page');
+    if (b) b.textContent = `${m.page.toLocaleString()} / ${m.pages.toLocaleString()}`;
+  },
+  /** What the video or audio file on screen holds (its size and length, its title and artist), for the kind line. */
+  mediaInfo(m) {
+    if (!m || m.path !== current.path || !['video', 'audio'].includes(current.view) || typeof m.text !== 'string') return;
+    current.media = m.text.slice(0, 300);
+    const t = document.querySelector('#kind .kind-text');
+    if (t) t.textContent = [current.kindName, current.media, fmtSize(current.size)].filter(Boolean).join(' · ');
+  },
+  /** How many matches the extension found in the PDF or RTF document on screen; it shows the first. */
+  nativeFound(m) {
+    if (!m || m.seq !== nativeFindSeq || finder.how !== 'native' || !Number.isInteger(m.count)) return;
+    finder.hits = Array.from({ length: Math.min(m.count, FIND_MAX) }, () => ({}));
+    finder.more = m.more === true;
+    finder.at = m.count ? 0 : -1;
+    findLabel();
   },
   /** An archive's contents, listed by the writer once its view is up, or why they could not be (then it is an info card). */
   setArchive(a) {
@@ -1443,7 +1474,7 @@ window.sb = {
   helperHint() {
     const s = $('status');
     if (s.textContent) return false;
-    s.textContent = 'Space helper is off: open spacebar Settings';
+    s.replaceChildren(document.createTextNode('Space helper is off'), el('span', 'hint-pill', 'Settings…'));
     s.dataset.hint = '';
     s.title = 'Open spacebar Settings';
     return true;
@@ -1542,8 +1573,8 @@ function icon(kind, size = 16) {
 function openButton(p) {
   const b = el('button', 'viewer-open');
   b.type = 'button';
-  b.dataset.action = p.canOpen === true ? 'openFile' : 'reveal';
-  b.textContent = p.canOpen === true ? openLabel(p) : 'Reveal in Finder';
+  b.dataset.action = p.missing === true ? 'revealFolder' : p.canOpen === true ? 'openFile' : 'reveal';
+  b.textContent = p.missing === true ? 'Show Folder' : p.canOpen === true ? openLabel(p) : 'Reveal in Finder';
   return b;
 }
 
@@ -1555,7 +1586,7 @@ function viewerAction(b, e) {
   // A Markdown document can hold a look-alike button; the viewers exist only for other files.
   if (!current.path || isMarkdown(current)) return;
   const a = b.dataset.action;
-  if ((a === 'openFile' || a === 'reveal') && e.isTrusted) post({ type: a, path: current.path });
+  if (['openFile', 'reveal', 'revealFolder', 'openPrivacy'].includes(a) && e.isTrusted) post({ type: a, path: current.path });
   else if (a === 'csvSort') csvSortBy(+b.dataset.col);
   else if (a === 'jsonToggle' || a === 'jsonAll' || a === 'jsonMore') jsonAction(a, b);
   else if (a === 'archiveEntry') {
@@ -2251,6 +2282,12 @@ function infoCard(p, why) {
   if (why) card.append(note(why));
   // Minimal chrome's Open; the toolbar row has its own. A file inside an archive has Back instead.
   card.append(p.entry ? viewHead(p) : openButton(p));
+  if (p.privacy === true && !p.entry) {
+    const b = el('button', 'viewer-open viewer-privacy', 'Open Privacy Settings');
+    b.type = 'button';
+    b.dataset.action = 'openPrivacy';
+    card.append(b);
+  }
   return card;
 }
 
@@ -2277,9 +2314,11 @@ function imageView(p) {
   const { text: meta, zoom } = setKind(p, [fmtSize(p.size)], true);
   img.alt = p.name;
   img.draggable = false;
+  // A vector image has the size its file gives it, and no zoom percentage: WebKit's own size for it is a default.
+  const vector = /\.svg$/i.test(p.name || '');
   img.addEventListener('load', () => {
-    meta.textContent = [p.kindName, `${img.naturalWidth} × ${img.naturalHeight}`, fmtSize(p.size)].filter(Boolean).join(' · ');
-    applyZoom(stage, img, zoom, imgScale);
+    meta.textContent = [p.kindName, vector ? (typeof p.svgSize === 'string' ? p.svgSize : '') : `${img.naturalWidth} × ${img.naturalHeight}`, fmtSize(p.size)].filter(Boolean).join(' · ');
+    applyZoom(stage, img, vector ? null : zoom, imgScale);
   });
   img.addEventListener('error', () => {
     if (!box.isConnected) return;
@@ -2688,7 +2727,13 @@ function pdfView(p) {
   const box = el('div', `viewer viewer-pdf${p.view === 'audio' ? ' viewer-audio' : ''}${p.view === 'bitmap' ? ' viewer-image' : ''}`);
   // The extension's image view reports its zoom (sb.imageZoom) into the toolbar, as the page's own image viewer does.
   const dims = p.view === 'bitmap' && Number.isInteger(p.width) && Number.isInteger(p.height) ? `${p.width} × ${p.height}` : '';
-  setKind(p, [dims, fmtSize(p.size)], p.view === 'bitmap');
+  setKind(p, [dims, typeof p.media === 'string' ? p.media : '', fmtSize(p.size)], p.view === 'bitmap');
+  if (p.view === 'pdf' && Number.isInteger(p.pages) && p.pages > 0) {
+    const b = el('button', 'pdf-page', `${(+p.page || 1).toLocaleString()} / ${p.pages.toLocaleString()}`);
+    b.type = 'button';
+    b.title = 'Go to page';
+    $('kind').append(b);
+  }
   box.append(viewHead(p));
   const area = el('div', 'pdf-area');
   area.setAttribute('role', 'document');
@@ -2797,8 +2842,16 @@ function overviewView(p) {
   title.append(el('div', 'ov-name', plainName(p.name || '')), el('div', 'ov-sub', sub));
   head.append(icon('folder', 40), title);
   box.append(head);
-  if (loading) return box;
-  head.append(viewToggle(p));
+  if (loading) {
+    const spin = el('span', 'spinner');
+    spin.setAttribute('aria-hidden', 'true');
+    const wait = el('div', 'viewer-loading ov-loading');
+    wait.setAttribute('role', 'status');
+    wait.append(spin);
+    box.append(wait);
+    return box;
+  }
+  if (total || folders) head.append(viewToggle(p));
   document.documentElement.toggleAttribute('data-grid', gridWanted(p));
   if (gridWanted(p)) { box.append(gridView(p)); return box; }
   const chips = el('div', 'ov-counts');
@@ -3075,16 +3128,29 @@ function syncOpen(p) {
   const doc = isMarkdown(p);
   b.hidden = !!p.entry || (!doc && (p.view === 'overview' || p.view === 'loading' || !p.path));
   b.dataset.kind = doc ? 'doc' : 'file';
-  b.dataset.action = doc ? 'edit' : p.canOpen === true ? 'openFile' : 'reveal';
-  b.textContent = b.dataset.action === 'reveal' ? 'Reveal' : 'Open';
+  b.dataset.action = p.missing === true ? 'revealFolder' : doc ? 'edit' : p.canOpen === true ? 'openFile' : 'reveal';
+  b.textContent = b.dataset.action === 'reveal' ? 'Reveal' : b.dataset.action === 'revealFolder' ? 'Show Folder' : 'Open';
   b.title = openTitle(p, b.dataset.action);
-  $('open-with').hidden = b.hidden || b.dataset.action === 'reveal';
+  $('open-with').hidden = b.hidden || b.dataset.action === 'reveal' || b.dataset.action === 'revealFolder';
   if ($('open-with').hidden || owPop.dataset.path !== p.path) showOpenWith(false);
+}
+
+/** The file on screen, by path, when it was moved or deleted while shown. */
+let goneP = '';
+function syncGone() {
+  const on = !!goneP && goneP === current.path;
+  root.toggleAttribute('data-gone', on);
+  $('edit').disabled = on;
+  $('open-with').disabled = on;
+  if (!on) return;
+  if (editing) stopEditing();
+  showOpenWith(false);
 }
 
 /** ⌘O opens the file only in the Space helper's panel; Quick Look never passes it on. */
 function openTitle(p, action) {
   if (action === 'reveal') return 'Reveal in Finder';
+  if (action === 'revealFolder') return 'Show the folder it was in';
   const key = window.__sbHost === 'panel' ? ' (⌘O)' : '';
   if (action === 'edit') return `Open in your editor${key}`;
   return `${p.app ? openLabel(p) : p.editor === true ? 'Open in your editor' : 'Open in its default app'}${key}`;
@@ -3099,7 +3165,7 @@ const tiny = matchMedia('(max-width: 479px)');
 const appChrome = () => root.dataset.chrome !== 'minimal' && !tiny.matches;
 // The tree of the root on screen: each listed folder by path. Expanded folders are remembered per root for this session
 // (the page lives as long as the extension process), never saved.
-let tree = { root: '', name: '', session: 0, dirs: new Map() };
+let tree = { root: '', name: '', session: 0, dirs: new Map(), selection: null, selOpened: null };
 const expandedByRoot = new Map();
 const requested = new Set();
 let sideDrawn = '';
@@ -3140,7 +3206,7 @@ function expanded() {
 }
 
 function resetTree(rootPath, name) {
-  tree = { root: rootPath, name: name || rootPath.split('/').pop() || rootPath, session: 0, dirs: new Map() };
+  tree = { root: rootPath, name: name || rootPath.split('/').pop() || rootPath, session: 0, dirs: new Map(), selection: null, selOpened: null };
   requested.clear();
   treeVersion++;
   if (filterSession && !filterSession.find) endFilter();
@@ -3169,6 +3235,16 @@ function setFolder(f) {
     size: num(e.size), modified: num(e.modified), broken: e.broken === true, thumb: e.thumb === true })),
     more: Math.max(0, +f.more || 0), stale: false });
   requested.delete(f.dir);
+  if (f.dir === tree.root) {
+    // A multiple selection: how many items, how many are too far away to list, and the folders that lead to the rest.
+    const s = f.selection && typeof f.selection === 'object' && Number.isInteger(f.selection.count) ? f.selection : null;
+    tree.selection = s ? { count: s.count, outside: Math.max(0, +s.outside || 0) } : null;
+    if (s && Array.isArray(s.expand) && tree.selOpened !== f.session) {
+      tree.selOpened = f.session;
+      const x = expanded();
+      for (const d of s.expand) if (inTree(d)) x.add(d);
+    }
+  }
   treeVersion++;
   requestFolders();
   renderSidebar();
@@ -3301,21 +3377,28 @@ function renderSidebar() {
   $('side-toggle').hidden = !on;
   syncToggle();
   syncSideMenu();
+  syncSelPos();
   const key = `${treeVersion}\n${current.path}\n${sideQuery}\n${sideMode}\n${hits.version}`;
   if (!on || key === sideDrawn) return;
   const moved = sideDrawn.split('\n')[1] !== current.path, refiltered = sideDrawn.split('\n')[2] !== sideQuery;
   sideDrawn = key;
-  $('side-title').textContent = tree.name;
+  const sel = tree.selection;
+  $('side-title').textContent = sel ? `${sel.count.toLocaleString()} Selected` : tree.name;
   $('side-title').title = `${tree.root}\nClick for an overview of this folder`;
+  const top0 = tree.dirs.get(tree.root), empty = !!top0 && !top0.entries.length && !top0.more;
+  $('side-q').disabled = empty;
+  $('side-mode').disabled = empty;
+  $('side-menu').disabled = empty;
   const list = $('side-list');
   const rows = [];
   const exp = expanded();
   const walk = (dir, depth) => {
     const d = tree.dirs.get(dir);
     if (!d) {
-      if (depth) rows.push({ note: 'Loading…', depth });
+      rows.push({ note: 'Loading…', depth });
       return;
     }
+    if (!depth && !d.entries.length && !d.more) rows.push({ note: sel ? 'Nothing selected is here any more' : 'Empty folder', depth });
     d.entries.forEach((e, i) => {
       const open = e.dir && exp.has(e.path);
       rows.push({ e, depth, open, pos: i + 1, size: d.entries.length });
@@ -3345,7 +3428,10 @@ function renderSidebar() {
     for (const r of rows) r.size = seen.get(parentOf(r.e.path));
     if (!rows.length) rows.push({ note: 'No matches', depth: 0 });
     if (partial) rows.push({ note: 'Only listed files were searched', depth: 0 });
-  } else walk(tree.root, 0);
+  } else {
+    walk(tree.root, 0);
+    if (sel && sel.outside) rows.push({ note: `${sel.outside.toLocaleString()} more selected ${sel.outside === 1 ? 'item is' : 'items are'} in other folders`, depth: 0 });
+  }
   const hadActive = sideRows.some((r) => r.e && r.e.path === current.path);
   sideRows = rows;
   const top = tree.dirs.get(tree.root);
@@ -3365,6 +3451,18 @@ function renderSidebar() {
     list.scrollTop = Math.max(0, y - list.clientHeight / 3);
     drawSideWindow(false);
   }
+}
+
+/** "2 of 5" in the toolbar while the sidebar is a multiple selection: where the file on screen is among its files. */
+function syncSelPos() {
+  const files = [];
+  const walk = (dir) => {
+    const d = tree.dirs.get(dir);
+    for (const e of d ? d.entries : []) { if (e.dir) walk(e.path); else files.push(e.path); }
+  };
+  if (tree.selection) walk(tree.root);
+  const i = files.indexOf(current.path);
+  $('selpos').textContent = i >= 0 && files.length > 1 ? `${i + 1} of ${files.length}` : '';
 }
 
 /** The file on screen, as a path from the root: the panel's title stays the file Quick Look opened. */
@@ -3901,9 +3999,9 @@ function syncRaw(p) {
 
 function syncTools(p) {
   const text = hasText(p);
-  $('copy').hidden = !text;
-  $('find-btn').hidden = !text;
-  if (!text) closeFind();
+  $('copy').hidden = !text && p.copyable !== true;
+  $('find-btn').hidden = !canFind(p);
+  if (!canFind(p)) closeFind();
   syncRaw(p);
 }
 
@@ -3989,13 +4087,17 @@ const findBar = $('find'), findField = $('find-q');
 const highlights = typeof CSS !== 'undefined' && CSS.highlights && typeof Highlight === 'function' ? CSS.highlights : null;
 // q: the text looked for; how: 'dom', 'csv' or 'json'; hits: { s, e } in the text (dom), with { k, c } a table cell (k -1 the
 // header) or { ptr, part } a JSON row's key or value; at: the current match, -1 before the first step.
-let finder = { q: '', path: '', how: 'dom', hits: [], at: -1, more: false, index: null, ranges: null };
-let findTimer = 0, findQuiet = false;
+let finder = { q: '', path: '', how: 'dom', hits: [], at: -1, more: false, index: null, ranges: null, goto: false };
+let findTimer = 0, findQuiet = false, nativeFindSeq = 0;
+// A PDF or RTF document is drawn natively: the extension finds in it, and the bar only shows the count. ('native' in `how`.)
+const NATIVE_FIND = new Set(['pdf', 'rtf']);
+const canFind = (p) => hasText(p) || (!!p.path && !p.entry && NATIVE_FIND.has(p.view));
 const findOpen = () => !findBar.hidden;
 const reEscape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const jsonLeaf = (v) => (typeof v === 'string' ? JSON.stringify(v.length > JSON_STR_MAX ? v.slice(0, JSON_STR_MAX) + '…' : v) : String(v));
 
 function findHow() {
+  if (NATIVE_FIND.has(current.view) && !hasText(current)) return 'native';
   if (current.view === 'csv' && !rawOn(current) && csvState && csvState.p === current && csvState.shown) return 'csv';
   if (current.view === 'json' && !rawOn(current) && jsonState && jsonState.p === current && jsonState.mode === 'tree') return 'json';
   return 'dom';
@@ -4073,9 +4175,13 @@ function findSearch(keep) {
       }
       return true;
     };
-    if (f.how === 'csv') csvFind(csvState, scan);
+    if (f.how === 'native') post({ type: 'nativeFind', path: current.path, q: f.q, seq: ++nativeFindSeq });
+    else if (f.how === 'csv') csvFind(csvState, scan);
     else if (f.how === 'json') jsonFind(jsonState, scan);
     else { f.index = domIndex(); scan(f.index.text, (s, e) => ({ s, e })); }
+  } else if (f.how === 'native' && current.path) {
+    nativeFindSeq++;
+    post({ type: 'nativeFindEnd', path: current.path });
   }
   // A redraw of the same file keeps the current match's number; another file starts before its first match.
   f.at = !f.hits.length ? -1 : !keep ? 0 : f.path === current.path ? Math.min(f.at, f.hits.length - 1) : -1;
@@ -4087,6 +4193,7 @@ function findSearch(keep) {
  *  next search or redraw). */
 function findRanges() {
   const f = finder;
+  if (f.how === 'native') return { keys: [], get: () => undefined };
   if (f.how === 'dom') return { keys: f.hits.map((_, i) => i), get: (i) => (f.hits[i] ? domRange(f.index, f.hits[i].s, f.hits[i].e) : undefined) };
   if (f.ranges) return f.ranges;
   const out = new Map();
@@ -4142,6 +4249,7 @@ function paintFind() {
 }
 
 function findLabel() {
+  if (finder.goto) { $('find-count').textContent = `of ${(+current.pages || 0).toLocaleString()}`; return; }
   const n = finder.hits.length, more = finder.more ? '+' : '';
   $('find-count').textContent = !finder.q ? '' : !n ? 'No matches'
     : finder.at < 0 ? `${n.toLocaleString()}${more} ${n === 1 ? 'match' : 'matches'}` : `${(finder.at + 1).toLocaleString()} of ${n.toLocaleString()}${more}`;
@@ -4196,6 +4304,7 @@ function findGo(i) {
   const f = finder, n = f.hits.length;
   if (!n) return findLabel();
   f.at = ((i % n) + n) % n;
+  if (f.how === 'native') { post({ type: 'nativeFindGo', path: current.path, i: f.at }); return findLabel(); }
   const h = f.hits[f.at];
   if (f.how === 'csv') csvReveal(csvState, h);
   else if (f.how === 'json' && jsonReveal(jsonState, h.ptr)) {
@@ -4213,15 +4322,23 @@ function findGo(i) {
 
 /** The field's text changed: every key searches at once in a small file; in a large one, once the typing pauses. */
 function findInput(q) {
+  if (finder.goto) { finder.q = q; return; }
   finder.q = q;
   clearTimeout(findTimer);
   findTimer = 0;
   const run = () => { findTimer = 0; if (!findOpen()) return; findSearch(false); if (finder.at >= 0) findGo(finder.at); else { paintFind(); findLabel(); } };
-  if (current.text && current.text.length > 256 * 1024) findTimer = setTimeout(run, 120); else run();
+  // The extension's find in a PDF or RTF document reads the whole of it: once the typing pauses.
+  if ((current.text && current.text.length > 256 * 1024) || findHow() === 'native') findTimer = setTimeout(run, 150); else run();
 }
 
 function findStep(d) {
   if (!findOpen()) return;
+  if (finder.goto) {
+    const n = parseInt(finder.q, 10);
+    if (n >= 1 && n <= (+current.pages || 0)) post({ type: 'pdfGoTo', path: current.path, page: n });
+    closeFind();
+    return;
+  }
   if (findTimer) {
     clearTimeout(findTimer);
     findTimer = 0;
@@ -4237,17 +4354,23 @@ function findStep(d) {
 /** After every draw: the matches are found again in what is now on screen, and the current one keeps its number. */
 function findAfterDraw() {
   if (!findOpen() || findQuiet) return;
-  if (!hasText(current)) return closeFind();
+  if (!canFind(current) || (finder.goto && current.view !== 'pdf')) return closeFind();
+  if (finder.goto) return;
   findSearch(true);
   paintFind();
   findLabel();
 }
 
 /** Shows the find bar; with `keys` its field asks for the writer's key panel (the page itself never has the keyboard). */
-function openFind(keys = true) {
-  if (!hasText(current)) return false;
+function openFind(keys = true, goto = false) {
+  if (!canFind(current) || (goto && current.view !== 'pdf')) return false;
   if (editing) stopEditing();
+  if (findOpen() && finder.goto !== goto) closeFind();
   if (!findOpen()) {
+    finder.goto = goto;
+    findField.placeholder = goto ? 'Go to page' : 'Find';
+    findField.setAttribute('aria-label', goto ? 'Go to page' : 'Find in this file');
+    if (goto) finder.q = '';
     findBar.hidden = false;
     $('find-btn').setAttribute('aria-expanded', 'true');
     if (!pop.hidden) showPopover(false);
@@ -4270,7 +4393,9 @@ function closeFind() {
   findTimer = 0;
   if (filterSession && filterSession.find) endFilter();
   if (document.activeElement === findField) findField.blur();
-  Object.assign(finder, { hits: [], at: -1, more: false, index: null, ranges: null });
+  if (finder.how === 'native' && !finder.goto && current.path) { nativeFindSeq++; post({ type: 'nativeFindEnd', path: current.path }); }
+  if (finder.goto) { finder.q = ''; findField.placeholder = 'Find'; findField.setAttribute('aria-label', 'Find in this file'); }
+  Object.assign(finder, { hits: [], at: -1, more: false, index: null, ranges: null, goto: false });
   if (highlights) { highlights.delete('sb-find'); highlights.delete('sb-find-cur'); }
 }
 
@@ -4295,6 +4420,7 @@ window.addEventListener('scroll', () => {
 }, { passive: true });
 $('find-btn').addEventListener('click', (e) => { if (findOpen()) closeFind(); else openFind(e.isTrusted); });
 $('find-next').addEventListener('click', () => findStep(1));
+$('kind').addEventListener('click', (e) => { if (e.target.closest('.pdf-page')) { e.preventDefault(); openFind(e.isTrusted, true); } });
 $('find-prev').addEventListener('click', () => findStep(-1));
 $('find-close').addEventListener('click', () => closeFind());
 
@@ -4303,7 +4429,7 @@ $('find-close').addEventListener('click', () => closeFind());
 let copyTimer = 0;
 /** `withFile`: the file goes on the clipboard beside its text, as Finder's ⌘C, where the host can (the Space panel). */
 function copyFile(withFile = false) {
-  if (!hasText(current)) return false;
+  if (!hasText(current) && current.copyable !== true) return false;
   post(withFile ? { type: 'copy', path: current.path, withFile: true } : { type: 'copy', path: current.path });
   return true;
 }
@@ -4626,7 +4752,7 @@ function followWiki(a) {
 $('edit').addEventListener('click', (e) => {
   if (isMarkdown(current)) { post({ type: 'edit', path: current.path }); return; }
   const a = $('edit').dataset.action;
-  if ((a === 'openFile' || a === 'reveal') && e.isTrusted && current.path) post({ type: a, path: current.path });
+  if ((a === 'openFile' || a === 'reveal' || a === 'revealFolder') && e.isTrusted && current.path) post({ type: a, path: current.path });
 });
 
 // ---------- Open With: the apps the writer offers for the file on screen, asked for when the chevron is clicked ----------
@@ -4691,7 +4817,7 @@ if (HOST === 'panel') {
   const source = (t) => {
     const row = t.closest('#side-list a.row.file:not(.broken), #doc .overview a.ov-row, #doc .ov-grid a.gt');
     if (row) return row.dataset.path;
-    return t.closest('#kind') && current.path && !current.entry && !['overview', 'loading'].includes(current.view) ? current.path : null;
+    return t.closest('#kind') && !t.closest('.pdf-page') && current.path && !current.entry && !['overview', 'loading'].includes(current.view) ? current.path : null;
   };
   document.addEventListener('pointerdown', (e) => {
     const path = e.button === 0 && e.isTrusted && !editing && e.target.closest ? source(e.target) : null;

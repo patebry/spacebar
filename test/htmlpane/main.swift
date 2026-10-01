@@ -11,6 +11,7 @@ func check(_ name: String, _ ok: Bool, _ detail: @autoclosure () -> String = "")
 func spin(_ s: Double) { RunLoop.main.run(until: Date().addingTimeInterval(s)) }
 
 _ = NSApplication.shared
+OffScreen.install()
 let dir = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath()
 let local = dir.appendingPathComponent("made-here.html"), downloaded = dir.appendingPathComponent("downloaded.html")
 try! Data("<p>hi</p>".utf8).write(to: local)

@@ -18,7 +18,7 @@ let out = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath
 let videoDir = CommandLine.arguments.count > 2 && !CommandLine.arguments[2].isEmpty
     ? URL(fileURLWithPath: CommandLine.arguments[2]).resolvingSymlinksInPath() : nil
 let env = ProcessInfo.processInfo.environment
-let flows = Set((env["FLOWS"] ?? "1,2,3,4,5,6,7,8,10").split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) })
+let flows = Set((env["FLOWS"] ?? "1,2,3,4,5,6,7,8,10,11").split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces) })
 let timing = env["SCEN_TIMING"] != "0"
 let strict = env["SCEN_STRICT"] == "1"
 let corpus = out.appendingPathComponent("corpus")
@@ -74,6 +74,7 @@ func pct(_ xs: [Double], _ p: Double) -> Double {
 // ---- the viewer, as the viewer app starts it, parked off screen ----
 WebHost.pageHost = "panel"
 _ = NSApplication.shared
+OffScreen.install()
 NSApp.setActivationPolicy(.accessory)
 Viewer.parkedFrame = NSRect(x: -20000, y: -20000, width: 1100, height: 760)
 let viewer = Viewer.shared
@@ -98,6 +99,7 @@ final class Recorder: NSObject, WKScriptMessageHandler {
 }
 let rec = Recorder()
 let web = WebHost.shared.web
+OffScreen.keepDrawing(web)
 spin(until: 15) { WebHost.shared.ready }
 guard WebHost.shared.ready else { print("FAIL the page never became ready"); exit(1) }
 web.evaluateJavaScript("sb.warm && sb.warm(); 0")
@@ -705,6 +707,29 @@ if flows.contains("6") {
     check("6: ↓ and ↑ walk the selection and never leave it", outside.isEmpty && Set(seen).count == 5, "\(seen.map { ($0 as NSString).lastPathComponent })")
     noErrors("6", page())
     close()
+
+    // Finder's list view with folders expanded: a selection across folders lists every item, under the folder holding them all.
+    let sel = out.appendingPathComponent("sel")
+    for (name, text) in [("a.md", "# A\n"), ("sub/b.md", "# B\n"), ("sub/other.md", "# Not selected\n"), ("sub/deeper/c.txt", "c\n")] {
+        let u = sel.appendingPathComponent(name)
+        try? FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try! text.write(to: u, atomically: true, encoding: .utf8)
+    }
+    let across = ["a.md", "sub/b.md", "sub/deeper/c.txt"].map { sel.appendingPathComponent($0) }
+    let a = space(across, expect: across[0], settle: 0.8)
+    spin(until: 3) { (js("document.querySelectorAll('#side-list a.row.file').length") as? Int ?? 0) >= 3 }
+    let fileRows = page().fileRows, files = Set(fileRows.map { String($0.dropFirst(sel.resolvingSymlinksInPath().path.count + 1)) })
+    check("6: a selection across folders lists each selected file and no other", files == ["a.md", "sub/b.md", "sub/deeper/c.txt"], "\(files.sorted())")
+    let head = js("[$('side-title').textContent, $('selpos').textContent].join('|')") as? String ?? ""
+    let at = (fileRows.firstIndex(of: a.page.path) ?? -1) + 1
+    check("6: the sidebar says how many are selected, and the toolbar where this one is", head == "3 Selected|\(at) of 3", head)
+    noErrors("6 across", a.page)
+    close()
+    let far = space([across[0], URL(fileURLWithPath: "/etc/hosts")], expect: across[0], settle: 0.8)
+    let note = js("[...document.querySelectorAll('#side-list .row-note')].map((n) => n.textContent).join('|')") as? String ?? ""
+    check("6: a selected item too far away to list is counted in a note", note == "1 more selected item is in other folders", note)
+    noErrors("6 far", far.page)
+    close()
 }
 
 // ================= 7. hostile files =================
@@ -756,7 +781,7 @@ if flows.contains("7") {
     let txt = space([corpus.appendingPathComponent("unreadable.txt")], settle: 0.5)
     let txtSays = (txt.page.notes + [txt.page.status]).joined(separator: " ")
     let offers = js("current.canOpen === true") as? Bool ?? true
-    check("7: an unreadable (chmod 000) text file says it couldn’t be read, and offers no app", txt.view == "info" && txtSays.contains("couldn’t be read") && !offers,
+    check("7: an unreadable (chmod 000) text file says it has no permission, and offers no app", txt.view == "info" && txtSays.contains("don’t have permission") && !offers,
           "view \(txt.view), card says '\(txt.page.text.replacingOccurrences(of: "\n", with: " ").prefix(160))'")
     close()
     let mdu = corpus.appendingPathComponent("unreadable.md")
@@ -766,8 +791,57 @@ if flows.contains("7") {
     spin(until: 6) { firstRender(mdu.path, from: from) != nil }
     spin(0.5)
     let mp = page()
-    check("7: an unreadable Markdown file says it cannot be read", (mp.notes + [mp.status]).joined().contains("couldn’t be read") || mp.text.contains("couldn’t be read"),
+    check("7: an unreadable Markdown file says why it cannot be read", (mp.notes + [mp.status]).joined().contains("don’t have permission") || mp.text.contains("don’t have permission"),
           "view \(mp.view), notes \(mp.notes), status '\(mp.status)'")
+    close()
+
+    // A file that goes while it is on screen: deleted, renamed, or replaced by a save.
+    let live = out.appendingPathComponent("live")
+    try? FileManager.default.createDirectory(at: live, withIntermediateDirectories: true)
+    let doomed = live.appendingPathComponent("doomed.md")
+    try! "# Doomed\n\nText.\n".write(to: doomed, atomically: true, encoding: .utf8)
+    _ = space([doomed], settle: 0.5)
+    try! FileManager.default.removeItem(at: doomed)
+    spin(2)
+    let g = jsJSON("return { gone: document.documentElement.hasAttribute('data-gone'), open: $('edit').disabled, status: $('status').textContent, text: $('doc').textContent }")
+    check("7: a file deleted while open says so, stays dimmed, and cannot be opened",
+          g["gone"] as? Bool == true && g["open"] as? Bool == true && g["status"] as? String == "doomed.md was moved or deleted" && (g["text"] as? String ?? "").contains("Doomed"), "\(g)")
+    try! "# Doomed again\n".write(to: doomed, atomically: true, encoding: .utf8)
+    spin(until: 3) { (js("document.documentElement.hasAttribute('data-gone')") as? Bool) == false }
+    let back = jsJSON("return { gone: document.documentElement.hasAttribute('data-gone'), status: $('status').textContent, text: $('doc').textContent }")
+    check("7: the file coming back clears it", back["gone"] as? Bool == false && back["status"] as? String == "" && (back["text"] as? String ?? "").contains("again"), "\(back)")
+    close()
+    let before = live.appendingPathComponent("before.md"), after = live.appendingPathComponent("after.md")
+    try! "# Renamed\n".write(to: before, atomically: true, encoding: .utf8)
+    _ = space([before], settle: 0.5)
+    try! FileManager.default.moveItem(at: before, to: after)
+    spin(until: 4) { page().path == after.path }
+    check("7: a file renamed while open is followed", page().path == after.path && (js("document.documentElement.hasAttribute('data-gone')") as? Bool) == false, page().path)
+    close()
+    let saved = live.appendingPathComponent("saved.txt")
+    try! "one\n".write(to: saved, atomically: true, encoding: .utf8)
+    _ = space([saved], settle: 0.5)
+    try! "two\n".write(to: saved, atomically: true, encoding: .utf8)
+    spin(2)
+    check("7: a save that replaces the file is not taken for a deletion", (js("document.documentElement.hasAttribute('data-gone')") as? Bool) == false && page().text.contains("two"), page().text)
+    close()
+    let putBack = live.appendingPathComponent("put-back.txt"), aside = out.appendingPathComponent("put-back.txt")
+    try! "kept\n".write(to: putBack, atomically: true, encoding: .utf8)
+    _ = space([putBack], settle: 0.5)
+    try! FileManager.default.moveItem(at: putBack, to: aside)
+    spin(2)
+    let wentAway = (js("document.documentElement.hasAttribute('data-gone')") as? Bool) == true
+    try! FileManager.default.moveItem(at: aside, to: putBack)
+    spin(until: 3) { (js("document.documentElement.hasAttribute('data-gone')") as? Bool) == false }
+    let backState = js("[document.documentElement.hasAttribute('data-gone'), $('edit').disabled, $('status').textContent].join('|')") as? String ?? ""
+    check("7: a file put back unchanged (Finder's Put Back) is no longer shown as gone", wentAway && backState.hasPrefix("false|false"), "went away \(wentAway), then \(backState)")
+    close()
+    let vanished = live.appendingPathComponent("vanished.md")
+    let v = space([vanished], settle: 0.5)
+    let vs = jsJSON("return { note: (document.querySelector('#doc .viewer-note') || {}).textContent, open: $('edit').textContent, action: $('edit').dataset.action }")
+    check("7: a file missing at open says it is no longer there, and offers its folder", vs["note"] as? String == "This file is no longer there. It may have been moved or deleted."
+          && vs["open"] as? String == "Show Folder" && vs["action"] as? String == "revealFolder", "\(vs)")
+    noErrors("7 gone", v.page)
     close()
 }
 
@@ -903,6 +977,59 @@ if flows.contains("9"), let dir = env["SCEN_SHOTS"] {
         close()
     }
     NSApp.appearance = nil
+}
+
+// ================= 11. documents drawn natively take the panel's keys =================
+if flows.contains("11") {
+    print("\n== 11. PDF and RTF: page counter, go to page, find, zoom, paging and copy reach the document")
+    func press(_ key: String, settle: Double = 0.3) { DispatchQueue.global().async { viewer.key(key, isRepeat: false) }; spin(settle) }
+    let pdf = space([corpus.appendingPathComponent("pages-500.pdf")], settle: 1.0)
+    let counter = { js("(document.querySelector('#kind .pdf-page') || {}).textContent || ''") as? String ?? "" }
+    check("11: a PDF shows its page counter", counter() == "1 / 500", counter())
+    press("pagedown", settle: 0.5)
+    press("pagedown", settle: 0.5)
+    check("11: Page Down moves the PDF, and the counter follows", counter() != "1 / 500" && counter().hasSuffix("/ 500"), counter())
+    let z0 = web.pageZoom, s0 = natives().pdf?.scaleFactor ?? 0
+    press("zoomIn")
+    check("11: ⌘+ zooms the PDF, not the toolbar", web.pageZoom == z0 && (natives().pdf?.scaleFactor ?? 0) > s0, "page zoom \(web.pageZoom), pdf \(s0) -> \(natives().pdf?.scaleFactor ?? 0)")
+    press("zoomReset")
+    press("find")
+    _ = js("findField.value = 'Page 42'; findInput('Page 42'); 0")
+    spin(1)
+    let found = js("[$('find').hidden, $('find-count').textContent].join('|')") as? String ?? ""
+    check("11: ⌘F finds in the PDF and shows the count", found == "false|1 of 11", found)
+    check("11: the first match is on screen", counter() == "42 / 500", counter())
+    _ = js("findStep(1); 0")
+    spin(0.5)
+    check("11: ↵ goes to the next match", counter() == "420 / 500" && (js("$('find-count').textContent") as? String) == "2 of 11", counter())
+    _ = js("closeFind(); 0")
+    _ = js("document.querySelector('#kind .pdf-page').click(); 0")
+    let gotoBar = js("[$('find').hidden, $('find-q').placeholder, $('find-count').textContent].join('|')") as? String ?? ""
+    check("11: a click on the counter asks for a page", gotoBar == "false|Go to page|of 500", gotoBar)
+    _ = js("findField.value = '250'; findInput('250'); findStep(1); 0")
+    spin(0.5)
+    check("11: go to page", counter() == "250 / 500" && (js("$('find').hidden") as? Bool) == true, counter())
+    if let v = natives().pdf, let pg = v.currentPage, let sel = pg.selection(for: pg.bounds(for: .mediaBox)) {
+        v.setCurrentSelection(sel, animate: false)
+        press("copy", settle: 0.5)
+        let st = page().status
+        check("11: ⌘C with text selected in the PDF copies the text, not the file", st.contains("selection") || st == "Could not copy", st)
+    }
+    noErrors("11 pdf", pdf.page)
+    close()
+    let rtf = space([corpus.appendingPathComponent("letter.rtf")], settle: 0.8)
+    let m0 = natives().text?.enclosingScrollView?.magnification ?? 0
+    press("zoomIn")
+    check("11: ⌘+ zooms the RTF document, not the toolbar", web.pageZoom == z0 && (natives().text?.enclosingScrollView?.magnification ?? 0) > m0)
+    check("11: an RTF document has Find and Copy", (js("[$('find-btn').hidden, $('copy').hidden].join('|')") as? String) == "false|false")
+    press("find")
+    _ = js("findField.value = 'italics'; findInput('italics'); 0")
+    spin(0.5)
+    check("11: ⌘F finds in the RTF document", (js("$('find-count').textContent") as? String) == "1 of 1" && natives().text?.selectedRange().length == 7,
+          js("$('find-count').textContent") as? String ?? "")
+    _ = js("closeFind(); 0")
+    noErrors("11 rtf", rtf.page)
+    close()
 }
 
 if let e = js("(() => { const e = window.__errs || []; window.__errs = []; return e; })()") as? [String] { closingErrors += e }

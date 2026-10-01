@@ -5,7 +5,7 @@ import WebKit
 /// (`.pdf-area`), placed by the same `pdfRect` messages as a PDF. The document never becomes HTML: AppKit's RTF reader builds
 /// the attributed string (no web content, no script, no remote load), and an RTFD's pictures come from inside its package.
 /// In a dark theme the text view maps the document's colours for a dark background, as TextEdit does.
-final class RichTextPane: NSObject, NSTextViewDelegate {
+final class RichTextPane: NSObject, NSTextViewDelegate, NativeDocument {
     let view: NSScrollView
     let textView: NSTextView
     private(set) var path: String?
@@ -14,6 +14,9 @@ final class RichTextPane: NSObject, NSTextViewDelegate {
     /// A link in the document. NSTextView's own open does nothing inside the sandbox, so the owner routes it.
     var onLink: (URL) -> Void = { _ in }
     static let inset = NSSize(width: 36, height: 28)
+    /// The longest line, in points: on a wide panel the text is centred at this width, as the page's documents are.
+    static let measure: CGFloat = 720
+    private var matches: [NSRange] = []
 
     override init() {
         view = NSScrollView(frame: .zero)
@@ -48,6 +51,64 @@ final class RichTextPane: NSObject, NSTextViewDelegate {
         textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         textView.delegate = self
         view.documentView = textView
+        view.allowsMagnification = true
+        view.minMagnification = 0.5
+        view.maxMagnification = 3
+        // A pinch magnifies too: the text wraps again to the width it now has.
+        NotificationCenter.default.addObserver(forName: NSScrollView.didEndLiveMagnifyNotification, object: view, queue: .main) { [weak self] _ in self?.layout() }
+    }
+
+    func find(_ query: String) -> Int {
+        findClear()
+        guard !query.isEmpty else { return 0 }
+        let text = textView.string as NSString
+        var at = 0
+        while matches.count < maxMatches {
+            let r = text.range(of: query, options: [.caseInsensitive], range: NSRange(location: at, length: text.length - at))
+            guard r.location != NSNotFound, r.length > 0 else { break }
+            matches.append(r)
+            at = r.location + r.length
+        }
+        for r in matches { textView.layoutManager?.addTemporaryAttribute(.backgroundColor, value: NSColor.findHighlightColor.withAlphaComponent(0.45), forCharacterRange: r) }
+        if !matches.isEmpty { findGo(0) }
+        return matches.count
+    }
+
+    func findGo(_ i: Int) {
+        guard matches.indices.contains(i) else { return }
+        textView.setSelectedRange(matches[i])
+        textView.scrollRangeToVisible(matches[i])
+        textView.showFindIndicator(for: matches[i])
+    }
+
+    func findClear() {
+        let all = NSRange(location: 0, length: (textView.string as NSString).length)
+        textView.layoutManager?.removeTemporaryAttribute(.backgroundColor, forCharacterRange: all)
+        // The last match was selected: ⌘C must not copy it once find is closed.
+        if !matches.isEmpty { textView.setSelectedRange(NSRange(location: 0, length: 0)) }
+        matches = []
+    }
+
+    var selectedText: String? {
+        let r = textView.selectedRange()
+        guard r.length > 0, NSMaxRange(r) <= (textView.string as NSString).length else { return nil }
+        return (textView.string as NSString).substring(with: r)
+    }
+
+    func zoom(_ key: String) {
+        let m = key == "zoomIn" ? view.magnification * 1.1 : key == "zoomOut" ? view.magnification / 1.1 : 1
+        view.magnification = min(max(m, view.minMagnification), view.maxMagnification)
+        layout()
+    }
+
+    func scrollKey(_ key: String) -> Bool {
+        switch key {
+        case "pageup", "pagedown": scrollPage(view, down: key == "pagedown")
+        case "home": textView.scrollToBeginningOfDocument(nil)
+        case "end": textView.scrollToEndOfDocument(nil)
+        default: return false
+        }
+        return true
     }
 
     enum LoadError: Error, Equatable { case unreadable, tooLarge }
@@ -94,6 +155,8 @@ final class RichTextPane: NSObject, NSTextViewDelegate {
     func show(_ text: NSAttributedString, path: String) {
         let same = path == self.path
         let y = view.contentView.bounds.origin.y
+        if !same { view.magnification = 1 }
+        matches = []
         self.path = path
         textView.textStorage?.setAttributedString(text)
         textView.setSelectedRange(NSRange(location: 0, length: 0))
@@ -103,7 +166,10 @@ final class RichTextPane: NSObject, NSTextViewDelegate {
     }
 
     private func layout() {
-        textView.frame.size.width = view.contentSize.width
+        // The clip view's width in the document's own points, which magnification changes.
+        let width = view.contentView.bounds.width
+        textView.textContainerInset = NSSize(width: max(Self.inset.width, ((width - Self.measure) / 2).rounded(.down)), height: Self.inset.height)
+        textView.frame.size.width = width
         if let c = textView.textContainer { textView.layoutManager?.ensureLayout(for: c) }
         textView.sizeToFit()
     }
@@ -145,6 +211,8 @@ final class RichTextPane: NSObject, NSTextViewDelegate {
 
     /// Takes the view down and lets the document go.
     func close() {
+        matches = []
+        view.magnification = 1
         textView.textStorage?.setAttributedString(NSAttributedString())
         view.removeFromSuperview()
         view.isHidden = true

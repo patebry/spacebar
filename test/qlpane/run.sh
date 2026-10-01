@@ -12,7 +12,7 @@ out=$(mktemp -d)
 MACH='<key>com.apple.security.temporary-exception.mach-lookup.global-name</key><array><string>com.apple.quicklook</string><string>com.apple.quicklook.ThumbnailsAgent</string></array>'
 grep -qF "$MACH" build.sh || { echo "FAIL build.sh no longer grants the mach-lookup exception this test signs with"; exit 1; }
 printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>md.spacebar.test.qlpane</string></dict></plist>' > "$out/Info.plist"
-xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/qlpane/main.swift Preview/QLFallbackPane.swift Preview/PDFPane.swift \
+xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/qlpane/main.swift test/offscreen.swift Preview/QLFallbackPane.swift Preview/PDFPane.swift \
   Shared/LinkPolicy.swift Shared/FolderListing.swift -framework Quartz \
   -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$out/Info.plist" -o "$out/qlpane"
 "$out/qlpane" "$out"

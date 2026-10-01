@@ -12,6 +12,8 @@ let vlog = Logger(subsystem: logSubsystem, category: "viewer")
 final class ViewerPanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+    /// Drawn as the window the user is looking at, coloured traffic lights included, though Finder keeps the keyboard.
+    @objc func hasKeyAppearance() -> Bool { true }
     /// The page's top row: `--bar-h` in base.css.
     static let rowHeight: CGFloat = 40
     static let lightsLeft: CGFloat = 12
@@ -24,23 +26,30 @@ final class ViewerPanel: NSPanel {
         // A resize lays the buttons out again just before this notification, so moving them here never shows.
         NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: self, queue: nil) { [weak self] _ in self?.placeLights() }
         // Any other layout. A move from inside AppKit's own setFrame does not stick, so it waits for the next turn.
-        if let close = standardWindowButton(.closeButton) {
-            close.postsFrameChangedNotifications = true
-            NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: close, queue: nil) { [weak self] _ in
+        for kind in [NSWindow.ButtonType.closeButton, .zoomButton] {
+            guard let b = standardWindowButton(kind) else { continue }
+            b.postsFrameChangedNotifications = true
+            NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: b, queue: nil) { [weak self] _ in
                 DispatchQueue.main.async { self?.placeLights() }
             }
         }
+        // The panel cannot minimize: no dead yellow button, and zoom takes its place.
+        standardWindowButton(.miniaturizeButton)?.isHidden = true
         placeLights()
     }
 
     func placeLights() {
-        guard let close = standardWindowButton(.closeButton) else { return }
+        guard let close = standardWindowButton(.closeButton), let mini = standardWindowButton(.miniaturizeButton) else { return }
         let at = close.convert(close.bounds, to: nil)
         let dx = Self.lightsLeft - at.minX, dy = frame.height - (Self.rowHeight + at.height) / 2 - at.minY
-        guard abs(dx) > 0.5 || abs(dy) > 0.5 else { return }
-        for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
-            guard let b = standardWindowButton(kind) else { continue }
-            b.setFrameOrigin(NSPoint(x: b.frame.minX + dx, y: b.frame.minY + (b.superview?.isFlipped == true ? -dy : dy)))
+        if abs(dx) > 0.5 || abs(dy) > 0.5 {
+            for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+                guard let b = standardWindowButton(kind) else { continue }
+                b.setFrameOrigin(NSPoint(x: b.frame.minX + dx, y: b.frame.minY + (b.superview?.isFlipped == true ? -dy : dy)))
+            }
+        }
+        if let zoom = standardWindowButton(.zoomButton), abs(zoom.frame.minX - mini.frame.minX) > 0.5 {
+            zoom.setFrameOrigin(NSPoint(x: mini.frame.minX, y: zoom.frame.minY))
         }
     }
 
@@ -97,6 +106,14 @@ final class TapKeySource: KeySource {
 final class PanelController: PreviewController {
     /// What Space opened: an HTML file among them never runs scripts, whatever the setting says for one reached in the sidebar.
     var spaced: Set<String> = []
+
+    override var preferredSize: NSSize? { nil }
+
+    /// Named for VoiceOver and window lists; the title itself is never drawn.
+    override func pageRendered() {
+        super.pageRendered()
+        view.window?.title = shownName
+    }
 
     override func htmlScripts(for url: URL) -> String {
         spaced.contains(url.resolvingSymlinksInPath().path) ? "off" : super.htmlScripts(for: url)
@@ -385,8 +402,11 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
     private func route(_ name: String, isRepeat: Bool) {
         if keys.key(name, isRepeat: isRepeat) { return }
         if name == "open" { return controller.openOnScreen() }
-        if name == "copy" { controller.armCopy() }
-        if controller.zoomKey(name) { return }
+        if name == "copy" {
+            if controller.copyNativeSelection() { return }
+            controller.armCopy()
+        }
+        if controller.zoomKey(name) || controller.scrollKey(name) { return }
         let web = controller.webView
         let arg = String(data: try! JSONSerialization.data(withJSONObject: ["key": name]), encoding: .utf8)!
         web.evaluateJavaScript("sb.hostKey && sb.hostKey(\(arg))") { r, _ in

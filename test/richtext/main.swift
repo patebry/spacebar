@@ -9,6 +9,7 @@ func check(_ name: String, _ ok: Bool, _ detail: @autoclosure () -> String = "")
 func spin(_ s: Double) { RunLoop.main.run(until: Date().addingTimeInterval(s)) }
 
 _ = NSApplication.shared
+OffScreen.install()
 let dir = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath()
 let fm = FileManager.default
 
@@ -136,6 +137,24 @@ _ = pane.textView(pane.textView, clickedOnLink: URL(string: "https://example.com
 _ = pane.textView(pane.textView, clickedOnLink: "https://example.com/s" as NSString, at: at)
 check("a link goes to the owner (which applies the PDF link policy), never to NSWorkspace",
       links == [URL(string: "https://example.com/rtf")!, URL(string: "https://example.com/s")!] && pane.textView(pane.textView, clickedOnLink: 5, at: 0))
+
+// ---- the panel's keys: find, ⌘C of the selection, zoom, paging, and a reading width on a wide panel ----
+let n = pane.find("quarterly")
+check("find: case-insensitive, the first match selected", n >= 1 && pane.selectedText?.lowercased() == "quarterly", "\(n) \(pane.selectedText ?? "nil")")
+pane.findClear()
+check("find: nothing for a word not there", pane.find("zzzabsent") == 0)
+pane.textView.setSelectedRange(NSRange(location: 0, length: 9))
+check("selection: the selected text is what ⌘C copies", pane.selectedText == "Quarterly")
+pane.zoom("zoomIn")
+check("zoom: ⌘+ magnifies the document", pane.view.magnification > 1.05, "\(pane.view.magnification)")
+pane.zoom("zoomReset")
+check("zoom: ⌘0 back to its size", abs(pane.view.magnification - 1) < 0.001)
+check("paging: Page Down, Home and End move the text; arrows do not", pane.scrollKey("pagedown") && pane.scrollKey("home") && pane.scrollKey("end") && !pane.scrollKey("down"))
+pane.place(message: msg.merging(["x": 0, "w": 1000, "path": pane.path!]) { _, n in n }, in: web)
+check("reading width: on a wide panel the text is centred at a comfortable measure",
+      pane.textView.textContainerInset.width > RichTextPane.inset.width && abs(pane.textView.textContainer!.size.width - RichTextPane.measure) < 2,
+      "\(pane.textView.textContainerInset) \(pane.textView.textContainer!.size)")
+pane.place(message: msg, in: web)
 
 pane.close()
 check("close: removed from the container, hidden, forgotten", pane.view.superview == nil && pane.view.isHidden && pane.path == nil && !pane.placed

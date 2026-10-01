@@ -388,8 +388,31 @@ do {
     try! Data("secret".utf8).write(to: locked)
     chmod(locked.path, 0)
     let l = FileView.payload(path: locked.path, kind: .text, root: d.path, reason: "open", canOpen: true)
-    check("unreadable (chmod 000) text: the info card says it couldn’t be read, and offers no app",
-          geteuid() == 0 || (l["view"] as? String == "info" && l["note"] as? String == "This file couldn’t be read." && l["canOpen"] as? Bool == false))
+    check("unreadable (chmod 000) text: the info card says it has no permission, and offers no app",
+          geteuid() == 0 || (l["view"] as? String == "info" && (l["note"] as? String)?.hasPrefix("You don’t have permission to read this file.") == true && l["canOpen"] as? Bool == false))
+    let lockedPDF = d.appendingPathComponent("locked.pdf")
+    try! Data("%PDF-1.4\n".utf8).write(to: lockedPDF)
+    chmod(lockedPDF.path, 0)
+    let lp = FileView.payload(path: lockedPDF.path, kind: .pdf, root: d.path, reason: "open", canOpen: true)
+    check("unreadable (chmod 000) PDF: an info card with the reason, not a PDF view that fails",
+          geteuid() == 0 || (lp["view"] as? String == "info" && (lp["note"] as? String)?.hasPrefix("You don’t have permission") == true && lp["privacy"] == nil))
+    let gone = d.appendingPathComponent("vanished.md").path
+    let card = FileView.unopenable(path: gone, root: d.path, note: FileView.openRefusal(gone))
+    check("missing at open: says it is no longer there, and is flagged so its folder is offered instead of Reveal",
+          card["note"] as? String == "This file is no longer there. It may have been moved or deleted." && card["missing"] as? Bool == true)
+    let lsCard = FileView.payload(path: "/bin/ls", kind: .other, root: "/bin", reason: "open", canOpen: false)
+    check("a Mach-O executable is named as Finder names it", lsCard["kindName"] as? String == "Unix executable")
+    check("kind names: sentence case, proper nouns kept",
+          FileView.kindName("HEIF Image") == "HEIF image" && FileView.kindName("application") == "Application" && FileView.kindName("PNG image") == "PNG image"
+          && FileView.kindName("Microsoft Word document") == "Microsoft Word document" && FileView.kindName("Markdown Text") == "Markdown text"
+          && FileView.kindName("text") == "Text")
+    let svg = d.appendingPathComponent("icon.svg")
+    try! #"<svg xmlns="http://www.w3.org/2000/svg" stroke-width="2" viewBox="0 0 24 24"><path d="M0 0"/></svg>"#.write(to: svg, atomically: true, encoding: .utf8)
+    let sized = d.appendingPathComponent("sized.svg")
+    try! #"<svg stroke-width='2' width="120px" height="80"></svg>"#.write(to: sized, atomically: true, encoding: .utf8)
+    check("SVG: its own size, from the viewBox or width and height, never a stroke-width", FileView.svgSize(svg.path) == "24 × 24" && FileView.svgSize(sized.path) == "120 × 80")
+    check("protected places are named as the privacy settings name them",
+          FileView.protectedPlace("/Volumes/X/a.md") == "files on this volume" && FileView.protectedPlace("/tmp/a.md") == "files in this folder")
     try? fm.removeItem(at: d)
 }
 check("claims summary names archives and Markdown", QuickLookClaims.summary.contains("archives") && QuickLookClaims.summary.hasPrefix("Markdown"))

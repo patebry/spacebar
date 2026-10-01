@@ -570,7 +570,7 @@ enum ContentSearch {
             let (dir, depth) = queue[head]
             head += 1
             var l = FolderListing.list(dir, root: root, sort: sort, readmeFirst: readmeFirst, showHidden: showHidden)
-            if depth == 0, let only { l = FolderListing.only(l, names: only) }
+            if let only { l = FolderListing.only(l, selection: only) }
             if l.more > 0 { listedOnly = true }
             for e in l.entries where !e.broken {
                 if e.isDirectory {

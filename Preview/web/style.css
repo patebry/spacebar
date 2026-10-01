@@ -218,6 +218,7 @@
     color: var(--muted); background: transparent; }
   #side-mode:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 7%, transparent); }
   #side-mode[aria-pressed=true] { color: var(--accent); }
+  #side-filter :disabled { opacity: .45; pointer-events: none; }
   /* A Contents search's result: the name, its folder and match count, then the matching line. As tall as SIDE_HIT_H. */
   #side-list a.row.hit { height: 40px; align-items: flex-start; padding-top: 4px; padding-left: 4px; }
   #side-list a.row.hit > svg { margin-top: 1px; }
@@ -268,6 +269,8 @@
   #doc .code-view pre.code { flex: 1 1 auto; }
   #doc .viewer-image { margin: 0; }
   #doc .img-stage { -webkit-user-select: none; user-select: none; }
+  /* Fitted, the picture sits in the middle of the room it has, as the panel's natively drawn images do. */
+  #doc .img-stage:not(.zoomed) { display: flex; align-items: center; justify-content: center; min-height: calc(100vh - var(--img-room)); }
   #doc .img-stage.zoomable { cursor: zoom-in; }
   /* The height around a fitted image: the page's padding, and the head where Minimal chrome keeps Open (fitScale reads it). */
   :root { --img-room: 150px; }
@@ -277,8 +280,11 @@
     background: color-mix(in srgb, var(--fg) 4%, transparent); }
   #doc .img-stage.zoomed img { flex: none; margin: auto; max-width: none; max-height: none; border-radius: 0; }
   #doc .img-stage.panning { cursor: grabbing; }
-  /* The Space helper's panel closed: emptied until the next file renders. */
-  :root[data-blank] body > * { visibility: hidden !important; }
+  /* The Space helper's panel closed: emptied until the next file renders. The window's shell (the chrome, the sidebar's
+     sheet, the page's outline) stays, so the first frame of the next file is not a bare sheet. */
+  :root[data-blank] :is(#doc, #crumbs, #toolbar, #toc, #copy, #side-head, #side-filter, #side-pop, #side-list, #side-more) { visibility: hidden !important; }
+  /* Moved or deleted while on screen: the last content stays, dimmed. */
+  :root[data-gone] #doc { opacity: .45; }
   /* A PDF fills the rest of the panel under its toolbar, edge to edge; the extension lays its native PDFView over .pdf-area. */
   :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=quicklook], [data-view=rtf], [data-view=bitmap]) body { height: 100vh; overflow: hidden; }
   :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=quicklook], [data-view=rtf], [data-view=bitmap]) #main { display: flex; flex-direction: column; height: 100vh; }
@@ -357,6 +363,7 @@
   #crumbs button.crumb-back:focus-visible { outline: 2px solid var(--accent); }
   #doc .viewer-loading { display: grid; justify-items: center; gap: 10px; padding: 96px 0 24px; font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--muted); }
   #doc .viewer-loading .viewer-note { margin: 0; }
+  #doc .overview .ov-loading { padding-top: 48px; }
   #doc .viewer-loading .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--muted) 25%, transparent);
     border-top-color: var(--muted); animation: sb-spin .8s linear infinite, sb-fade .2s ease-out both; }
   @keyframes sb-spin { to { transform: rotate(360deg); } }
@@ -392,20 +399,26 @@
       --ui-hover: rgba(255, 255, 255, .08); --ui-seg: rgba(255, 255, 255, .08); --ui-seg-on: rgba(255, 255, 255, .2); --ui-accent: #0a84ff; }
   }
   @supports (color: -apple-system-control-accent) { #toolbar, #side-toggle { --ui-accent: -apple-system-control-accent; } }
-  #status:empty, #kind:empty, #stats:empty { display: none; }
+  #status:empty, #selpos:empty, #kind:empty, #stats:empty { display: none; }
+  #selpos { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
   #stats { font-variant-numeric: tabular-nums; margin-right: 2px; }
   /* The file's kind and size (an image's zoom too): quiet text, cut before it crowds the path. */
   #kind { display: flex; gap: 6px; min-width: 0; max-width: 34vw; white-space: nowrap; }
   #kind .kind-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   #kind .img-zoom { flex: none; font-variant-numeric: tabular-nums; }
   #kind .img-zoom:empty { display: none; }
+  #kind .pdf-page { flex: none; font: inherit; font-variant-numeric: tabular-nums; color: inherit; height: 20px; margin: -2px 0; padding: 0 6px;
+    border: 0; border-radius: 5px; background: none; cursor: default; }
+  #kind .pdf-page:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 8%, transparent); }
   #kind:not(:empty) + #stats:not(:empty)::before { content: "· "; }
   /* Over the page (Minimal chrome, or a very narrow panel) the text sits on the buttons' material, so it stays legible. */
-  #toolbar > :is(#status, #kind, #stats):not(:empty) { display: flex; height: 24px; align-items: center; padding: 0 8px; border-radius: 6px; background: var(--ui-bg);
+  #toolbar > :is(#status, #selpos, #kind, #stats):not(:empty) { display: flex; height: 24px; align-items: center; padding: 0 8px; border-radius: 6px; background: var(--ui-bg);
     box-shadow: 0 0 0 .5px var(--ui-edge), 0 1px 2px rgba(0, 0, 0, .06); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); }
   #toolbar > #kind:not(:empty) + #stats:not(:empty)::before { content: none; }
-  #status[data-hint] { cursor: pointer; }
-  #status[data-hint]:hover { color: var(--fg); text-decoration: underline; }
+  #status[data-hint] { cursor: pointer; gap: 6px; align-items: center; }
+  #status .hint-pill { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 6px; color: var(--ui-fg);
+    background: color-mix(in srgb, var(--fg) 7%, transparent); font-weight: 500; }
+  #status[data-hint]:hover .hint-pill { background: color-mix(in srgb, var(--fg) 12%, transparent); }
   #toolbar > button, #side-toggle {
     font: inherit; font-weight: 500; color: var(--ui-fg); height: 24px; padding: 0 10px; border-radius: 6px; cursor: default;
     background: var(--ui-bg); border: 0; box-shadow: 0 0 0 .5px var(--ui-edge), 0 1px 2px rgba(0, 0, 0, .06);
@@ -543,9 +556,10 @@
   :root[data-chrome=minimal] #edit[data-kind=file] { display: none; }
   @media (min-width: 480px) {
     :root:not([data-chrome=minimal]) #toolbar { color: var(--muted); gap: 4px; }
-    :root:not([data-chrome=minimal]) #toolbar > :is(#status, #kind, #stats) { height: auto; padding: 0; background: none; box-shadow: none;
+    :root:not([data-chrome=minimal]) #toolbar > :is(#status, #selpos, #kind, #stats) { height: auto; padding: 0; background: none; box-shadow: none;
       -webkit-backdrop-filter: none; backdrop-filter: none; }
     :root:not([data-chrome=minimal]) #toolbar > #kind:not(:empty) + #stats:not(:empty)::before { content: "· "; }
+    :root:not([data-chrome=minimal]) #toolbar > #selpos:not(:empty) + #kind:not(:empty)::before { content: "·"; margin-right: -2px; }
     /* A hidden .tb-slot (Raw, Find, Aa, Open) keeps its place, and Open is as wide as Reveal, so nothing in the row moves from
        file to file. An update where Aa is hidden (so are Raw and Find) fills exactly their three slots. */
     :root:not([data-chrome=minimal]) #toolbar > .tb-slot[hidden] { visibility: hidden; }
@@ -571,7 +585,7 @@
     :root:not([data-chrome=minimal]):is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=quicklook], [data-view=rtf], [data-view=bitmap]) #doc { padding-top: calc(var(--bar-h) + 1px); }
     :root:not([data-chrome=minimal]) #doc .pdf-area { margin: 0 calc(var(--gap) + 1px) 0 calc(var(--frame-inset) + 1px); border-top: 0; }
     /* The viewer's Open button moves up into the toolbar row, and a head with nothing else in it goes. */
-    :root:not([data-chrome=minimal]) #doc :is(.viewer-head, .info-card) > .viewer-open { display: none; }
+    :root:not([data-chrome=minimal]) #doc :is(.viewer-head, .info-card) > .viewer-open:not(.viewer-privacy) { display: none; }
     :root:not([data-chrome=minimal]) #doc .viewer-head.bare { display: none; }
     :root:not([data-chrome=minimal]) { --img-room: 114px; }
   }

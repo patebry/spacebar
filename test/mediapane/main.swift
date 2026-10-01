@@ -69,7 +69,12 @@ func makeM4A(from wav: URL, to url: URL, art: Data) -> URL? {
     item.value = art as NSData
     s.outputURL = url
     s.outputFileType = .m4a
-    s.metadata = [item]
+    let title = AVMutableMetadataItem(), artist = AVMutableMetadataItem()
+    title.identifier = .commonIdentifierTitle
+    title.value = "Test Tone" as NSString
+    artist.identifier = .commonIdentifierArtist
+    artist.value = "spacebar" as NSString
+    s.metadata = [item, title, artist]
     var done = false
     s.exportAsynchronously { done = true }
     spin(until: 20) { done }
@@ -77,6 +82,7 @@ func makeM4A(from wav: URL, to url: URL, art: Data) -> URL? {
 }
 
 _ = NSApplication.shared
+OffScreen.install()
 let dir = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath()
 let wav = dir.appendingPathComponent("tone.wav"), mp4 = dir.appendingPathComponent("clip.mp4"), junk = dir.appendingPathComponent("junk.mp4")
 makeWAV(wav)
@@ -94,6 +100,19 @@ check("resume: at the start, invalid or indefinite: from the start",
 check("resume: at or past the end of a shorter file: from the start", MediaPane.resumeTime(s(3), duration: s(3)) == nil
       && MediaPane.resumeTime(s(5), duration: s(2)) == nil)
 check("resume: a duration not known yet does not stop it", MediaPane.resumeTime(s(1), duration: .indefinite) == s(1))
+
+// ---- info: what the kind line says of a video and an audio file ----
+func info(_ url: URL, audio: Bool) -> String? {
+    var out: String?, done = false
+    Task { out = await MediaPane.info(AVURLAsset(url: url), audio: audio); done = true }
+    spin(until: 10) { done }
+    return out
+}
+check("info: a video's size and length", info(mp4, audio: false).map { $0.hasPrefix("64 × 64 · 0:0") } == true, info(mp4, audio: false) ?? "nil")
+if let m4a {
+    check("info: an audio file's title, artist and length", info(m4a, audio: true).map { $0.hasPrefix("Test Tone — spacebar · 0:0") } == true, info(m4a, audio: true) ?? "nil")
+}
+check("info: lengths as m:ss, and h:mm:ss from an hour", MediaPane.duration(6) == "0:06" && MediaPane.duration(125.4) == "2:05" && MediaPane.duration(3725) == "1:02:05")
 
 // ---- the pane in a real (off-screen) window above a WKWebView, as in the extension ----
 let window = NSWindow(contentRect: NSRect(x: -20000, y: -20000, width: 1000, height: 800), styleMask: [.borderless], backing: .buffered, defer: false)

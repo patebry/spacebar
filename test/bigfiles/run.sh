@@ -16,7 +16,7 @@ id=md.spacebar.test.bigfiles
 xpc=$app/Contents/XPCServices/$id.writer.xpc
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$xpc/Contents/MacOS" "$out/support" "$out/files"
 # shellcheck disable=SC2086
-xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/bigfiles/main.swift Viewer/Viewer.swift Viewer/PanelFrame.swift Viewer/FinderCopy.swift Shared/HelperProtocol.swift $PREVIEW_SRC \
+xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/bigfiles/main.swift test/offscreen.swift Viewer/Viewer.swift Viewer/PanelFrame.swift Viewer/FinderCopy.swift Shared/HelperProtocol.swift $PREVIEW_SRC \
   -framework QuickLookUI -framework WebKit -framework PDFKit -framework AVKit -framework AVFoundation -framework QuickLookThumbnailing \
   -o "$app/Contents/MacOS/bigfiles"
 # The scenario harness's stub writer: it lists archives as the real writer does.

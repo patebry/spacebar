@@ -31,6 +31,7 @@ func show(_ s: String) -> String { s.debugDescription.count > 300 ? String(s.deb
 // ---- the host ----
 WebHost.pageHost = host == "panel" ? "panel" : "quicklook"
 _ = NSApplication.shared
+OffScreen.install()
 NSApp.setActivationPolicy(.accessory)
 let parked = NSRect(x: -20000, y: -20000, width: 1100, height: 760)
 var qlController: PreviewController?
@@ -58,6 +59,7 @@ final class Recorder: NSObject, WKScriptMessageHandler {
 }
 let rec = Recorder()
 let web = WebHost.shared.web
+OffScreen.keepDrawing(web)
 spin(until: 15) { WebHost.shared.ready }
 guard WebHost.shared.ready else { print("FAIL the page never became ready"); exit(1) }
 web.configuration.userContentController.removeScriptMessageHandler(forName: "sb")

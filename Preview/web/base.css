@@ -60,7 +60,7 @@
   :root.sb-anim[data-sidebar=collapsed] #sidebar { transition: width .2s ease-out, visibility 0s .2s; }
   #side-toggle { position: fixed !important; top: 8px; left: 12px; z-index: 10 !important; }
   /* The Space helper's panel: its traffic lights sit over the page's top-left corner, centred in the --bar-h row (ViewerPanel). */
-  :root[data-host=panel] { --titlebar-inset: 76px; }
+  :root[data-host=panel] { --titlebar-inset: 56px; }
   :root[data-host=panel] #side-toggle { left: var(--titlebar-inset); }
   #main { flex: 1 1 auto; min-width: 0; }
   #doc { max-width: var(--measure); margin: 0 auto; padding: 44px 40px 80px; overflow-x: auto;
@@ -123,4 +123,10 @@
     :root:not([data-chrome=minimal]) #doc > :is(h1, h2, h3, h4, h5, h6) { scroll-margin-top: calc(var(--bar-h) + 16px); }
   }
   @media (prefers-reduced-motion: reduce) { :root.sb-anim #frame, :root.sb-anim #crumbs { transition: none !important; } }
+  /* The sidebar shown over a narrow page: an opaque sheet above the page and the path, with its button still on top. */
+  @media (max-width: 639px) {
+    :root.sb-peek:not([data-chrome=minimal]) #sidebar, :root.sb-peek #sidebar { z-index: 11 !important; background: var(--chrome);
+      border-right: 1px solid var(--frame-line); box-shadow: 0 0 24px rgba(0, 0, 0, .22); }
+    :root.sb-peek #side-toggle { z-index: 12 !important; }
+  }
 }

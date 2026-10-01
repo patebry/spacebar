@@ -49,6 +49,68 @@ Each release's notes on GitHub also list its commits. This file keeps what chang
   across the block, dim the hunk headers (`@@ -1 +1 @@` too, with its function name), and keep file headers quiet, in every
   theme, light and dark.
 
+### The panel and its files
+
+- **The Space panel keeps the size and place you give it**; it no longer snaps back to 900 × 700 on every file. Its traffic
+  lights are drawn in colour, the minimize button it cannot use is gone, and the window is titled after the file for
+  VoiceOver and window lists.
+- **A file deleted while on screen says so.** A save that replaces the file is not mistaken for a deletion, and a rename in
+  the same folder is followed. A file that is really gone dims, with "moved or deleted" in a banner, and Open, Open With,
+  editing, task toggles and undo stay off until it comes back. Text you had not yet saved is kept in the banner to copy.
+- A file missing at open offers **Show Folder**. A file that cannot be read says why: no permission, or macOS's privacy
+  protection, with an **Open Privacy Settings** button.
+- **A Finder selection across folders** is listed in full under the nearest folder holding it, titled "N Selected", and the
+  toolbar says where the file on screen is ("2 of 5").
+- **PDFs** show their page and page count ("41 / 228"); a click goes to a page. ⌘F finds in a PDF or RTF document with the
+  same find bar as text, Page Up and Page Down move through it, and ⌘C copies the text selected in it.
+- **⌘+ ⌘− ⌘0 zoom** a PDF, an RTF document or an HTML file.
+- The kind line gives a video's size and length, an audio file's title, artist and length, and an SVG's own size.
+
+### Sidebar, folders and archives
+
+- **The Names filter searches every folder**, expanded or not (the same caps and skipped folders as Contents), and a folder
+  that matches shows what it holds. Names | Contents is a fixed-width segmented control; long names are cut in the middle;
+  hidden files are dimmed; empty folders say so.
+- **Space on a folder** opens its own README, index or Home, else its overview; it no longer opens a Markdown file found
+  deeper down. List view is the folder's own files. Breadcrumb folders are clickable. A picture opened from the grid has
+  Back, and ← or ⌫ return to it.
+- **Archives:** PDFs inside are shown; links inside are named, never followed; a lone `.gz`, `.bz2` or `.xz` of text shows
+  its text. Columns sort, folders show their size, `.DS_Store` and `__MACOSX` are hidden, and a long archive says
+  "first 5,000 of N".
+
+### Data, code and Markdown
+
+- **CSV** is a table that fills the view. **JSON** is read up to 16 MB as a tree, and its long strings
+  wrap. **Logs** (`.log`, `.out`, `.err`) over 2 MB show their newest 2 MB, with error and warning lines tinted.
+- **Wrap Lines** in Aa, per kind: text and Markdown source wrap, code does not by default.
+- Kind labels are spacebar's own ("TypeScript", "Plain text", "Log"). Dockerfile, nginx, Scala and Terraform are highlighted.
+- **Markdown:** heading anchors and in-page `#links`, footnotes, `==highlight==`, folded callouts, wide tables that scroll;
+  long tables keep their header in view, and a reason for a Mermaid diagram that fails. A code fence shows its language and a **Copy** button that copies the
+  fence from the file itself. A fence waits out a double-click before it edits, so code can be selected; code, tables,
+  math and diagrams are edited in the code font.
+- **Toolbar:** the file name is the last thing cut at narrow widths; Raw keeps one label; Find tints "No matches"; Copy says
+  "Copy source" on Markdown; the kind drags the file out of the panel.
+
+### Editing
+
+- **Editing shows:** "Editing · Esc to finish" and a Saved tick in the toolbar, a clearer hover, and a one-time tip the first
+  time the pointer rests on editable text.
+- **Undo across edits.** ⌘Z past an edit's own undo, or the toolbar's Undo, puts back the text before the last edit, split,
+  merge or task toggle while the file stays open. Each undo is an ordinary checked save: neither undo nor anything else can
+  put an old version back over a change made elsewhere.
+- **Text a change on disk would have replaced is kept** behind a banner (Keep Mine for Markdown, Use Disk Version, Copy My
+  Text) until you choose; leaving the file waits for that.
+- Raw lasts while the preview is open instead of becoming a saved setting.
+
+### Settings and first run
+
+- The hint when Space reaches Quick Look says why: the Space helper is not running, or is paused while a named app holds
+  secure input.
+- "Space helper" everywhere; Settings has an About section with the version and Check Now, and a Quick Look status row.
+- Welcome explains both macOS prompts and links SECURITY.md; the sample folder is `~/spacebar Sample Folder`, with a picture
+  and a PDF.
+- Focus rings and labels throughout for keyboard and VoiceOver users.
+
 ## 0.3.0 (unreleased)
 
 Waits for the Developer ID: the first release with the Space helper is notarized.

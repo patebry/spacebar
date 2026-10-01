@@ -43,9 +43,9 @@ protocol SpacebarWriterProtocol {
     func updateOffer(reply: @escaping (Data?) -> Void)
     /// Puts the install command, which also updates, on the clipboard.
     func copyInstallCommand(reply: @escaping (Bool) -> Void)
-    /// Whether the Space helper is on in the settings but not taking Space (not running, or without Accessibility), so Space
-    /// falls back to Apple's Quick Look.
-    func spaceHelperPaused(reply: @escaping (Bool) -> Void)
+    /// Whether the Space helper takes Space: "off" (off in the settings), "notRunning" (on, but no tap of its own: not running,
+    /// or without Accessibility), "paused" (another app has secure input on; its name, when found, is the second value) or "on".
+    func spaceHelperState(reply: @escaping (String, String?) -> Void)
     /// Puts `text` on the clipboard as plain text: the file on screen, or the page's selection. The extension is never asked to
     /// touch the pasteboard; only the Space panel's ⌘C with nothing selected is written by the viewer itself (FinderCopy).
     func copyText(_ text: String, reply: @escaping (Bool) -> Void)
@@ -94,6 +94,9 @@ protocol SpacebarEditHostProtocol {
     /// Enter that ends the block: it keeps `before`, `after` becomes a new block the edit moves into, and `tail` (may be
     /// empty) follows as a block of its own. The host answers with resetEdit.
     func editSplit(_ session: Int, before: String, after: String, tail: String)
+    /// ⌘Z (⇧⌘Z with `redo`) with nothing left to undo in the session: the host goes back to the file's text before the last
+    /// edit, split or merge (or forward again), and ends the session.
+    func editUndo(_ session: Int, redo: Bool)
     /// The filter field's text (FilterKeys.clean) after each change.
     func filterChanged(_ session: Int, text: String)
     /// A key the sidebar moves with, one of FilterKeys.names (a list session: listNames and listCommands; the find field:

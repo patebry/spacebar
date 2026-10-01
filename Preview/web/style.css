@@ -159,7 +159,8 @@
     background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--fg); }
 
   /* ---------- inline editing ---------- */
-  :root:not([data-editing=off]) #doc > [data-src]:not(.md-editing):hover { background: color-mix(in srgb, var(--code-bg) 60%, transparent); border-radius: 4px; cursor: text; }
+  :root:not([data-editing=off]) #doc > [data-src]:not(.md-editing):hover { background: color-mix(in srgb, var(--code-bg) 70%, transparent); border-radius: 4px; cursor: text;
+    box-shadow: -4px 0 0 color-mix(in srgb, var(--accent) 40%, transparent); }
   .md-editing { white-space: pre-wrap; background: var(--code-bg); border-radius: 4px; outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent); outline-offset: 2px; }
   :root:not([data-editing=off]) #doc .code-view pre.code[data-file-text]:not(.text-editing) { cursor: text; }
   #doc .code-view pre.code.text-editing { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
@@ -167,6 +168,10 @@
   :is(.md-editing, .text-editing) .caret { display: inline-block; width: 0; border-left: 2px solid var(--accent); margin-right: -2px; height: 1.15em; vertical-align: text-bottom; animation: blink 1s steps(1) infinite; }
   :is(.md-editing, .text-editing) .sel { background: color-mix(in srgb, var(--accent) 30%, transparent); }
   @keyframes blink { 50% { border-color: transparent; } }
+  @media (prefers-reduced-motion: reduce) { :is(.md-editing, .text-editing) .caret { animation: none; } }
+  #edit-tip { position: fixed; z-index: 11; padding: 4px 9px; border-radius: 6px; font: 12px/1.3 -apple-system, BlinkMacSystemFont, sans-serif;
+    color: #fff; background: rgba(40, 40, 42, .92); box-shadow: 0 2px 8px rgba(0, 0, 0, .18); pointer-events: none; white-space: nowrap; }
+  #edit-tip[hidden] { display: none; }
 
   /* ---------- sidebar and table of contents ---------- */
   /* Only the document is selectable: a selection that runs past it must not paint the empty page, the frame or the chrome. */
@@ -393,6 +398,38 @@
   }
   @supports (color: -apple-system-control-accent) { #toolbar, #side-toggle { --ui-accent: -apple-system-control-accent; } }
   #status:empty, #kind:empty, #stats:empty { display: none; }
+  /* One line, cut short: the toolbar never grows over the path or the sidebar button. Warnings go to the banner (#alert). */
+  #status { display: block; min-width: 0; max-width: min(36vw, 360px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Editing: a quiet label while the keys go to the text, and a tick for a moment after each save. */
+  #edit-pill { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; height: 24px; }
+  #edit-pill[hidden] { display: none; }
+  #toolbar > #edit-pill { padding: 0 8px; border-radius: 6px; background: var(--ui-bg); box-shadow: 0 0 0 .5px var(--ui-edge), 0 1px 2px rgba(0, 0, 0, .06); }
+  #edit-pill:not(.active) .ep-label { display: none; }
+  #edit-pill .ep-saved { display: inline-flex; align-items: center; gap: 3px; opacity: 0; transition: opacity .2s; }
+  #edit-pill.saved .ep-saved { opacity: 1; }
+  #edit-pill.active .ep-saved::before { content: "·"; margin-right: 3px; }
+  #toolbar > #undo { display: inline-flex; align-items: center; gap: 4px; }
+  #toolbar > #undo[hidden] { display: none; }
+  @media (prefers-reduced-motion: reduce) { #edit-pill .ep-saved { transition: none; } }
+  /* Text that is not saved: a banner under the toolbar that stays until it is resolved. */
+  #alert { position: fixed; z-index: 10; top: calc(var(--bar-h, 40px) + 4px); right: 12px; width: min(460px, calc(100vw - 24px)); box-sizing: border-box;
+    display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 8px;
+    font: 12px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: #3d2600; background: #fff4d6; box-shadow: 0 0 0 .5px rgba(160, 100, 0, .45), 0 4px 14px rgba(0, 0, 0, .12); }
+  #alert[hidden] { display: none; }
+  #alert .alert-ic { flex: none; color: #b25f00; margin-top: 1px; }
+  #alert p { margin: 0; overflow-wrap: anywhere; }
+  #alert-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  #alert-actions[hidden] { display: none; }
+  #alert-actions button { font: inherit; font-weight: 500; height: 24px; padding: 0 10px; border-radius: 6px; border: 0; color: inherit;
+    background: rgba(255, 255, 255, .75); box-shadow: 0 0 0 .5px rgba(160, 100, 0, .45); }
+  #alert-actions button:hover { background: #fff; }
+  #alert-actions button:focus-visible { outline: 2px solid #b25f00; outline-offset: 1px; }
+  @media (prefers-color-scheme: dark) {
+    #alert { color: #ffe3b0; background: #3a2a10; box-shadow: 0 0 0 .5px rgba(255, 190, 90, .4), 0 4px 14px rgba(0, 0, 0, .4); }
+    #alert .alert-ic { color: #ffb340; }
+    #alert-actions button { background: rgba(255, 255, 255, .1); box-shadow: 0 0 0 .5px rgba(255, 190, 90, .4); }
+    #alert-actions button:hover { background: rgba(255, 255, 255, .18); }
+  }
   #stats { font-variant-numeric: tabular-nums; margin-right: 2px; }
   /* The file's kind and size (an image's zoom too): quiet text, cut before it crowds the path. */
   #kind { display: flex; gap: 6px; min-width: 0; max-width: 34vw; white-space: nowrap; }
@@ -404,6 +441,7 @@
   #toolbar > :is(#status, #kind, #stats):not(:empty) { display: flex; height: 24px; align-items: center; padding: 0 8px; border-radius: 6px; background: var(--ui-bg);
     box-shadow: 0 0 0 .5px var(--ui-edge), 0 1px 2px rgba(0, 0, 0, .06); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); }
   #toolbar > #kind:not(:empty) + #stats:not(:empty)::before { content: none; }
+  #toolbar > #status:not(:empty) { display: block; line-height: 24px; }
   #status[data-hint] { cursor: pointer; }
   #status[data-hint]:hover { color: var(--fg); text-decoration: underline; }
   #toolbar > button, #side-toggle {
@@ -463,8 +501,7 @@
   #toolbar > #upd { display: inline-flex; align-items: center; gap: 6px; }
   #toolbar > #upd[hidden] { display: none; }
   #upd .upd-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ui-accent); }
-  #toolbar > #aa[data-update]::after { content: ""; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%;
-    background: var(--ui-accent); }
+  #aa-pop:not([data-mode=update]) #aa-update { display: none; }
   #aa-update { display: grid; gap: 2px; padding-bottom: 8px; margin: 0 -12px; padding-inline: 12px; box-shadow: 0 .5px 0 var(--ui-edge); }
   #aa-update[hidden] { display: none; }
   #aa-update p { margin: 0; overflow-wrap: anywhere; }
@@ -546,13 +583,14 @@
     :root:not([data-chrome=minimal]) #toolbar > :is(#status, #kind, #stats) { height: auto; padding: 0; background: none; box-shadow: none;
       -webkit-backdrop-filter: none; backdrop-filter: none; }
     :root:not([data-chrome=minimal]) #toolbar > #kind:not(:empty) + #stats:not(:empty)::before { content: "· "; }
+    :root:not([data-chrome=minimal]) #toolbar > #edit-pill { padding: 0 4px 0 0; background: none; box-shadow: none; }
     /* A hidden .tb-slot (Raw, Find, Aa, Open) keeps its place, and Open is as wide as Reveal, so nothing in the row moves from
        file to file. An update where Aa is hidden (so are Raw and Find) fills exactly their three slots. */
     :root:not([data-chrome=minimal]) #toolbar > .tb-slot[hidden] { visibility: hidden; }
     :root:not([data-chrome=minimal]) #toolbar > .tb-ic[hidden] { display: inline-grid; }
     :root:not([data-chrome=minimal]) #toolbar > :is(#aa, #edit)[hidden] { display: inline-block; }
     :root:not([data-chrome=minimal]) #toolbar:has(> #upd:not([hidden])) > :is(#raw, #find-btn, #aa)[hidden] { display: none; }
-    :root:not([data-chrome=minimal]) #toolbar > #upd { width: calc(28px + 28px + 32px + 2 * 4px); box-sizing: border-box; justify-content: center; }
+    :root:not([data-chrome=minimal]) #toolbar:has(> #aa[hidden]) > #upd { width: calc(28px + 28px + 32px + 2 * 4px); box-sizing: border-box; justify-content: center; }
     :root:not([data-chrome=minimal]) :is(#toolbar > button, #side-toggle) { height: 26px; color: var(--fg); background: transparent; box-shadow: none;
       -webkit-backdrop-filter: none; backdrop-filter: none; }
     :root:not([data-chrome=minimal]) #side-toggle { color: var(--muted); }

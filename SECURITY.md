@@ -24,7 +24,10 @@ Nine features reach further than a rendered page, and are in scope:
   property list. Code and config can run, so the extension cannot write content of its own into them: when an edit of such a
   file starts, the writer reads the file itself and takes the edit's text only if it is that file's text (or one its edits of
   the file already sent), a script cannot replace the buffer, and every write must be, byte for byte, a buffer the writer's
-  own panel sent, in the file's encoding. Markdown writes are as before: any content, to Markdown only. Every write names
+  own panel sent, in the file's encoding, over bytes the file held while the writer recorded it (or that its own failed write
+  left), so nothing is written over a change made elsewhere. Undo is held to the same rule: the writer also keeps, per file,
+  the text each edit began with on disk and the one it ended with (32 at most), and ⌘Z may write back only those; a file
+  changed on disk starts a new record without them. Markdown writes are as before: any content, to Markdown only. Every write names
   the bytes it expects on disk (compare-and-swap), and the resolved path is opened without following a link swapped in for
   it. The preview edits a file only when its bytes come back exactly from its text in the encoding and byte order mark they
   were read with; a character that encoding cannot hold is not saved, and a file is never converted to UTF-8. A `.env` is
@@ -115,7 +118,8 @@ Nine features reach further than a rendered page, and are in scope:
   does: the file on screen's URL, with its text where it has a whole-file copy, and only within a second of a ⌘C the helper
   forwarded; the Copy button stays text only, through the writer.
 - **The helper hint.** Whether the Space helper is taking Space comes from the Quick Look extension's writer, which reads
-  the window server's list of event taps (each tap's owner, matched by its executable's path). Nothing connects to the
+  the window server's list of event taps (each tap's owner, matched by its executable's path), and which app holds secure
+  input from the I/O Registry's console-user record (`kCGSSessionSecureInputPID`), to name it. Nothing connects to the
   helper, and no key is seen.
 - **The Space helper** ("Use spacebar for every file", off until you turn it on) holds Accessibility and an event tap. Its
   threat model is below.

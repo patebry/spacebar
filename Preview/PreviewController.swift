@@ -36,6 +36,9 @@ final class EditHost: NSObject, SpacebarEditHostProtocol {
     func editSplit(_ session: Int, before: String, after: String, tail: String) {
         DispatchQueue.main.async { self.controller?.splitRequested(session, before: before, after: after, tail: tail) }
     }
+    func editUndo(_ session: Int, redo: Bool) {
+        DispatchQueue.main.async { self.controller?.undoRequested(session, redo: redo) }
+    }
     func filterChanged(_ session: Int, text: String) {
         DispatchQueue.main.async { self.controller?.filterChanged(session, text: text) }
     }
@@ -494,9 +497,9 @@ class PreviewController: NSViewController {
         if let e = edit { stopEdit(notifyWriter: true, keepRetired: true); retired.append(e) }
         guard writing || !retired.isEmpty else {
             dropPending()
-            guard hasUnsavedText else { return false }
+            guard hasUnsavedText || !displaced.isEmpty else { return false }
             log.error("refused to leave the document: unsaved text")
-            refuseToLeave(action, "unsaved text")
+            refuseToLeave(action, displaced.isEmpty ? "unsaved text" : "choose what to do with your text first")
             return true
         }
         log.info("switch waits for the edit's saves (writing=\(self.writing) retired=\(self.retired.count))")
@@ -515,7 +518,7 @@ class PreviewController: NSViewController {
         guard textSource != nil, hasUnsavedText else { return false }
         textStranded = true
         saveRefused = false
-        stickyStatus("NOT SAVED: this text can no longer be saved to the file; copy it now. The file on disk is unchanged.")
+        stickyStatus("Not saved: this text can no longer be saved to the file. Copy it now; the file on disk is unchanged.")
         return true
     }
 
@@ -530,7 +533,7 @@ class PreviewController: NSViewController {
             let reason = why == "unsaved text" ? "Not started: unsaved text. Edit again to save it first." : "Not started: \(why)."
             js("sb.update", ["state": "failed", "version": v, "reason": reason, "retry": true])
         } else {
-            status("not switched: \(why)")
+            status("Not switched: \(why)")
         }
     }
 
@@ -541,7 +544,7 @@ class PreviewController: NSViewController {
             guard let self, self.pending != nil, self.pendingGen == gen else { return }
             // A write in flight is never given up on: its reply, or the writer's loss, decides.
             if self.writing {
-                self.status("still saving…")
+                self.status("Still saving…")
                 return self.armPending()
             }
             // A writer that never reports an edit's end (hung, not crashed) must not keep the panel on this document.
@@ -555,13 +558,13 @@ class PreviewController: NSViewController {
         guard !writing, retired.isEmpty, let p = pending else { return }
         pending = nil
         // Text that never reached the disk (a character the file's encoding cannot hold) keeps the panel on this document.
-        if case .update = p {} else if hasUnsavedText { return refuseToLeave(p, "unsaved text") }
+        if case .update = p {} else if hasUnsavedText || !displaced.isEmpty { return refuseToLeave(p, "unsaved text") }
         switch p {
         case .file(let url, let anchor): open(url, anchor: anchor)
         case .overview(let r, let reason): showOverview(r, reason: reason)
         case .update:
             // The edit and its saves are done by now; anything left unsaved keeps the update from starting.
-            if edit == nil, !hasUnsavedText { startUpdate() } else { refuseToLeave(.update, "unsaved text") }
+            if edit == nil, !hasUnsavedText, displaced.isEmpty { startUpdate() } else { refuseToLeave(.update, "unsaved text") }
         }
     }
 
@@ -572,6 +575,21 @@ class PreviewController: NSViewController {
         pendingGen += 1
         refuseToLeave(p, why)
     }
+    /// The document's texts before each edit, split, merge and task toggle, newest last, and the texts undo went back from: ⌘Z
+    /// and the Undo button walk them while the file stays on screen. Each is written like any edit (compare-and-swap; for a
+    /// text file only a text the writer recorded, TypedTexts), and a change on disk drops them.
+    private var undoTexts: [String] = []
+    private var redoTexts: [String] = []
+    /// The current edit has not changed the document yet: its first change takes the text before it into undoTexts.
+    private var undoDue = false
+    /// Within what the writer keeps of a text file for undo (an edit's start and end each, TypedTexts.keptMarks).
+    private static let undoDepth = 16
+    /// An undo's write in flight, and the text it replaced: a writer that no longer holds the target refuses it.
+    private var undoing: (target: String, previous: String)?
+    /// The user's texts a change on disk displaced, oldest first: kept, with a banner, until they keep the last (Markdown only),
+    /// take the disk's, or copy them.
+    private var displaced: [String] = []
+
     /// Set after a write failed part-way and could not be undone: the exact bytes it left on disk (the torn file need not be
     /// valid UTF-8), snapshotted once per such failure and used as the base of every retry, so a save by anyone else in the
     /// meantime still turns the retry into a conflict. Until a retry succeeds docText is the only good copy in memory, so
@@ -635,6 +653,9 @@ class PreviewController: NSViewController {
     /// The view is on screen.
     func hostAppeared() {
         appeared = true
+        // The page forgot both when the host took the preview away (sb.previewClosed).
+        if !displaced.isEmpty { js("sb.conflict", ["open": true, "keep": textSource == nil && fileKind == .markdown]) }
+        if !shownSticky.isEmpty { status(shownSticky, sticky: true) }
         htmlPane?.view.setAllMediaPlaybackSuspended(false)
         host.web.setAllMediaPlaybackSuspended(false)
         wantListKeys()
@@ -659,6 +680,7 @@ class PreviewController: NSViewController {
         stopFilter(notifyWriter: true)
         host.remoteImages.reset()
         closePDF()
+        js("sb.previewClosed", [:])
     }
 
     /// Runs whenever the page reports a paint or a render.
@@ -985,7 +1007,7 @@ class PreviewController: NSViewController {
     }
 
     private func open(_ url: URL, anchor: String? = nil) {
-        if torn { return status("NOT SAVED: file partly written; retrying before switching") }
+        if torn { return status("Not saved: the file was partly written; retrying before switching") }
         var st = stat()
         let found = stat(url.path, &st) == 0
         let kind = found ? FileTypes.kind(name: url.lastPathComponent, isDirectory: st.st_mode & S_IFMT == S_IFDIR, isPackage: st.st_mode & S_IFMT == S_IFDIR,
@@ -1028,6 +1050,8 @@ class PreviewController: NSViewController {
         textSource = nil
         textPayload = nil
         lineEnding = "\n"
+        resetUndo()
+        dropDisplaced()
         if saveRefused || textStranded { saveRefused = false; textStranded = false; stickyStatus("") }
         if let refusal {
             watcher = nil
@@ -1120,7 +1144,8 @@ class PreviewController: NSViewController {
     /// Takes a Markdown read that is still current: `raw` is the file's text as on disk, `lines` its text as shown.
     private func apply(_ raw: String, _ lines: Lines, url: URL, reason: String) {
         if raw == diskText { return }
-        if edit == nil, let d = docText, !matchesDisk(d) { status("unsaved text replaced by the version on disk") }
+        if let d = docText, !matchesDisk(d) { displace(d) }
+        resetUndo()
         lineEnding = lines.crlf ? "\r\n" : "\n"
         let text = lines.text
         if let t = lines.targets { targetsMemo = (text, t) }
@@ -1129,7 +1154,7 @@ class PreviewController: NSViewController {
         if edit != nil {
             log.info("file changed on disk during edit; stopping edit")
             stopEdit(notifyWriter: true)
-            status("changed on disk: edit stopped")
+            status("Changed on disk: editing stopped")
         }
         docText = text
         diskText = raw
@@ -1281,7 +1306,7 @@ class PreviewController: NSViewController {
     private func show(_ url: URL, reason: String) {
         var st = stat()
         guard stat(url.path, &st) == 0 else {
-            return reason == "change" ? status("cannot read \(url.lastPathComponent)") : showUnopenable(url, note: FileView.openRefusal(url.path))
+            return reason == "change" ? status("Can’t read \(url.lastPathComponent)") : showUnopenable(url, note: FileView.openRefusal(url.path))
         }
         let stamp = "\(st.st_size)-\(st.st_mtimespec.tv_sec).\(st.st_mtimespec.tv_nsec)-\(st.st_ino)"
         if reason == "change", stamp == shownStamp || awaitingDownload(url) { return }
@@ -1383,14 +1408,14 @@ class PreviewController: NSViewController {
         }
         if same {
             retired = []
+            if let d = docText, !matchesDisk(d) { displace(d) }
             if edit != nil {
                 log.info("file changed on disk during edit; stopping edit")
                 stopEdit(notifyWriter: true)
-                status("changed on disk: edit stopped")
-            } else if hasUnsavedText {
-                status("unsaved text replaced by the version on disk")
+                status("Changed on disk: editing stopped")
             }
         }
+        resetUndo()
         if saveRefused || textStranded { saveRefused = false; textStranded = false; stickyStatus("") }
         textSource = opened?.source
         docText = opened?.text
@@ -1893,7 +1918,7 @@ class PreviewController: NSViewController {
                   LinkPolicy.fileRefusal(url, allowArchives: fileKind == .archive) == nil || (shownText && LinkPolicy.editorRefusal(url) == nil) else {
                 return refuse("openFile", "not the file on screen or not allowed")
             }
-            let done = { (ok: Bool) in if !ok { DispatchQueue.main.async { self.status("not opened: \(url.lastPathComponent)") } } }
+            let done = { (ok: Bool) in if !ok { DispatchQueue.main.async { self.status("Not opened: \(url.lastPathComponent)") } } }
             if shownText {
                 helper { $0.openText(url, appBundleID: SettingsStore.shared.settings.editorBundleID, reply: done) }
             } else {
@@ -1914,7 +1939,7 @@ class PreviewController: NSViewController {
                 }
             }
             guard let id = m.string("app", max: 256) else { return refuse(type, "no app") }
-            helper { $0.openWith(url, appBundleID: id) { ok in if !ok { DispatchQueue.main.async { self.status("not opened: \(url.lastPathComponent)") } } } }
+            helper { $0.openWith(url, appBundleID: id) { ok in if !ok { DispatchQueue.main.async { self.status("Not opened: \(url.lastPathComponent)") } } } }
         case "reveal":
             // A broken link does not resolve: its card reveals the link itself, in a folder inside the root.
             guard let url = fileURL, fileKind != .markdown || unavailablePath == url.path, m.string("path", max: 4096) == url.path,
@@ -1922,7 +1947,7 @@ class PreviewController: NSViewController {
                     && FolderListing.isInside((url.path as NSString).deletingLastPathComponent, root: rootDir, allowRoot: true) else {
                 return refuse("reveal", "not the file on screen")
             }
-            helper { $0.reveal(url) { ok in if !ok { DispatchQueue.main.async { self.status("could not show \(url.lastPathComponent) in Finder") } } } }
+            helper { $0.reveal(url) { ok in if !ok { DispatchQueue.main.async { self.status("Couldn’t show \(url.lastPathComponent) in Finder") } } } }
         case "setting":
             // The Aa popover and the sidebar button: cosmetic keys only (Settings.panelKeys), checked here and again by the writer.
             guard let key = m.string("key", max: 32), let raw = body["value"], let patch = Settings.panelPatch(key, raw) else {
@@ -1932,7 +1957,7 @@ class PreviewController: NSViewController {
             helper {
                 $0.updateSettings(patch) { ok in
                     DispatchQueue.main.async {
-                        if !ok { self.status("settings.json could not be updated"); self.host.resendSettings() }
+                        if !ok { self.status("Couldn’t update settings.json"); self.host.resendSettings() }
                         SettingsStore.shared.checkNow(reason: "panel")
                     }
                 }
@@ -1940,7 +1965,7 @@ class PreviewController: NSViewController {
         case "openSettings":
             let tab = m.string("tab", max: 16) ?? "appearance"
             guard SettingsTab.all.contains(tab) else { return refuse("openSettings", "unknown tab") }
-            helper { $0.openSettings(tab) { ok in if !ok { DispatchQueue.main.async { self.status("could not open settings") } } } }
+            helper { $0.openSettings(tab) { ok in if !ok { DispatchQueue.main.async { self.status("Couldn’t open Settings") } } } }
         case "toggle":
             guard SettingsStore.shared.settings.taskToggles else { return refuse("toggle", "task toggles are off") }
             // A refused toggle is already flipped on the page: the document goes back to it as it is.
@@ -1948,7 +1973,7 @@ class PreviewController: NSViewController {
             guard isCurrent(m), let line = m.int("line"), let checked = m.bool("checked"), let text = m.string("text", max: 1 << 16) else {
                 return refuse("toggle", "bad request or not the previewed file")
             }
-            guard let mapped = mapLine(line, from: m.int("ver")) else { status("not toggled: document changed"); return repushDoc("toggleRefused") }
+            guard let mapped = mapLine(line, from: m.int("ver")) else { status("Not toggled: the document changed"); return repushDoc("toggleRefused") }
             toggleTask(line: mapped, text: text, checked: checked)
         case "editBlock":
             guard SettingsStore.shared.settings.inlineEditing, isCurrent(m) else {
@@ -1985,6 +2010,27 @@ class PreviewController: NSViewController {
             mergeBackward(m)
         case "editCancel":
             if let e = edit, m.int("seq") == e.seq { stopEdit(notifyWriter: true) }
+        case "undo":
+            // During an edit ⌘Z is the writer's, and its last keys may still be landing.
+            guard edit == nil, fileKind == .markdown || textSource != nil else { return refuse("undo", "not an edited file, or editing") }
+            undo(redo: m.bool("redo") == true)
+        case "conflict":
+            guard let mine = displaced.last, fileURL != nil else { return js("sb.conflict", ["open": false]) }
+            switch m.string("choice", max: 8) {
+            case "mine":
+                // The writer never puts a text file back over a change made elsewhere (TypedTexts), so only Markdown offers it.
+                guard textSource == nil, fileKind == .markdown, let url = fileURL else { return refuse("conflict", "Keep Mine is for Markdown") }
+                guard let disk = docText else { return status("The file on disk can’t be read: copy your text instead") }
+                if edit != nil { stopEdit(notifyWriter: true) }
+                checkpoint(disk)
+                save(mine)
+                push(text: mine, path: url.path, reason: "undo")
+            case "disk": dropDisplaced()
+            case "copy":
+                let all = displaced.joined(separator: "\n\n")
+                helper { $0.copyText(all) { ok in DispatchQueue.main.async { self.status(ok ? "Copied your text" : "Could not copy") } } }
+            default: refuse("conflict", "unknown choice")
+            }
         case "editStop":
             guard let e = edit, m.int("seq") == e.seq else { return }
             stopEdit(notifyWriter: true, keepRetired: true)
@@ -2032,7 +2078,7 @@ class PreviewController: NSViewController {
                   let dir = images.revealable(m.string("path", max: 4096), doc: url.path) else {
                 return refuse("revealImageFolder", "not a folder of this document's images")
             }
-            helper { $0.reveal(dir) { ok in if !ok { DispatchQueue.main.async { self.status("could not show \(dir.lastPathComponent) in Finder") } } } }
+            helper { $0.reveal(dir) { ok in if !ok { DispatchQueue.main.async { self.status("Couldn’t show \(dir.lastPathComponent) in Finder") } } } }
         case "pdfRect":
             // Where the page reserved the PDF's place, in CSS pixels of the viewport; `hide` while the page has something above it.
             if fileKind == .pdf { pdfPane?.place(message: body, in: host.web) }
@@ -2140,7 +2186,7 @@ class PreviewController: NSViewController {
         helper {
             $0.open(url, appBundleID: editor) { ok in
                 log.info("link -> helper open returned \(ok)")
-                if !ok { DispatchQueue.main.async { self.status("not opened: \(url.lastPathComponent)") } }
+                if !ok { DispatchQueue.main.async { self.status("Not opened: \(url.lastPathComponent)") } }
             }
         }
     }
@@ -2185,8 +2231,8 @@ class PreviewController: NSViewController {
         }
     }
 
-    /// Once per extension process, a quiet line when the Space helper is on in the settings but Space fell back to Quick Look.
-    /// Asked of the writer at most every 30 s, and only while the setting is on.
+    /// Once per extension process, a quiet line when the Space helper is on in the settings but Space came to Quick Look: it is
+    /// not running, or another app's secure input pauses it. Asked of the writer at most every 30 s, and only while the setting is on.
     private static var helperHinted = false
     private static var helperAsked = Date.distantPast
     private func checkSpaceHelper() {
@@ -2194,11 +2240,12 @@ class PreviewController: NSViewController {
               Date().timeIntervalSince(Self.helperAsked) > 30 else { return }
         Self.helperAsked = Date()
         helper {
-            $0.spaceHelperPaused { paused in
+            $0.spaceHelperState { state, app in
                 DispatchQueue.main.async {
-                    guard paused, !Self.helperHinted, self.host.controller === self else { return }
+                    guard state == "notRunning" || state == "paused", !Self.helperHinted, self.host.controller === self else { return }
+                    let arg = String(data: try! JSONSerialization.data(withJSONObject: ["state": state, "app": app ?? ""]), encoding: .utf8)!
                     // Spent only once the page has put it up: a status already showing keeps it for a later preview.
-                    self.host.web.evaluateJavaScript("sb.helperHint()") { shown, _ in
+                    self.host.web.evaluateJavaScript("sb.helperHint(\(arg))") { shown, _ in
                         if shown as? Bool == true { Self.helperHinted = true }
                     }
                 }
@@ -2282,7 +2329,7 @@ class PreviewController: NSViewController {
         }
         let proxy = conn.remoteObjectProxyWithErrorHandler { [weak self] err in
             log.error("xpc error: \(err.localizedDescription, privacy: .public)")
-            DispatchQueue.main.async { self?.status("helper unavailable"); onError?() }
+            DispatchQueue.main.async { self?.status("Couldn’t reach spacebar’s background service"); onError?() }
         } as? SpacebarWriterProtocol
         if let proxy { body(proxy) }
     }
@@ -2291,7 +2338,7 @@ class PreviewController: NSViewController {
         stopEdit(notifyWriter: false)
         stopFilter(notifyWriter: false)
         let lostWrite = writing
-        if writing { writing = false; queuedSave = nil; status("save failed: edit again to retry") }
+        if writing { writing = false; queuedSave = nil; status("Save failed: edit again to retry") }
         if torn, let url = fileURL { retryTorn(url) }
         // No more keys will arrive for ended sessions.
         retired = []
@@ -2299,8 +2346,8 @@ class PreviewController: NSViewController {
     }
 
     private func retryTorn(_ url: URL) {
-        stickyStatus(tornStatus.isEmpty ? "NOT SAVED: file partly written, no recovery copy; copy your text before closing"
-                                        : "NOT SAVED: file partly written; retrying. Text kept in \(tornStatus) (temporary folders are cleared)")
+        stickyStatus(tornStatus.isEmpty ? "Not saved: the file was partly written and there is no recovery copy. Copy your text before closing."
+                                        : "Not saved: the file was partly written; retrying. Your text is kept in \(tornStatus) (temporary folders are cleared).")
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             guard let self, self.torn, !self.tornHalted, !self.writing, self.fileURL == url, let t = self.docText else { return }
             self.save(t)
@@ -2327,6 +2374,7 @@ class PreviewController: NSViewController {
         else { return log.error("toggle: line \(line) is not a task item") }
         let r = lines[line].index(item.upperBound, offsetBy: -3)..<item.upperBound
         lines[line].replaceSubrange(r, with: checked ? "[x]" : "[ ]")
+        checkpoint(text)
         save(lines.joined(separator: "\n"))
     }
 
@@ -2340,7 +2388,7 @@ class PreviewController: NSViewController {
     }
 
     private func send(_ url: URL, _ text: String, _ keyTime: Double?) {
-        guard !tornHalted else { return stickyStatus("file changed on disk; your unsaved text is only in this preview: copy it now") }
+        guard !tornHalted else { return stickyStatus("Not saved: the file changed on disk, and your text is only in this preview. Copy it now.") }
         if torn && tornBase == nil { tornBase = FileManager.default.contents(atPath: url.path) }
         guard let base = torn ? tornBase : diskText.flatMap(bytes) else {
             if torn { retryTorn(url) }
@@ -2350,12 +2398,12 @@ class PreviewController: NSViewController {
         guard let data = bytes(onDisk(text)) else {
             let c = textSource?.unencodable(text).map { "“\($0)”" } ?? "a character"
             saveRefused = true
-            return stickyStatus("NOT SAVED: \(c) can’t be written in \(textSource?.name ?? "this file’s encoding"); remove it to save")
+            return stickyStatus("Not saved: \(c) can’t be written in \(textSource?.name ?? "this file’s encoding"). Remove it to save.")
         }
         // The writer refuses a text file past the cap; asking would end the edit with a retry that can never work.
         if textSource != nil, data.count > FileTypes.maxTextBytes {
             saveRefused = true
-            return stickyStatus("NOT SAVED: text files over 2 MB aren’t saved; remove some text to save")
+            return stickyStatus("Not saved: text files over 2 MB aren’t saved. Remove some text to save.")
         }
         if saveRefused { saveRefused = false; stickyStatus("") }
         writing = true
@@ -2380,7 +2428,7 @@ class PreviewController: NSViewController {
             tornHalted = true
             queuedSave = nil
             stopEdit(notifyWriter: true)
-            stickyStatus("file changed on disk; your unsaved text is only in this preview: copy it now")
+            stickyStatus("Not saved: the file changed on disk, and your text is only in this preview. Copy it now.")
             cancelPending("save failed")
             return
         }
@@ -2391,7 +2439,7 @@ class PreviewController: NSViewController {
             log.error("save failed: conflict after a partial write")
             queuedSave = nil
             stopEdit(notifyWriter: true)
-            stickyStatus("changed on disk; your unsaved text is in \(tornStatus)")
+            stickyStatus("Not saved: the file changed on disk. Your text is kept in \(tornStatus).")
             tornStatus = ""
             docText = nil
             diskText = nil
@@ -2403,12 +2451,26 @@ class PreviewController: NSViewController {
             log.error("save failed: conflict")
             queuedSave = nil
             stopEdit(notifyWriter: true)
-            status("changed on disk: not saved")
+            displace(docText ?? text)
             docText = nil
             diskText = nil
             reload(reason: "conflict")
             cancelPending("changed on disk, not saved")
             return
+        }
+        if let error, error.contains("not a text typed"), let u = undoing, u.target == text {
+            // The writer no longer holds that text (it restarted, or it was edited past what it keeps): the file is as it was.
+            log.error("undo refused by the writer")
+            undoing = nil
+            queuedSave = nil
+            docText = u.previous
+            undoTexts = []
+            redoTexts = []
+            sendUndoState()
+            if textSource == nil { push(text: u.previous, path: url.path, reason: "undo") } else { renderText("undo") }
+            status("Can’t undo further")
+            if !matchesDisk(u.previous) { return save(u.previous) }
+            return runPending()
         }
         if let error, error.contains("not a text typed"), strandText() {
             queuedSave = nil
@@ -2430,14 +2492,21 @@ class PreviewController: NSViewController {
             if torn {
                 retryTorn(url)
             } else {
-                status("save failed: edit again to retry")
+                status("Save failed: edit again to retry")
             }
             cancelPending("save failed; edit again to retry")
             return
         }
         diskText = onDisk(text)
         syncedText = text
-        if torn { torn = false; tornBase = nil; stickyStatus(""); status(tornStatus.isEmpty ? "saved" : "saved; \(tornStatus) can be deleted"); tornStatus = "" }
+        if displaced.last == text {
+            displaced.removeLast()
+            if displaced.isEmpty { js("sb.conflict", ["open": false]) }
+        }
+        if undoing?.target == text { undoing = nil }
+        if textStranded { textStranded = false; stickyStatus("") }
+        if queuedSave == nil { js("sb.saved", [:]) }
+        if torn { torn = false; tornBase = nil; stickyStatus(""); status(tornStatus.isEmpty ? "Saved" : "Saved; \(tornStatus) can be deleted"); tornStatus = "" }
         if let q = queuedSave {
             queuedSave = nil
             if q.url == url { send(q.url, q.text, q.keyTime) }
@@ -2447,6 +2516,68 @@ class PreviewController: NSViewController {
         // Catch an external change that landed while writes were in flight (watcher reloads are skipped during a write).
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in self?.reload(reason: "change") }
         runPending()
+    }
+
+    // MARK: undo, and text a change on disk displaced
+
+    private func resetUndo() {
+        undoTexts = []
+        redoTexts = []
+        undoDue = false
+        sendUndoState()
+    }
+
+    /// `before` is the document as it was before a change that is about to be saved.
+    private func checkpoint(_ before: String) {
+        if undoTexts.last != before { undoTexts.append(before) }
+        if undoTexts.count > Self.undoDepth { undoTexts.removeFirst() }
+        redoTexts = []
+        sendUndoState()
+    }
+
+    private func sendUndoState() { js("sb.undoState", ["undo": !undoTexts.isEmpty, "redo": !redoTexts.isEmpty]) }
+
+    fileprivate func undoRequested(_ id: Int, redo: Bool) {
+        guard let e = edit, e.id == id else { return }
+        undo(redo: redo)
+    }
+
+    /// Puts the document back to its text before the last edit, split, merge or toggle (or forward again). The edit ends; the
+    /// text is saved like any edit, against what is on disk.
+    private func undo(redo: Bool) {
+        guard let url = fileURL, let now = docText, !torn, !tornHalted else { return }
+        var from = redo ? redoTexts : undoTexts
+        while from.last == now { from.removeLast() }
+        guard let target = from.popLast() else {
+            if redo { redoTexts = from } else { undoTexts = from }
+            sendUndoState()
+            return status(redo ? "Nothing to redo" : "Nothing to undo")
+        }
+        if redo { redoTexts = from; undoTexts.append(now) } else { undoTexts = from; redoTexts.append(now) }
+        if edit != nil { stopEdit(notifyWriter: true) }
+        undoDue = false
+        log.info("\(redo ? "redo" : "undo", privacy: .public): \(self.undoTexts.count) back, \(self.redoTexts.count) forward")
+        if !writing, matchesDisk(target) {
+            docText = target
+        } else {
+            undoing = (target, now)
+            save(target)
+        }
+        if textSource == nil { push(text: target, path: url.path, reason: "undo") } else { renderText("undo") }
+        sendUndoState()
+        status(redo ? "Redone" : "Undone")
+    }
+
+    /// Keeps the user's text that the file on disk replaced, and asks them what to do with it.
+    private func displace(_ text: String) {
+        if displaced.last != text { displaced.append(text) }
+        js("sb.conflict", ["open": true, "keep": textSource == nil && fileKind == .markdown])
+    }
+
+    private func dropDisplaced() {
+        guard !displaced.isEmpty else { return }
+        displaced = []
+        js("sb.conflict", ["open": false])
     }
 
     // MARK: inline editing
@@ -2487,6 +2618,7 @@ class PreviewController: NSViewController {
         editCounter += 1
         let id = editCounter
         edit = (id, seq, at, blockLines.count)
+        undoDue = true
         log.info("editBlock \(id) lines \(at)..<\(at + blockLines.count) caret \(caret)\(at == mapped ? "" : " (page said \(start))", privacy: .public)\(self.writing ? " during a write" : "", privacy: .public)")
         if at != mapped { js("sb.editMoved", ["seq": seq, "doc": text, "start": at, "ver": nextVersion()]) }
         let d = { (k: String) in m.double(k) ?? 0 }
@@ -2496,7 +2628,7 @@ class PreviewController: NSViewController {
                 DispatchQueue.main.async {
                     guard self.edit?.id == id else { return }
                     log.info("lat[\(id)] ack \(upMs(), format: .fixed(precision: 1))")
-                    if !ok { self.stopEdit(notifyWriter: false); self.status("inline editing unavailable") }
+                    if !ok { self.stopEdit(notifyWriter: false); self.status("Inline editing unavailable") }
                 }
             }
         }
@@ -2510,6 +2642,7 @@ class PreviewController: NSViewController {
         let newLines = block.components(separatedBy: "\n")
         if let e = edit, e.id == id {
             guard e.start + e.lines <= lines.count else { stopEdit(notifyWriter: true); return }
+            if undoDue, block != lines[e.start..<(e.start + e.lines)].joined(separator: "\n") { undoDue = false; checkpoint(text) }
             let ver = nextVersion(splicingAt: e.start + e.lines, delta: newLines.count - e.lines)
             js("sb.editUpdate", ["seq": e.seq, "text": block, "selStart": selStart, "selLen": selLen, "keyTime": keyTime, "ver": ver,
                                      "at": e.start, "old": e.lines])
@@ -2550,7 +2683,7 @@ class PreviewController: NSViewController {
         log.info("edit \(id) ended: \(reason, privacy: .public)")
         stopEdit(notifyWriter: false)
         dropIfEmpty(start: e.start, lines: e.lines)
-        if reason == "not-key" { status("inline editing unavailable") }
+        if reason == "not-key" { status("Inline editing unavailable") }
         // Re-sync the page with docText, the authority, in case the two drifted while it owned the view.
         if let url = fileURL, let text = docText { push(text: text, path: url.path, reason: "editEnd") }
         if FilterKeys.relists(afterEnding: reason, list: false) { wantListKeys() }
@@ -2581,6 +2714,7 @@ class PreviewController: NSViewController {
         editCounter += 1
         let id = editCounter
         edit = (id, seq, 0, 0)
+        undoDue = true
         log.info("editText \(id) caret \(caret)\(self.writing ? " during a write" : "", privacy: .public)")
         // Only the click's line matters for where the panel sits; a tall view would make a window taller than the screen.
         let clamp = { (k: String, hi: Double) in min(max(m.double(k) ?? 0, 0), hi) }
@@ -2590,7 +2724,7 @@ class PreviewController: NSViewController {
             $0.beginTextEdit(id, path: url.path, text: text, caret: caret, clickX: clamp("clickX", w), clickY: y, width: w, height: h) { ok in
                 DispatchQueue.main.async {
                     guard self.edit?.id == id else { return }
-                    if !ok { self.stopEdit(notifyWriter: false); if !self.strandText() { self.status("inline editing unavailable") } }
+                    if !ok { self.stopEdit(notifyWriter: false); if !self.strandText() { self.status("Inline editing unavailable") } }
                 }
             }
         }
@@ -2604,7 +2738,10 @@ class PreviewController: NSViewController {
         let c = EditableText.change(from: old, to: text)
         js("sb.textUpdate", ["seq": seq, "from": c?.from ?? 0, "to": c?.to ?? 0, "insert": c?.insert ?? "", "selStart": selStart, "selLen": selLen,
                              "keyTime": keyTime])
-        if c != nil { save(text, keyTime: keyTime) }
+        if c != nil {
+            if undoDue, edit?.id == id { undoDue = false; checkpoint(old) }
+            save(text, keyTime: keyTime)
+        }
     }
 
     private func textEditEnded(_ id: Int, reason: String) {
@@ -2616,7 +2753,7 @@ class PreviewController: NSViewController {
         guard let e = edit, e.id == id else { return runPending() }
         log.info("edit \(id) ended: \(reason, privacy: .public)")
         stopEdit(notifyWriter: false)
-        if reason == "not-key" { status("inline editing unavailable") }
+        if reason == "not-key" { status("Inline editing unavailable") }
         renderText("editEnd")
         if FilterKeys.relists(afterEnding: reason, list: false) { wantListKeys() }
         if reason == "find" { js("sb.editFind", [:]) }
@@ -2657,6 +2794,8 @@ class PreviewController: NSViewController {
         js("sb.editReset", ["seq": e.seq, "doc": updated, "start": ps, "text": block, "caret": caret, "tag": tag, "ver": ver,
                                 "at": ps, "old": e.start + e.lines - ps])
         helper { $0.resetEdit(e.id, text: block, caret: caret) }
+        checkpoint(text)
+        undoDue = true
         save(updated)
     }
 
@@ -2713,6 +2852,8 @@ class PreviewController: NSViewController {
         js("sb.editReset", ["seq": e.seq, "doc": updated, "start": newStart, "text": block, "caret": 0, "tag": "P", "ver": ver,
                                 "at": e.start, "old": e.lines, "repl": repl])
         helper { $0.resetEdit(e.id, text: block, caret: 0) }
+        checkpoint(text)
+        undoDue = true
         save(updated)
     }
 
@@ -2738,6 +2879,7 @@ class PreviewController: NSViewController {
         shiftRetired(from: at + removed, by: -removed)
         let ver = nextVersion(splicingAt: at + removed, delta: -removed)
         js("sb.spliceLines", ["at": at, "old": removed, "lines": [String](), "ver": ver])
+        checkpoint(text)
         save(lines.joined(separator: "\n"))
     }
 
@@ -2840,5 +2982,10 @@ class PreviewController: NSViewController {
         host.web.evaluateJavaScript("sb.status(\(arg)[0], \(sticky))", completionHandler: nil)
     }
 
-    private func stickyStatus(_ s: String) { status(s, sticky: true) }
+    /// The sticky warning the page shows now.
+    private var shownSticky = ""
+    private func stickyStatus(_ s: String) {
+        shownSticky = s
+        status(s, sticky: true)
+    }
 }

@@ -17,7 +17,7 @@ const el = (tag, cls, text) => {
 const DEFAULTS = { theme: 'apple', appearance: 'auto', codeTheme: 'auto', bodyFont: 'system', monoFont: 'system', fontSize: 15,
   lineHeight: 1.6, width: 'medium', frontMatter: 'table', toc: 'auto', stats: false, math: true, mermaid: true, rawHTML: 'sanitized',
   remoteImages: false, inlineEditing: true, taskToggles: true, sidebarCollapsed: false, sidebarWidth: 240, minimalChrome: false, customCSSURL: null,
-  userThemeURL: null, rawMarkdown: false, rawJSON: false, rawNotebook: false, rawCSV: false, rawXML: false, rawCSS: false };
+  userThemeURL: null, rawMarkdown: false, rawJSON: false, rawNotebook: false, rawCSV: false, rawXML: false, rawCSS: false, editHintShown: false };
 let settings = { ...DEFAULTS, ...(window.__sbInitial || {}) };
 const THEMES = { apple: 'Apple', github: 'GitHub', paper: 'Paper', solarized: 'Solarized', nord: 'Nord', contrast: 'High Contrast' };
 const theme = window.sbTheme && typeof window.sbTheme.apply === 'function' ? window.sbTheme : {
@@ -674,7 +674,7 @@ let editing = null; // { seq, start, lines, text, selStart, selLen, tag } from t
 let retired = null; // { seq, start, lines } of the edit a click just replaced; its late keys still arrive
 let editSeq = 0;
 let docVer = 0;
-let stickyStatus = ''; // a warning that must stay up (unsaved text); passing messages fall back to it // native document version of the last edit message applied here; a click's line numbers are relative to it
+let stickyStatus = ''; // a warning that must stay up (text that is not saved), shown in the banner until native clears it
 
 const INLINE_TAGS = new Set(['P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6']);
 
@@ -836,6 +836,7 @@ function beginEdit(block, e, tClick) {
   editing = { seq: ++editSeq, start, lines: end - start, text: src, selStart: caret, selLen: 0, tag: block.tagName };
   const tMapped = now();
   if (hadEditor) draw(); else spliceEditor([start, end]);
+  syncEditPill();
   post({ type: 'editBlock', path: current.path, seq: editing.seq, start, end, text: src, caret, tag: block.tagName,
          clickX: e.clientX - r.left, clickY: e.clientY - r.top, width: r.width, height: r.height, ver: docVer, tClick, tMapped });
   afterPaint(() => post({ type: 'caretPainted', t: now() }));
@@ -996,6 +997,7 @@ function beginTextEdit(pre, e, tClick) {
   editing = { seq: ++editSeq, whole: true, start: 0, lines: 0, text, selStart: caret, selLen: 0, tag: 'PRE' };
   const tMapped = now();
   paintTextEditor();
+  syncEditPill();
   jsonCheckSoon();
   post({ type: 'editText', path: current.path, seq: editing.seq, caret, len: text.length, clickX: e.clientX - r.left, clickY: e.clientY - r.top,
          width: r.width, height: r.height, tClick, tMapped });
@@ -1007,6 +1009,18 @@ function endTextEditing() {
   if (editing && editing.whole) current = { ...current, text: editing.text };
   editing = null;
   retired = null;
+  syncEditPill();
+}
+
+// ---------- what editing says about itself: the pill while editing, a tick after each save, and Undo once it has ended ----------
+
+let savedTimer = 0;
+let canUndo = false, canRedo = false;
+function syncEditPill() {
+  if (editing) $('edit-tip').hidden = true;
+  $('edit-pill').hidden = !editing && !$('edit-pill').classList.contains('saved');
+  $('edit-pill').classList.toggle('active', !!editing);
+  $('undo').hidden = !!editing || !canUndo;
 }
 
 // JSON as typed: where it stops being JSON, said quietly above the text. It is saved either way.
@@ -1167,8 +1181,8 @@ function decorate() {
 // ---------- settings ----------
 
 // Keys that change what is rendered (a redraw) and keys that only change colours or fonts (mermaid draws its own).
-const RENDER_KEYS = ['frontMatter', 'toc', 'stats', 'math', 'mermaid', 'rawHTML', 'inlineEditing', 'taskToggles', 'remoteImages', 'rawMarkdown', 'rawJSON',
-  'rawNotebook', 'rawCSV', 'rawXML', 'rawCSS', 'folderViewMedia', 'folderViewOther'];
+const RENDER_KEYS = ['frontMatter', 'toc', 'stats', 'math', 'mermaid', 'rawHTML', 'inlineEditing', 'taskToggles', 'remoteImages', 'folderViewMedia',
+  'folderViewOther'];
 const LOOK_KEYS = ['theme', 'codeTheme', 'appearance', 'bodyFont', 'userThemeURL', 'customCSSURL'];
 
 /** A large render's text, sent apart from its script (PageBody). Read synchronously, so this render finishes before the next
@@ -1221,9 +1235,10 @@ window.sb = {
     if (editing) post({ type: 'editCancel', seq: editing.seq });
     editing = null;
     retired = null;
+    syncEditPill();
     docVer = p.ver ?? docVer;
     const y = samePath ? window.scrollY : p.reason === 'back' && p.path === current.path ? arcScroll : 0;
-    if (!samePath && clearHint()) $('status').textContent = stickyStatus;
+    if (!samePath) clearHint();
     // A re-render of the same file (a change on disk) keeps the app its Open button names; only a new file asks again.
     if (samePath && p.app === undefined && typeof current.app === 'string') p = { ...p, app: current.app };
     current = p;
@@ -1417,7 +1432,6 @@ window.sb = {
     updateBusy = false;
     $('aa-update').hidden = true;
     delete $('aa').dataset.update;
-    $('aa').title = 'Appearance';
     syncUpdateButton();
   },
   /** Why the local images that failed did not load: {doc, images: {path: {reason, folder, suggest?}}}. */
@@ -1439,11 +1453,14 @@ window.sb = {
     clearTimeout(copyTimer);
     copyTimer = setTimeout(() => b.classList.remove('done'), 1500);
   },
-  /** The Space helper is on in the settings but did not take Space: one quiet line, which a click turns into Settings. */
-  helperHint() {
+  /** The Space helper is on in the settings but Space came to Quick Look: `state` is notRunning, or paused while `app` has
+   *  secure input on. One quiet line, which a click turns into Settings. */
+  helperHint(h) {
     const s = $('status');
     if (s.textContent) return false;
-    s.textContent = 'Space helper is off: open spacebar Settings';
+    const app = h && typeof h.app === 'string' && h.app ? h.app.slice(0, 64) : '';
+    s.textContent = h && h.state === 'paused' ? (app ? `Space helper paused while ${app} has secure input on` : 'Space helper paused: another app has secure input on')
+      : 'Space helper isn’t running: open Settings';
     s.dataset.hint = '';
     s.title = 'Open spacebar Settings';
     return true;
@@ -1453,13 +1470,59 @@ window.sb = {
     b.textContent = r && r.ok ? 'Copied' : 'Could not copy';
     setTimeout(() => { b.textContent = 'Copy Install Command'; }, 1600);
   },
+  /** Passing messages show in the toolbar for a moment. A sticky one says text is not saved: it stays in the warning banner
+   *  until native clears it (''). */
   status(s, sticky) {
-    if (sticky) stickyStatus = s;
+    if (sticky) { stickyStatus = s; syncAlert(); return; }
     clearHint();
-    $('status').textContent = s;
-    if (!sticky) setTimeout(() => { if ($('status').textContent === s) $('status').textContent = stickyStatus; }, 2500);
+    const st = $('status');
+    st.textContent = s;
+    st.title = s;
+    setTimeout(() => { if (st.textContent === s) { st.textContent = ''; st.removeAttribute('title'); } }, 2500);
+  },
+  /** The host took the preview away: what lasts only while it is open is forgotten. */
+  previewClosed() {
+    rawKinds = new Set();
+    conflictOpen = false;
+    stickyStatus = '';
+    syncAlert();
+  },
+  /** A save landed: a tick shows for a moment. */
+  saved() {
+    const p = $('edit-pill');
+    p.classList.add('saved');
+    syncEditPill();
+    clearTimeout(savedTimer);
+    savedTimer = setTimeout(() => { p.classList.remove('saved'); syncEditPill(); }, 1500);
+  },
+  /** Whether the file on screen has changes to undo (or redo), for the Undo button shown once editing has ended. */
+  undoState(u) {
+    canUndo = !!u && u.undo === true;
+    canRedo = !!u && u.redo === true;
+    syncEditPill();
+  },
+  /** A change on disk displaced the user's text: the banner offers it back until a choice is made. */
+  conflict(c) {
+    conflictOpen = !!c && c.open === true;
+    conflictKeep = conflictOpen && c.keep === true;
+    syncAlert();
   },
 };
+
+let conflictOpen = false, conflictKeep = false;
+function syncAlert() {
+  const a = $('alert');
+  $('alert-text').textContent = conflictOpen ? 'This file changed on disk, so your last change wasn’t saved. Your text is kept here until you choose.'
+    : stickyStatus;
+  $('alert-actions').querySelector('[data-choice=mine]').hidden = !conflictKeep;
+  $('alert-actions').hidden = !conflictOpen;
+  a.hidden = !conflictOpen && !stickyStatus;
+}
+$('alert-actions').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-choice]');
+  if (b) post({ type: 'conflict', choice: b.dataset.choice });
+});
+$('undo').addEventListener('click', () => { if (!editing) post({ type: 'undo' }); });
 
 /** Takes the helper's hint down; whether it was up. */
 function clearHint() {
@@ -3871,8 +3934,7 @@ if (HOST === 'panel') {
 
 // ---------- the toolbar's tools: Formatted or Raw, Find and Copy, each shown only for the views they apply to ----------
 
-// The Raw toggle's panel key for each kind of formatted view. Raw is always the file's own text, read only, in the code view.
-const RAW_KEYS = { markdown: 'rawMarkdown', json: 'rawJSON', notebook: 'rawNotebook', csv: 'rawCSV', xml: 'rawXML', css: 'rawCSS' };
+// Raw is always the file's own text, in the code view: read only for Markdown, XML and CSS, editable for JSON and CSV.
 const RAW_NAMES = { markdown: 'Markdown source', json: 'raw JSON', notebook: 'raw JSON', csv: 'raw text', xml: 'raw XML', css: 'raw CSS' };
 const FORMATTED_NAMES = { markdown: 'rendered', json: 'tree', notebook: 'cells', csv: 'table', xml: 'indented', css: 'laid out' };
 const XML_FILES = /\.(xml|plist|xsd|xslt?)$/i;
@@ -3890,13 +3952,18 @@ function rawKind(p) {
   if (p.lang === 'css' && minified(p.text)) return 'css';
   return '';
 }
-const rawOn = (p) => { const k = rawKind(p); return !!k && settings[RAW_KEYS[k]] === true; };
+// Raw lasts while this preview stays open, for each kind (rawKind) switched to it; it is never saved, so the next preview opens
+// formatted again.
+let rawKinds = new Set();
+const rawOn = (p) => { const k = rawKind(p); return !!k && rawKinds.has(k); };
+const EDITS_IN_RAW = new Set(['json', 'notebook', 'csv', 'xml', 'css']);
 
 function syncRaw(p) {
   const b = $('raw'), k = rawKind(p), on = rawOn(p);
   b.hidden = !k;
   b.setAttribute('aria-pressed', String(on));
-  b.title = `Show ${(on ? FORMATTED_NAMES : RAW_NAMES)[k] || 'raw text'}`;
+  b.title = `Show ${(on ? FORMATTED_NAMES : RAW_NAMES)[k] || 'raw text'}`
+    + (!on && EDITS_IN_RAW.has(k) && settings.inlineEditing && p.editable === true ? ' (click the text to edit)' : '');
 }
 
 function syncTools(p) {
@@ -3911,7 +3978,11 @@ $('raw').addEventListener('click', () => {
   const k = rawKind(current);
   if (!k) return;
   if (editing) stopEditing();
-  choose(RAW_KEYS[k], settings[RAW_KEYS[k]] !== true);
+  if (rawKinds.has(k)) rawKinds.delete(k); else rawKinds.add(k);
+  const y = window.scrollY;
+  draw();
+  window.scrollTo(0, y);
+  syncRaw(current);
 });
 
 let prettyMemo = { p: null, kind: '', text: null };
@@ -4342,6 +4413,7 @@ document.addEventListener('keydown', (e) => {
     if (k === 'f' && !e.shiftKey) used = e.altKey ? focusFilter() : openFind();
     else if (k === 'g' && !e.altKey && findOpen()) { findStep(e.shiftKey ? -1 : 1); used = true; }
     else if (k === 'c' && !e.altKey && !e.shiftKey && !getSelection().toString() && !(e.target instanceof Element && e.target.closest('input, textarea'))) used = copyFile();
+    else if (k === 'z' && !e.altKey && !editing && (e.shiftKey ? canRedo : canUndo) && !(e.target instanceof Element && e.target.closest('input, textarea'))) { post({ type: 'undo', redo: e.shiftKey }); used = true; }
     if (used) e.preventDefault();
     return;
   }
@@ -4422,16 +4494,16 @@ function showUpdate(u) {
   $('aa-update-sub').textContent = failed ? String(u.reason || 'The update did not start.')
     : u.state === 'elsewhere' ? `This copy is in ${u.place}, which the installer does not update. Replace it with the download on the release page.`
     : u.state === 'done' ? 'Close this preview and open it again to use it.'
-    : running ? 'Quick Look shows an error for a moment while spacebar updates. Press Space again in a few seconds.'
-    : 'Quick Look shows an error for a moment while spacebar updates. Press Space again after.';
+    : running ? 'The preview closes briefly while spacebar updates. Press Space again in a few seconds.'
+    : 'The preview closes briefly while spacebar updates. Press Space again after.';
   $('aa-install').hidden = !(u.state === 'available' || running || (failed && u.retry));
   $('aa-install').disabled = running;
   $('aa-install').textContent = running ? 'Updating…' : 'Update';
   $('aa-copy').hidden = !(failed && u.copy);
   $('aa-update').hidden = false;
   $('aa').dataset.update = '';
-  $('aa').title = `Appearance · ${title}`;
   $('upd').title = title;
+  $('upd').setAttribute('aria-label', title);
   syncUpdateButton();
   // A successful update quits this preview; one still here after a while asks whether the installer is still running.
   if (u.state === 'started') updatePolls = 0;
@@ -4451,9 +4523,9 @@ function syncAa(p) {
   syncUpdateButton();
 }
 
-/** The update's own button: only when there is an update and Aa, which otherwise carries its dot, is hidden. */
+/** The update's own button, whenever there is an update: Aa stays the appearance popover alone. */
 function syncUpdateButton() {
-  const b = $('upd'), show = $('aa').hidden && 'update' in $('aa').dataset;
+  const b = $('upd'), show = 'update' in $('aa').dataset;
   b.hidden = !show;
   if (!show && !pop.hidden && pop.dataset.mode === 'update') showPopover(false);
 }
@@ -4583,6 +4655,23 @@ document.addEventListener('click', (e) => {
   const block = e.target.closest('#doc > [data-src]');
   if (block && settings.inlineEditing && !current.entry) beginEdit(block, e, tClick);
   else if (editing) stopEditing();
+});
+
+// Once per install, the first time the pointer rests on text that a click edits: a small tip says so.
+let tipTimer = 0;
+$('doc').addEventListener('mouseover', (e) => {
+  if (settings.editHintShown || !settings.inlineEditing || editing || current.entry || !$('edit-tip').hidden) return;
+  const t = e.target.closest('#doc > [data-src]:not(.md-editing)')
+    || (current.editable === true && !isMarkdown(current) && e.target.closest('#doc pre.code[data-file-text]'));
+  if (!t) return;
+  const tip = $('edit-tip'), r = t.getBoundingClientRect();
+  tip.hidden = false;
+  tip.style.left = `${Math.max(8, Math.min(e.clientX + 12, window.innerWidth - tip.offsetWidth - 8))}px`;
+  tip.style.top = `${r.top > 48 ? r.top - tip.offsetHeight - 6 : Math.min(e.clientY + 18, window.innerHeight - tip.offsetHeight - 8)}px`;
+  choose('editHintShown', true);
+  const hide = () => { tip.hidden = true; clearTimeout(tipTimer); t.removeEventListener('mouseleave', hide); };
+  t.addEventListener('mouseleave', hide);
+  tipTimer = setTimeout(hide, 5000);
 });
 
 /** A click outside every block ends the edit; native saves what the writer still holds and re-renders. */

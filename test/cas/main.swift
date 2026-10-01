@@ -176,25 +176,69 @@ let sameLink = (same as NSString).appendingPathComponent("notes.txt")
 try! FileManager.default.createSymbolicLink(atPath: sameLink, withDestinationPath: txt)
 check("a link to a file of the same name is editable", EditableText.allowed(path: sameLink))
 
-// Only what was typed: the writer records the file as it read it and every buffer its edit sent (TypedTexts).
+// Only what was typed: the writer records the file as it read it and every buffer its edit sent (TypedTexts), and a write may
+// replace only bytes the file held while it was recording.
 let typed = TypedTexts()
-let notes = put("typed.txt", "Café 25 €\n".data(using: .windowsCP1252)!)
+let cp = { (t: String) in t.data(using: .windowsCP1252)! }
+let notes = put("typed.txt", cp("Café 25 €\n"))
+var disk = cp("Café 25 €\n")
+/// What the writer allows over what is on disk now; `write` puts it there, as a save would.
+func may(_ t: String, write: Bool = false) -> Bool {
+    let ok = typed.allows(path: notes, data: cp(t), base: disk)
+    if ok && write { disk = cp(t); _ = put("typed.txt", disk) }
+    return ok
+}
 check("typed: an edit starts only from the file's own text", !typed.begin(path: notes, text: "something else\n") && typed.begin(path: notes, text: "Café 25 €\n"))
 typed.sent(path: notes, text: "Café 30 €\n")
-check("typed: a sent text may be written, in the file's encoding", typed.allows(path: notes, data: "Café 30 €\n".data(using: .windowsCP1252)!))
-check("typed: the same text in another encoding, or text never typed, may not", !typed.allows(path: notes, data: Data("Café 30 €\n".utf8))
-      && !typed.allows(path: notes, data: "rm -rf ~\n".data(using: .windowsCP1252)!) && !typed.allows(path: txt, data: ok))
+check("typed: a sent text may be written, in the file's encoding", may("Café 30 €\n"))
+check("typed: the same text in another encoding, or text never typed, may not", !typed.allows(path: notes, data: Data("Café 30 €\n".utf8), base: disk)
+      && !may("rm -rf ~\n") && !typed.allows(path: txt, data: ok, base: ok))
 check("typed: an edit may start again from a text it sent (a save still in flight)", typed.begin(path: notes, text: "Café 30 €\n"))
 for n in 31...40 { typed.sent(path: notes, text: "Café \(n) €\n") }
+check("typed: a save lands", may("Café 40 €\n", write: true))
 typed.ended(path: notes)
-check("typed: once the edit ends only its last buffers may still be saved", typed.allows(path: notes, data: "Café 40 €\n".data(using: .windowsCP1252)!)
-      && !typed.allows(path: notes, data: "Café 31 €\n".data(using: .windowsCP1252)!))
+check("typed: once the edit ends only its last buffers may still be saved", may("Café 40 €\n") && !may("Café 31 €\n"))
+check("typed: after the edit ends, the text it began from on disk may still be written (undo), not a buffer it began from",
+      may("Café 25 €\n") && !may("Café 30 €\n"))
+check("typed: an edit may start from a text kept for undo", may("Café 25 €\n", write: true) && typed.begin(path: notes, text: "Café 25 €\n"))
+for n in 50...60 { typed.sent(path: notes, text: "Café \(n) €\n") }
+_ = may("Café 60 €\n", write: true)
+typed.ended(path: notes)
+check("typed: undo reaches each edit's start and end, never a buffer typed in between", may("Café 25 €\n") && may("Café 40 €\n") && may("Café 60 €\n")
+      && !may("Café 55 €\n") && !may("Café 35 €\n"))
+for n in 0..<40 {
+    _ = typed.begin(path: notes, text: n == 0 ? "Café 60 €\n" : "Café \(100 + n) €\n")
+    typed.sent(path: notes, text: "Café \(101 + n) €\n")
+    _ = may("Café \(101 + n) €\n", write: true)
+    typed.ended(path: notes)
+}
+check("typed: the texts kept for undo are bounded", !may("Café 25 €\n") && may("Café 139 €\n"))
+disk = cp("changed elsewhere\n")
+_ = put("typed.txt", disk)
+check("typed: after a change made elsewhere, nothing recorded may be written over it, and no edit continues the record",
+      !may("Café 139 €\n") && !may("Café 140 €\n") && !typed.begin(path: notes, text: "Café 140 €\n"))
+check("typed: an edit of the changed file starts a new record, without the old undo texts",
+      typed.begin(path: notes, text: "changed elsewhere\n") && !may("Café 139 €\n"))
+for t in ["a\n", "ab\n", "abc\n", "abcd\n"] { typed.sent(path: notes, text: t) }
+typed.wrote(path: notes, cp("a\n"), torn: nil)
+disk = cp("a\n"); _ = put("typed.txt", disk)
+typed.ended(path: notes)
+check("typed: a save typed while the last write was in flight names that write's bytes, after the edit ends", may("abcd\n"))
+_ = typed.begin(path: notes, text: "abcd\n")
+for n in 0..<20 { typed.sent(path: notes, text: "slow \(n)\n") }
+typed.wrote(path: notes, cp("slow 0\n"), torn: nil)
+disk = cp("slow 0\n"); _ = put("typed.txt", disk)
+check("typed: many keys during one slow write still save over it", may("slow 19\n"))
+typed.sent(path: notes, text: "torn retry\n")
+typed.wrote(path: notes, nil, torn: cp("torn re"))
+check("typed: a retry may replace the bytes the writer's own failed write left", typed.allows(path: notes, data: cp("torn retry\n"), base: cp("torn re"))
+      && !typed.allows(path: notes, data: cp("torn re"), base: disk))
 check("typed: never for a file the writer cannot read as editable", !typed.begin(path: bigPath, text: "") && !typed.begin(path: rcLink, text: "export A=1\n"))
 let u16log = put("wide.log", "Windows log line one\r\nline two: café\r\n".data(using: .utf16LittleEndian)!)
 check("typed: a UTF-16 file without a byte order mark", typed.begin(path: u16log, text: "Windows log line one\nline two: café\n"))
 typed.sent(path: u16log, text: "日本")
 let short16 = "日本\r\n".data(using: .utf16LittleEndian)!
-check("typed: a short CJK edit of it is saved in UTF-16, not refused as binary", typed.allows(path: u16log, data: "日本".data(using: .utf16LittleEndian)!)
+check("typed: a short CJK edit of it is saved in UTF-16, not refused as binary", typed.allows(path: u16log, data: "日本".data(using: .utf16LittleEndian)!, base: FileManager.default.contents(atPath: u16log)!)
       && EditableText.writeRefusal(path: u16log, data: short16, base: FileManager.default.contents(atPath: u16log)!) == nil)
 
 // The resolved path is written without following a link swapped in for it.

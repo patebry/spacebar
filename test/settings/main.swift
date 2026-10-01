@@ -81,7 +81,7 @@ check("panel allow-list drops userTheme/editor/customCSS/editing/rawHTML/remoteI
       afterPanel.userTheme == nil && afterPanel.editorBundleID == nil && afterPanel.customCSS && afterPanel.inlineEditing
       && afterPanel.rawHTML == "sanitized" && !afterPanel.remoteImages)
 check("panel keys are cosmetic only", Settings.panelKeys.isSubset(of: ["theme", "appearance", "fontSize", "width", "bodyFont", "lineHeight", "sidebarCollapsed", "sidebarWidth", "folderSort",
-                                                                     "folderViewMedia", "folderViewOther", "rawMarkdown", "rawJSON", "rawNotebook", "rawCSV", "rawXML", "rawCSS"]))
+                                                                     "folderViewMedia", "folderViewOther", "rawMarkdown", "rawJSON", "rawNotebook", "rawCSV", "rawXML", "rawCSS", "editHintShown"]))
 check("folder views: grid for folders of pictures and list for the rest by default, grid or list only, from the panel",
       Settings().folderViewMedia == "grid" && Settings().folderViewOther == "list"
       && Settings(dictionary: ["folderViewMedia": "list", "folderViewOther": "grid"]).folderViewMedia == "list"
@@ -695,6 +695,17 @@ check("migrate leaves a linked file's target untouched", String(data: FileManage
 try! Data(#"{"version": 4, "stats": true}"#.utf8).write(to: linkTarget)
 check("a linked version-4 file can turn reading stats on", SettingsFile.load(at: link).stats)
 try? FileManager.default.removeItem(at: resetDir)
+
+// Settings' About row: what it says for a check's outcome, and nothing is asked of GitHub where checks are off.
+check("About: up to date, a newer version, or nothing known yet",
+      UpdateCheck.status(enabled: true, allowed: true, current: "0.4.0", latest: "0.4") == .upToDate
+      && UpdateCheck.status(enabled: true, allowed: true, current: "0.4.0", latest: "0.4.1") == .available("0.4.1")
+      && UpdateCheck.status(enabled: true, allowed: true, current: "0.4.0", latest: nil) == .unknown)
+check("About: checks off and development builds say so first",
+      UpdateCheck.status(enabled: false, allowed: true, current: "0.4.0", latest: "9.0") == .off
+      && UpdateCheck.status(enabled: true, allowed: false, current: "0.4.0", latest: "9.0") == .devBuild)
+check("About: each outcome reads as a short phrase", UpdateCheck.Status.available("0.5").text == "Version 0.5 is available"
+      && UpdateCheck.Status.failed.text == "Couldn’t check" && UpdateCheck.Status.upToDate.text == "Up to date" && UpdateCheck.Status.unknown.text == nil)
 
 // spacebar-md://settings/<name>: the old tab names still open the window; those whose settings moved open Advanced.
 let tabNames = ["general", "appearance", "folders", "editing", "advanced"]

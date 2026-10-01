@@ -39,6 +39,8 @@ final class SystemStatus: ObservableObject {
     @Published private(set) var editors: [EditorApp] = []
     @Published private(set) var defaultEditorName: String?
     @Published private(set) var helper = HelperState.off
+    /// The app holding secure input while the helper is paused by it, when it can be found.
+    @Published private(set) var secureInputOwner: String?
     /// A `--reregister` this app started is running.
     @Published private(set) var reregistering = false
 
@@ -115,6 +117,7 @@ final class SystemStatus: ObservableObject {
             let status = settings.spaceHelper && agent == .enabled ? HelperAgent.ask(timeout: 0.8) : nil
             var state = HelperState.of(enabled: settings.spaceHelper, agent: agent, helper: status, secureInput: IsSecureEventInputEnabled())
             if state == .needsAccessibility, self.takePrompt() { _ = HelperAgent.promptAccessibility(timeout: 3) }
+            let owner = state == .secureInput ? SecureInput.ownerName() : nil
             DispatchQueue.main.async {
                 self.helperMisses = settings.spaceHelper && agent == .enabled && status == nil ? self.helperMisses + 1 : 0
                 if HelperState.shouldReregister(enabled: settings.spaceHelper, agent: agent, answering: status != nil, misses: self.helperMisses) {
@@ -122,6 +125,7 @@ final class SystemStatus: ObservableObject {
                     self.reregister()
                 }
                 if self.helper != state { self.helper = state }
+                if self.secureInputOwner != owner { self.secureInputOwner = owner }
                 self.helperPolling = false
             }
         }

@@ -62,8 +62,8 @@ struct WelcomeView: View {
             }
             if let problem { Text(problem).foregroundColor(.red).fixedSize(horizontal: false, vertical: true) }
             HStack {
-                Button("Settings") { next(tryIt: false) }
-                    .help("Close this and show spacebar’s settings")
+                Button("Not Now") { next(tryIt: false) }
+                    .help("Skip the sample folder")
                 Spacer()
                 Button("Try It") { next(tryIt: true) }
                     .keyboardShortcut(.defaultAction)
@@ -83,8 +83,11 @@ struct WelcomeView: View {
             }
             Text("Space in Finder can open spacebar for any file you select, images, PDFs and video included, not only the types Quick Look hands it.")
                 .fixedSize(horizontal: false, vertical: true)
-            Text("This needs Accessibility, listed there as \(HelperCopy.accessibilityName), which lets spacebar notice when you press Space in Finder and read which file is selected. It never reads what you type anywhere else. You can turn it off in Settings.")
+            Text("The Space helper needs Accessibility, listed there as \(HelperCopy.accessibilityName), which lets spacebar notice when you press Space in Finder and read which file is selected. It never reads what you type anywhere else. You can turn it off in Settings.")
                 .foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("macOS will ask you to allow it in two places: Login Items, then Accessibility.")
+                .foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+            Link("How spacebar uses this", destination: HelperCopy.securityURL)
             if turnedOn { progress }
             if let problem { Text(problem).foregroundColor(.red).fixedSize(horizontal: false, vertical: true) }
             HStack {
@@ -102,24 +105,28 @@ struct WelcomeView: View {
     }
 
     @ViewBuilder private var progress: some View {
-        HStack(spacing: 8) {
-            StatusDot(color: HelperCopy.color(system.helper))
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                StatusDot(color: HelperCopy.color(system.helper))
+                Group {
+                    switch system.helper {
+                    case .on: Text("On: press Space on any file in Finder")
+                    case .secureInput: Text("On. \(HelperCopy.title(.secureInput, owner: system.secureInputOwner)).")
+                    case .needsAccessibility: Text("Waiting for Accessibility: turn on \(HelperCopy.accessibilityName)…")
+                    case .needsLoginItems: Text("Waiting for Login Items…")
+                    case .notRunning: Text(system.reregistering ? "Restarting…" : "macOS did not start it.")
+                    case .off, .starting: Text("Starting…")
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
             switch system.helper {
-            case .on, .secureInput:
-                Text("On: press Space on any file in Finder")
-            case .needsAccessibility:
-                Text("Waiting for Accessibility: turn on \(HelperCopy.accessibilityName)…")
-                Button("Open Accessibility Settings") { HelperAgent.openAccessibility() }.buttonStyle(.link)
-            case .needsLoginItems:
-                Text("Waiting for Login Items…")
-                Button("Open Login Items Settings") { HelperAgent.openLoginItems() }.buttonStyle(.link)
-            case .notRunning:
-                Text("macOS did not start it. Try again in Settings.")
-            case .off, .starting:
-                Text("Starting…")
+            case .needsAccessibility: Button("Open Accessibility Settings") { HelperAgent.openAccessibility() }.buttonStyle(.link)
+            case .needsLoginItems: Button("Open Login Items Settings") { HelperAgent.openLoginItems() }.buttonStyle(.link)
+            case .notRunning: Button("Try Again") { system.reregister() }.disabled(system.reregistering)
+            default: EmptyView()
             }
         }
-        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func next(tryIt: Bool) {

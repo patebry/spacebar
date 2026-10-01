@@ -10,7 +10,7 @@ final class StubWriter: NSObject, SpacebarWriterProtocol, NSXPCListenerDelegate 
     func openText(_ url: URL, appBundleID: String?, reply: @escaping (Bool) -> Void) { reply(false) }
     func textOpener(_ url: URL, appBundleID: String?, reply: @escaping (String?, Bool) -> Void) { reply("TextEdit", true) }
     func reveal(_ url: URL, reply: @escaping (Bool) -> Void) { reply(false) }
-    func spaceHelperPaused(reply: @escaping (Bool) -> Void) { reply(false) }
+    func spaceHelperState(reply: @escaping (String, String?) -> Void) { reply("on", nil) }
     func defaultApp(_ url: URL, reply: @escaping (String?) -> Void) { reply("Preview") }
     func openWithApps(_ url: URL, reply: @escaping (Data?) -> Void) { reply(nil) }
     func openWith(_ url: URL, appBundleID: String, reply: @escaping (Bool) -> Void) { reply(false) }

@@ -44,9 +44,11 @@ for line in out.stdout.splitlines():
         for l in blocked: print('   ', l[:160])
     else:
         # _navigation and _refused are the harness's records of what the shell cancelled or the scheme handler refused.
-        foreign = [m for m in msgs if m.get('type') not in PAGE_TYPES | {'link', '_navigation', '_refused'}]
+        # The one-time "Click to edit" tip records that it was shown: the page's own setting, nothing the document chose.
+        hint = lambda m: (m.get('type') == 'setting' and m.get('key') == 'editHintShown') or (m.get('type') == '_written' and m.get('patch') == '{"editHintShown":true}')
+        foreign = [m for m in msgs if m.get('type') not in PAGE_TYPES | {'link', '_navigation', '_refused'} and not hint(m)]
         pwn_links = [m for m in msgs if m.get('type') == 'link' and 'pwned' in m.get('href', '')]
-        off_main = [m for m in msgs if m.get('type') not in ('_navigation', '_refused') and (m.get('_mainFrame') not in ('1', 'true') or m.get('_origin') != 'spacebar://bundle')]
+        off_main = [m for m in msgs if m.get('type') not in ('_navigation', '_refused', '_written') and (m.get('_mainFrame') not in ('1', 'true') or m.get('_origin') != 'spacebar://bundle')]
         links = sorted({m['href'] for m in msgs if m.get('type') == 'link'})
         ok = not foreign and not pwn_links and not off_main and a['pwned'] is None and not a['scripts'] and not a['frames'] \
             and not a['handlers'] and not a['scriptUrls'] and not a['forms'] and a['bases'] == 1 \

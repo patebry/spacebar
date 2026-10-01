@@ -23,6 +23,8 @@ final class EditTextView: NSTextView {
     var listKeys = false
     /// A find session: Return and Shift+Return (⌘G and ⇧⌘G too) go to onFilterKey as FilterKeys.findNames.
     var findKeys = false
+    /// ⌘Z (true: ⇧⌘Z) with the session's own undo used up: the host undoes across sessions, splits and merges.
+    var onUndoPastStart: ((_ redo: Bool) -> Void)?
     /// ⌘F while an edit holds the keys: the edit ends (its text is already saved) and the page opens find.
     var onFind: (() -> Void)?
     var session = 0
@@ -131,7 +133,9 @@ final class EditTextView: NSTextView {
         case "c": copy(nil)
         case "x": cut(nil)
         case "v": pasteAsPlainText(nil)
-        case "z": shift ? undoManager?.redo() : undoManager?.undo()
+        case "z":
+            let um = undoManager
+            if shift ? um?.canRedo == true : um?.canUndo == true { shift ? um?.redo() : um?.undo() } else { onUndoPastStart?(shift) }
         default: return true  // swallow everything else so no shortcut leaks to another window
         }
         return true

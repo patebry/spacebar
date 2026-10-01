@@ -449,7 +449,7 @@ if flows.contains("2") {
     spin(0.3)
     let first = jsJSON("return { head: document.getElementById('kind').textContent, first: document.querySelector('#doc table.csv tbody tr:not(.pad) td').textContent };")
     check("2: semicolon CSV with decimal commas: named as such, sorted by value (0,99 first)",
-          semi.view == "csv" && (first["head"] as? String ?? "").contains("semicolon-separated") && first["first"] as? String == "Kirschen", "view \(semi.view) \(first)")
+          semi.view == "csv" && (first["head"] as? String ?? "").contains("CSV (semicolon)") && first["first"] as? String == "Kirschen", "view \(semi.view) \(first)")
     noErrors("2", page())
     close()
 }
@@ -766,7 +766,7 @@ if flows.contains("7") {
         // The stub writer answers every reveal with false, so the status says so only when the reveal reached it.
         _ = js("post({ type: 'reveal', path: current.path }); 0")
         spin(0.5)
-        check("7: the symlink loop's card can reveal the link in Finder", page().status.contains("could not show \(name) in Finder"), page().status)
+        check("7: the symlink loop's card can reveal the link in Finder", page().status.contains("Couldn’t show \(name) in Finder"), page().status)
         close()
     }
     let folder = space([corpus], any: true, settle: 0.8, timeout: 10)
@@ -803,12 +803,12 @@ if flows.contains("7") {
     _ = space([doomed], settle: 0.5)
     try! FileManager.default.removeItem(at: doomed)
     spin(2)
-    let g = jsJSON("return { gone: document.documentElement.hasAttribute('data-gone'), open: $('edit').disabled, status: $('status').textContent, text: $('doc').textContent }")
+    let g = jsJSON("return { gone: document.documentElement.hasAttribute('data-gone'), open: $('edit').disabled, status: $('alert').hidden ? '' : $('alert-text').textContent, text: $('doc').textContent }")
     check("7: a file deleted while open says so, stays dimmed, and cannot be opened",
           g["gone"] as? Bool == true && g["open"] as? Bool == true && g["status"] as? String == "doomed.md was moved or deleted" && (g["text"] as? String ?? "").contains("Doomed"), "\(g)")
     try! "# Doomed again\n".write(to: doomed, atomically: true, encoding: .utf8)
     spin(until: 3) { (js("document.documentElement.hasAttribute('data-gone')") as? Bool) == false }
-    let back = jsJSON("return { gone: document.documentElement.hasAttribute('data-gone'), status: $('status').textContent, text: $('doc').textContent }")
+    let back = jsJSON("return { gone: document.documentElement.hasAttribute('data-gone'), status: $('alert').hidden ? '' : $('alert-text').textContent, text: $('doc').textContent }")
     check("7: the file coming back clears it", back["gone"] as? Bool == false && back["status"] as? String == "" && (back["text"] as? String ?? "").contains("again"), "\(back)")
     close()
     let before = live.appendingPathComponent("before.md"), after = live.appendingPathComponent("after.md")

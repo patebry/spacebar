@@ -21,6 +21,7 @@ xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/bigfiles/mai
   -o "$app/Contents/MacOS/bigfiles"
 # The scenario harness's stub writer: it lists archives as the real writer does.
 xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/scenarios/writer/main.swift Writer/EditTextView.swift Shared/WriterProtocol.swift Shared/ArchiveListing.swift \
+  Shared/FolderListing.swift Shared/Settings.swift Shared/LinkPolicy.swift \
   -o "$xpc/Contents/MacOS/stubwriter"
 plist() { printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>%s</string><key>CFBundleExecutable</key><string>%s</string><key>CFBundlePackageType</key><string>%s</string>%s</dict></plist>' "$@"; }
 plist "$id" bigfiles APPL '<key>LSUIElement</key><true/>' > "$app/Contents/Info.plist"

@@ -176,7 +176,7 @@ let cases: [Case] = [
     Case(name: "PNG 12k x 12k", file: "huge-12k.png", up: "(() => { const i = document.querySelector('#doc .img-stage img'); return !!(i && i.complete && i.naturalWidth); })()",
          check: "(() => { const i = document.querySelector('#doc .img-stage img'); return i ? i.naturalWidth + 'x' + i.naturalHeight : ''; })()", expect: "12000x12000"),
     Case(name: "zip 10k entries", file: "many-10k.zip", up: "document.querySelectorAll('#doc [data-path]').length >= 50",
-         check: "(document.getElementById('doc').textContent.match(/[\\d,]+ files, [\\d,]+ folders/) || [''])[0]", expect: "5,000 files, 50 folders"),
+         check: "(document.getElementById('doc').textContent.match(/[\\d,]+\\+? files, [\\d,]+\\+? folders/) || [''])[0]", expect: "5,000+ files, 50+ folders"),
     Case(name: "folder 5,000 files", file: "folder-5000", up: "current.view === 'overview'",
          check: "current.view", expect: "overview"),
     Case(name: "file in 5,000-file folder", file: "folder-5000/item-2500.txt", up: "document.querySelectorAll('#side-list a.row').length > 20",

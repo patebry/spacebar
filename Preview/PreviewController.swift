@@ -668,6 +668,9 @@ class PreviewController: NSViewController {
     /// Runs whenever the page reports a paint or a render.
     func pageRendered() {}
 
+    /// What is on screen, by name: the file, else the folder.
+    var shownName: String { fileURL?.lastPathComponent ?? (rootDir as NSString).lastPathComponent }
+
     /// Whether `start` launches the writer ahead of the first click when inline editing is on.
     var prewarmsWriter: Bool { true }
 

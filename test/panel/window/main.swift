@@ -43,6 +43,21 @@ show(notes)
 check("shown at the frame it was given", panel.isVisible && panel.frame == first, panel.frame)
 let sizing = (panel.contentView?.constraints ?? []).filter { ($0.identifier ?? "").hasPrefix("NSViewController.preferredContentSize") }
 check("the content view has no preferred-size constraints", sizing.isEmpty, sizing)
+check("the window is named for VoiceOver by the file shown", panel.title == "Notes.md", panel.title)
+let closeB = panel.standardWindowButton(.closeButton)!, mini = panel.standardWindowButton(.miniaturizeButton)!, zoom = panel.standardWindowButton(.zoomButton)!
+check("minimize, which the panel cannot do, is hidden", mini.isHidden && !closeB.isHidden && !zoom.isHidden)
+check("zoom sits where minimize was", abs(zoom.frame.minX - mini.frame.minX) < 0.5 && zoom.frame.minX > closeB.frame.maxX, (closeB.frame, zoom.frame))
+if let img = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(panel.windowNumber), [.boundsIgnoreFraming]) {
+    let rep = NSBitmapImageRep(cgImage: img), c = closeB.convert(closeB.bounds, to: nil), scale = CGFloat(rep.pixelsWide) / panel.frame.width
+    let px = rep.colorAt(x: Int(c.midX * scale), y: Int((panel.frame.height - c.midY) * scale))?.usingColorSpace(.sRGB)
+    check("the close button is drawn red, not inactive grey", px.map { $0.redComponent > 0.7 && $0.greenComponent < 0.55 } == true, px ?? "no pixel")
+} else {
+    print("SKIP window: no window image (screen recording not allowed?): light colour not checked")
+}
+if let dir = ProcessInfo.processInfo.environment["PANEL_SHOTS"],
+   let img = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(panel.windowNumber), [.boundsIgnoreFraming]) {
+    try? NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir).appendingPathComponent("panel.png"))
+}
 spin(1)
 check("still that frame after layout and a second", panel.frame == first, panel.frame)
 
@@ -52,6 +67,7 @@ spin(0.5)
 check("a resize while open holds", panel.frame == resized, panel.frame)
 show(other)
 check("showing another file keeps the resized frame", panel.frame == resized, panel.frame)
+check("the title follows the file", panel.title == "Other.md", panel.title)
 
 viewer.close()
 spin(0.5)

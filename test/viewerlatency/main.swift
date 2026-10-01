@@ -112,6 +112,7 @@ final class Painted: NSObject, WKScriptMessageHandler {
 }
 let painted = Painted()
 let web = WebHost.shared.web
+OffScreen.keepDrawing(web)
 spin(until: 10) { WebHost.shared.ready }
 let pageReady = now()
 if ProcessInfo.processInfo.environment["NOWARM"] == nil { web.evaluateJavaScript("sb.warm && sb.warm(); 0") }

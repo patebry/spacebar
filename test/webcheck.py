@@ -14,7 +14,7 @@ PAGE_TYPES = {'ready', 'painted', 'rendered', 'log', 'caretPainted', 'editBlock'
 exe = os.path.join(hostile.OUT, 'webcheck')
 # Compiled with the extension's own scheme handler and document-start settings script.
 subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-O', '-target', 'arm64-apple-macos13.0',
-                os.path.join(ROOT, 'test', 'web', 'main.swift'), os.path.join(ROOT, 'Shared', 'Settings.swift'),
+                os.path.join(ROOT, 'test', 'web', 'main.swift'), os.path.join(ROOT, 'test', 'offscreen.swift'), os.path.join(ROOT, 'Shared', 'Settings.swift'),
                 os.path.join(ROOT, 'Shared', 'WebShell.swift'),
                 os.path.join(ROOT, 'Shared', 'FolderListing.swift'), os.path.join(ROOT, 'Shared', 'ArchiveListing.swift'), os.path.join(ROOT, 'Shared', 'FolderScan.swift'), os.path.join(ROOT, 'Shared', 'LinkPolicy.swift'), os.path.join(ROOT, 'Preview', 'PDFPane.swift'),
                         os.path.join(ROOT, 'Preview', 'Gestures.swift'), os.path.join(ROOT, 'Preview', 'Thumbnail.swift'), os.path.join(ROOT, 'Preview', 'ImagePane.swift'),

@@ -12,6 +12,7 @@ func spin(_ s: Double) { RunLoop.main.run(until: Date().addingTimeInterval(s)) }
 func spin(until: Double = 10, _ done: () -> Bool) { let end = Date().addingTimeInterval(until); while !done() && Date() < end { spin(0.02) } }
 
 _ = NSApplication.shared
+OffScreen.install()
 let dir = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath()
 let sandboxed = ProcessInfo.processInfo.environment["IMAGEPANE_SANDBOX"] != nil
 

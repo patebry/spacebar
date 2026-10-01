@@ -77,6 +77,7 @@ func makeM4A(from wav: URL, to url: URL, art: Data) -> URL? {
 }
 
 _ = NSApplication.shared
+OffScreen.install()
 let dir = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath()
 let wav = dir.appendingPathComponent("tone.wav"), mp4 = dir.appendingPathComponent("clip.mp4"), junk = dir.appendingPathComponent("junk.mp4")
 makeWAV(wav)

@@ -5,6 +5,6 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
-xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/richtext/main.swift Preview/RichTextPane.swift Preview/PDFPane.swift \
+xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/richtext/main.swift test/offscreen.swift Preview/RichTextPane.swift Preview/PDFPane.swift \
   Shared/LinkPolicy.swift Shared/FolderListing.swift -o "$out/richtext"
 "$out/richtext" "$out"

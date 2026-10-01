@@ -7,9 +7,11 @@ unmodified, in `Preview/web/vendor/`. Each is distributed under its own licence,
 |---|---|---|---|
 | markdown-it | 15.0.2 | MIT | `markdown-it.min.js` |
 | markdown-it-texmath | 1.0.0 | MIT | `texmath.js` |
+| markdown-it-footnote | 4.0.0 | MIT | `markdown-it-footnote.min.js` |
+| markdown-it-mark | 4.0.0 | MIT | `markdown-it-mark.min.js` |
 | KaTeX | 0.18.9 | MIT | `katex.min.js`, `katex.min.css` |
 | KaTeX fonts | 0.18.9 | OFL-1.1 | `fonts/KaTeX_*.woff2` |
-| highlight.js | 11.12.0 | BSD-3-Clause | `highlight.min.js` |
+| highlight.js | 11.12.0 | BSD-3-Clause | `highlight.min.js`, `hljs-languages.min.js` (its Dockerfile, nginx and Scala grammars) |
 | DOMPurify | 3.4.16 | Apache-2.0 OR MPL-2.0 (used under Apache-2.0) | `purify.min.js` |
 | Mermaid | 12.0.0 | MIT | `mermaid.min.js` (bundles the packages listed below) |
 
@@ -72,6 +74,64 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+```
+
+---
+
+## markdown-it-footnote 4.0.0
+
+```text
+Copyright (c) 2014-2015 Vitaly Puzrin, Alex Kocharin.
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+```
+
+---
+
+## markdown-it-mark 4.0.0
+
+```text
+Copyright (c) 2014-2015 Vitaly Puzrin, Alex Kocharin.
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
 ```
 
 ---

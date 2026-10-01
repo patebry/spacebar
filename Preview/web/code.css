@@ -21,6 +21,10 @@
   :is(pre[data-lang=diff], code.language-diff, code.language-patch) .hljs-deletion { background: color-mix(in srgb, var(--hl-deletion) 14%, transparent); }
   :is(pre[data-lang=diff], code.language-diff, code.language-patch) .hljs-meta { color: var(--hl-comment); opacity: .8; }
   :is(pre[data-lang=diff], code.language-diff, code.language-patch) .hljs-comment { font-style: normal; font-weight: 600; }
+  /* A log: error lines red, warnings amber, leading timestamps quiet. */
+  .log-err { color: var(--hl-deletion); }
+  .log-warn { color: var(--hl-attr); }
+  .log-time { color: var(--hl-comment); }
   .hljs-section, .hljs-strong { font-weight: 600; }
   .hljs-emphasis { font-style: italic; }
   .hljs-link { text-decoration: underline; }

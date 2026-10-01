@@ -41,6 +41,8 @@ enum FileTypes {
     static let richTextExtensions: Set<String> = ["rtf", "rtfd"]
     /// Listed by the writer with bsdtar. A lone compressed file (notes.txt.gz) is shown as the one file it holds.
     static let archiveExtensions: Set<String> = ["zip", "tar", "gz", "gzip", "tgz", "bz2", "bz", "tbz", "tbz2", "xz", "txz", "7z", "rar", "zst", "tzst"]
+    /// Text read from its end when it is too large to read whole (FileView).
+    static let logExtensions: Set<String> = ["log", "out", "err"]
     static let textExtensions: Set<String> = ["txt", "text", "log", "out", "err", "rst", "adoc", "asciidoc", "org", "tex", "bib", "srt", "vtt", "nfo",
                                               "diz", "cfg", "conf", "properties", "lock", "sum", "mod", "example", "sample", "gitignore",
                                               "gitattributes", "gitmodules", "dockerignore", "editorconfig", "npmrc", "nvmrc", "env", "csr", "pem"]
@@ -56,12 +58,13 @@ enum FileTypes {
         "xhtml": "xml", "xml": "xml", "plist": "xml", "xsd": "xml", "xsl": "xml", "vue": "xml", "svelte": "xml", "yaml": "yaml",
         "yml": "yaml", "toml": "ini", "ini": "ini", "sql": "sql", "php": "php", "php3": "php", "php4": "php", "ph3": "php", "ph4": "php", "phtml": "php", "pl": "perl", "pm": "perl", "lua": "lua", "r": "r",
         "graphql": "graphql", "gql": "graphql", "diff": "diff", "patch": "diff", "mk": "makefile", "mak": "makefile", "make": "makefile", "gmk": "makefile", "gradle": "java", "groovy": "java",
-        "vb": "vbnet", "wat": "wasm", "dart": nil, "scala": nil, "ex": nil, "exs": nil, "erl": nil, "hs": nil, "clj": nil, "ml": nil,
-        "zig": nil, "nim": nil, "proto": nil, "tf": nil, "hcl": nil, "cmake": nil, "bat": nil, "ps1": nil, "applescript": nil, "dockerfile": nil,
+        "vb": "vbnet", "wat": "wasm", "dart": nil, "scala": "scala", "sc": "scala", "ex": nil, "exs": nil, "erl": nil, "hs": nil, "clj": nil, "ml": nil,
+        "zig": nil, "nim": nil, "proto": nil, "tf": "hcl", "tfvars": "hcl", "hcl": "hcl", "cmake": nil, "bat": nil, "ps1": nil, "applescript": nil,
+        "dockerfile": "dockerfile",
     ]
     /// Files known by their whole name (lowercased), with their language.
     static let codeNames: [String: String?] = [
-        "dockerfile": nil, "containerfile": nil, "makefile": "makefile", "gnumakefile": "makefile", "gemfile": "ruby", "rakefile": "ruby",
+        "dockerfile": "dockerfile", "containerfile": "dockerfile", "nginx.conf": "nginx", "makefile": "makefile", "gnumakefile": "makefile", "gemfile": "ruby", "rakefile": "ruby",
         "podfile": "ruby", "brewfile": "ruby", "vagrantfile": "ruby", "fastfile": "ruby", "procfile": nil, "jenkinsfile": nil,
         "justfile": nil, ".bashrc": "bash", ".zshrc": "bash", ".profile": "bash", ".bash_profile": "bash", ".zprofile": "bash",
     ]
@@ -158,7 +161,7 @@ enum FileTypes {
     static let maxFileBytes: Int64 = 512 << 20
     /// Text and code past this show their first 2 MB, with a note.
     static let maxTextBytes = 2 << 20
-    /// A CSV or TSV is read this far for its table: 50,000 typical rows. Editing stays within maxTextBytes.
+    /// A CSV or TSV is read this far for its table (50,000 typical rows), and JSON for its tree. Editing stays within maxTextBytes.
     static let maxTableBytes = 16 << 20
 
     /// The `file` URL of an absolute path, as the page loads it; `version` busts the cache after a change on disk.
@@ -203,7 +206,7 @@ enum FileTypes {
     static func language(name: String) -> String? {
         let lower = name.lowercased()
         if let l = codeNames[lower] { return l }
-        if lower.hasPrefix("dockerfile.") || lower.hasSuffix(".dockerfile") { return nil }
+        if lower.hasPrefix("dockerfile.") || lower.hasSuffix(".dockerfile") { return "dockerfile" }
         if let l = codeLanguages[(lower as NSString).pathExtension] { return l }
         return nil
     }
@@ -731,8 +734,20 @@ enum FileView {
             var fst = stat()
             guard fstat(fd, &fst) == 0, fst.st_mode & S_IFMT == S_IFREG else { close(fd); break }
             let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-            let cap = kind == .csv ? FileTypes.maxTableBytes : FileTypes.maxTextBytes
-            let read = { try? h.read(upToCount: cap) ?? Data() }
+            let cap = kind == .csv || kind == .json ? FileTypes.maxTableBytes : FileTypes.maxTextBytes
+            // A log past the cap shows its end: what was written last is what it is opened for. Not a UTF-16 one: read from an
+            // offset, its code units could be split.
+            var head = [UInt8](repeating: 0, count: 2)
+            let utf16 = pread(fd, &head, 2, 0) == 2 && (head == [0xFF, 0xFE] || head == [0xFE, 0xFF])
+            let tail = kind == .text && FileTypes.logExtensions.contains(ext.lowercased()) && size > Int64(cap) && !utf16
+            let read = { () -> Data? in
+                if tail { guard (try? h.seek(toOffset: UInt64(size - Int64(cap)))) != nil else { return nil } }
+                guard var d = try? h.read(upToCount: cap) ?? Data() else { return nil }
+                // The read starts mid-line, maybe mid-character: it starts at the next line, or failing one, the next character.
+                if tail, let nl = d.prefix(64 << 10).firstIndex(of: 10) { d = d.subdata(in: d.index(after: nl)..<d.endIndex) }
+                else if tail { while let b = d.first, b & 0xC0 == 0x80 { d = Data(d.dropFirst()) } }
+                return d
+            }
             // Only a text kind is downloaded when evicted, and within Markdown's bound: the download is the whole file, and
             // anything else only turns into its info card.
             let fetch = [.code, .json, .csv, .text].contains(kind) && size <= FolderListing.maxDocumentBytes
@@ -758,6 +773,7 @@ enum FileView {
             }
             p["truncated"] = size > cap
             p["readCap"] = cap
+            if tail { p["tail"] = true }
             p["lang"] = kind == .code ? FileTypes.language(name: (path as NSString).lastPathComponent) ?? NSNull() : NSNull()
             if ext.lowercased() == "tsv" { p["tsv"] = true }
         default:

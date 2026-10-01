@@ -555,6 +555,14 @@ rec.onMessage = { type, body in
         DispatchQueue.main.async { renderOverview(FolderScan.scan(root, showHidden: Settings(dictionary: settingsDict).showHiddenFiles), reason: "overview") }
     case "copy":
         // As the extension, with the clipboard left alone: what it would copy is recorded as "_copied".
+        if let s = body["fenceStart"] as? Int, let e = body["fenceEnd"] as? Int {
+            guard let f = currentFile, path == f, currentKind == .markdown, let doc = currentBody?.text, let code = CodeFence.code(doc, start: s, end: e), !code.isEmpty else {
+                rec.messages.append(["type": "_copyRefused", "path": path ?? ""]); return
+            }
+            rec.messages.append(["type": "_copied", "text": code, "fence": true])
+            web.evaluateJavaScript("sb.copied(\(jsonString(["ok": true, "fence": true]))); 0")
+            return
+        }
         let selection = body["text"] as? String
         guard let f = currentFile, path == f, let text = selection ?? currentBody?.text, !text.isEmpty else {
             rec.messages.append(["type": "_copyRefused", "path": path ?? ""]); return

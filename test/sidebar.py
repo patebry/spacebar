@@ -349,7 +349,7 @@ def text_editing(page, check, out, view, T):
     page.cmd('@wait:0.2')
     rows = page.js("return [...document.querySelectorAll('#doc table.csv tbody tr')].map((r) => [...r.cells].map((c) => c.textContent))")
     check(asked(r, 'table.csv') and res == 'saved' and rows == [['1', 'apple', '3'], ['2', 'pear', '5'], ['3', 'fig', '7']]
-          and open(E('table.csv')).read().endswith('fig,7\n') and csv_title == 'Show table', 'CSV: Raw flips the table to its text to edit, and back to the edited table', json.dumps([res, rows]))
+          and open(E('table.csv')).read().endswith('fig,7\n') and csv_title == 'Raw text', 'CSV: Raw flips the table to its text to edit, and back to the edited table', json.dumps([res, rows]))
 
     page.apply(inlineEditing=False)
     view(E('code.ts'), root=d)
@@ -824,12 +824,12 @@ def viewers(page, check, out, st):
     view('prices.csv')
     c = page.js(CSV)
     check(c['head'] == ['', 'name', 'price', 'qty'] and c['rows'][0] == ['1', 'Apfel', '1,50', '3'] and c['align'] == ['right', 'left', 'right', 'right']
-          and 'semicolon-separated' in c['kind'] and '3 rows × 3 columns' in c['kind'],
+          and c['kind'].startswith('CSV (semicolon) · 3 rows × 3 columns · '),
           'CSV: semicolons found, numbers (decimal commas too) right-aligned, row numbers', json.dumps(c))
     shoot(page, 'csv-semicolon')
     view('pipes.csv')
     c = page.js(CSV)
-    check(c['head'] == ['', 'a', 'b', 'c'] and c['rows'] == [['1', '1', '2', '3'], ['2', '4', '5', '6']] and 'pipe-separated' in c['kind'], 'CSV: pipes found', json.dumps(c))
+    check(c['head'] == ['', 'a', 'b', 'c'] and c['rows'] == [['1', '1', '2', '3'], ['2', '4', '5', '6']] and c['kind'].startswith('CSV (pipe) · '), 'CSV: pipes found', json.dumps(c))
     view('sort.csv')
     click(page, '#doc .csv-sort[data-col="1"]')
     asc = page.js(CSV)
@@ -917,8 +917,7 @@ def viewers(page, check, out, st):
     shoot(page, 'json-tree')
     view('large.json')
     lj = page.js("return [!!document.querySelector('#doc .json-tree'), !!document.querySelector('#doc pre.code'), [...document.querySelectorAll('#doc .viewer-note')].map((n) => n.textContent)]")
-    check(lj[0] is False and lj[1] and lj[2][0].startswith('Showing the first 2 MB of 2.') and lj[2][1] == 'A file this large is shown as its text, not as a tree.',
-          'JSON over 2 MB: its text, with a note, never parsed', json.dumps(lj))
+    check(lj[0] is True and not lj[1] and lj[2] == [], 'JSON over 2 MB (within 16 MB): parsed whole, shown as its tree', json.dumps(lj))
     view('analysis.ipynb')
     nb = page.js("""const d = document.getElementById('doc'); return { h1: (d.querySelector('.nb-md h1') || {}).textContent, katex: d.querySelectorAll('.nb-md .katex').length,
       task: (() => { const i = d.querySelector('.nb-md input[type=checkbox]'); return i ? [i.disabled, i.hasAttribute('data-line')] : null; })(),
@@ -1079,9 +1078,9 @@ def steady_chrome(page, check, out):
             page.cmd('@wait:0.2')
             clear[f'{n} {size}'] = page.js(CLEAR)
     page.cmd('@size:1100x760')
-    check(all(v['shown'] and v['last'] and v['column'] and v.get('mid', True) and v.get('box', True) for v in clear.values())
+    check(all(v['shown'] and v['last'] and (v['column'] or v.get('box') is True) and v.get('mid', True) and v.get('box', True) for v in clear.values())
           and all('mid' in v for k, v in clear.items() if k.startswith('code.ts')),
-          'copy: always shown on text, and clear of the last line, the last table row and the text column, at any panel size', json.dumps(clear))
+          'copy: always shown on text, and clear of the last line, the last table row and the text column (a table: its box ends above it), at any panel size', json.dumps(clear))
 
 
 def tools(page, check, out):
@@ -1285,7 +1284,7 @@ def tools(page, check, out):
     m = page.js("""const b = document.getElementById('raw'); return [b.getAttribute('aria-pressed'), b.title, (document.querySelector('#doc .viewer-source pre.code') || {}).textContent,
       document.querySelectorAll('#doc > [data-src]').length];""")
     written = [x.get('patch') for x in msgs(r, '_written')]
-    check(m[:3] == ['true', 'Show rendered', open(D('notes.md')).read()] and m[3] == 0 and written == ['{"rawMarkdown":true}'],
+    check(m[:3] == ['true', 'Markdown source', open(D('notes.md')).read()] and m[3] == 0 and written == ['{"rawMarkdown":true}'],
           'raw: Markdown shows its source, read only, and the choice is saved as a panel setting', json.dumps([m[:2], m[3], written]))
     r = click(page, '#doc .viewer-source pre.code')
     check(not msgs(r, 'editBlock'), 'raw: a click in the source edits nothing')
@@ -1298,7 +1297,7 @@ def tools(page, check, out):
           and page.js("return [!!document.querySelector('#doc .viewer-source'), document.getElementById('raw').getAttribute('aria-pressed')]") == [True, 'true'],
           'raw: settings.json keeps it for the next preview, and Markdown opens as source again', json.dumps({k: v for k, v in saved.items() if k.startswith('raw')}))
     page.cmd('@nativeclick:#raw')
-    check(page.js("return [document.querySelector('#doc > h1').textContent, document.getElementById('raw').title]") == ['Needle notes', 'Show Markdown source'],
+    check(page.js("return [document.querySelector('#doc > h1').textContent, document.getElementById('raw').title, document.getElementById('raw').getAttribute('aria-pressed')]") == ['Needle notes', 'Markdown source', 'false'],
           'raw: and back to rendered')
     view('cells.ipynb')
     page.cmd('@nativeclick:#raw')
@@ -1326,7 +1325,7 @@ def tools(page, check, out):
     page.cmd('@nativeclick:#raw')
     titles.append(page.js("return document.getElementById('raw').title"))
     page.cmd('@nativeclick:#raw')
-    check(titles == ['Show cells', 'Show indented', 'Show laid out', 'Show tree'], 'raw: its tooltip names the view it goes back to', json.dumps(titles))
+    check(titles == ['Raw JSON', 'Raw XML', 'Raw CSS', 'Raw JSON'], 'raw: its tooltip names the raw view whatever its state; aria-pressed says which is on', json.dumps(titles))
     check(pretty.startswith('.a {\n  color:red;\n  background:url(data:image/png;base64,AA;BB)\n}\n\n.b>c,d:hover {\n  margin:0 auto;\n  content:"x;}{y"\n}\n\n@media (max-width:10px) {\n  .e {\n    top:0\n  }\n}')
           and raw == open(D('min.css')).read(), 'raw: minified CSS is laid out a declaration to a line (strings and url() kept whole), or shown as is', json.dumps(pretty[:160]))
     t = page.js("""const t0 = performance.now(); const a = prettyXML('<!DOCTYPE a ' + '[]'.repeat(100000)), b = prettyCSS('/* '.repeat(700000));
@@ -3073,7 +3072,7 @@ def main():
           text: document.querySelector('#doc pre.code').textContent, edit: (() => { const e = document.getElementById('edit');
             return [getComputedStyle(e).display !== 'none', e.textContent, e.dataset.kind, getComputedStyle(document.querySelector('#doc .viewer-head .viewer-open')).display]; })(), stats: document.getElementById('stats').textContent,
           kind: document.getElementById('kind').textContent, button: document.querySelector('#doc button.viewer-open').textContent }""")
-        check(c['kind'].startswith('Source code · ') and c['button'] == 'Open', '.ts is named as source; it opens as text in an editor, never as a video', json.dumps(c))
+        check(c['kind'].startswith('TypeScript · ') and c['button'] == 'Open', '.ts is named as TypeScript; it opens as text in an editor, never as a video', json.dumps(c))
         r = page.cmd("@eval:window.webkit.messageHandlers.sb.postMessage({type:'openFile', path: " + json.dumps(T('code.ts')) + "}); 0")
         page.cmd('@wait:0.1')
         check('_openText' in [m.get('type') for m in r['messages'] + page.cmd('@eval:0')['messages']], 'openFile for a .ts file goes to the text opener, not its default app')
@@ -3142,10 +3141,11 @@ def main():
         page.cmd('@eval:sb.editEnd({}); 0')
         view(T('notes.txt'))
         check(page.js("return [document.querySelector('#doc pre.code').textContent, document.querySelectorAll('#doc pre.code span').length]") == [open(T('notes.txt')).read(), 0],
-              'text: shown as is, with line numbers')
+              'text: shown as is (wrapped by default)')
         view(T('huge.log'))
         h = page.js("return [document.querySelector('#doc pre.code').textContent.length, [...document.querySelectorAll('#doc .viewer-note')].map((n) => n.textContent)]")
-        check(h[0] == 2 * 1024 * 1024 and h[1] == ['Showing the first 2 MB of 3.1 MB.'], 'text over 2 MB: its first 2 MB, with a note', json.dumps(h))
+        check(2 * 1024 * 1024 - 100 <= h[0] <= 2 * 1024 * 1024 and h[0] % 100 == 0 and h[1] == ['Showing the last 2 MB of 3.1 MB.'],
+              'a log over 2 MB: its last 2 MB from a whole line, with a note', json.dumps(h))
         text_editing(page, check, page.out, view, T)
         r = view(T('blob.dat'))
         card = page.js("""const c = document.querySelector('#doc .info-card'); return c && { name: c.querySelector('.info-name').textContent,

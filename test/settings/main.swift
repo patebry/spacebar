@@ -81,7 +81,8 @@ check("panel allow-list drops userTheme/editor/customCSS/editing/rawHTML/remoteI
       afterPanel.userTheme == nil && afterPanel.editorBundleID == nil && afterPanel.customCSS && afterPanel.inlineEditing
       && afterPanel.rawHTML == "sanitized" && !afterPanel.remoteImages)
 check("panel keys are cosmetic only", Settings.panelKeys.isSubset(of: ["theme", "appearance", "fontSize", "width", "bodyFont", "lineHeight", "sidebarCollapsed", "sidebarWidth", "folderSort",
-                                                                     "folderViewMedia", "folderViewOther", "rawMarkdown", "rawJSON", "rawNotebook", "rawCSV", "rawXML", "rawCSS"]))
+                                                                     "folderViewMedia", "folderViewOther", "rawMarkdown", "rawJSON", "rawNotebook", "rawCSV", "rawXML", "rawCSS",
+                                                                     "wrapText", "wrapMarkdown", "wrapCode"]))
 check("folder views: grid for folders of pictures and list for the rest by default, grid or list only, from the panel",
       Settings().folderViewMedia == "grid" && Settings().folderViewOther == "list"
       && Settings(dictionary: ["folderViewMedia": "list", "folderViewOther": "grid"]).folderViewMedia == "list"
@@ -333,7 +334,7 @@ check("types: all \(declared.count) declared extensions have a kind (\(unmapped.
 let langs: [(String, String?)] = [("a.toml", "ini"), ("a.go", "go"), ("a.rs", "rust"), ("a.kt", "kotlin"), ("a.cs", "csharp"), ("a.scss", "scss"),
     ("a.lua", "lua"), ("a.sql", "sql"), ("a.graphql", "graphql"), ("a.vb", "vbnet"), ("a.wat", "wasm"), ("a.gradle", "java"), ("a.vue", "xml"),
     ("a.xsd", "xml"), ("a.fish", "bash"), ("a.mak", "makefile"), ("a.phtml", "php"), ("a.hpp", "cpp"), ("a.dart", nil), ("a.zig", nil),
-    ("a.scala", nil), ("a.dockerfile", nil)]
+    ("a.scala", "scala"), ("a.dockerfile", "dockerfile"), ("Dockerfile.dev", "dockerfile"), ("main.tf", "hcl"), ("nginx.conf", "nginx")]
 let langWrong = langs.filter { FileTypes.language(name: $0.0) != $0.1 }.map { "\($0.0)=\(FileTypes.language(name: $0.0) ?? "nil")" }
 check("types: highlight.js languages for the new extensions, plain text where none is bundled (\(langWrong.joined(separator: " ")))", langWrong.isEmpty)
 check("types: the writer lists exactly the extensions the viewer calls archives", ArchiveListing.extensions == FileTypes.archiveExtensions)
@@ -442,7 +443,7 @@ do {
           && a["view"] as? String == "audio" && a["size"] as? Int64 == 2048 && h["view"] as? String == "info" && d["view"] as? String == "info")
 }
 check("types: highlight.js languages", FileTypes.language(name: "a.ts") == "typescript" && FileTypes.language(name: "a.tsx") == "typescript"
-      && FileTypes.language(name: "page.html") == "xml" && FileTypes.language(name: "Makefile") == "makefile" && FileTypes.language(name: "Dockerfile") == nil
+      && FileTypes.language(name: "page.html") == "xml" && FileTypes.language(name: "Makefile") == "makefile" && FileTypes.language(name: "Dockerfile") == "dockerfile"
       && FileTypes.language(name: "a.sh") == "bash" && FileTypes.language(name: "a.toml") == "ini")
 check("types: icons", [FileKind.json, .csv].allSatisfy { $0.icon == "data" } && FileKind.app.icon == "other" && FileKind.code.icon == "code")
 let glyphs: [(String, FileKind, String)] = [("a.ttf", .other, "font"), ("a.docx", .other, "doc"), ("a.XLSX", .other, "sheet"), ("a.key", .other, "slides"),

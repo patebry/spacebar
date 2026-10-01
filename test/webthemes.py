@@ -470,7 +470,7 @@ def main():
             ok = len(posted) == 1 and all(posted[0].get(k) == v for k, v in want.items()) and got == val \
                 and not [m for m in r['messages'] if m.get('type') in ('editBlock', 'link')]
             check(ok, f'popover {sel} posts {want["key"]}={want["value"]} and applies it', f'{posted} root={got}')
-        checked = page.js("return [...document.querySelectorAll('#aa-pop [aria-checked=true]')].map((b) => b.dataset.value)")
+        checked = page.js("return [...document.querySelectorAll('#aa-pop [data-key][aria-checked=true]')].map((b) => b.dataset.value)")
         check(sorted(checked) == ['paper', 'serif', 'wide'], 'popover shows the current choices', json.dumps(checked))
         r = click(page, '#aa-settings')
         o = [m for m in r['messages'] if m.get('type') == 'openSettings']

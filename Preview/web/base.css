@@ -78,6 +78,8 @@
     background: linear-gradient(transparent, var(--bg)); }
   @media (max-width: 899px) { #toc { display: none !important; } }
   @media (max-width: 1099px) { :root:not([data-sidebar=collapsed]) #sidebar:not([hidden]) ~ #toc { display: none !important; } }
+  /* Wide and Full need the TOC's room to be any wider than Medium. */
+  @media (max-width: 1399px) { :root:is([data-width=wide], [data-width=full]) #toc { display: none !important; } }
   /* Narrow: the sidebar collapses whatever the setting says (it is not changed), and the button shows it over the page. */
   @media (max-width: 639px) {
     :root { --frame-left: var(--gap); --frame-inset: var(--gap); }

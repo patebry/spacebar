@@ -11,7 +11,10 @@
 <script src="spacebar://bundle/vendor/markdown-it.min.js"></script>
 <script src="spacebar://bundle/vendor/katex.min.js"></script>
 <script src="spacebar://bundle/vendor/texmath.js"></script>
+<script src="spacebar://bundle/vendor/markdown-it-footnote.min.js"></script>
+<script src="spacebar://bundle/vendor/markdown-it-mark.min.js"></script>
 <script src="spacebar://bundle/vendor/highlight.min.js"></script>
+<script src="spacebar://bundle/vendor/hljs-languages.min.js"></script>
 <script src="spacebar://bundle/vendor/purify.min.js"></script>
 </head>
 <body>
@@ -65,6 +68,7 @@
       <button id="aa-larger" type="button" data-step="1" title="Larger text">A</button>
     </div>
     <div class="pop-themes" id="aa-themes" role="radiogroup" aria-label="Theme"></div>
+    <div class="pop-theme-name" id="aa-theme-name" aria-hidden="true"></div>
     <div class="pop-seg" id="aa-width" role="radiogroup" aria-label="Width">
       <button type="button" role="radio" data-key="width" data-value="narrow">Narrow</button>
       <button type="button" role="radio" data-key="width" data-value="medium">Medium</button>
@@ -73,6 +77,10 @@
     <div class="pop-seg" id="aa-font" role="radiogroup" aria-label="Font">
       <button type="button" role="radio" data-key="bodyFont" data-value="system">System</button>
       <button type="button" role="radio" data-key="bodyFont" data-value="serif" class="serif">Serif</button>
+    </div>
+    <div class="pop-seg" id="aa-wrap" role="radiogroup" aria-label="Long lines" hidden>
+      <button type="button" role="radio" data-wrap="1">Wrap Lines</button>
+      <button type="button" role="radio" data-wrap="0">Don’t Wrap</button>
     </div>
     <div class="pop-sep"></div>
     <button id="aa-settings" type="button">Settings…</button>

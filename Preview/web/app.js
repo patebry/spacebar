@@ -4463,7 +4463,8 @@ Object.assign(window.sb, {
     if (!ofFilter(m)) return;
     if (filterSession.find) { if (m.key === 'next' || m.key === 'prev') findStep(m.key === 'next' ? 1 : -1); return; }
     if (filterSession.list && LIST_COMMANDS.has(m.key)) { hostCommand(m.key); return; }
-    if (filterSession.arc) { arcKey(m.key); return; }
+    // A key the archive does not take (⌫ in its listing) goes back to the grid it was opened from, as in the browser.
+    if (filterSession.arc) { if (!arcKey(m.key) && Object.hasOwn(FILTER_KEYS, m.key)) gridBackKey(FILTER_KEYS[m.key]); return; }
     if (!Object.hasOwn(FILTER_KEYS, m.key) || (!filterSession.list && ['left', 'right', 'back'].includes(m.key))) return;
     if (filterSession.list && gridTakesKeys() && gridKey(FILTER_KEYS[m.key])) return;
     if (!sideKey(FILTER_KEYS[m.key], !filterSession.list, m.repeat === true) && filterSession && filterSession.list) gridBackKey(FILTER_KEYS[m.key]);
@@ -4833,7 +4834,7 @@ function paintFind() {
 }
 
 function findLabel() {
-  if (finder.goto) { $('find-count').textContent = `of ${(+current.pages || 0).toLocaleString()}`; return; }
+  if (finder.goto) { findBar.removeAttribute('data-none'); $('find-count').textContent = `of ${(+current.pages || 0).toLocaleString()}`; return; }
   const n = finder.hits.length, more = finder.more ? '+' : '';
   findBar.toggleAttribute('data-none', !!finder.q && !n);
   $('find-count').textContent = !finder.q ? '' : !n ? 'No matches'

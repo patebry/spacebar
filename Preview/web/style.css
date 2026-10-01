@@ -524,6 +524,8 @@
     display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 8px;
     font: 12px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: #3d2600; background: #fff4d6; box-shadow: 0 0 0 .5px rgba(160, 100, 0, .45), 0 4px 14px rgba(0, 0, 0, .12); }
   #alert[hidden] { display: none; }
+  /* Under the find bar when both are up, never over it. */
+  :root:has(#find:not([hidden])) #alert { top: calc(var(--bar-h, 40px) + 40px); }
   #alert .alert-ic { flex: none; color: #b25f00; margin-top: 1px; }
   #alert p { margin: 0; overflow-wrap: anywhere; }
   #alert-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }

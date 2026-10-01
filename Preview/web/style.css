@@ -282,7 +282,7 @@
   #doc .img-stage.panning { cursor: grabbing; }
   /* The Space helper's panel closed: emptied until the next file renders. The window's shell (the chrome, the sidebar's
      sheet, the page's outline) stays, so the first frame of the next file is not a bare sheet. */
-  :root[data-blank] :is(#doc, #crumbs, #toolbar, #toc, #copy, #side-head, #side-list, #side-more) { visibility: hidden !important; }
+  :root[data-blank] :is(#doc, #crumbs, #toolbar, #toc, #copy, #side-head, #side-filter, #side-pop, #side-list, #side-more) { visibility: hidden !important; }
   /* Moved or deleted while on screen: the last content stays, dimmed. */
   :root[data-gone] #doc { opacity: .45; }
   /* A PDF fills the rest of the panel under its toolbar, edge to edge; the extension lays its native PDFView over .pdf-area. */

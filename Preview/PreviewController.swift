@@ -328,6 +328,8 @@ class PreviewController: NSViewController {
     /// The file on screen's inode when it was opened, so a rename in the same folder is followed.
     private var openedInode: ino_t?
     private var goneCheck: DispatchWorkItem?
+    /// The file whose card offers Privacy & Security, while it is on screen.
+    private var privacyCard: String?
     /// Why the document's local images did not load, the folders their placeholders may reveal, and the watch that renders the
     /// document again when one appears.
     private lazy var images: ImageCheck = {
@@ -995,6 +997,8 @@ class PreviewController: NSViewController {
             // The file on screen, gone, is back: watched and read again.
             if self.gone, let url = self.fileURL, url.deletingLastPathComponent().path == dir, Self.stamp(url) != nil {
                 self.watcher = FileWatcher(path: url.path) { [weak self] in self?.fileChanged() }
+                // Put back unchanged (the same stamp) is still shown again, so the gone state clears.
+                self.shownStamp = nil
                 self.reload(reason: "change")
             }
         }
@@ -1147,7 +1151,13 @@ class PreviewController: NSViewController {
         let w = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.goneCheck = nil
-            guard self.fileURL == url, self.host.controller === self, Self.stamp(url) == nil else { return }
+            guard self.fileURL == url, self.host.controller === self else { return }
+            guard Self.stamp(url) == nil else {
+                // Back within the second: FileWatcher may have given up re-arming meanwhile, so it is watched and read again.
+                self.watcher = FileWatcher(path: url.path) { [weak self] in self?.fileChanged() }
+                self.shownStamp = nil
+                return self.reload(reason: "change")
+            }
             if let ino = self.openedInode, let moved = Self.renamed(url, inode: ino) {
                 log.info("followed a rename of the file on screen")
                 if !self.holdUntilSaved(.file(moved, anchor: nil)) { self.open(moved) }
@@ -1316,6 +1326,7 @@ class PreviewController: NSViewController {
         renderGen += 1
         var payload = payload
         if let k = payload["kindName"] as? String { payload["kindName"] = FileView.kindName(k) }
+        privacyCard = payload["privacy"] as? Bool == true ? payload["path"] as? String : nil
         host.scheme.body = PageBody.take(&payload)
         host.scheme.entryImage = pendingEntryImage
         pendingEntryImage = nil
@@ -1472,6 +1483,8 @@ class PreviewController: NSViewController {
                 log.error("show timed out \(url.path, privacy: .private)")
                 return self.showUnavailable(url, reason: reason, cloud: cloud)
             }
+            // Read again, so it is there: a file put back as it was renders nothing new (takeText), but is no longer gone.
+            self.clearGone()
             var p = r.payload
             var doc: PDFDocument?
             switch r.pdf {
@@ -1577,6 +1590,7 @@ class PreviewController: NSViewController {
             let pane = pdfPane ?? PDFPane()
             pane.onLink = { [weak self] in self?.pdfLink($0) }
             pane.onPage = { [weak self] path, page, pages in self?.js("sb.pdfPage", ["path": path, "page": page, "pages": pages]) }
+            if pane.path == url.path, let n = pane.shownPage { p["page"] = n }
             p["pages"] = pdf.pageCount
             pane.show(pdf, path: url.path, over: host.web)
             pdfPane = pane
@@ -1607,6 +1621,7 @@ class PreviewController: NSViewController {
         if view == "html" {
             let scripts = HTMLPane.runsScripts(url, setting: htmlScripts(for: url))
             if htmlPane?.scripts != scripts { htmlPane?.close(); htmlPane = HTMLPane(scripts: scripts) }
+            if htmlPane?.path != url.path { htmlPane?.view.pageZoom = 1 }
             htmlPane?.onLink = { [weak self] in self?.htmlLink($0) }
             htmlPane?.show(url, over: host.web)
         }
@@ -2016,8 +2031,8 @@ class PreviewController: NSViewController {
             guard let urls = body["urls"] as? [Any], urls.count <= 512 else { return refuse("thumbDrop", "bad list") }
             host.scheme.dropThumbs(urls.compactMap { ($0 as? String).flatMap { $0.utf8.count <= 8192 ? $0 : nil } })
         case "overview":
-            // The sidebar's folder name: the overview of the root.
-            guard !torn else { return }
+            // The sidebar's folder name: the overview of the root. Not for a selection, whose root holds more than was selected.
+            guard !torn, selection == nil else { return }
             overviewRequested = true
             scanFolder(openBest: false)
         case "list":
@@ -2091,6 +2106,7 @@ class PreviewController: NSViewController {
             helper { $0.reveal(dir) { ok in if !ok { DispatchQueue.main.async { self.status("could not show \(dir.lastPathComponent) in Finder") } } } }
         case "openPrivacy":
             // A file macOS's privacy protection kept spacebar from: Privacy & Security's Files and Folders, where that changes.
+            guard privacyCard != nil, privacyCard == fileURL?.path, m.string("path", max: 4096) == privacyCard else { return refuse("openPrivacy", "no privacy card on screen") }
             guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders"),
                   NSWorkspace.shared.open(url) else {
                 return status("Open System Settings › Privacy & Security › Files and Folders")

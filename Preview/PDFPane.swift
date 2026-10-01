@@ -65,6 +65,9 @@ final class PDFPane: NSObject, PDFViewDelegate, NativeDocument {
         NotificationCenter.default.addObserver(forName: .PDFViewPageChanged, object: view, queue: .main) { [weak self] _ in self?.reportPage() }
     }
 
+    /// The page last reported for the file on screen, from 1.
+    var shownPage: Int? { reported.flatMap { $0.path == path ? $0.page : nil } }
+
     func reportPage() {
         // The page a third of the way down the view: PDFView's currentPage moves on only as it draws.
         let at = NSPoint(x: view.bounds.midX, y: view.isFlipped ? view.bounds.height / 3 : view.bounds.height * 2 / 3)
@@ -147,6 +150,7 @@ final class PDFPane: NSObject, PDFViewDelegate, NativeDocument {
         let keep = path == self.path ? view.currentPage.flatMap { view.document?.index(for: $0) } : nil
         matches = []
         reported = nil
+        if path != self.path { view.autoScales = true }
         self.path = path
         view.document = doc
         pendingPage = keep ?? 0

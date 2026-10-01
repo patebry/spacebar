@@ -3125,8 +3125,6 @@ const gridTakesKeys = () => gridShown() && (!filterSession || filterSession.auto
  *  is one short word whatever the app, so the toolbar keeps its place from file to file; the tooltip names the app. */
 function syncOpen(p) {
   const b = $('edit');
-  b.disabled = false;
-  $('open-with').disabled = false;
   const doc = isMarkdown(p);
   b.hidden = !!p.entry || (!doc && (p.view === 'overview' || p.view === 'loading' || !p.path));
   b.dataset.kind = doc ? 'doc' : 'file';
@@ -3142,10 +3140,10 @@ let goneP = '';
 function syncGone() {
   const on = !!goneP && goneP === current.path;
   root.toggleAttribute('data-gone', on);
+  $('edit').disabled = on;
+  $('open-with').disabled = on;
   if (!on) return;
   if (editing) stopEditing();
-  $('edit').disabled = true;
-  $('open-with').disabled = true;
   showOpenWith(false);
 }
 
@@ -4329,7 +4327,8 @@ function findInput(q) {
   clearTimeout(findTimer);
   findTimer = 0;
   const run = () => { findTimer = 0; if (!findOpen()) return; findSearch(false); if (finder.at >= 0) findGo(finder.at); else { paintFind(); findLabel(); } };
-  if (current.text && current.text.length > 256 * 1024) findTimer = setTimeout(run, 120); else run();
+  // The extension's find in a PDF or RTF document reads the whole of it: once the typing pauses.
+  if ((current.text && current.text.length > 256 * 1024) || findHow() === 'native') findTimer = setTimeout(run, 150); else run();
 }
 
 function findStep(d) {

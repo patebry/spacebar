@@ -619,7 +619,7 @@ enum FileView {
               let open = text.range(of: #"<svg\b[^>]*>"#, options: [.regularExpression, .caseInsensitive]) else { return nil }
         let tag = String(text[open])
         func attr(_ name: String) -> String? {
-            guard let r = tag.range(of: #"\b\#(name)\s*=\s*["']([^"']*)["']"#, options: [.regularExpression, .caseInsensitive]) else { return nil }
+            guard let r = tag.range(of: #"(?<![-\w:])\#(name)\s*=\s*["']([^"']*)["']"#, options: [.regularExpression, .caseInsensitive]) else { return nil }
             let v = tag[r]
             guard let q = v.firstIndex(where: { $0 == "\"" || $0 == "'" }) else { return nil }
             return String(v[v.index(after: q)..<v.index(before: v.endIndex)])
@@ -853,7 +853,8 @@ enum FileView {
         default:
             break
         }
-        if let r = refusal {
+        // Apple's preview draws out of process, so a privacy refusal of this process does not stop it.
+        if let r = refusal, !(r.privacy && view == "quicklook") {
             view = "info"
             p["note"] = r.note
             if r.privacy { p["privacy"] = true } else { p["canOpen"] = false }

@@ -54,6 +54,8 @@ final class RichTextPane: NSObject, NSTextViewDelegate, NativeDocument {
         view.allowsMagnification = true
         view.minMagnification = 0.5
         view.maxMagnification = 3
+        // A pinch magnifies too: the text wraps again to the width it now has.
+        NotificationCenter.default.addObserver(forName: NSScrollView.didEndLiveMagnifyNotification, object: view, queue: .main) { [weak self] _ in self?.layout() }
     }
 
     func find(_ query: String) -> Int {
@@ -82,6 +84,8 @@ final class RichTextPane: NSObject, NSTextViewDelegate, NativeDocument {
     func findClear() {
         let all = NSRange(location: 0, length: (textView.string as NSString).length)
         textView.layoutManager?.removeTemporaryAttribute(.backgroundColor, forCharacterRange: all)
+        // The last match was selected: ⌘C must not copy it once find is closed.
+        if !matches.isEmpty { textView.setSelectedRange(NSRange(location: 0, length: 0)) }
         matches = []
     }
 

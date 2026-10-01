@@ -406,6 +406,11 @@ do {
           FileView.kindName("HEIF Image") == "HEIF image" && FileView.kindName("application") == "Application" && FileView.kindName("PNG image") == "PNG image"
           && FileView.kindName("Microsoft Word document") == "Microsoft Word document" && FileView.kindName("Markdown Text") == "Markdown text"
           && FileView.kindName("text") == "Text")
+    let svg = d.appendingPathComponent("icon.svg")
+    try! #"<svg xmlns="http://www.w3.org/2000/svg" stroke-width="2" viewBox="0 0 24 24"><path d="M0 0"/></svg>"#.write(to: svg, atomically: true, encoding: .utf8)
+    let sized = d.appendingPathComponent("sized.svg")
+    try! #"<svg stroke-width='2' width="120px" height="80"></svg>"#.write(to: sized, atomically: true, encoding: .utf8)
+    check("SVG: its own size, from the viewBox or width and height, never a stroke-width", FileView.svgSize(svg.path) == "24 × 24" && FileView.svgSize(sized.path) == "120 × 80")
     check("protected places are named as the privacy settings name them",
           FileView.protectedPlace("/Volumes/X/a.md") == "files on this volume" && FileView.protectedPlace("/tmp/a.md") == "files in this folder")
     try? fm.removeItem(at: d)

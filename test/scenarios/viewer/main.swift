@@ -825,6 +825,17 @@ if flows.contains("7") {
     spin(2)
     check("7: a save that replaces the file is not taken for a deletion", (js("document.documentElement.hasAttribute('data-gone')") as? Bool) == false && page().text.contains("two"), page().text)
     close()
+    let putBack = live.appendingPathComponent("put-back.txt"), aside = out.appendingPathComponent("put-back.txt")
+    try! "kept\n".write(to: putBack, atomically: true, encoding: .utf8)
+    _ = space([putBack], settle: 0.5)
+    try! FileManager.default.moveItem(at: putBack, to: aside)
+    spin(2)
+    let wentAway = (js("document.documentElement.hasAttribute('data-gone')") as? Bool) == true
+    try! FileManager.default.moveItem(at: aside, to: putBack)
+    spin(until: 3) { (js("document.documentElement.hasAttribute('data-gone')") as? Bool) == false }
+    let backState = js("[document.documentElement.hasAttribute('data-gone'), $('edit').disabled, $('status').textContent].join('|')") as? String ?? ""
+    check("7: a file put back unchanged (Finder's Put Back) is no longer shown as gone", wentAway && backState.hasPrefix("false|false"), "went away \(wentAway), then \(backState)")
+    close()
     let vanished = live.appendingPathComponent("vanished.md")
     let v = space([vanished], settle: 0.5)
     let vs = jsJSON("return { note: (document.querySelector('#doc .viewer-note') || {}).textContent, open: $('edit').textContent, action: $('edit').dataset.action }")

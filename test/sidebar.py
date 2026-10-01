@@ -1847,8 +1847,8 @@ def calm_header(page, check, host):
     if SHOTS:
         shoot(page, f'header-{host}-clicked')
     mid = idle['bar'] / 2
-    # The panel centres its traffic lights (12 to 66 pt from the left) on the top row: ViewerPanel.rowHeight and lightsLeft.
-    clear_of_lights = idle['toggle'][0] >= 66 + 8 if host == 'panel' else True
+    # The panel centres its traffic lights, close and zoom (12 to 46 pt from the left), on the top row: ViewerPanel.rowHeight and lightsLeft.
+    clear_of_lights = idle['toggle'][0] >= 46 + 8 if host == 'panel' else True
     check(abs(idle['toggle'][1] - mid) <= 2 and clear_of_lights, f'{host}: the sidebar button sits in the top row, centred on it'
           + (", the traffic lights' line, and clear of them" if host == 'panel' else ''),
           json.dumps([idle['toggle'], mid]))
@@ -1902,7 +1902,7 @@ def panel_host(check):
         page.cmd('@wait:0.3')
         g = page.js("""const r = document.documentElement, t = document.getElementById('side-toggle').getBoundingClientRect();
           return [r.dataset.host, getComputedStyle(r).getPropertyValue('--titlebar-inset').trim(), Math.round(t.left)];""")
-        check(g[0] == 'panel' and g[1] == '76px' and g[2] >= 76, "panel: the host is set at document start, and the sidebar button clears the traffic lights", json.dumps(g))
+        check(g[0] == 'panel' and g[1] == '56px' and g[2] >= 56, "panel: the host is set at document start, and the sidebar button clears the traffic lights", json.dumps(g))
         calm_header(page, check, 'panel')
         page.render(T('README.md'))
         page.cmd('@wait:0.3')

@@ -98,6 +98,8 @@ final class PanelController: PreviewController {
     /// What Space opened: an HTML file among them never runs scripts, whatever the setting says for one reached in the sidebar.
     var spaced: Set<String> = []
 
+    override var preferredSize: NSSize? { nil }
+
     override func htmlScripts(for url: URL) -> String {
         spaced.contains(url.resolvingSymlinksInPath().path) ? "off" : super.htmlScripts(for: url)
     }

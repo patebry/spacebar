@@ -590,8 +590,12 @@ class PreviewController: NSViewController {
         host.web.frame = container.bounds
         container.addSubview(host.web)
         view = container
-        preferredContentSize = NSSize(width: 900, height: 700)
+        if let size = preferredSize { preferredContentSize = size }
     }
+
+    /// The size Quick Look opens its window at. A host that sizes its own window has none: as a window's content view
+    /// controller, a preferred size becomes constraints that override every frame the window is given.
+    var preferredSize: NSSize? { NSSize(width: 900, height: 700) }
 
     /// The view the page is shown in.
     func makeRoot(frame: NSRect) -> NSView { NSView(frame: frame) }

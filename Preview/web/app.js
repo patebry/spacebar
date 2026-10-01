@@ -3099,7 +3099,7 @@ const tiny = matchMedia('(max-width: 479px)');
 const appChrome = () => root.dataset.chrome !== 'minimal' && !tiny.matches;
 // The tree of the root on screen: each listed folder by path. Expanded folders are remembered per root for this session
 // (the page lives as long as the extension process), never saved.
-let tree = { root: '', name: '', session: 0, dirs: new Map() };
+let tree = { root: '', name: '', session: 0, dirs: new Map(), selection: null, selOpened: null };
 const expandedByRoot = new Map();
 const requested = new Set();
 let sideDrawn = '';
@@ -3140,7 +3140,7 @@ function expanded() {
 }
 
 function resetTree(rootPath, name) {
-  tree = { root: rootPath, name: name || rootPath.split('/').pop() || rootPath, session: 0, dirs: new Map() };
+  tree = { root: rootPath, name: name || rootPath.split('/').pop() || rootPath, session: 0, dirs: new Map(), selection: null, selOpened: null };
   requested.clear();
   treeVersion++;
   if (filterSession && !filterSession.find) endFilter();
@@ -3169,6 +3169,16 @@ function setFolder(f) {
     size: num(e.size), modified: num(e.modified), broken: e.broken === true, thumb: e.thumb === true })),
     more: Math.max(0, +f.more || 0), stale: false });
   requested.delete(f.dir);
+  if (f.dir === tree.root) {
+    // A multiple selection: how many items, how many are too far away to list, and the folders that lead to the rest.
+    const s = f.selection && typeof f.selection === 'object' && Number.isInteger(f.selection.count) ? f.selection : null;
+    tree.selection = s ? { count: s.count, outside: Math.max(0, +s.outside || 0) } : null;
+    if (s && Array.isArray(s.expand) && tree.selOpened !== f.session) {
+      tree.selOpened = f.session;
+      const x = expanded();
+      for (const d of s.expand) if (inTree(d)) x.add(d);
+    }
+  }
   treeVersion++;
   requestFolders();
   renderSidebar();
@@ -3301,21 +3311,28 @@ function renderSidebar() {
   $('side-toggle').hidden = !on;
   syncToggle();
   syncSideMenu();
+  syncSelPos();
   const key = `${treeVersion}\n${current.path}\n${sideQuery}\n${sideMode}\n${hits.version}`;
   if (!on || key === sideDrawn) return;
   const moved = sideDrawn.split('\n')[1] !== current.path, refiltered = sideDrawn.split('\n')[2] !== sideQuery;
   sideDrawn = key;
-  $('side-title').textContent = tree.name;
+  const sel = tree.selection;
+  $('side-title').textContent = sel ? `${sel.count.toLocaleString()} Selected` : tree.name;
   $('side-title').title = `${tree.root}\nClick for an overview of this folder`;
+  const top0 = tree.dirs.get(tree.root), empty = !!top0 && !top0.entries.length && !top0.more;
+  $('side-q').disabled = empty;
+  $('side-mode').disabled = empty;
+  $('side-menu').disabled = empty;
   const list = $('side-list');
   const rows = [];
   const exp = expanded();
   const walk = (dir, depth) => {
     const d = tree.dirs.get(dir);
     if (!d) {
-      if (depth) rows.push({ note: 'Loading…', depth });
+      rows.push({ note: 'Loading…', depth });
       return;
     }
+    if (!depth && !d.entries.length && !d.more) rows.push({ note: sel ? 'Nothing selected is here any more' : 'Empty folder', depth });
     d.entries.forEach((e, i) => {
       const open = e.dir && exp.has(e.path);
       rows.push({ e, depth, open, pos: i + 1, size: d.entries.length });
@@ -3345,7 +3362,10 @@ function renderSidebar() {
     for (const r of rows) r.size = seen.get(parentOf(r.e.path));
     if (!rows.length) rows.push({ note: 'No matches', depth: 0 });
     if (partial) rows.push({ note: 'Only listed files were searched', depth: 0 });
-  } else walk(tree.root, 0);
+  } else {
+    walk(tree.root, 0);
+    if (sel && sel.outside) rows.push({ note: `${sel.outside.toLocaleString()} more selected ${sel.outside === 1 ? 'item is' : 'items are'} in other folders`, depth: 0 });
+  }
   const hadActive = sideRows.some((r) => r.e && r.e.path === current.path);
   sideRows = rows;
   const top = tree.dirs.get(tree.root);
@@ -3365,6 +3385,18 @@ function renderSidebar() {
     list.scrollTop = Math.max(0, y - list.clientHeight / 3);
     drawSideWindow(false);
   }
+}
+
+/** "2 of 5" in the toolbar while the sidebar is a multiple selection: where the file on screen is among its files. */
+function syncSelPos() {
+  const files = [];
+  const walk = (dir) => {
+    const d = tree.dirs.get(dir);
+    for (const e of d ? d.entries : []) { if (e.dir) walk(e.path); else files.push(e.path); }
+  };
+  if (tree.selection) walk(tree.root);
+  const i = files.indexOf(current.path);
+  $('selpos').textContent = i >= 0 && files.length > 1 ? `${i + 1} of ${files.length}` : '';
 }
 
 /** The file on screen, as a path from the root: the panel's title stays the file Quick Look opened. */

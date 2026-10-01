@@ -353,8 +353,10 @@ class PreviewController: NSViewController {
         guard let d = downloading, d.url == url, loader.isActive(d.load), FileTypes.isDataless(url.path) else { return false }
         return Self.stamp(url) == d.stamp
     }
-    /// A multiple selection's names in the root: the root's listing shows only these.
-    private var selectionNames: Set<String>?
+    /// A multiple selection's items, by path inside the root: each listing shows only these and the folders that lead to them.
+    private var selection: Set<String>?
+    /// Selected items outside the root, too far from the rest to list: the sidebar says how many.
+    private var selectionOutside = 0
     /// The sidebar's folders as last sent, by path; `open` from the page is limited to their files.
     private var listings: [String: FolderListing.Listing] = [:]
     /// Folders the page may ask to list: the root and every folder a listing named. Nothing above the root is ever in it.
@@ -721,17 +723,40 @@ class PreviewController: NSViewController {
     /// Shows `url`, a file or a folder; `reason` names what asked, for the settings check. The host holds any access `url` needs.
     func start(url: URL, reason: String) { start(url: url, reason: reason, only: nil) }
 
-    /// Shows the first file of `urls` (Finder's selection) with a sidebar of just the selection: the items in that file's folder.
+    /// Shows the first file of `urls` (Finder's selection) with a sidebar of just the selection. Items in other folders (Finder's
+    /// list view with folders expanded) are listed under the folder that holds them all, when it is near; any still too far
+    /// away are counted in a note.
     func start(selection urls: [URL], reason: String) {
         let parent = { (u: URL) in u.deletingLastPathComponent().resolvingSymlinksInPath().path }
         guard urls.count > 1, let first = urls.first(where: { !$0.hasDirectoryPath && !FolderListing.isDirectory($0.path) }) else {
             return urls.first.map { start(url: $0, reason: reason) } ?? ()
         }
-        let names = Set(urls.filter { parent($0) == parent(first) }.map(\.lastPathComponent))
-        start(url: first, reason: reason, only: names.count > 1 ? names : nil)
+        let paths = urls.map { URL(fileURLWithPath: parent($0)).appendingPathComponent($0.lastPathComponent).path }
+        let root = Self.selectionRoot(urls.map(parent), home: parent(first))
+        let inside = paths.filter { $0.hasPrefix(root == "/" ? "/" : root + "/") }
+        selectionOutside = paths.count - inside.count
+        start(url: first, reason: reason, only: Set(inside), root: root)
     }
 
-    private func start(url: URL, reason: String, only: Set<String>?) {
+    /// The folder a selection's sidebar lists: the nearest folder holding every selected item, when it is at most
+    /// `selectionReach` folders above the first file's and not a top-level folder (a selection from search results can span
+    /// the disk), else the first file's own folder.
+    static let selectionReach = 3
+    static func selectionRoot(_ parents: [String], home: String) -> String {
+        var common = home.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        for p in parents {
+            let parts = p.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+            var n = 0
+            while n < min(common.count, parts.count), common[n] == parts[n] { n += 1 }
+            common = Array(common.prefix(n))
+        }
+        let homeDepth = home.split(separator: "/", omittingEmptySubsequences: true).count
+        guard common.count >= 2, homeDepth - common.count <= selectionReach else { return home }
+        return "/" + common.joined(separator: "/")
+    }
+
+    private func start(url: URL, reason: String, only: Set<String>?, root selectionRoot: String? = nil) {
+        if only == nil { selectionOutside = 0 }
         prepareStart = Date()
         SettingsStore.shared.checkNow(reason: reason)
         let warm = host.ready
@@ -759,8 +784,8 @@ class PreviewController: NSViewController {
         FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir)
         let resolved = only == nil ? url.resolvingSymlinksInPath()
             : URL(fileURLWithPath: url.deletingLastPathComponent().resolvingSymlinksInPath().path).appendingPathComponent(url.lastPathComponent)
-        rootDir = isDir.boolValue ? resolved.path : resolved.deletingLastPathComponent().path
-        selectionNames = only
+        rootDir = selectionRoot ?? (isDir.boolValue ? resolved.path : resolved.deletingLastPathComponent().path)
+        selection = only
         if !isDir.boolValue, only == nil, !FolderRules.isQuarantined(resolved.path) { rootDir = FolderRules.vaultRoot(containing: rootDir) ?? rootDir }
         host.scheme.fileRoot = rootDir
         knownDirs = [rootDir]
@@ -950,11 +975,11 @@ class PreviewController: NSViewController {
         let gen = (listGens[dir] ?? 0) + 1
         listGens[dir] = gen
         if let then { onListed = then }
-        let root = rootDir, s = SettingsStore.shared.settings, pinned = fileURL?.path, only = dir == rootDir ? selectionNames : nil
+        let root = rootDir, s = SettingsStore.shared.settings, pinned = fileURL?.path, only = selection
         listedWith = (s.folderSort, s.folderReadmeFirst, s.showHiddenFiles)
         DispatchQueue.global(qos: .userInitiated).async {
             var l = FolderListing.list(dir, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles, pinned: pinned)
-            if let only { l = FolderListing.only(l, names: only) }
+            if let only { l = FolderListing.only(l, selection: only) }
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.listGens[dir], root == self.rootDir else { return }
                 let changed = l != self.listings[dir]
@@ -971,6 +996,16 @@ class PreviewController: NSViewController {
             guard let self, self.host.controller === self, self.listings[l.dir] == l else { return }
             var p = l.payload(root: self.rootDir)
             p["session"] = self.session
+            if let sel = self.selection, l.dir == self.rootDir {
+                // The folders between the root and each selected item open, so the whole selection is in view.
+                let prefix = self.rootDir == "/" ? "/" : self.rootDir + "/"
+                var open: Set<String> = []
+                for path in sel where path.hasPrefix(prefix) {
+                    var dir = (path as NSString).deletingLastPathComponent
+                    while dir.count > self.rootDir.count, open.insert(dir).inserted { dir = (dir as NSString).deletingLastPathComponent }
+                }
+                p["selection"] = ["count": sel.count + self.selectionOutside, "outside": self.selectionOutside, "expand": open.sorted()]
+            }
             self.js("sb.setFiles", p)
         }
     }
@@ -1799,7 +1834,7 @@ class PreviewController: NSViewController {
         guard !rootDir.isEmpty else { return js("sb.searchResults", ContentSearch.payload(.init(done: true), seq: seq)) }
         let cancel = ContentSearch.Cancel()
         search = (seq, cancel)
-        let root = rootDir, s = SettingsStore.shared.settings, only = selectionNames
+        let root = rootDir, s = SettingsStore.shared.settings, only = selection
         ContentSearch.queue.async {
             ContentSearch.run(query: query, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles,
                               only: only, cancel: cancel) { p in

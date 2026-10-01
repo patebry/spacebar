@@ -218,6 +218,7 @@
     color: var(--muted); background: transparent; }
   #side-mode:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 7%, transparent); }
   #side-mode[aria-pressed=true] { color: var(--accent); }
+  #side-filter :disabled { opacity: .45; pointer-events: none; }
   /* A Contents search's result: the name, its folder and match count, then the matching line. As tall as SIDE_HIT_H. */
   #side-list a.row.hit { height: 40px; align-items: flex-start; padding-top: 4px; padding-left: 4px; }
   #side-list a.row.hit > svg { margin-top: 1px; }
@@ -392,7 +393,8 @@
       --ui-hover: rgba(255, 255, 255, .08); --ui-seg: rgba(255, 255, 255, .08); --ui-seg-on: rgba(255, 255, 255, .2); --ui-accent: #0a84ff; }
   }
   @supports (color: -apple-system-control-accent) { #toolbar, #side-toggle { --ui-accent: -apple-system-control-accent; } }
-  #status:empty, #kind:empty, #stats:empty { display: none; }
+  #status:empty, #selpos:empty, #kind:empty, #stats:empty { display: none; }
+  #selpos { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
   #stats { font-variant-numeric: tabular-nums; margin-right: 2px; }
   /* The file's kind and size (an image's zoom too): quiet text, cut before it crowds the path. */
   #kind { display: flex; gap: 6px; min-width: 0; max-width: 34vw; white-space: nowrap; }
@@ -401,7 +403,7 @@
   #kind .img-zoom:empty { display: none; }
   #kind:not(:empty) + #stats:not(:empty)::before { content: "· "; }
   /* Over the page (Minimal chrome, or a very narrow panel) the text sits on the buttons' material, so it stays legible. */
-  #toolbar > :is(#status, #kind, #stats):not(:empty) { display: flex; height: 24px; align-items: center; padding: 0 8px; border-radius: 6px; background: var(--ui-bg);
+  #toolbar > :is(#status, #selpos, #kind, #stats):not(:empty) { display: flex; height: 24px; align-items: center; padding: 0 8px; border-radius: 6px; background: var(--ui-bg);
     box-shadow: 0 0 0 .5px var(--ui-edge), 0 1px 2px rgba(0, 0, 0, .06); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); }
   #toolbar > #kind:not(:empty) + #stats:not(:empty)::before { content: none; }
   #status[data-hint] { cursor: pointer; }
@@ -543,9 +545,10 @@
   :root[data-chrome=minimal] #edit[data-kind=file] { display: none; }
   @media (min-width: 480px) {
     :root:not([data-chrome=minimal]) #toolbar { color: var(--muted); gap: 4px; }
-    :root:not([data-chrome=minimal]) #toolbar > :is(#status, #kind, #stats) { height: auto; padding: 0; background: none; box-shadow: none;
+    :root:not([data-chrome=minimal]) #toolbar > :is(#status, #selpos, #kind, #stats) { height: auto; padding: 0; background: none; box-shadow: none;
       -webkit-backdrop-filter: none; backdrop-filter: none; }
     :root:not([data-chrome=minimal]) #toolbar > #kind:not(:empty) + #stats:not(:empty)::before { content: "· "; }
+    :root:not([data-chrome=minimal]) #toolbar > #selpos:not(:empty) + #kind:not(:empty)::before { content: "·"; margin-right: -2px; }
     /* A hidden .tb-slot (Raw, Find, Aa, Open) keeps its place, and Open is as wide as Reveal, so nothing in the row moves from
        file to file. An update where Aa is hidden (so are Raw and Find) fills exactly their three slots. */
     :root:not([data-chrome=minimal]) #toolbar > .tb-slot[hidden] { visibility: hidden; }

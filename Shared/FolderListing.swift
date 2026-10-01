@@ -917,8 +917,13 @@ enum FolderListing {
     /// the sidebar's order. Nil sends the preview to FolderScan.
     /// `l` with only the entries named in `names`: the sidebar of a multiple selection, which moves among the selected items.
     /// Entries past the listing's caps are not in `l` (but for the pinned file on screen).
-    static func only(_ l: Listing, names: Set<String>) -> Listing {
-        Listing(dir: l.dir, entries: l.entries.filter { names.contains($0.name) }, more: 0)
+    /// A selection's view of a listing: the selected items (paths) in it, and the folders on the way to one. A selected folder,
+    /// and everything in it, lists in full.
+    static func only(_ l: Listing, selection: Set<String>) -> Listing {
+        if selection.contains(where: { l.dir == $0 || l.dir.hasPrefix($0 + "/") }) { return l }
+        let prefix = l.dir == "/" ? "/" : l.dir + "/"
+        let names = Set(selection.compactMap { p in p.hasPrefix(prefix) ? p.dropFirst(prefix.count).split(separator: "/").first.map(String.init) : nil })
+        return Listing(dir: l.dir, entries: l.entries.filter { names.contains($0.name) }, more: 0)
     }
 
     static func isDirectory(_ path: String) -> Bool {

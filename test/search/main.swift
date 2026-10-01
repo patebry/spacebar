@@ -83,8 +83,14 @@ check("a long line's snippet is cut around the match with ellipses",
 check("no match: a final report with no hits", search("zzzqqq").hits.isEmpty && search("zzzqqq").reports.last?.done == true)
 check("an empty or oversized query searches nothing", search("").reports.count == 1 && search("").reports[0].total == 0
       && search(String(repeating: "a", count: 300)).reports[0].total == 0)
-check("a selection's sidebar searches only the selected items", names(search("widget", only: ["README.md", "src"]).hits) == ["README.md", "src/app.ts"],
-      "\(names(search("widget", only: ["README.md", "src"]).hits))")
+let picked: Set<String> = [fx + "/README.md", fx + "/src"]
+check("a selection's sidebar searches only the selected items", names(search("widget", only: picked).hits) == ["README.md", "src/app.ts"],
+      "\(names(search("widget", only: picked).hits))")
+put("src/other.ts", "widget not selected\n")
+let nested: Set<String> = [fx + "/data.json", fx + "/src/app.ts"]
+check("a selection across folders searches the selected files in each, and nothing else beside them",
+      names(search("widget", only: nested).hits) == ["data.json", "src/app.ts"], "\(names(search("widget", only: nested).hits))")
+try! fm.removeItem(atPath: fx + "/src/other.ts")
 
 // Caps: each stops the search and says which.
 var lim = ContentSearch.Limits()

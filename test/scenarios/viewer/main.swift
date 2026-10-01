@@ -706,6 +706,29 @@ if flows.contains("6") {
     check("6: ↓ and ↑ walk the selection and never leave it", outside.isEmpty && Set(seen).count == 5, "\(seen.map { ($0 as NSString).lastPathComponent })")
     noErrors("6", page())
     close()
+
+    // Finder's list view with folders expanded: a selection across folders lists every item, under the folder holding them all.
+    let sel = out.appendingPathComponent("sel")
+    for (name, text) in [("a.md", "# A\n"), ("sub/b.md", "# B\n"), ("sub/other.md", "# Not selected\n"), ("sub/deeper/c.txt", "c\n")] {
+        let u = sel.appendingPathComponent(name)
+        try? FileManager.default.createDirectory(at: u.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try! text.write(to: u, atomically: true, encoding: .utf8)
+    }
+    let across = ["a.md", "sub/b.md", "sub/deeper/c.txt"].map { sel.appendingPathComponent($0) }
+    let a = space(across, expect: across[0], settle: 0.8)
+    spin(until: 3) { (js("document.querySelectorAll('#side-list a.row.file').length") as? Int ?? 0) >= 3 }
+    let fileRows = page().fileRows, files = Set(fileRows.map { String($0.dropFirst(sel.resolvingSymlinksInPath().path.count + 1)) })
+    check("6: a selection across folders lists each selected file and no other", files == ["a.md", "sub/b.md", "sub/deeper/c.txt"], "\(files.sorted())")
+    let head = js("[$('side-title').textContent, $('selpos').textContent].join('|')") as? String ?? ""
+    let at = (fileRows.firstIndex(of: a.page.path) ?? -1) + 1
+    check("6: the sidebar says how many are selected, and the toolbar where this one is", head == "3 Selected|\(at) of 3", head)
+    noErrors("6 across", a.page)
+    close()
+    let far = space([across[0], URL(fileURLWithPath: "/etc/hosts")], expect: across[0], settle: 0.8)
+    let note = js("[...document.querySelectorAll('#side-list .row-note')].map((n) => n.textContent).join('|')") as? String ?? ""
+    check("6: a selected item too far away to list is counted in a note", note == "1 more selected item is in other folders", note)
+    noErrors("6 far", far.page)
+    close()
 }
 
 // ================= 7. hostile files =================

@@ -1,0 +1,54 @@
+name: Something is wrong
+description: A file shows wrong, Space does nothing, an edit misbehaves, or install or update fails.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Report a Problem…** in spacebar's Settings fills in your versions and the end of the update log for you.
+        Security problems go to the [private report](https://github.com/patebry/spacebar/security/advisories/new) instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you pressed or clicked, on what kind of file, and what you saw. A screenshot helps.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      options:
+        - Space in Finder, with Use spacebar for every file on (spacebar's panel)
+        - Space in Finder, inside Quick Look
+        - The sidebar
+        - Settings or the welcome window
+        - Install, update or uninstall
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: file
+    attributes:
+      label: File type
+      description: The extension, and the size if it is large (`.csv`, 40 MB).
+  - type: input
+    id: versions
+    attributes:
+      label: spacebar and macOS versions
+      description: spacebar's Settings shows its version; the Apple menu, About This Mac, shows macOS.
+      placeholder: spacebar 0.3.0, macOS 15.4.1, Apple silicon
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: For install or update problems, the end of ~/Library/Logs/spacebar-update.log. For the Space helper, ~/Library/Logs/spacebar-helper.log.
+      render: text

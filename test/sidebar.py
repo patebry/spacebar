@@ -163,7 +163,7 @@ def sandboxed(tree, check, runtime=False):
     open(ent, 'w').write(ENTITLEMENTS)
     open(plist, 'w').write(f'<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>{SANDBOX_ID}</string></dict></plist>')
     subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-O', '-target', 'arm64-apple-macos13.0'] +
-                   [os.path.join(ROOT, *p) for p in (('test', 'web', 'main.swift'), ('Shared', 'Settings.swift'), ('Shared', 'WebShell.swift'),
+                   [os.path.join(ROOT, *p) for p in (('test', 'web', 'main.swift'), ('test', 'offscreen.swift'), ('Shared', 'Settings.swift'), ('Shared', 'WebShell.swift'),
                                                       ('Shared', 'FolderListing.swift'), ('Shared', 'ArchiveListing.swift'), ('Shared', 'FolderScan.swift'), ('Shared', 'LinkPolicy.swift'), ('Preview', 'PDFPane.swift'),
                                                       ('Preview', 'Gestures.swift'), ('Preview', 'Thumbnail.swift'), ('Preview', 'ImagePane.swift'), ('test', 'nsevents.swift'))] +
                    ['-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist', '-Xlinker', plist, '-o', exe], check=True)

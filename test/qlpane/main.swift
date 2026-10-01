@@ -17,6 +17,7 @@ let render = ProcessInfo.processInfo.environment["QLPANE_RENDER"] != "0"
 func renderCheck(_ name: String, _ body: () -> Void) { if render { body() } else { print("SKIP \(name)") } }
 
 _ = NSApplication.shared
+OffScreen.install()
 let dir = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath()
 
 func offscreen() -> (NSWindow, NSView, WKWebView) {

@@ -116,6 +116,7 @@ let args = CommandLine.arguments
 let webRoot = URL(fileURLWithPath: args[1])
 FileTypes.quickLookClaims = (try? String(contentsOf: webRoot.appendingPathComponent("../../scripts/quicklook-types.txt"), encoding: .utf8)).map(FileTypes.claims)
 _ = NSApplication.shared
+OffScreen.install()
 let rec = Recorder()
 let scheme = SchemeHandler(webRoot: webRoot)
 scheme.onRefused = { rec.messages.append(["type": "_refused", "msg": $0]) }

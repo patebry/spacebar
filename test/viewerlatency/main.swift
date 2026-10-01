@@ -85,6 +85,7 @@ if CommandLine.arguments.count > 3, CommandLine.arguments[3] == "--fixtures" {
 // ---- the viewer, as the viewer app starts it, parked off screen ----
 WebHost.pageHost = "panel"
 _ = NSApplication.shared
+OffScreen.install()
 NSApp.setActivationPolicy(.accessory)
 Viewer.parkedFrame = NSRect(x: -20000, y: -20000, width: 1100, height: 720)
 let launched = now()

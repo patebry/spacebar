@@ -74,6 +74,7 @@ func pct(_ xs: [Double], _ p: Double) -> Double {
 // ---- the viewer, as the viewer app starts it, parked off screen ----
 WebHost.pageHost = "panel"
 _ = NSApplication.shared
+OffScreen.install()
 NSApp.setActivationPolicy(.accessory)
 Viewer.parkedFrame = NSRect(x: -20000, y: -20000, width: 1100, height: 760)
 let viewer = Viewer.shared

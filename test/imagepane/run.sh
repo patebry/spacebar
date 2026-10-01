@@ -7,7 +7,7 @@ cd "$(dirname "$0")/../.."
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
 printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>md.spacebar.test.imagepane</string></dict></plist>' > "$out/Info.plist"
-xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/imagepane/main.swift test/nsevents.swift Preview/ImagePane.swift Preview/Gestures.swift Preview/PDFPane.swift \
+xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/imagepane/main.swift test/offscreen.swift test/nsevents.swift Preview/ImagePane.swift Preview/Gestures.swift Preview/PDFPane.swift \
   Shared/LinkPolicy.swift Shared/FolderListing.swift -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$out/Info.plist" -o "$out/imagepane"
 "$out/imagepane" "$out"
 cp "$out/imagepane" "$out/imagepane-sandboxed"

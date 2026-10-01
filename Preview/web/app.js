@@ -17,7 +17,8 @@ const el = (tag, cls, text) => {
 const DEFAULTS = { theme: 'apple', appearance: 'auto', codeTheme: 'auto', bodyFont: 'system', monoFont: 'system', fontSize: 15,
   lineHeight: 1.6, width: 'medium', frontMatter: 'table', toc: 'auto', stats: false, math: true, mermaid: true, rawHTML: 'sanitized',
   remoteImages: false, inlineEditing: true, taskToggles: true, sidebarCollapsed: false, sidebarWidth: 240, minimalChrome: false, customCSSURL: null,
-  userThemeURL: null, rawMarkdown: false, rawJSON: false, rawNotebook: false, rawCSV: false, rawXML: false, rawCSS: false };
+  userThemeURL: null, rawMarkdown: false, rawJSON: false, rawNotebook: false, rawCSV: false, rawXML: false, rawCSS: false, wrapText: true,
+  wrapMarkdown: true, wrapCode: false };
 let settings = { ...DEFAULTS, ...(window.__sbInitial || {}) };
 const THEMES = { apple: 'Apple', github: 'GitHub', paper: 'Paper', solarized: 'Solarized', nord: 'Nord', contrast: 'High Contrast' };
 const theme = window.sbTheme && typeof window.sbTheme.apply === 'function' ? window.sbTheme : {
@@ -46,6 +47,19 @@ if (window.hljs) hljs.registerLanguage('diff', () => ({
   ],
 }));
 
+// Terraform and HCL, which highlight.js does not ship: blocks, attributes, strings with ${} interpolation, comments.
+if (window.hljs && !hljs.getLanguage('hcl')) hljs.registerLanguage('hcl', (h) => ({
+  name: 'HCL', aliases: ['terraform', 'tf'],
+  keywords: { keyword: 'resource data variable output module provider locals terraform backend moved import check for in if for_each count dynamic content',
+    literal: 'true false null' },
+  contains: [
+    h.HASH_COMMENT_MODE, h.C_LINE_COMMENT_MODE, h.C_BLOCK_COMMENT_MODE,
+    { className: 'string', begin: /"/, end: /"/, illegal: /\n/, contains: [h.BACKSLASH_ESCAPE, { className: 'subst', begin: /\$\{/, end: /\}/ }] },
+    h.NUMBER_MODE,
+    { className: 'attr', begin: /\b[A-Za-z_][\w-]*(?=\s*=(?!=))/ },
+  ],
+}));
+
 function markdown(html) {
   const md = window.markdownit({
     html,
@@ -56,6 +70,14 @@ function markdown(html) {
     },
   }).use(texmath, { engine: { renderToString: (tex, o) => `<span class="tex" data-display="${o.displayMode ? 1 : 0}" data-tex="${esc(tex)}"></span>` },
                      delimiters: 'dollars' });
+  if (window.markdownitFootnote) {
+    md.use(window.markdownitFootnote);
+    md.renderer.rules.footnote_caption = (tokens, idx) => {
+      const m = tokens[idx].meta;
+      return `${m.id + 1}${m.subId > 0 ? `:${m.subId}` : ''}`;
+    };
+  }
+  if (window.markdownitMark) md.use(window.markdownitMark);
 
   const fence = md.renderer.rules.fence;
   md.renderer.rules.fence = (tokens, idx, opts, env, self) => {
@@ -96,6 +118,22 @@ function markdown(html) {
     }
   });
 
+  // Headings get GitHub's ids, so a README's own `[Install](#install)` links work. The sanitizer prefixes every id with
+  // "user-content-", as GitHub does; inPageLink looks them up that way. An embedded note's headings get none.
+  md.core.ruler.push('anchors', (state) => {
+    if (renderDepth) return;
+    const seen = new Map();
+    const toks = state.tokens;
+    for (let i = 0; i + 1 < toks.length; i++) {
+      if (toks[i].type !== 'heading_open' || !toks[i + 1].children) continue;
+      const base = slug(toks[i + 1].children.filter((t) => t.type === 'text' || t.type === 'code_inline').map((t) => t.content).join(''));
+      if (!base) continue;
+      const n = seen.get(base) || 0;
+      seen.set(base, n + 1);
+      toks[i].attrSet('id', n ? `${base}-${n}` : base);
+    }
+  });
+
   md.inline.ruler.before('link', 'wikilink', wikiRule);
   md.inline.ruler.before('newline', 'tag', tagRule);
   md.renderer.rules.wikilink = (tokens, idx) => wikiHTML(tokens[idx].meta);
@@ -107,6 +145,9 @@ function markdown(html) {
   });
   return md;
 }
+
+/** A heading's anchor as GitHub makes it: lower case, punctuation dropped, spaces as hyphens. */
+const slug = (s) => s.trim().toLowerCase().replace(/[^\p{L}\p{M}\p{N}\s_-]/gu, '').replace(/\s/g, '-');
 // ---------- Obsidian: [[wikilinks]], ![[embeds]], #tags and > [!callouts] ----------
 // A link's target is resolved by the extension (LinkIndex), never here: the page only draws what the render payload's `links`
 // and `embeds` name, and asks to open a path from them, which the extension checks again. Nothing of the document's own markup
@@ -207,6 +248,16 @@ function callouts(frag) {
     bq.dataset.callout = CALLOUTS[type] || 'blue';
     bq.insertBefore(title, p);
     if (!p.textContent.trim() && !p.querySelector('img, input, .katex')) p.remove();
+    // `[!tip]-` folds the body away until the title is clicked; `[!tip]+` can be folded but starts open.
+    if (m[2]) {
+      const fold = el('details', 'callout-fold');
+      fold.open = m[2] === '+';
+      const summary = el('summary', 'callout-title');
+      summary.append(...title.childNodes, el('span', 'callout-chev'));
+      title.remove();
+      fold.append(summary, ...bq.childNodes);
+      bq.append(fold);
+    }
   });
 }
 
@@ -311,7 +362,8 @@ function render(text, depth = 0) {
   const md = settings.rawHTML === 'off' ? mdText : mdHTML;
   renderDepth = depth;
   let html;
-  try { html = md.render(fm ? fm.body : text); } finally { renderDepth = 0; }
+  // An embedded note's footnotes are its own: their ids must not take the document's.
+  try { html = md.render(fm ? fm.body : text, depth ? { docId: `e${++embedDocs}` } : {}); } finally { renderDepth = 0; }
   const frag = DOMPurify.sanitize(html, PURIFY);
   frag.querySelectorAll('input:not([type=checkbox]), textarea, select').forEach((n) => n.remove());
   frag.querySelectorAll('span.tex[data-tex]').forEach((n) => {
@@ -326,12 +378,75 @@ function render(text, depth = 0) {
   });
   obsidian(frag, depth);
   labelTasks(frag);
+  tables(frag);
+  if (depth === 0 && !current.entry) fences(frag);
   if (!settings.taskToggles || current.entry) frag.querySelectorAll('input[type=checkbox]').forEach((n) => { n.disabled = true; });
   if (settings.remoteImages !== true && current.remoteImagesOnce !== true) blockRemoteImages(frag);
   if (depth === 0) frag.querySelectorAll('img').forEach(watchImage);
   const head = fm && frontMatterNode(fm);
   if (head) frag.prepend(head);
   return frag;
+}
+
+let embedDocs = 0;
+
+/** Tables keep short cells on one line and scroll sideways rather than wrap every cell; a long one keeps its header row in view. */
+const TABLE_NOWRAP = 30, TABLE_TALL = 40;
+function tables(frag) {
+  for (const t of frag.querySelectorAll('table:not(.frontmatter)')) {
+    for (const c of t.querySelectorAll('th, td')) if (c.textContent.length <= TABLE_NOWRAP) c.classList.add('nw');
+    if (t.tBodies.length && t.tBodies[0].rows.length > TABLE_TALL) t.classList.add('tall');
+  }
+}
+
+// A code fence's language and Copy button. The button is made here and remembered, like the image load button, and copies by
+// the fence's source lines: the extension reads the code from the document itself (CodeFence).
+const fenceButtons = new WeakSet();
+let fenceCopying = null;
+function fences(frag) {
+  for (const blk of frag.children) {
+    const pre = blk.classList.contains('blk') && blk.dataset.src ? blk.querySelector(':scope > pre:not(.mermaid)') : null;
+    if (!pre) continue;
+    const bar = el('div', 'fence-bar');
+    const lang = /(?:^|\s)language-(\S+)/.exec((pre.querySelector('code') || pre).className);
+    if (lang) bar.append(el('span', 'fence-lang', lang[1]));
+    const b = el('button', 'fence-copy');
+    b.type = 'button';
+    b.title = 'Copy code';
+    b.setAttribute('aria-label', 'Copy code');
+    b.append(copyIcon());
+    fenceButtons.add(b);
+    b.addEventListener('pointerdown', (e) => { armed = e.isTrusted ? b : null; });
+    // From the keyboard, a real Return or Space on the button arms it as a press does.
+    b.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') armed = e.isTrusted ? b : null; });
+    b.addEventListener('click', copyFence);
+    bar.append(b);
+    blk.insertBefore(bar, pre);
+  }
+}
+
+function copyIcon() {
+  const svg = document.createElementNS(SVG, 'svg');
+  for (const [k, v] of Object.entries({ viewBox: '0 0 16 16', width: 14, height: 14, 'aria-hidden': 'true', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.3,
+    'stroke-linejoin': 'round' })) svg.setAttribute(k, v);
+  for (const d of ['M5.5 5.5h8v8.5h-8z', 'M3.5 10.5h-.4A1.1 1.1 0 0 1 2 9.4V3.1A1.1 1.1 0 0 1 3.1 2h5.8A1.1 1.1 0 0 1 10 3.1v.4']) {
+    const path = document.createElementNS(SVG, 'path');
+    path.setAttribute('d', d);
+    svg.append(path);
+  }
+  return svg;
+}
+
+/** As loadRemoteImages: only a real click that went down on one of the page's own Copy buttons. */
+function copyFence(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  const b = e.currentTarget, pressed = armed === b, blk = b.closest('.blk[data-src]');
+  armed = null;
+  if (!e.isTrusted || !pressed || !fenceButtons.has(b) || !blk || !current.path || !isMarkdown(current) || current.entry) return;
+  const [start, end] = blockRange(blk);
+  fenceCopying = b;
+  post({ type: 'copy', path: current.path, fenceStart: start, fenceEnd: end });
 }
 
 /** Names each task checkbox by its item's text. The sanitizer drops <label> and prefixes the document's ids, so the ids are
@@ -548,6 +663,15 @@ const mermaidCache = new Map();
 const MERMAID_CACHE_MAX = 48;
 const MERMAID_MIN_H = 120;
 let mermaidQueue = Promise.resolve();
+const mermaidWhy = new WeakMap();
+/** Mermaid's error as one short line: "Parse error on line 2", the first line of anything else. */
+function mermaidReason(e) {
+  const msg = String((e && (e.message || e.str)) || '').trim();
+  const line = /Parse error on line (\d+)/.exec(msg);
+  if (line) return `Mermaid couldn’t parse line ${line[1]} of this diagram.`;
+  const first = msg.split('\n')[0].slice(0, 160);
+  return first ? `Mermaid couldn’t draw this diagram: ${first}` : 'Mermaid couldn’t draw this diagram.';
+}
 let mermaidSeq = 0;
 
 const mermaidBlocked = () => settings.remoteImages !== true && current.remoteImagesOnce !== true;
@@ -635,6 +759,7 @@ function runMermaid(redraw = true) {
         } catch (e) {
           post({ type: 'log', msg: 'mermaid: ' + (e && (e.message || JSON.stringify(e))) });
           done.set(n, null);
+          mermaidWhy.set(n, mermaidReason(e));
         }
       }
     } catch (e) {
@@ -650,12 +775,14 @@ function runMermaid(redraw = true) {
       n.classList.remove('mm-wait');
       n.style.removeProperty('--mm-h');
       if (svg === null) {
-        // Not a diagram mermaid can draw: its source, marked as such, is the honest thing to show.
+        // Not a diagram mermaid can draw: its source, marked as such and with mermaid's reason, is the honest thing to show.
         n.classList.add('mm-error');
         n.textContent = mermaidSrc.get(n);
+        n.dataset.reason = mermaidWhy.get(n) || 'Mermaid couldn’t draw this diagram.';
         continue;
       }
       n.classList.remove('mm-error');
+      delete n.dataset.reason;
       // Only a diagram's first appearance fades in; a redraw in new colours is a plain swap.
       n.classList.toggle('mm-in', fresh);
       n.innerHTML = svg;
@@ -690,7 +817,7 @@ const editorEl = () => document.querySelector('#doc > .md-editing');
 function spliceEditor(range) {
   const [s, e] = range;
   const el = document.createElement(INLINE_TAGS.has(editing.tag) ? editing.tag : 'DIV');
-  el.className = 'md-editing';
+  el.className = monoSource(editing.text) ? 'md-editing mono' : 'md-editing';
   el.dataset.src = `${s},${e}`;
   el.innerHTML = editorHTML();
   const blocks = [...$('doc').children];
@@ -699,6 +826,11 @@ function spliceEditor(range) {
   $('doc').insertBefore(el, inside[0] || after || null);
   inside.forEach((b) => b.remove());
 }
+
+/** Source whose spacing carries meaning, edited in the code font: a code fence (a diagram's too), display math, an indented
+ *  code block or a table. */
+const TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+const monoSource = (t) => /^\s{0,3}(```|~~~)|^\s{0,3}\$\$|^( {4}|\t)/.test(t) || (t.includes('|') && TABLE_RULE.test(t.split('\n', 2)[1] || ''));
 
 /** A rendered block's line range in current.text: blocks below the editor shift by the lines typed since the last render. */
 function blockRange(b) {
@@ -716,7 +848,7 @@ let drawnMermaid = Promise.resolve();
 function draw() {
   if (editing && !editing.whole && rawOn(current)) { stopEditing(); return; }
   if (!gridWanted(current)) gridStop();
-  $('kind').replaceChildren();
+  clearKind();
   if (!isMarkdown(current) || rawOn(current)) {
     $('doc').replaceChildren(viewNode(current));
     // The view no longer shows the file's text (Raw turned off): the edit ends.
@@ -728,24 +860,26 @@ function draw() {
     decorate();
     syncPdf();
     findAfterDraw();
+    if (!pop.hidden) syncPopover();
     return;
   }
   const heights = [...document.querySelectorAll('#doc pre.mermaid')].map((n) => n.getBoundingClientRect().height);
   const frag = render(current.text);
   mountMermaid(frag, heights);
   $('doc').replaceChildren(frag);
-  if (current.entry) setKind(current, [fmtSize(current.size)]);
   if (editing) spliceEditor([editing.start, editing.start + editing.lines]);
+  setKind(current, [fmtSize(current.entry ? current.size : textBytes(current.text))]);
   decorate();
   syncPdf();
   findAfterDraw();
+  if (!pop.hidden) syncPopover();
   if (settings.mermaid && document.querySelector('#doc pre.mermaid.mm-wait')) drawnMermaid = runMermaid(false);
 }
 
 /** Rendered text of a range, without KaTeX's hidden MathML copy of each formula. */
 function visibleText(range) {
   const frag = range.cloneContents();
-  frag.querySelectorAll('.katex-mathml').forEach((n) => n.remove());
+  frag.querySelectorAll('.katex-mathml, .fence-bar').forEach((n) => n.remove());
   return frag.textContent.replace(/\u200B/g, '');
 }
 
@@ -818,10 +952,18 @@ function splice(at, old, next, ver) {
 }
 
 const now = () => performance.timeOrigin + performance.now();
+const utf8 = new TextEncoder();
+let bytesMemo = { text: null, n: 0 };
+/** The document's size in UTF-8, counted once per text. */
+function textBytes(t) {
+  if (bytesMemo.text !== t) bytesMemo = { text: t, n: utf8.encode(t).length };
+  return bytesMemo.n;
+}
 const afterPaint = (f) => requestAnimationFrame(() => setTimeout(f, 0));
 
 /** Shows the editor with its caret at once; the native side is told in parallel and ends the edit if it cannot take the keyboard. */
 function beginEdit(block, e, tClick) {
+  clearTimeout(fenceTimer);
   if (updateBusy) { window.sb.status('Updating…'); return; }
   // Find's index holds the text nodes the editor is about to change.
   closeFind();
@@ -1101,6 +1243,18 @@ function scrollToHeading(h, smooth) {
   if (t) t.scrollIntoView({ behavior: smooth && !reducedMotion.matches ? 'smooth' : 'auto', block: 'start' });
 }
 
+/** `#name` in the document: a heading's id, a footnote or its reference, as the sanitizer prefixed them, else a heading whose
+ *  anchor would be that name. */
+function inPageLink(name) {
+  let id = name;
+  try { id = decodeURIComponent(name); } catch { /* used as written */ }
+  const doc = $('doc');
+  const byId = (x) => { const t = document.getElementById(x); return t && doc.contains(t) ? t : null; };
+  const t = byId('user-content-' + id) || byId('user-content-' + slug(id))
+    || [...doc.querySelectorAll(':scope > :is(h1, h2, h3, h4, h5, h6)')].find((h) => slug(headingText(h)) === slug(id));
+  if (t) t.scrollIntoView({ behavior: reducedMotion.matches ? 'auto' : 'smooth', block: 'start' });
+}
+
 function headingText(h) {
   const c = h.cloneNode(true);
   c.querySelectorAll('.katex-mathml').forEach((n) => n.remove());
@@ -1125,11 +1279,14 @@ function buildToc() {
   requestAnimationFrame(spy);
 }
 
-/** Marks the section being read: the last heading above the top of the window. */
+/** Marks the section being read: the last heading in the top part of the window, and the last one once the page is scrolled
+ *  to its end (the sections there may never reach the top). */
 function spy() {
   if (!tocTargets.length) return;
   let cur = 0;
-  tocTargets.forEach((h, i) => { if (h.isConnected && h.getBoundingClientRect().top < 96) cur = i; });
+  const line = (parseFloat(getComputedStyle(root).getPropertyValue('--bar-h')) || 40) + window.innerHeight * 0.3;
+  const end = window.scrollY > 0 && window.scrollY + window.innerHeight >= document.scrollingElement.scrollHeight - 2;
+  tocTargets.forEach((h, i) => { if (h.isConnected && (h.getBoundingClientRect().top < line || (end && h.getBoundingClientRect().top < window.innerHeight))) cur = i; });
   $('toc').querySelectorAll('a').forEach((a, i) => a.classList.toggle('active', i === cur));
 }
 let spyQueued = false;
@@ -1150,7 +1307,7 @@ function updateStats() {
     return;
   }
   statsTimer = setTimeout(() => {
-    const skip = '.katex-mathml, pre.mermaid, .frontmatter, .frontmatter-raw, svg, .wl-embed-body';
+    const skip = '.katex-mathml, pre.mermaid, .frontmatter, .frontmatter-raw, svg, .wl-embed-body, .fence-bar, .footnotes';
     const walk = document.createTreeWalker($('doc'), NodeFilter.SHOW_TEXT,
       { acceptNode: (n) => (n.parentElement && n.parentElement.closest(skip) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
     let text = '';
@@ -1169,7 +1326,7 @@ function decorate() {
 
 // Keys that change what is rendered (a redraw) and keys that only change colours or fonts (mermaid draws its own).
 const RENDER_KEYS = ['frontMatter', 'toc', 'stats', 'math', 'mermaid', 'rawHTML', 'inlineEditing', 'taskToggles', 'remoteImages', 'rawMarkdown', 'rawJSON',
-  'rawNotebook', 'rawCSV', 'rawXML', 'rawCSS', 'folderViewMedia', 'folderViewOther'];
+  'rawNotebook', 'rawCSV', 'rawXML', 'rawCSS', 'folderViewMedia', 'folderViewOther', 'wrapText', 'wrapMarkdown', 'wrapCode'];
 const LOOK_KEYS = ['theme', 'codeTheme', 'appearance', 'bodyFont', 'userThemeURL', 'customCSSURL'];
 
 /** A large render's text, sent apart from its script (PageBody). Read synchronously, so this render finishes before the next
@@ -1226,7 +1383,7 @@ window.sb = {
     const y = samePath ? window.scrollY : p.reason === 'back' && p.path === current.path ? arcScroll : 0;
     if (!samePath && clearHint()) $('status').textContent = stickyStatus;
     // A re-render of the same file (a change on disk) keeps the app its Open button names; only a new file asks again.
-    if (samePath && p.app === undefined && typeof current.app === 'string') p = { ...p, app: current.app };
+    if (samePath && p.app === undefined && typeof current.app === 'string') p = { ...p, app: current.app, editor: current.editor };
     current = p;
     if (goneP && goneP !== p.path) goneP = '';
     delete root.dataset.blank;
@@ -1435,7 +1592,7 @@ window.sb = {
     current.editor = o.editor === true;
     document.querySelectorAll('#doc .viewer-open[data-action=openFile]').forEach((b) => { b.textContent = openLabel(current); });
     const b = $('edit');
-    if (b.dataset.action === 'openFile') b.title = openTitle(current, 'openFile');
+    if (b.dataset.action === 'openFile' || b.dataset.action === 'edit') b.title = openTitle(current, b.dataset.action);
   },
   /** A newer release than this one: a dot on the Aa button and a row at the top of its popover. `state` is available,
    *  elsewhere (this copy is not the one the installer replaces), started, inProgress (still running after a while), done, or
@@ -1466,11 +1623,13 @@ window.sb = {
   },
   /** The writer's answer to a copy: the Copy button shows a check for a moment, and the status line says what was copied. */
   copied(r) {
-    const ok = !!r && r.ok === true, b = $('copy');
-    window.sb.status(ok ? (r.truncated === true ? `Copied the first ${readCap(current)}` : 'Copied') : 'Could not copy');
+    const ok = !!r && r.ok === true, fence = !!r && r.fence === true && fenceCopying && fenceCopying.isConnected;
+    const b = fence ? fenceCopying : $('copy');
+    fenceCopying = null;
+    window.sb.status(ok ? (r.truncated === true ? `Copied the ${current.tail === true ? 'last' : 'first'} ${readCap(current)}` : 'Copied') : 'Could not copy');
     b.classList.toggle('done', ok);
-    clearTimeout(copyTimer);
-    copyTimer = setTimeout(() => b.classList.remove('done'), 1500);
+    clearTimeout(copyTimers.get(b));
+    copyTimers.set(b, setTimeout(() => b.classList.remove('done'), 1500));
   },
   /** The Space helper is on in the settings but did not take Space: one quiet line, which a click turns into Settings. */
   helperHint() {
@@ -1642,14 +1801,44 @@ function viewHead(p, ...extra) {
 }
 
 /** The file's kind and size (and whatever `more` adds) as quiet text in the toolbar. With `zoom`, the span an image's zoom is
- *  written to follows it; returned with the text's own span. */
-function setKind(p, more = [], zoom = false) {
-  const text = el('span', 'kind-text', [p.kindName, ...more, entryPosition(p)].filter(Boolean).join(' · '));
+ *  written to follows it; returned with the text's own span. In the Space panel the kind drags the file out, and says so. */
+function setKind(p, more = [], zoom = false, label = kindLabel(p)) {
+  const text = el('span', 'kind-text', [label, ...more, entryPosition(p)].filter(Boolean).join(' · '));
   const z = zoom ? el('span', 'img-zoom') : null;
-  $('kind').replaceChildren(...[text, z].filter(Boolean));
+  const k = $('kind');
+  const drag = HOST === 'panel' && !!p.path && !p.entry && !['overview', 'loading'].includes(p.view);
+  k.replaceChildren(...[drag ? icon(isMarkdown(p) ? 'markdown' : p.icon, 14) : null, text, z].filter(Boolean));
+  k.classList.toggle('drag', drag);
+  if (drag) k.title = 'Drag to copy the file'; else k.removeAttribute('title');
   return { text, zoom: z };
 }
+
+// The kind as spacebar names it, the same for every file of a kind: the system's names differ from file to file (".ts" is
+// "Source code", ".tsx" "script", a CSV "comma-separated values").
+const LANG_NAMES = { javascript: 'JavaScript', typescript: 'TypeScript', python: 'Python', ruby: 'Ruby', go: 'Go', rust: 'Rust', swift: 'Swift',
+  bash: 'Shell script', c: 'C', cpp: 'C++', objectivec: 'Objective-C', java: 'Java', kotlin: 'Kotlin', csharp: 'C#', css: 'CSS', scss: 'SCSS',
+  less: 'Less', xml: 'XML', yaml: 'YAML', ini: 'INI', sql: 'SQL', php: 'PHP', perl: 'Perl', lua: 'Lua', r: 'R', graphql: 'GraphQL', diff: 'Diff',
+  makefile: 'Makefile', vbnet: 'Visual Basic', wasm: 'WebAssembly text', dockerfile: 'Dockerfile', scala: 'Scala', nginx: 'nginx configuration',
+  hcl: 'Terraform' };
+const EXT_NAMES = { toml: 'TOML', plist: 'Property list', vue: 'Vue', svelte: 'Svelte', groovy: 'Groovy', gradle: 'Gradle', geojson: 'GeoJSON',
+  ipynb: 'Jupyter notebook', jsonc: 'JSON with comments', json5: 'JSON5', tsv: 'TSV', log: 'Log', out: 'Log', err: 'Log', hcl: 'HCL' };
+function kindLabel(p) {
+  if (isMarkdown(p)) return 'Markdown';
+  const name = p.kindName || '';
+  // The extension's own words (a binary plist converted, a format macOS cannot play) stand.
+  if (!['code', 'text', 'json', 'csv'].includes(p.view) || /shown as XML/.test(name)) return name;
+  const ext = (/\.([^./]+)$/.exec(p.name || '') || [])[1];
+  let base = EXT_NAMES[(ext || '').toLowerCase()] || (p.view === 'code' && LANG_NAMES[p.lang]) || '';
+  if (!base) base = p.view === 'json' ? 'JSON' : p.view === 'csv' ? (p.tsv === true ? 'TSV' : 'CSV') : p.view === 'text' ? 'Plain text' : name || 'Source code';
+  return typeof p.encoding === 'string' && p.encoding ? `${base} (${p.encoding})` : base;
+}
 const zoomLabel = () => document.querySelector('#kind .img-zoom');
+function clearKind() {
+  const k = $('kind');
+  k.replaceChildren();
+  k.classList.remove('drag');
+  k.removeAttribute('title');
+}
 
 /** Where a file of an archive sits among the archive's files ("3 of 10"), which ↑ and ↓ step through. */
 function entryPosition(p) {
@@ -1661,15 +1850,41 @@ function entryPosition(p) {
 function note(text) { return el('div', 'viewer-note', text); }
 
 const readCap = (p) => `${(typeof p.readCap === 'number' ? p.readCap : 2 << 20) >> 20} MB`;
-function truncNote(p) { return p.truncated ? note(`Showing the first ${readCap(p)}${typeof p.size === 'number' ? ` of ${fmtSize(p.size)}` : ''}.`) : null; }
+function truncNote(p, how = '') {
+  return p.truncated ? note(`Showing the ${p.tail === true ? 'last' : 'first'} ${readCap(p)}${typeof p.size === 'number' ? ` of ${fmtSize(p.size)}` : ''}${how}.`) : null;
+}
+/** After the last line of a file read from its start: how much more there is. */
+function truncTail(p) {
+  if (!p.truncated || p.tail === true || typeof p.size !== 'number' || typeof p.readCap !== 'number' || p.size <= p.readCap) return null;
+  const n = note(`${fmtSize(p.size - p.readCap)} more not shown. Open the file to see all of it.`);
+  n.classList.add('trunc-tail');
+  return n;
+}
 
-const highlighted = (text, lang) => DOMPurify.sanitize(hljs.highlight(text, { language: lang, ignoreIllegals: true }).value,
+const highlight1 = (text, lang) => DOMPurify.sanitize(hljs.highlight(text, { language: lang, ignoreIllegals: true }).value,
   { ALLOWED_TAGS: ['span'], ALLOWED_ATTR: ['class'], RETURN_DOM_FRAGMENT: true });
+/** Markdown's front matter is highlighted as YAML (TOML as INI): as Markdown its closing `---` reads as a heading's underline. */
+function highlighted(text, lang) {
+  const fm = lang === 'markdown' ? frontMatter(text) : null;
+  if (!fm) return highlight1(text, lang);
+  // Its fence, its lines and its closing line.
+  const lines = text.split('\n'), count = fm.lines.length + 2;
+  const end = lines.slice(0, count).join('\n').length + (lines.length > count ? 1 : 0);
+  const out = highlight1(text.slice(0, end), fm.toml ? 'ini' : 'yaml');
+  out.append(highlight1(text.slice(end), lang));
+  return out;
+}
+
+// Which setting wraps the long lines of a view of text: prose (text and logs) and Markdown's source wrap by default, code not.
+const wrapKey = (p) => (isMarkdown(p) ? 'wrapMarkdown' : p.view === 'text' ? 'wrapText' : 'wrapCode');
+const wrapOn = (p) => settings[wrapKey(p)] === true;
+const isLog = (p) => p.view === 'text' && /\.(log|out|err)$/i.test(p.name || '');
 
 /** Source with line numbers; highlighted by the bundled highlight.js when the language is known and the text is not huge.
- *  `file`: the text is the editable file's own, which a click edits. */
-function codeBlock(text, lang, file = false) {
-  const wrap = el('div', 'code-view');
+ *  `file`: the text is the editable file's own, which a click edits. `wrap`: long lines wrap, and the line numbers, which would
+ *  no longer match the rows, go. `log`: error and warning lines are tinted and timestamps dimmed. */
+function codeBlock(text, lang, file = false, { wrap: wrapped = false, log = false } = {}) {
+  const wrap = el('div', wrapped ? 'code-view wrap' : 'code-view');
   const n = Math.max(1, lineCount(text));
   const gutter = el('pre', 'gutter', Array.from({ length: n }, (_, i) => i + 1).join('\n'));
   gutter.dataset.n = n;
@@ -1684,13 +1899,7 @@ function codeBlock(text, lang, file = false) {
   };
   // Plain text goes in as many text nodes, a few thousand characters each at line ends: WebKit measures a range in one of them
   // (find's matches) in time that grows with the node.
-  for (let at = 0; at < text.length;) {
-    let end = text.indexOf('\n', at + 8192);
-    end = end >= 0 && end < at + 16384 ? end + 1 : Math.min(text.length, at + 8192);
-    if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) end++;
-    code.append(text.slice(at, end));
-    at = end;
-  }
+  if (log && !lang) logText(code, text); else plainText(code, text);
   if (lang && window.hljs && hljs.getLanguage(lang) && text.length <= HIGHLIGHT_MAX) {
     pre.dataset.lang = lang;
     // A long file is painted plain first: highlighting it would hold the first paint.
@@ -1700,6 +1909,40 @@ function codeBlock(text, lang, file = false) {
   pre.append(code);
   wrap.append(pre);
   return wrap;
+}
+
+function plainText(code, text) {
+  for (let at = 0; at < text.length;) {
+    let end = text.indexOf('\n', at + 8192);
+    end = end >= 0 && end < at + 16384 ? end + 1 : Math.min(text.length, at + 8192);
+    if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) end++;
+    code.append(text.slice(at, end));
+    at = end;
+  }
+}
+
+// A log's lines: errors red, warnings amber, a leading timestamp dimmed (in a log small enough to mark every line).
+const LOG_ERR = /\b(?:FATAL|ERROR|CRITICAL|PANIC|SEVERE|EMERG)\b|\[(?:error|fatal|crit)\]|level=(?:error|fatal)/;
+const LOG_WARN = /\b(?:WARN|WARNING)\b|\[warn(?:ing)?\]|level=warn(?:ing)?/;
+const LOG_TIME = /^\[?(?:\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?|[A-Z][a-z]{2} [ \d]\d \d{2}:\d{2}:\d{2}|\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)\]?/;
+function logText(code, text) {
+  const times = text.length <= HIGHLIGHT_MAX;
+  let plain = '';
+  const flush = () => { if (plain) { plainText(code, plain); plain = ''; } };
+  for (let at = 0; at < text.length;) {
+    let end = text.indexOf('\n', at);
+    end = end < 0 ? text.length : end + 1;
+    const line = text.slice(at, end), head = line.slice(0, 400);
+    at = end;
+    const level = LOG_ERR.test(head) ? 'log-err' : LOG_WARN.test(head) ? 'log-warn' : '';
+    const t = times ? LOG_TIME.exec(line) : null;
+    if (!level && !t) { plain += line; if (plain.length > 8192) flush(); continue; }
+    flush();
+    if (t) code.append(el('span', 'log-time', t[0]));
+    const rest = t ? line.slice(t[0].length) : line;
+    if (level) code.append(el('span', level, rest)); else plain += rest;
+  }
+  flush();
 }
 
 // ---------- JSON: a tree of text nodes, and a Jupyter notebook as its cells; Raw shows either as its text ----------
@@ -1762,14 +2005,19 @@ function jsonLoose(t) {
   return out.join('');
 }
 
-/** Opens the tree level by level, breadth first, while the rows shown stay within `budget`. */
-function jsonOpenLevels(m, budget) {
+/** Opens the tree level by level, breadth first, while the rows shown stay within `budget`. With `all` (Expand All) a long
+ *  array or object shows past its first JSON_CHUNK children, as far as the budget goes. */
+function jsonOpenLevels(m, budget, all = false) {
   let level = [['', m.value]], rows = 1;
   while (level.length) {
     const next = [];
     for (const [ptr, v] of level) {
-      const n = Math.min(branchSize(v), JSON_CHUNK);
-      if (rows + n > budget) return;
+      let n = Math.min(branchSize(v), JSON_CHUNK);
+      if (all && branchSize(v) > JSON_CHUNK) {
+        n = Math.min(branchSize(v), budget - rows);
+        if (n > JSON_CHUNK) m.more.set(ptr, n);
+      }
+      if (n <= 0 || rows + n > budget) return;
       m.open.add(ptr);
       rows += n;
       const kids = Array.isArray(v) ? v.slice(0, n).map((x, i) => [i, x]) : Object.entries(v).slice(0, n);
@@ -1794,15 +2042,16 @@ function jsonView(p) {
   }
   setKind(p, [fmtSize(p.size)]);
   box.append(viewHead(p, ...extra));
-  const t = truncNote(p);
-  if (t) box.append(t, note(/\.ipynb$/i.test(p.name || '') ? 'A notebook this large is shown as its text.' : 'A file this large is shown as its text, not as a tree.'));
+  const t = truncNote(p, ', as text');
+  if (t) box.append(t);
   if (!m.ok && !p.truncated) {
     const at = strictJSON(p) ? jsonErrorAt(p.text) : null;
     const n = note(at === null ? 'Not valid JSON: shown as is.' : `Not valid JSON at ${jsonWhere(p.text, at)}: shown as is.`);
     n.classList.add('json-warn');
     box.append(n);
   }
-  if (raw) box.append(codeBlock(p.text, 'json', p.editable === true));
+  // Cut short, a minified file (most large JSON is) would be one line megabytes long: it wraps whatever the setting says.
+  if (raw) box.append(codeBlock(p.text, 'json', p.editable === true, { wrap: wrapOn(p) || (p.truncated && minified(p.text)) }));
   else if (m.mode === 'tree') box.append(jsonTree(m));
   else box.append(notebookView(m.value));
   return box;
@@ -1841,6 +2090,13 @@ function jsonRow(it, branch, open) {
   row.setAttribute('role', 'treeitem');
   row.setAttribute('aria-level', String(it.depth + 1));
   row.style.setProperty('--d', it.depth);
+  // An empty object or array has nothing to open: it is a leaf, {} or [].
+  if (branch && !branchSize(it.v)) {
+    row.append(el('span', 'jt-tw', ''));
+    if (it.key !== null) row.append(it.index ? el('span', 'jt-index', String(it.key)) : el('span', 'jt-key hljs-attr', JSON.stringify(String(it.key))), el('span', 'jt-colon', ': '));
+    row.append(el('span', 'jt-sum', Array.isArray(it.v) ? '[]' : '{}'));
+    return row;
+  }
   if (branch) {
     row.setAttribute('aria-expanded', String(open));
     const b = el('button', 'jt-tw', open ? '▾' : '▸');
@@ -1891,7 +2147,7 @@ function jsonAction(a, b) {
   else if (a === 'jsonAll') {
     m.open.clear();
     m.more.clear();
-    if (b.dataset.open === '1') jsonOpenLevels(m, JSON_ALL_MAX);
+    if (b.dataset.open === '1') jsonOpenLevels(m, JSON_ALL_MAX, true);
   }
   draw();
   window.scrollTo(0, y);
@@ -2113,14 +2369,14 @@ function csvView(p) {
     const t = truncNote(p);
     if (t) box.append(t);
     else if (p.editable !== true && settings.inlineEditing && p.size > 2 << 20) box.append(note('Too large to edit here.'));
-    box.append(codeBlock(p.text, null, p.editable === true));
+    box.append(codeBlock(p.text, null, p.editable === true, { wrap: wrapOn(p) }));
     return box;
   }
   const m = csvModel(p);
   const box = el('div', 'viewer viewer-csv');
   const shape = m.head.length ? `${Math.max(0, m.total - 1).toLocaleString()} ${m.total === 2 ? 'row' : 'rows'} × ${m.cols} ${m.cols === 1 ? 'column' : 'columns'}` : '';
-  const sepName = m.sep === ',' || (m.sep === '\t' && p.tsv === true) ? '' : `${DELIMITER_NAMES[m.sep]}-separated`;
-  setKind(p, [fmtSize(p.size), shape, sepName]);
+  const sepName = m.sep === ',' || (m.sep === '\t' && p.tsv === true) ? '' : ` (${DELIMITER_NAMES[m.sep]})`;
+  setKind(p, [shape, fmtSize(p.size)], false, kindLabel(p) + sepName);
   box.append(viewHead(p));
   const t = truncNote(p);
   if (t) box.append(t);
@@ -2340,7 +2596,7 @@ function imageView(p) {
   });
   img.addEventListener('error', () => {
     if (!box.isConnected) return;
-    $('kind').replaceChildren();
+    clearKind();
     box.replaceWith(infoCard(p, 'This image can’t be shown here.'));
   });
   img.src = p.src;
@@ -2854,7 +3110,8 @@ function syncPdf() {
 function viewNode(p) {
   if (isMarkdown(p)) {
     const box = el('div', 'viewer viewer-code viewer-source');
-    box.append(codeBlock(p.text, 'markdown'));
+    setKind(p, [fmtSize(textBytes(p.text))]);
+    box.append(codeBlock(p.text, 'markdown', false, { wrap: wrapOn(p) }));
     return box;
   }
   switch (p.view) {
@@ -2875,7 +3132,9 @@ function viewNode(p) {
         if (p.view === 'code' && p.lang && p.text.length > HIGHLIGHT_MAX) box.append(note('Highlighting is off for files over 512 KB.'));
         const kind = rawKind(p), pretty = kind && !rawOn(p) ? prettyText(p, kind) : null;
         if (kind && !rawOn(p) && pretty === null) box.append(note(kind === 'xml' ? 'Not well-formed XML: shown as is.' : 'Shown as is.'));
-        box.append(codeBlock(pretty ?? p.text, p.view === 'code' ? p.lang : null, pretty === null && p.editable === true));
+        box.append(codeBlock(pretty ?? p.text, p.view === 'code' ? p.lang : null, pretty === null && p.editable === true, { wrap: wrapOn(p), log: isLog(p) }));
+        const more = truncTail(p);
+        if (more) box.append(more);
         return box;
       }
       break;
@@ -3255,7 +3514,7 @@ function openTitle(p, action) {
   if (action === 'reveal') return 'Reveal in Finder';
   if (action === 'revealFolder') return 'Show the folder it was in';
   const key = window.__sbHost === 'panel' ? ' (⌘O)' : '';
-  if (action === 'edit') return `Open in your editor${key}`;
+  if (action === 'edit') return `${p.app ? openLabel(p) : 'Open in your editor'}${key}`;
   return `${p.app ? openLabel(p) : p.editor === true ? 'Open in your editor' : 'Open in its default app'}${key}`;
 }
 
@@ -4184,10 +4443,12 @@ Object.assign(window.sb, {
     if (Object.hasOwn(HOST_ZOOM, key)) return zoomImage(HOST_ZOOM[key]);
     if (Object.hasOwn(FILTER_KEYS, key) && gridTakesKeys() && gridKey(FILTER_KEYS[key])) return true;
     if (Object.hasOwn(FILTER_KEYS, key) && gridBackKey(FILTER_KEYS[key])) return true;
-    const page = Math.max(40, window.innerHeight * 0.9), max = document.scrollingElement.scrollHeight;
+    // A table view does not scroll the page: its own box does.
+    const box = document.querySelector('#doc > .viewer-csv > .csv-scroll');
+    const page = Math.max(40, (box ? box.clientHeight : window.innerHeight) * 0.9), max = (box || document.scrollingElement).scrollHeight;
     const by = { up: -40, down: 40, pageup: -page, pagedown: page, home: -max, end: max }[key];
     if (by === undefined) return false;
-    window.scrollBy({ top: by, behavior: 'instant' });
+    (box || window).scrollBy({ top: by, behavior: 'instant' });
     return true;
   },
 });
@@ -4219,8 +4480,8 @@ if (HOST === 'panel') {
 
 // The Raw toggle's panel key for each kind of formatted view. Raw is always the file's own text, read only, in the code view.
 const RAW_KEYS = { markdown: 'rawMarkdown', json: 'rawJSON', notebook: 'rawNotebook', csv: 'rawCSV', xml: 'rawXML', css: 'rawCSS' };
-const RAW_NAMES = { markdown: 'Markdown source', json: 'raw JSON', notebook: 'raw JSON', csv: 'raw text', xml: 'raw XML', css: 'raw CSS' };
-const FORMATTED_NAMES = { markdown: 'rendered', json: 'tree', notebook: 'cells', csv: 'table', xml: 'indented', css: 'laid out' };
+// One name per kind whatever the state: aria-pressed says whether it is on.
+const RAW_NAMES = { markdown: 'Markdown source', json: 'Raw JSON', notebook: 'Raw JSON', csv: 'Raw text', xml: 'Raw XML', css: 'Raw CSS' };
 const XML_FILES = /\.(xml|plist|xsd|xslt?)$/i;
 const minified = (t) => t.length > 2000 && t.length / Math.max(1, lineCount(t)) > 300;
 const hasText = (p) => !!p.path && typeof p.text === 'string' && (isMarkdown(p) || TEXT_VIEWS.has(p.view) || p.view === 'csv');
@@ -4242,12 +4503,15 @@ function syncRaw(p) {
   const b = $('raw'), k = rawKind(p), on = rawOn(p);
   b.hidden = !k;
   b.setAttribute('aria-pressed', String(on));
-  b.title = `Show ${(on ? FORMATTED_NAMES : RAW_NAMES)[k] || 'raw text'}`;
+  b.title = RAW_NAMES[k] || 'Raw text';
+  b.setAttribute('aria-label', b.title);
 }
 
 function syncTools(p) {
   const text = hasText(p);
   $('copy').hidden = !text && p.copyable !== true;
+  $('copy').title = isMarkdown(p) ? 'Copy source (⌘C)' : 'Copy text (⌘C)';
+  $('copy').setAttribute('aria-label', isMarkdown(p) ? 'Copy source' : 'Copy');
   $('find-btn').hidden = !canFind(p);
   if (!canFind(p)) closeFind();
   syncRaw(p);
@@ -4330,7 +4594,7 @@ function prettyCSS(text) {
 const FIND_MAX = 10000;
 // Matches drawn at once, those on and near the screen: WebKit repaints every registered range on each frame.
 const FIND_PAINT = 150;
-const FIND_SKIP = '.viewer-head, .viewer-note, .gutter, .katex-mathml, .md-editing, pre.mermaid, svg, button, .jt-sum';
+const FIND_SKIP = '.viewer-head, .viewer-note, .gutter, .katex-mathml, .md-editing, pre.mermaid, svg, button, .jt-sum, .fence-bar';
 const findBar = $('find'), findField = $('find-q');
 const highlights = typeof CSS !== 'undefined' && CSS.highlights && typeof Highlight === 'function' ? CSS.highlights : null;
 // q: the text looked for; how: 'dom', 'csv' or 'json'; hits: { s, e } in the text (dom), with { k, c } a table cell (k -1 the
@@ -4499,6 +4763,7 @@ function paintFind() {
 function findLabel() {
   if (finder.goto) { $('find-count').textContent = `of ${(+current.pages || 0).toLocaleString()}`; return; }
   const n = finder.hits.length, more = finder.more ? '+' : '';
+  findBar.toggleAttribute('data-none', !!finder.q && !n);
   $('find-count').textContent = !finder.q ? '' : !n ? 'No matches'
     : finder.at < 0 ? `${n.toLocaleString()}${more} ${n === 1 ? 'match' : 'matches'}` : `${(finder.at + 1).toLocaleString()} of ${n.toLocaleString()}${more}`;
 }
@@ -4535,10 +4800,17 @@ function csvReveal(m, h) {
 
 /** Scrolls a match into view: sideways in a box that scrolls on its own (code, a table, the tree), then the page. */
 function revealRange(r) {
-  if (!r.getClientRects().length) return;
   const node = r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement;
-  const box = node && node.closest('.code-view, .csv-scroll, .json-tree');
+  // A match inside a folded callout or a closed <details> is shown by opening it.
+  for (let d = node && node.closest('details:not([open])'); d; d = d.parentElement && d.parentElement.closest('details:not([open])')) d.open = true;
+  if (!r.getClientRects().length) return;
+  const box = node && node.closest('.code-view, .csv-scroll, .json-tree, #doc > table');
   let b = r.getBoundingClientRect();
+  // A long Markdown table scrolls in its own box.
+  if (box && box.matches('table') && box.scrollHeight > box.clientHeight + 1) {
+    const bb = box.getBoundingClientRect();
+    if (b.top < bb.top + 40 || b.bottom > bb.bottom - 8) { box.scrollTop += b.top - bb.top - bb.height / 3; b = r.getBoundingClientRect(); }
+  }
   if (box && box.scrollWidth > box.clientWidth) {
     const bb = box.getBoundingClientRect(), side = box.querySelector(':scope > .gutter, th.rn');
     const left = bb.left + (side ? side.getBoundingClientRect().width : 0);
@@ -4674,7 +4946,7 @@ $('find-close').addEventListener('click', () => closeFind());
 
 // ---------- copy: the file's text (a Markdown file's source) or the selection; in the panel ⌘C adds the file itself ----------
 
-let copyTimer = 0;
+const copyTimers = new WeakMap();
 /** `withFile`: the file goes on the clipboard beside its text, as Finder's ⌘C, where the host can (the Space panel). */
 function copyFile(withFile = false) {
   if (!hasText(current) && current.copyable !== true) return false;
@@ -4777,7 +5049,15 @@ function syncPopover() {
   $('aa-smaller').disabled = settings.fontSize <= 12;
   $('aa-larger').disabled = settings.fontSize >= 24;
   pop.querySelectorAll('[data-key]').forEach((b) => b.setAttribute('aria-checked', String(settings[b.dataset.key] === b.dataset.value)));
+  $('aa-theme-name').textContent = THEMES[settings.theme] || '';
+  // Wrap applies to a file shown as its text: code, text, logs, and Raw of Markdown, JSON or CSV.
+  const wrap = $('aa-wrap');
+  wrap.hidden = !document.querySelector('#doc > .viewer > .code-view');
+  wrap.querySelectorAll('[data-wrap]').forEach((b) => b.setAttribute('aria-checked', String((b.dataset.wrap === '1') === wrapOn(current))));
 }
+// The theme under the pointer is named under the swatches; the chosen one otherwise.
+$('aa-themes').addEventListener('mouseover', (e) => { const s = e.target.closest('.swatch'); if (s) $('aa-theme-name').textContent = THEMES[s.dataset.value] || ''; });
+$('aa-themes').addEventListener('mouseleave', () => { $('aa-theme-name').textContent = THEMES[settings.theme] || ''; });
 
 let updateTimer = 0;
 // Asks after 10 s, 30 s, then every minute: an installer that fails at once (offline) frees edits quickly.
@@ -4796,8 +5076,10 @@ function showUpdate(u) {
   $('aa-update-sub').textContent = failed ? String(u.reason || 'The update did not start.')
     : u.state === 'elsewhere' ? `This copy is in ${u.place}, which the installer does not update. Replace it with the download on the release page.`
     : u.state === 'done' ? 'Close this preview and open it again to use it.'
+    : HOST === 'panel' ? (running ? 'spacebar closes for a moment while it updates. Press Space again in a few seconds.'
+      : 'spacebar closes for a moment while it updates.')
     : running ? 'Quick Look shows an error for a moment while spacebar updates. Press Space again in a few seconds.'
-    : 'Quick Look shows an error for a moment while spacebar updates. Press Space again after.';
+    : 'Quick Look shows an error for a moment while spacebar updates. Press Space again afterwards.';
   $('aa-install').hidden = !(u.state === 'available' || running || (failed && u.retry));
   $('aa-install').disabled = running;
   $('aa-install').textContent = running ? 'Updating…' : 'Update';
@@ -4868,6 +5150,7 @@ pop.addEventListener('click', (e) => {
   if (b.id === 'aa-copy') { post({ type: 'copyInstall' }); return; }
   if (b.id === 'aa-notes') { showPopover(false); post({ type: 'releaseNotes' }); return; }
   if (b.dataset.step) choose('fontSize', Math.min(24, Math.max(12, settings.fontSize + Number(b.dataset.step))));
+  else if (b.dataset.wrap) choose(wrapKey(current), b.dataset.wrap === '1');
   else if (b.dataset.key) choose(b.dataset.key, b.dataset.value);
 });
 // While the popover is open, a click anywhere else only closes it (it does not also start an edit or follow a link).
@@ -4895,6 +5178,7 @@ document.addEventListener('dblclick', (e) => {
 
 document.addEventListener('click', (e) => {
   const tClick = performance.timeOrigin + e.timeStamp;
+  clearTimeout(fenceTimer);
   // The chrome around the document ends an edit like a click on the page's margin does; hiding or resizing the sidebar
   // only changes the layout, so the edit stays open.
   if (editing && e.target.closest('#sidebar, #crumbs, #toolbar, #toc') && !e.target.closest('#side-resize')) stopEditing();
@@ -4954,20 +5238,37 @@ document.addEventListener('click', (e) => {
   const a = e.target.closest('a[href], a[*|href]');
   const href = a && (a.getAttribute('href') ?? a.getAttributeNS('http://www.w3.org/1999/xlink', 'href'));
   if (a && href && !href.startsWith('#')) { e.preventDefault(); post({ type: 'link', href: new URL(href, document.baseURI).href }); return; }
+  if (a && href && href.length > 1 && a.closest('#doc')) { e.preventDefault(); inPageLink(href.slice(1)); return; }
   // An embedded note is another file: it is read here, never edited.
   if (e.target.closest('#doc .wl-embed')) return;
   const el = e.target.closest('#doc > .md-editing, #doc pre.text-editing');
   if (editing && el) { if (e.detail < 2) select(editorOffset(el, e.clientX, e.clientY), 0); return; }
-  if (a || e.target.closest('input, button, #toolbar') || getSelection().toString()) return;
+  if (a || e.target.closest('input, button, summary, #toolbar') || getSelection().toString()) return;
   const text = e.target.closest('#doc pre.code[data-file-text]');
   if (text && settings.inlineEditing && current.editable === true && !isMarkdown(current)) { beginTextEdit(text, e, tClick); return; }
   const block = e.target.closest('#doc > [data-src]');
-  if (block && settings.inlineEditing && !current.entry) beginEdit(block, e, tClick);
-  else if (editing) stopEditing();
+  if (block && settings.inlineEditing && !current.entry) {
+    // Code is selected with a double or triple click as often as it is edited: a fence's edit waits out a second click.
+    if (block.matches('.blk') && block.querySelector(':scope > pre:not(.mermaid)')) {
+      // Kept relative to the block, so a scroll meanwhile still puts the caret where the click was.
+      const b0 = block.getBoundingClientRect(), dx = e.clientX - b0.left, dy = e.clientY - b0.top;
+      if (e.detail < 2) fenceTimer = setTimeout(() => {
+        if (!block.isConnected || getSelection().toString()) return;
+        const b1 = block.getBoundingClientRect();
+        beginEdit(block, { clientX: b1.left + dx, clientY: b1.top + dy }, tClick);
+      }, FENCE_WAIT);
+      return;
+    }
+    beginEdit(block, e, tClick);
+  } else if (editing) stopEditing();
 });
+let fenceTimer = 0;
+const FENCE_WAIT = 350;
+document.addEventListener('mousedown', (e) => { if (e.detail > 1) clearTimeout(fenceTimer); }, true);
 
 /** A click outside every block ends the edit; native saves what the writer still holds and re-renders. */
 function stopEditing() {
+  clearTimeout(fenceTimer);
   const seq = editing.seq;
   endTextEditing();
   draw();

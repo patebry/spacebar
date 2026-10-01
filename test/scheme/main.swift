@@ -218,5 +218,12 @@ check("image check: another document forgets the folders", ic.revealable(ip("med
 chmod(imgs.appendingPathComponent("locked.png").path, 0o644)
 try? fm.removeItem(at: imgs)
 
+// A fence's Copy: the code is the document's own, found by the fence's lines.
+check("code fence: its code, without the fences", CodeFence.code("# A\n\n```sh\necho hi\nls\n```\n", start: 2, end: 6) == "echo hi\nls")
+check("code fence: CRLF line ends count as one line, an indented fence's indentation goes",
+      CodeFence.code("a\r\n  ~~~\r\n  x\r\n    y\r\n  ~~~\r\n", start: 1, end: 5) == "x\n  y")
+check("code fence: a line that opens no fence copies nothing", CodeFence.code("text\n```\nx\n```\n", start: 0, end: 4) == nil
+      && CodeFence.code("    ```\nx\n", start: 0, end: 2) == nil && CodeFence.code("```\nx\n```", start: 0, end: 9) == nil)
+
 print("\n\(failures == 0 ? "all" : "\(failures) FAILED of") scheme checks")
 exit(failures == 0 ? 0 : 1)

@@ -35,10 +35,45 @@
   table { border-collapse: collapse; display: block; max-width: 100%; overflow: auto; width: max-content; font-variant-numeric: tabular-nums; }
   th, td { border: 1px solid var(--border); padding: 5px 12px; }
   th { background: var(--code-bg); font-weight: 600; text-align: left; }
+  /* A wide table keeps its short cells on one line and scrolls; a shadow at an edge says there is more past it. */
+  #doc table:not(.csv, .frontmatter, .archive) :is(th, td).nw { white-space: nowrap; }
+  #doc table:not(.csv, .frontmatter, .archive) :is(th, td):not(.nw) { min-width: 16em; }
+  #doc > table {
+    background: linear-gradient(to right, var(--bg) 30%, transparent) left / 32px 100% no-repeat local,
+      linear-gradient(to left, var(--bg) 30%, transparent) right / 32px 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, color-mix(in srgb, var(--fg) 18%, transparent), transparent) left / 10px 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, color-mix(in srgb, var(--fg) 18%, transparent), transparent) right / 10px 100% no-repeat scroll; }
+  /* A long table scrolls in a box the window's height, its header row pinned. */
+  #doc table.tall { max-height: calc(100vh - var(--bar-h) - 96px); }
+  #doc table.tall thead th { position: sticky; top: 0; z-index: 1; box-shadow: 0 1px 0 var(--border); }
 
   li.task { list-style: none; }
   li.task > input { margin: 0 .45em 0 -1.35em; vertical-align: -1px; accent-color: var(--accent); }
   li.task > input:disabled { opacity: .75; }
+  li.task:has(> input:checked) > .task-text, li.task > p:has(> input:checked) > .task-text { color: var(--muted); }
+
+  /* Footnotes: small and muted under a rule; a reference is a raised number. */
+  sup.footnote-ref { font-size: .75em; line-height: 0; }
+  sup.footnote-ref > a { text-decoration: none !important; padding: 0 .1em; }
+  hr.footnotes-sep { margin: 2.5em 0 1em; }
+  section.footnotes { font-size: .875em; color: var(--muted); }
+  section.footnotes ol { padding-left: 1.4em; }
+  a.footnote-backref { text-decoration: none !important; font-family: var(--font-body); }
+  #doc [id] { scroll-margin-top: calc(var(--bar-h) + 16px); }
+
+  /* A code fence's language and Copy button, in its top right corner; the button shows on hover. */
+  #doc .blk { position: relative; }
+  #doc .fence-bar { position: absolute; z-index: 1; top: 4px; right: 4px; display: flex; align-items: center; gap: 6px; padding: 0 0 0 8px; border-radius: 6px;
+    background: var(--hl-bg); font: 11px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+    color: var(--muted); -webkit-user-select: none; user-select: none; pointer-events: none; }
+  #doc .fence-lang { opacity: .8; }
+  #doc .fence-copy { pointer-events: auto; width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 6px; cursor: default;
+    color: var(--muted); background: color-mix(in srgb, var(--hl-bg) 70%, var(--fg) 8%); opacity: 0; transition: opacity .12s; }
+  #doc .blk:hover .fence-copy, #doc .fence-copy:focus-visible, #doc .fence-copy.done { opacity: 1; }
+  #doc .fence-copy:hover { color: var(--fg); }
+  #doc .fence-copy.done { color: var(--accent); }
+  #doc .fence-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  @media (prefers-reduced-motion: reduce) { #doc .fence-copy { transition: none; } }
 
   .mermaid { text-align: center; }
   pre.mermaid { background: transparent; color: var(--muted); }
@@ -48,6 +83,8 @@
   @keyframes mm-in { from { opacity: 0; } }
   @media (prefers-reduced-motion: reduce) { pre.mermaid.mm-in > svg { animation: none; } }
   pre.mermaid.mm-error { text-align: left; white-space: pre-wrap; border: 1px dashed var(--border); }
+  pre.mermaid.mm-error[data-reason]::before { content: attr(data-reason); display: block; margin: 0 0 .6em; font: 12px/1.4 -apple-system, BlinkMacSystemFont, sans-serif;
+    color: var(--muted); }
   /* Where mermaid lays diagrams out, away from the page: never painted, never in the body's flex row. */
   #mm-stage { position: fixed !important; left: -100000px !important; top: 0 !important; width: 1000px; height: 0; overflow: hidden !important;
     visibility: hidden !important; pointer-events: none !important; }
@@ -101,6 +138,14 @@
   .callout-title:only-child { margin-bottom: 0; }
   .callout-icon { flex: none; width: .95em; height: .95em; border-radius: 50%; background: var(--c);
     box-shadow: inset 0 0 0 .22em color-mix(in srgb, var(--c) 45%, var(--bg)); }
+  details.callout-fold { margin: 0; }
+  details.callout-fold > summary { list-style: none; cursor: default; }
+  details.callout-fold > summary::-webkit-details-marker { display: none; }
+  details.callout-fold:not([open]) > summary { margin-bottom: 0; }
+  details.callout-fold > :last-child { margin-bottom: 0; }
+  .callout-chev { width: .45em; height: .45em; margin-left: .1em; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg);
+    transition: transform .12s; opacity: .7; }
+  details.callout-fold[open] > summary .callout-chev { transform: rotate(45deg); }
 
   /* ---------- the folder overview ---------- */
   :root[data-view=overview] #doc { max-width: 720px; }
@@ -169,7 +214,11 @@
 
   /* ---------- inline editing ---------- */
   :root:not([data-editing=off]) #doc > [data-src]:not(.md-editing):hover { background: color-mix(in srgb, var(--code-bg) 60%, transparent); border-radius: 4px; cursor: text; }
-  .md-editing { white-space: pre-wrap; background: var(--code-bg); border-radius: 4px; outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent); outline-offset: 2px; }
+  .md-editing { white-space: pre-wrap; background: var(--code-bg); border-radius: 4px; outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent); outline-offset: 2px;
+    padding: 4px 8px; }
+  div.md-editing { margin: 0 0 1em; }
+  /* Code, diagrams, math and tables are edited in the code font, unwrapped, so their spacing and alignment show. */
+  .md-editing.mono { font-family: var(--font-mono); font-size: .87em; line-height: 1.5; white-space: pre; overflow-x: auto; tab-size: 4; }
   :root:not([data-editing=off]) #doc .code-view pre.code[data-file-text]:not(.text-editing) { cursor: text; }
   #doc .code-view pre.code.text-editing { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
   #doc pre.text-editing .tchunk { display: block; }
@@ -277,6 +326,12 @@
   #crumbs button.crumb { all: unset; cursor: default; border-radius: 4px; padding: 0 2px; }
   #crumbs button.crumb:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 7%, transparent); }
   #crumbs button.crumb:focus-visible { outline: 2px solid var(--accent); }
+  /* Squeezed, the folders give way first; the file's own name keeps its room and is cut only when it alone does not fit. */
+  #crumbs:not([hidden]) { display: flex; align-items: baseline; }
+  #crumbs > * { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #crumbs > button.crumb { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #crumbs > .crumb-sep { flex: none; }
+  #crumbs > .here { flex: 0 1 auto; }
 
   /* ---------- file views ---------- */
   #doc .viewer-head { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin: 0 0 12px; font: 12px/1.3 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--muted); }
@@ -292,6 +347,10 @@
   #doc .code-view .gutter { position: sticky; left: 0; z-index: 1; flex: none; text-align: right; color: var(--muted); background: var(--hl-bg);
     border-right: 1px solid var(--border); padding-right: 10px; -webkit-user-select: none; user-select: none; }
   #doc .code-view pre.code { flex: 1 1 auto; }
+  /* Wrapped: the rows no longer match the line numbers, which go. */
+  #doc .code-view.wrap > .gutter { display: none; }
+  #doc .code-view.wrap > pre.code { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #doc .viewer-note.trunc-tail { margin: 10px 0 0; }
   #doc .viewer-image { margin: 0; }
   #doc .img-stage { -webkit-user-select: none; user-select: none; }
   /* Fitted, the picture sits in the middle of the room it has, as the panel's natively drawn images do. */
@@ -322,9 +381,18 @@
   /* Audio: a player of its own height, centred in the space under the toolbar. */
   :root[data-view=audio] #doc .viewer-audio .pdf-area { flex: none; box-sizing: border-box; width: min(560px, calc(100% - 40px)); height: 220px;
     max-height: 100%; margin: auto; border: 1px solid var(--border); border-radius: 8px; }
-  /* CSV: a scroll box of its own, so the header row and the row numbers stay put while the rows scroll under them. */
-  #doc .csv-scroll { max-height: calc(100vh - 150px); overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
-  #doc table.csv { display: table; width: max-content; min-width: 100%; max-width: none; overflow: visible; margin: 0; border-collapse: separate;
+  /* CSV: a scroll box of its own, so the header row and the row numbers stay put while the rows scroll under them. The table is
+     the whole view, as in Numbers: the page itself does not scroll, and the box ends above the Copy button. A small table is
+     as wide and tall as its cells. */
+  :root[data-view=csv]:has(#doc > .viewer-csv) body { height: 100vh; overflow: hidden; }
+  :root[data-view=csv]:has(#doc > .viewer-csv) #main { display: flex; flex-direction: column; height: 100vh; }
+  :root[data-view=csv]:has(#doc > .viewer-csv) #doc { flex: 1 1 auto; min-height: 0; width: 100%; box-sizing: border-box; display: flex; flex-direction: column;
+    padding-bottom: 56px; }
+  #doc > .viewer-csv { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  #doc > .viewer-csv > * { flex: none; }
+  #doc > .viewer-csv > .csv-scroll { flex: 0 1 auto; min-height: 0; align-self: flex-start; max-width: 100%; box-sizing: border-box; }
+  #doc .csv-scroll { overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+  #doc table.csv { display: table; width: max-content; max-width: none; overflow: visible; margin: 0; border-collapse: separate;
     border-spacing: 0; font-size: calc(var(--font-size, 15px) * .8667); line-height: 1.45; }
   #doc table.csv :is(th, td) { border: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 4px 10px;
     max-width: 32em; vertical-align: top; white-space: pre-wrap; text-align: left; }
@@ -353,7 +421,9 @@
   #doc .viewer button.jt-tw:focus-visible { outline: 2px solid var(--accent); border-radius: 3px; }
   #doc .jt-index { color: var(--muted); }
   #doc .jt-sum { color: var(--muted); }
-  #doc .jt-val.hljs-string { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+  /* A row holding a string wraps it at the tree's width; other rows keep their width and scroll. */
+  #doc .jt-row:has(> .jt-val.hljs-string) { min-width: 0; }
+  #doc .jt-val.hljs-string { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; flex: 0 1 auto; }
   #doc .viewer button.jt-more-b { height: 20px; font-size: 11px; margin: 2px 0; }
   #doc .viewer button.json-all { flex: none; }
   /* A notebook: cells one under another, code in the code theme, outputs under their cell. */
@@ -442,14 +512,25 @@
   #kind .pdf-page { flex: none; font: inherit; font-variant-numeric: tabular-nums; color: inherit; height: 20px; margin: -2px 0; padding: 0 6px;
     border: 0; border-radius: 5px; background: none; cursor: default; }
   #kind .pdf-page:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 8%, transparent); }
+  #kind > .ic { align-self: center; }
+  #kind.drag { cursor: grab; }
+  #kind.drag:active { cursor: grabbing; }
+  /* A passing message is capped like the kind, so neither takes the file name's room. */
+  #status { max-width: min(34vw, 280px); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 760px) { #status { max-width: 16vw; } }
+  @media (max-width: 700px) {
+    #kind .kind-text { display: none; }
+    #toolbar > #kind:not(:has(> .ic, > .img-zoom:not(:empty), > .pdf-page)) { display: none; }
+  }
   #kind:not(:empty) + #stats:not(:empty)::before { content: "· "; }
   /* Over the page (Minimal chrome, or a very narrow panel) the text sits on the buttons' material, so it stays legible. */
   #toolbar > :is(#status, #selpos, #kind, #stats):not(:empty) { display: flex; height: 24px; align-items: center; padding: 0 8px; border-radius: 6px; background: var(--ui-bg);
     box-shadow: 0 0 0 .5px var(--ui-edge), 0 1px 2px rgba(0, 0, 0, .06); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); }
   #toolbar > #kind:not(:empty) + #stats:not(:empty)::before { content: none; }
-  #status[data-hint] { cursor: pointer; gap: 6px; align-items: center; }
-  #status .hint-pill { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 6px; color: var(--ui-fg);
-    background: color-mix(in srgb, var(--fg) 7%, transparent); font-weight: 500; }
+  #toolbar > #status:not(:empty) { display: block; line-height: 24px; }
+  #status[data-hint] { cursor: pointer; }
+  #status .hint-pill { display: inline-flex; align-items: center; height: 20px; margin-left: 6px; padding: 0 8px; border-radius: 6px; color: var(--ui-fg);
+    background: color-mix(in srgb, var(--fg) 7%, transparent); font-weight: 500; vertical-align: middle; }
   #status[data-hint]:hover .hint-pill { background: color-mix(in srgb, var(--fg) 12%, transparent); }
   #toolbar > button, #side-toggle {
     font: inherit; font-weight: 500; color: var(--ui-fg); height: 24px; padding: 0 10px; border-radius: 6px; cursor: default;
@@ -481,6 +562,7 @@
   #aa-size { font-size: 11px; color: var(--ui-muted); min-width: 36px; text-align: center; font-variant-numeric: tabular-nums; }
 
   .pop-themes { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; padding: 2px 0 0; }
+  .pop-theme-name { margin: -6px 0 0; font-size: 11px; text-align: center; color: var(--ui-muted); min-height: 14px; }
   #aa-pop .swatch { display: grid; justify-items: center; padding: 3px 0; }
   .swatch-dot {
     position: relative; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
@@ -518,6 +600,8 @@
   #aa-pop :is(#aa-install, #aa-copy) { height: 28px; margin-top: 8px; padding: 0 10px; border-radius: 6px; font-size: 13px; font-weight: 500;
     background: var(--ui-accent); color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #aa-pop :is(#aa-install, #aa-copy):not(:disabled):hover { filter: brightness(1.08); }
+  /* With Update, copying the command is the second choice. */
+  #aa-pop #aa-install:not([hidden]) ~ #aa-copy { background: var(--ui-seg); color: var(--ui-fg); }
   #aa-pop #aa-install:disabled { opacity: .6; }
   #aa-pop #aa-notes { justify-self: center; margin-top: 2px; padding: 3px 8px; border-radius: 5px; font-size: 12px; color: var(--ui-muted); }
   #aa-pop #aa-notes:hover { background: var(--ui-hover); color: var(--ui-fg); }
@@ -559,7 +643,9 @@
   #copy:hover, #copy:focus-visible, #copy.done { color: var(--fg); }
   #copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   :root:not(.sb-embedded):has(#copy:not([hidden])) #doc { padding-right: 64px; }
-  :root:not(.sb-embedded):has(#copy:not([hidden])) #doc :is(pre.code, .viewer-csv) { padding-right: 40px; }
+  :root:not(.sb-embedded):has(#copy:not([hidden])) #doc pre.code { padding-right: 40px; }
+  /* The table ends above Copy, so it needs no column of its own: both margins are the page's 40px. */
+  :root:not(.sb-embedded)[data-view=csv]:has(#doc > .viewer-csv) #doc { padding-right: 40px; }
   #copy:active { transform: scale(.96); }
   :root.sb-embedded #copy { display: none; }
   #copy .done-ic, #copy.done .copy-ic { display: none; }
@@ -576,6 +662,10 @@
   #find-q { width: 180px; height: 24px; box-sizing: border-box; padding: 0 8px; border: 0; border-radius: 6px; outline: 0; font: 12px/1 -apple-system, BlinkMacSystemFont, sans-serif;
     color: var(--ui-fg); background: var(--ui-seg); -webkit-user-select: text; user-select: text; }
   #find-q:focus, #find-q.held { box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-accent) 45%, transparent); }
+  /* The bar's own ✕ closes it; the field's clear button would sit beside it. */
+  #find-q::-webkit-search-cancel-button { display: none; -webkit-appearance: none; }
+  #find[data-none] #find-q { box-shadow: 0 0 0 2px rgba(255, 59, 48, .35); }
+  #find[data-none] :is(#find-prev, #find-next) { opacity: .35; }
   #find-count { min-width: 64px; padding: 0 6px; text-align: right; font-size: 11px; color: var(--ui-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   #find-count:empty { min-width: 0; padding: 0; }
   #find button { width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; color: inherit; background: none; cursor: default; }

@@ -465,6 +465,28 @@ enum ShellPolicy {
     }
 }
 
+/// A code fence's copy button: the page names the fence by its source lines, and the code is taken from the document's own text,
+/// never from the page, so a scripted page cannot put text of its choosing on the clipboard.
+enum CodeFence {
+    /// The code inside the fence that opens on line `start` (0-based) of `doc`, within lines [start, end); nil when that line
+    /// opens no fence.
+    static func code(_ doc: String, start: Int, end: Int) -> String? {
+        // Split as markdown-it counts lines: CRLF is one line end ("\r\n" is one Character to Swift).
+        let lines = doc.replacingOccurrences(of: "\r\n", with: "\n").split(separator: "\n", omittingEmptySubsequences: false)
+        guard start >= 0, end > start, end <= lines.count else { return nil }
+        let open = lines[start].drop { $0 == " " }
+        guard lines[start].count - open.count <= 3, let mark = open.first, mark == "`" || mark == "~" else { return nil }
+        let fence = open.prefix { $0 == mark }
+        guard fence.count >= 3 else { return nil }
+        var body = lines[(start + 1)..<end]
+        if let last = body.last, last.trimmingCharacters(in: .whitespaces).hasPrefix(String(fence)),
+           last.trimmingCharacters(in: .whitespaces).allSatisfy({ $0 == mark }) { body = body.dropLast() }
+        // An indented fence's content loses as much indentation, as CommonMark renders it.
+        let indent = lines[start].count - open.count
+        return body.map { line in String(line.dropFirst(min(indent, line.prefix { $0 == " " }.count))) }.joined(separator: "\n")
+    }
+}
+
 /// What the page is told about the settings: the settings themselves plus the URLs of the user CSS to load, each versioned by
 /// its modification time so an edit to the file reloads it.
 enum PageSettings {

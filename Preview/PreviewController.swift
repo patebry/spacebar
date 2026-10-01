@@ -1284,6 +1284,17 @@ class PreviewController: NSViewController {
         let last = text[..<end].lastIndex(of: "\n").map { text[text.index(after: $0)..<end] } ?? text[..<end]
         log.info("read \(text.utf8.count) bytes, last line: \(String(last), privacy: .private)")
         push(text: text, path: url.path, reason: reason)
+        // Open's tooltip names the app the document opens in, as it does for other files.
+        if reason == "open" {
+            let path = url.path
+            helper { $0.textOpener(url, appBundleID: SettingsStore.shared.settings.editorBundleID) { name, editor in
+                DispatchQueue.main.async {
+                    guard let name, self.fileURL?.path == path, self.fileKind == .markdown else { return }
+                    self.opener = (path, name, editor)
+                    self.js("sb.setOpener", ["path": path, "app": name, "editor": editor])
+                }
+            } }
+        }
     }
 
     /// "Loading…" in place of the file while load `id` runs: at once for a file iCloud must download, else only once a read
@@ -2313,6 +2324,14 @@ class PreviewController: NSViewController {
             // is taken only just after this controller handed it a ⌘C.
             let failed = { (why: String) in self.refuse("copy", why); self.js("sb.copied", ["ok": false]) }
             guard let url = fileURL, m.string("path", max: 4096) == url.path else { return failed("not the file on screen") }
+            if let start = m.int("fenceStart"), let end = m.int("fenceEnd") {
+                guard fileKind == .markdown, let doc = docText, let code = CodeFence.code(doc, start: start, end: end), !code.isEmpty else {
+                    return failed("not a code fence of the document")
+                }
+                return helper(onError: { failed("writer unavailable") }) {
+                    $0.copyText(code) { ok in DispatchQueue.main.async { self.js("sb.copied", ["ok": ok, "fence": true]) } }
+                }
+            }
             let asked = copyAsked.map { -$0.timeIntervalSinceNow < 1 } ?? false
             copyAsked = nil
             let selection = m.string("text")

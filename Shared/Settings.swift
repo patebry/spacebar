@@ -54,6 +54,10 @@ struct Settings: Codable, Equatable {
     var rawCSV = false
     var rawXML = false
     var rawCSS = false
+    /// Long lines wrapped in the text view, remembered per kind: prose (text and logs) and Markdown's source wrap, code does not.
+    var wrapText = true
+    var wrapMarkdown = true
+    var wrapCode = false
 
     /// 2: folder previews became on by default. A file written before that stores the old default, false, so it reads as on
     /// until SettingsFile.update rewrites it; a user who turns them off afterwards stays off.
@@ -86,8 +90,9 @@ struct Settings: Codable, Equatable {
     static let doubleRanges: [String: ClosedRange<Double>] = ["lineHeight": 1.2...2.0]
     static let boolKeys: Set<String> = Set(["customCSS", "inlineEditing", "taskToggles", "folderMode", "folderReadmeFirst", "stats", "math",
                                         "mermaid", "remoteImages", "sidebarCollapsed", "sidebarKeys", "showHiddenFiles", "minimalChrome", "checkUpdates",
-                                        "welcomeShown", "spaceHelper", "helperOffered"]).union(rawKeys)
+                                        "welcomeShown", "spaceHelper", "helperOffered"]).union(rawKeys).union(wrapKeys)
     static let rawKeys: Set<String> = ["rawMarkdown", "rawJSON", "rawNotebook", "rawCSV", "rawXML", "rawCSS"]
+    static let wrapKeys: Set<String> = ["wrapText", "wrapMarkdown", "wrapCode"]
     /// Keys whose value is a string or null, each checked by its own pattern.
     static let optionalKeys: Set<String> = ["userTheme", "editorBundleID"]
     static var allKeys: Set<String> { Set(choices.keys).union(intRanges.keys).union(doubleRanges.keys).union(boolKeys).union(optionalKeys) }
@@ -98,7 +103,7 @@ struct Settings: Codable, Equatable {
     /// changed in the settings window only.
     static let panelKeys: Set<String> = Set(["theme", "appearance", "fontSize", "width", "bodyFont", "sidebarCollapsed", "sidebarWidth", "folderSort",
                                              "folderViewMedia", "folderViewOther"])
-        .union(rawKeys)
+        .union(rawKeys).union(wrapKeys)
     /// The keys the settings window shows, on its page and under Advanced. Every other key is changed in the preview (panelKeys),
     /// by spacebar itself, or in settings.json only, and keeps its stored value.
     static let windowKeys: Set<String> = ["theme", "appearance", "fontSize", "spaceHelper", "editorBundleID", "checkUpdates"]
@@ -199,6 +204,7 @@ struct Settings: Codable, Equatable {
         take(.welcomeShown, \.welcomeShown); take(.spaceHelper, \.spaceHelper); take(.helperOffered, \.helperOffered)
         take(.rawMarkdown, \.rawMarkdown); take(.rawJSON, \.rawJSON); take(.rawNotebook, \.rawNotebook); take(.rawCSV, \.rawCSV)
         take(.rawXML, \.rawXML); take(.rawCSS, \.rawCSS)
+        take(.wrapText, \.wrapText); take(.wrapMarkdown, \.wrapMarkdown); take(.wrapCode, \.wrapCode)
         self = s
     }
 

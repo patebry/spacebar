@@ -742,6 +742,30 @@ func run(_ cmd: String) -> String {
            let png = NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]), (try? png.write(to: URL(fileURLWithPath: arg))) != nil {
             result = "\(img.width)x\(img.height)"
         } else { result = "failed" }
+    case "@winmean":
+        // The mean colour of x,y,w,h (points from the top left) as the window last painted it: a snapshot draws the page afresh,
+        // so only this sees paint WebKit failed to invalidate.
+        spin(0.2)
+        let p = arg.split(separator: ",").compactMap { Double($0) }
+        var rgb: [Int] = []
+        var img: CGImage?
+        // The window server now and then has no image of the window yet.
+        for _ in 0..<10 where img == nil {
+            img = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming])
+            if img == nil { spin(0.1) }
+        }
+        if p.count == 4, p[2] > 0, p[3] > 0, let img {
+            let rep = NSBitmapImageRep(cgImage: img), s = Double(rep.pixelsWide) / window.frame.width
+            var sum = [0.0, 0.0, 0.0], n = 0.0
+            for y in Int(p[1] * s)..<Int((p[1] + p[3]) * s) where y >= 0 && y < rep.pixelsHigh {
+                for x in Int(p[0] * s)..<Int((p[0] + p[2]) * s) where x >= 0 && x < rep.pixelsWide {
+                    guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                    sum[0] += c.redComponent; sum[1] += c.greenComponent; sum[2] += c.blueComponent; n += 1
+                }
+            }
+            if n > 0 { rgb = sum.map { Int(($0 / n * 255).rounded()) } }
+        }
+        result = rgb
     case "@pixel":
         let p = arg.split(separator: ",").compactMap { Double($0) }
         var rgb: [Int] = [], done = false

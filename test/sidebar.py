@@ -1104,6 +1104,72 @@ def viewers(page, check, out, st):
     page.cmd('@root:')
 
 
+def find_typed(page, check, out):
+    """Find as the query is typed a key at a time, as the writer sends it, in rendered Markdown, code, a table, a JSON tree and a
+    text file large enough that the search waits for the typing to pause: only the last query's matches are highlighted, in the
+    registry and as painted in the window (WebKit leaves the ranges of a Highlight the registry drops painted), whether each key
+    is searched or the keys come faster than the search; after Backspace, an emptied field and closing the bar too."""
+    d = os.path.join(out, 'typed')
+    os.makedirs(d)
+    files = {'typed.md': '# Title\n\nThe word is here.\n\nA wolf alone.\n\nWalk west.\n', 'typed.ts': 'const word = 1;\n// a wolf\n// walk west\n',
+             'typed.csv': 'a,b\nword,wolf\nwalk,west\n', 'typed.json': json.dumps({'word': 'wolf', 'walk': 'west'}),
+             'typed.txt': 'The word is here.\nA wolf alone.\nWalk west.\n' + 'filler line\n' * 25000}
+    for n, t in files.items():
+        open(os.path.join(d, n), 'w').write(t)
+    MARKS = """const q = %s.toLowerCase(), c = CSS.highlights, rs = ['sb-find', 'sb-find-cur'].flatMap((k) => (c.get(k) ? [...c.get(k)] : []));
+      return [rs.length, rs.map((r) => r.toString()).filter((t) => t.toLowerCase() !== q), document.getElementById('find-count').textContent];"""
+    # Where the first two letters of each word's first appearance are now (a step scrolls the match into view), inset from the line box.
+    SPOTS = """const out = {}, w = document.createTreeWalker(document.getElementById('doc'), NodeFilter.SHOW_TEXT);
+      for (let n; (n = w.nextNode());) for (const m of n.data.matchAll(/\\b(word|wolf|walk|west)/gi)) {
+        const k = m[1].toLowerCase(), r = document.createRange();
+        if (out[k]) continue;
+        r.setStart(n, m.index);
+        r.setEnd(n, m.index + 2);
+        const rs = r.getClientRects(), b = rs[rs.length - 1];
+        out[k] = [b.left + 1, b.top + 2, b.width - 2, b.height - 4].map(Math.round).join(',');
+      }
+      return out;"""
+    seq = [0]
+
+    def send(*texts, wait=0.3):
+        page.cmd('@eval:' + ' '.join('sb.filterText(' + json.dumps({'seq': seq[0], 'text': t}) + ');' for t in texts) + ' 0')
+        page.cmd(f'@wait:{wait}')
+
+    def yellow(spot):
+        rgb = page.cmd('@winmean:' + spot)['result']
+        return rgb[0] - rgb[2] if len(rgb) == 3 else float('nan')
+
+    for name in files:
+        page.cmd('@root:' + d)
+        page.render(os.path.join(d, name))
+        page.cmd('@wait:0.4')
+        fb = [m for m in page.cmd('@nativeclick:#find-btn')['messages'] if m.get('type') == 'filterBegin']
+        seq[0] = int(fb[0]['seq']) if fb else -1
+        # The bar opens on the last file's query.
+        send('')
+        spots = page.js(SPOTS)
+        base = {k: yellow(v) for k, v in spots.items()}
+        painted = lambda: sorted(k for k, v in page.js(SPOTS).items() if not yellow(v) - base[k] <= 30)
+        marks = lambda q: page.js(MARKS % json.dumps(q))
+        got = []
+        for q in ('w', 'wo', 'wor', 'word'):
+            send(q)
+        got.append([marks('word'), painted()])
+        send('wor', 'wo')
+        got.append([marks('wo'), painted()])
+        send('')
+        got.append([marks(''), painted()])
+        send('w', 'wo', 'wor', 'word', wait=0.5)
+        got.append([marks('word'), painted()])
+        page.cmd('@eval:sb.filterEnd(' + json.dumps({'seq': seq[0], 'reason': 'escape'}) + '); 0')
+        page.cmd('@wait:0.3')
+        got.append([marks('')[0], page.js("return document.getElementById('find').hidden"), painted()])
+        check(sorted(spots) == ['walk', 'west', 'wolf', 'word'] and got == [
+            [[1, [], '1 of 1'], ['word']], [[2, [], '1 of 2'], ['wolf', 'word']], [[0, [], ''], []], [[1, [], '1 of 1'], ['word']], [0, True, []]],
+              f'find typed a key at a time in {name}: only the last query is highlighted and painted, typed slowly or fast, after ⌫, emptied and closed',
+              json.dumps([spots, got]))
+
+
 def make_tools(out):
     """Files for the toolbar's tools: Markdown, JSON with matches deep in the tree and past a chunk, a notebook, a long table, a
     2 MB script, a property list, a minified and a plain stylesheet, TypeScript and an image."""
@@ -4175,6 +4241,7 @@ def main():
         page.cmd('@root:')
         viewers(page, check, page.out, st)
         tools(page, check, page.out)
+        find_typed(page, check, page.out)
         steady_chrome(page, check, page.out)
         missing_images(page, check, page.out)
         one_selection(page, check, page.out)

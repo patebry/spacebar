@@ -52,10 +52,12 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private(set) var tap: CFMachPort?
     private static let binary = HelperBinary.stamp(Bundle.main.executablePath ?? "")
     private var tapSource: CFRunLoopSource?
-    /// The trackpad's gesture (29), magnify (30) and smart magnify (32) events, on only while the panel is open
-    /// (`GestureRoute.tapOn`), so a slow turn of the main thread never holds up scrolls and swipes elsewhere.
+    /// The trackpad's gesture (29), magnify (30) and smart magnify (32) events, on only while the panel is open, so a slow turn
+    /// of the main thread never holds up scrolls and swipes elsewhere.
     private(set) var gestureTap: CFMachPort?
     private var gestureSource: CFRunLoopSource?
+    private var boundsLookupQueued = false
+    private static let ticksPerNs: Double = { var t = mach_timebase_info_data_t(); mach_timebase_info(&t); return Double(t.numer) / Double(t.denom) }()
     private var route = KeyRoute()
     private var viewer: NSXPCConnection?
     private var viewerPid: pid_t = 0
@@ -267,9 +269,14 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         }
     }
 
+    /// Only a prompt: the bounds come from the window server, never from the viewer, and one lookup serves a burst of moves.
     func panelMoved(_ r: CGRect, windowNumber: Int, from c: NSXPCConnection) {
-        guard c === viewer, panelOpen, windowNumber == panelWindow, r.width > 0, r.height > 0 else { return }
-        panelBounds = r
+        guard c === viewer, panelOpen, windowNumber == panelWindow, !boundsLookupQueued else { return }
+        boundsLookupQueued = true
+        DispatchQueue.main.async { [self] in
+            boundsLookupQueued = false
+            if panelOpen { _ = panelOnScreen(panelWindow) }
+        }
     }
 
     func declined(_ id: Int) {
@@ -418,7 +425,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         let g = GestureEvent(type: Int64(type.rawValue), subtype: event.getIntegerValueField(Self.gestureSubtype),
                              phase: event.getIntegerValueField(Self.gesturePhase),
                              windowUnder: Int(event.getIntegerValueField(.mouseEventWindowUnderMousePointer)), location: event.location,
-                             time: Double(event.timestamp) / 1e9)
+                             time: Double(event.timestamp) * Self.ticksPerNs / 1e9)
         guard GestureRoute.zooms(g) else { return pass }
         let began = g.phase == 1 || g.phase == 128
         let action = gestures.route(g, open: panelOpen, panelWindow: panelWindow, bounds: panelBounds)

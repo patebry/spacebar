@@ -405,6 +405,109 @@ def big_folder(page, check, T):
     check(a == ['m-4999.txt'], 'the filter cleared: the file opened from it, far down the list, is scrolled to and drawn', json.dumps(a))
 
 
+def steady_list(page, check, out):
+    """The list holds still, as Finder's does: a click on a row in view, a file opened from one, a folder opened under the pointer
+    or rows put in above the cursor never move it; ↓ scrolls only once the cursor reaches the edge, by one row, edge-aligned."""
+    d = os.path.join(out, 'steady')
+    for f in ('afolder', 'zfolder'):
+        os.makedirs(os.path.join(d, f))
+        for i in range(30):
+            open(os.path.join(d, f, f'{f[0]}{i:02d}.txt'), 'w').write(f'{i}\n')
+    for i in range(80):
+        open(os.path.join(d, f'f{i:02d}.txt'), 'w').write(f'{i}\n')
+    P = lambda *n: os.path.join(d, *n)
+    ROW = """const l = document.getElementById('side-list'), r = l.querySelector('a.row[data-path="%s"]'), b = l.getBoundingClientRect();
+      return { top: l.scrollTop, y: r ? r.getBoundingClientRect().top - b.top : null, low: r ? b.top + l.clientHeight - r.getBoundingClientRect().bottom : null,
+        h: l.clientHeight, cursor: (l.querySelector('a.cursor') || { dataset: {} }).dataset.path || null, current: current.path };"""
+    at = lambda p: page.js(ROW % p)
+    scroll = lambda t: page.cmd("@eval:(() => { const l = document.getElementById('side-list'); l.scrollTop = " + str(t)
+                                + "; l.dispatchEvent(new Event('scroll')); return 0; })()")
+    page.cmd('@root:' + d)
+    page.cmd('@size:1000x500')
+    page.render(P('f05.txt'))
+    page.cmd('@wait:0.3')
+    # Where a row sits in the list, and a scrollTop that puts it in the middle.
+    idx = lambda p: page.js('return sideRows.findIndex((r) => r.e && r.e.path === ' + json.dumps(p) + ')')
+    mid = lambda p: idx(p) * 24 - 150
+
+    def press(path, top, wait=0.6):
+        scroll(top)
+        page.cmd('@wait:0.1')
+        a = at(path)
+        r = page.cmd('@nativeclick:#side-list a.row[data-path="' + path + '"]')
+        b = at(path)
+        page.cmd('@wait:' + str(wait))
+        return a, b, at(path), r
+
+    still = lambda a, *later: all(x['top'] == a['top'] and abs(x['y'] - a['y']) <= 1 for x in later)
+    a, b, c, r = press(P('f20.txt'), mid(P('f20.txt')))
+    fb = [m for m in r['messages'] if m.get('type') == 'filterBegin']
+    check(c['current'] == P('f20.txt') and still(a, b, c), 'steady list: a click on a row in the middle of a long list opens it and moves nothing, '
+          'after the render or later', json.dumps([a, b, c]))
+    a, b, c, _ = press(P('f26.txt'), (idx(P('f26.txt')) + 1) * 24 - page.js("return document.getElementById('side-list').clientHeight") - 11)
+    check(c['current'] == P('f26.txt') and a['low'] < 0 and still(a, b, c), 'steady list: a row cut off at the bottom opens where it is, not pulled '
+          'toward the middle', json.dumps([a, b, c]))
+
+    seq = int(fb[0]['seq']) if fb else -1
+    key = lambda k: page.cmd('@eval:sb.filterKey(' + json.dumps({'seq': seq, 'key': k}) + '); 0')
+    a, _, _, r = press(P('f20.txt'), mid(P('f20.txt')))
+    fb = [m for m in r['messages'] if m.get('type') == 'filterBegin']
+    seq = int(fb[0]['seq']) if fb else -1
+    key('down')
+    b = at(P('f21.txt'))
+    page.cmd('@wait:0.6')
+    c = at(P('f21.txt'))
+    check(c['cursor'] == c['current'] == P('f21.txt') and b['top'] == c['top'] == a['top'], 'steady list: ↓ within view moves the cursor, not the list',
+          json.dumps([a, b, c]))
+    h = a['h']
+    # f25 the last row wholly in view: ↓ to f26 scrolls one row and no more, its bottom on the list's.
+    scroll((idx(P('f25.txt')) + 1) * 24 - h)
+    page.cmd('@eval:cursor = ' + json.dumps(P('f25.txt')) + '; markCursor(); 0')
+    a = at(P('f25.txt'))
+    key('down')
+    b = at(P('f26.txt'))
+    page.cmd('@wait:0.6')
+    c = at(P('f26.txt'))
+    check(0 <= a['low'] <= 1 and b['top'] - a['top'] == 24 and 0 <= b['low'] <= 1 and c['top'] == b['top'] and c['current'] == P('f26.txt'),
+          'steady list: ↓ past the bottom scrolls by one row, the cursor edge-aligned at the bottom, never centred', json.dumps([a, b, c]))
+
+    # A folder opened under the pointer, and a file in it, hold still; so does a folder holding the file on screen opened again.
+    a, b, c, _ = press(P('zfolder'), 0)
+    check(c['cursor'] == P('zfolder') and still(a, b, c) and page.js('return expanded().has(' + json.dumps(P('zfolder')) + ')'),
+          'steady list: a folder opened by a click stays where it was clicked', json.dumps([a, b, c]))
+    a, b, c, _ = press(P('zfolder', 'z12.txt'), mid(P('zfolder', 'z12.txt')))
+    check(c['current'] == P('zfolder', 'z12.txt') and still(a, b, c), 'steady list: a click on a file in an open folder moves nothing',
+          json.dumps([a, b, c]))
+    page.render(P('zfolder', 'z29.txt'))
+    page.cmd('@wait:0.3')
+    a, b, c, _ = press(P('zfolder'), 0)
+    a2, b2, c2, _ = press(P('zfolder'), 0)
+    check(page.js('return expanded().has(' + json.dumps(P('zfolder')) + ')') is True and still(a, b, c) and still(a2, b2, c2) and a2['top'] == 0,
+          'steady list: a folder holding the file on screen, closed and opened again, never scrolls to that file', json.dumps([a, c, a2, c2]))
+
+    # Rows put in above the cursor leave it where it is on screen.
+    press(P('f40.txt'), mid(P('f40.txt')))
+    a = at(P('f40.txt'))
+    page.cmd('@eval:toggleFolder(' + json.dumps(P('afolder')) + '); 0')
+    page.cmd('@wait:0.4')
+    b = at(P('f40.txt'))
+    check(abs(b['y'] - a['y']) <= 1 and b['top'] - a['top'] == 30 * 24, 'steady list: a folder of 30 opened above the cursor leaves its row still on screen',
+          json.dumps([a, b]))
+
+    # Opened afresh on a file far down, the list shows it with its top row whole, not cut under the filter field.
+    page.cmd('@eval:sb.filterEnd({ all: true }); 0')
+    page.cmd('@root:' + P('afolder'))
+    page.render(P('afolder', 'a00.txt'))
+    page.cmd('@root:' + d)
+    page.render(P('f60.txt'))
+    page.cmd('@wait:0.4')
+    a = at(P('f60.txt'))
+    check(a['top'] > 0 and a['top'] % 24 == 0 and a['y'] >= 0 and a['low'] >= 0, 'steady list: opened on a file far down, it is in view and the top row '
+          'is whole', json.dumps(a))
+    page.cmd('@size:1100x760')
+    page.cmd('@root:')
+
+
 def one_selection(page, check, out):
     """After a click or Return, the arrows leave one row looking selected, the cursor: the file on screen catches up with it, a row
     left under the pointer keeps no highlight and is never redrawn under it, a row already in view never scrolls, and a cursor in
@@ -4245,6 +4348,7 @@ def main():
         steady_chrome(page, check, page.out)
         missing_images(page, check, page.out)
         one_selection(page, check, page.out)
+        steady_list(page, check, page.out)
         contents_search(page, check, page.out)
         archive_entries(page, check, page.out)
         sidebar_and_folders(page, check, page.out)

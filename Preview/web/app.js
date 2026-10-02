@@ -3650,6 +3650,8 @@ function resetTree(rootPath, name) {
   requested.clear();
   peeked.clear();
   treeVersion++;
+  $('side-list').scrollTop = 0;
+  sideOwed = '';
   if (filterSession && !filterSession.find) endFilter();
   sideQuery = '';
   $('side-q').value = '';
@@ -3712,6 +3714,7 @@ function requestFolders() {
 }
 
 function toggleFolder(p) {
+  sideOwed = '';
   const s = expanded();
   if (s.has(p)) { s.delete(p); post({ type: 'unlist', path: p }); } else s.add(p);
   treeVersion++;
@@ -3790,6 +3793,12 @@ let sideRows = [];
 let sideWin = '';
 // The query of the Contents results last drawn: new results start at the top of the list.
 let sideHitsQ = '';
+// The row height of the rows drawn, and a row still to be scrolled into view once it is listed (the file a render opened, or a
+// folder revealFolder showed); a click, a key or the wheel on the list cancels it.
+let sideWinH = 0;
+let sideOwed = '';
+// Set while revealFolder places the list itself: clearing the filter for it owes the file on screen no reveal.
+let sideHold = false;
 const SIDE_ROW_H = 24, SIDE_HIT_H = 40, SIDE_VIRTUAL = 300, SIDE_OVERSCAN = 30;
 const sideRowH = () => (showingHits() ? SIDE_HIT_H : SIDE_ROW_H);
 
@@ -3821,12 +3830,23 @@ function drawSideWindow(force) {
   const key = `${a},${b}`;
   if (!force && key === sideWin) return;
   sideWin = key;
+  sideWinH = rh;
   const nodes = [];
   if (a > 0) nodes.push(sidePad(a * rh));
   for (let i = a; i < b; i++) nodes.push(sideNode(sideRows[i]));
   if (b < n) nodes.push(sidePad((n - b) * rh));
   patchList(list, nodes);
   markCursor();
+}
+
+/** The row a redraw keeps still on screen, and its distance below the list's top: the cursor's row when any of it is in view,
+ *  else the first row in view. */
+function sideAnchor() {
+  const list = $('side-list'), top = list.getBoundingClientRect().top, bottom = top + list.clientHeight;
+  const seen = (a) => { const b = a.getBoundingClientRect(); return b.bottom > top && b.top < bottom; };
+  const rows = [...list.querySelectorAll('a.row')];
+  const a = rows.find((x) => x.dataset.path === cursor && seen(x)) || rows.find(seen);
+  return a ? { path: a.dataset.path, dy: a.getBoundingClientRect().top - top } : null;
 }
 
 /** Puts `nodes` in the list, keeping each row already there (by path, or a note by its markup) and only changing what differs:
@@ -3850,6 +3870,7 @@ function patchList(list, nodes) {
 }
 // The pointer moving over the list hands the highlight back to it, as in Finder; a redraw under a still pointer does not.
 $('side-list').addEventListener('pointermove', (e) => { if (e.movementX || e.movementY) $('side-list').classList.remove('keyed'); }, { passive: true });
+$('side-list').addEventListener('wheel', () => { sideOwed = ''; }, { passive: true });
 let sideScrollQueued = false;
 $('side-list').addEventListener('scroll', () => {
   if (sideScrollQueued || sideRows.length <= SIDE_VIRTUAL) return;
@@ -3965,33 +3986,39 @@ function renderSidebar() {
     walk(tree.root, 0);
     if (sel && sel.outside) rows.push({ note: `${sel.outside.toLocaleString()} more selected ${sel.outside === 1 ? 'item is' : 'items are'} in other folders`, depth: 0 });
   }
-  const hadActive = sideRows.some((r) => r.e && r.e.path === current.path);
+  // Rows put in or taken out above it leave the row in view where it was on screen, as in Finder.
+  const anchor = !refiltered && sideWinH === sideRowH() ? sideAnchor() : null;
   sideRows = rows;
   const status = sideMode === 'contents' && sideQuery ? searchStatus() : '';
   const more = $('side-more');
   more.hidden = !status && (!(top && top.more) || !!sideQuery);
   more.textContent = status || (top && top.more ? moreNote(top.more) : '');
   more.title = more.textContent;
-  // Keep the document on screen in view; the list scrolls on its own, never the page.
-  const at = sideRows.findIndex((r) => r.e && !r.e.dir && r.e.path === current.path);
   for (const [p, t] of keyed) if (performance.now() - t > 2000) keyed.delete(p);
   // While the keys are ahead of the renders they own the cursor and the scrolling: a late render never pulls either back.
   const byKeys = (moved && keyed.delete(current.path)) || keyed.size > 0;
   if (moved && !byKeys) cursor = current.path;
-  // The list is drawn at its new height first: a scrollTop set while it still holds fewer rows would be clamped. A folder
-  // opened or closed above the document leaves the list where it is, and a row already in view never moves.
+  // The document on screen is shown once its row is listed: the list scrolls on its own, never the page.
+  if (moved) sideOwed = byKeys ? '' : current.path;
+  else if (refiltered && !sideHold && !showingHits()) sideOwed = current.path;
+  // The list is drawn at its new height first: a scrollTop set while it still holds fewer rows would be clamped.
   drawSideWindow(true);
   const hitsQ = showingHits() ? hits.listQ : '';
   if (hitsQ !== sideHitsQ) {
     sideHitsQ = hitsQ;
-    if (hitsQ) { list.scrollTop = 0; drawSideWindow(false); return; }
+    if (hitsQ) { sideOwed = ''; list.scrollTop = 0; drawSideWindow(false); return; }
   }
-  const rh = sideRowH(), y = at * rh;
-  const off = y < list.scrollTop || y + rh > list.scrollTop + list.clientHeight;
-  if (at >= 0 && off && !byKeys && (moved || (!hitsQ && (refiltered || !hadActive)))) {
-    list.scrollTop = Math.max(0, y - list.clientHeight / 3);
+  const rh = sideRowH();
+  const i = anchor ? sideRows.findIndex((r) => r.e && r.e.path === anchor.path) : -1;
+  if (i >= 0 && Math.abs(i * rh - anchor.dy - list.scrollTop) >= 1) {
+    list.scrollTop = Math.max(0, i * rh - anchor.dy);
     drawSideWindow(false);
   }
+  // A row with any of it in view is already shown; one out of view scrolls in at the nearer edge, never to the middle.
+  const at = sideOwed ? sideRows.findIndex((r) => r.e && r.e.path === sideOwed && !(r.e.dir && sideOwed === current.path)) : -1;
+  if (at < 0) return;
+  sideOwed = '';
+  if (at * rh + rh <= list.scrollTop || at * rh >= list.scrollTop + list.clientHeight) revealRow(sideRows[at], true);
 }
 
 /** "2 of 5" in the toolbar while the sidebar is a multiple selection: where the file on screen is among its files. */
@@ -4056,15 +4083,18 @@ function revealFolder(path) {
   const s = expanded();
   for (let d = path; d !== tree.root && inTree(d); d = parentOf(d)) s.add(d);
   treeVersion++;
+  cursor = path;
+  sideHold = true;
   if (sideQuery) { filterField.value = ''; setSideQuery(''); }
   if (narrow.matches) peek(true);
   else if (settings.sidebarCollapsed === true) choose('sidebarCollapsed', false);
   requestFolders();
   renderSidebar();
-  cursor = path;
+  sideHold = false;
   markCursor();
+  sideOwed = path;
   const r = sideRows.find((x) => x.e && x.e.path === path);
-  if (r) revealRow(r);
+  if (r) { sideOwed = ''; revealRow(r, true); }
 }
 
 // The breadcrumb in the toolbar row ends where the toolbar's buttons begin.
@@ -4337,12 +4367,13 @@ function markCursor() {
   }
 }
 
-/** Scrolls the list, never the page, just enough to show the row, and draws the rows now in view. */
-function revealRow(r) {
+/** Scrolls the list, never the page, just enough to show the row, and draws the rows now in view. `whole` keeps the top row
+ *  whole, for a list placed afresh rather than stepped through. */
+function revealRow(r, whole) {
   const list = $('side-list'), rh = sideRowH(), y = sideRows.indexOf(r) * rh;
   if (y < 0) return;
   if (y < list.scrollTop) list.scrollTop = y;
-  else if (y + rh > list.scrollTop + list.clientHeight) list.scrollTop = y + rh - list.clientHeight;
+  else if (y + rh > list.scrollTop + list.clientHeight) list.scrollTop = whole ? Math.ceil((y + rh - list.clientHeight) / rh) * rh : y + rh - list.clientHeight;
   drawSideWindow(false);
 }
 
@@ -4350,6 +4381,7 @@ function revealRow(r) {
 let openTimer = 0;
 function moveCursor(r, open, repeat) {
   cursor = r.e.path;
+  sideOwed = '';
   revealRow(r);
   markCursor();
   clearTimeout(openTimer);
@@ -5337,6 +5369,7 @@ document.addEventListener('click', (e) => {
     e.preventDefault();
     arcFocus = false;
     cursor = row.dataset.path;
+    sideOwed = '';
     keyed.clear();
     markCursor();
     // The cursor's ring is for the keys; a click shows only the highlight.

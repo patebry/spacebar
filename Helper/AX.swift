@@ -109,7 +109,8 @@ enum FinderAX {
         while !queue.isEmpty, visited < 25, !trace.expired {
             let (e, d) = queue.removeFirst()
             visited += 1
-            if let u = trace.url(e, kAXURLAttribute), u.isFileURL { return u.path }
+            // The Desktop gives file reference URLs (file:///.file/id=…), whose path names no file.
+            if let u = trace.url(e, kAXURLAttribute), u.isFileURL, let p = (u as NSURL).filePathURL?.path { return p }
             if let name = trace.string(e, kAXFilenameAttribute), !name.isEmpty {
                 if dir == nil { dir = .some(windowDirectory(item, trace: trace)) }
                 guard let d = dir!, !d.isEmpty else { return nil }
@@ -120,9 +121,9 @@ enum FinderAX {
         return nil
     }
 
-    /// The folder of the window holding `item`, or ~/Desktop for an item in no window (the Desktop).
+    /// The folder of the window holding `item`, or ~/Desktop for an item on the Desktop, whose "window" is a scroll area.
     private static func windowDirectory(_ item: AXUIElement, trace: AXTrace) -> String? {
-        if let w = trace.element(item, kAXWindowAttribute) {
+        if let w = trace.element(item, kAXWindowAttribute), trace.role(w) == kAXWindowRole {
             if let doc = trace.string(w, kAXDocumentAttribute), let u = URL(string: doc), u.isFileURL { return u.path }
             return nil
         }

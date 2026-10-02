@@ -343,7 +343,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         let c = front?.bundleIdentifier == finderID ? FinderAX.spaceContext(finderPid: front!.processIdentifier) : SpaceContext(frontIsFinder: false)
         let d = Decision.space(c)
         guard case .show(let paths) = d, let fpid = front?.processIdentifier else {
-            if c.frontIsFinder { log.info("space pass \(String(describing: d), privacy: .public) in \(ms(since: t0), format: .fixed(precision: 1))ms errors=\(c.axErrors.joined(separator: ","), privacy: .public)") }
+            if c.frontIsFinder { log.info("space pass \(String(describing: d), privacy: .public) in \(ms(since: t0), format: .fixed(precision: 1))ms errors=\(c.axErrors.joined(separator: ","), privacy: .public) focus=\(c.role ?? "-", privacy: .public)/\(c.subrole ?? "-", privacy: .public)") }
             return false
         }
         guard viewer != nil else {

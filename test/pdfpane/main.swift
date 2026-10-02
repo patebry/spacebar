@@ -199,6 +199,37 @@ check("links: file, javascript, mailto and other schemes are refused",
       [URL(fileURLWithPath: a.path), URL(string: "javascript:alert(1)")!, URL(string: "mailto:x@example.com")!, URL(string: "x-apple.systempreferences:")!,
        URL(string: "spacebar://file/etc/hosts")!].allSatisfy { PDFPane.linkRefusal($0) != nil })
 
+// ---- a find started while another runs counts only its own matches ----
+let f = dir.appendingPathComponent("find.pdf")
+do {
+    var box = CGRect(x: 0, y: 0, width: 600, height: 800)
+    let ctx = CGContext(f as CFURL, mediaBox: &box, nil)!
+    for _ in 0..<60 {
+        ctx.beginPDFPage(nil)
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+        for i in 0..<20 {
+            NSAttributedString(string: "w wow word w w wave w", attributes: [.font: NSFont.systemFont(ofSize: 14)]).draw(at: NSPoint(x: 60, y: 60 + i * 30))
+        }
+        ctx.endPDFPage()
+    }
+    ctx.closePDF()
+}
+guard case .success(let docF) = PDFPane.open(f) else { fatalError("find.pdf did not open") }
+pane.show(docF, path: f.path, over: web)
+pane.place(message: msg.merging(["path": f.path]) { _, n in n }, in: web)
+spin(0.2)
+var raced = 0, racedFirst = -1
+for _ in 0..<5 {
+    pane.find("w") { racedFirst = $0 }
+    spin(0.005)
+    let n = findNow("word")
+    let marks = pane.view.highlightedSelections ?? []
+    if n != 1200 || marks.count != 1200 || !marks.allSatisfy({ $0.string?.lowercased() == "word" }) { raced += 1; print("  raced: \(n) \(marks.count)") }
+}
+spin(0.3)
+check("find: a find started while another runs counts and marks only its own matches", raced == 0 && racedFirst == -1, "\(raced) of 5, first done \(racedFirst)")
+pane.findClear()
+
 // ---- a drag off text moves the document; one on text selects; a link is still followed ----
 let c = dir.appendingPathComponent("c.pdf")
 do {
@@ -225,11 +256,16 @@ func mouse(_ type: NSEvent.EventType, _ p: NSPoint, clicks: Int = 1) -> NSEvent 
     NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
                        context: nil, eventNumber: 0, clickCount: clicks, pressure: 1)!
 }
+var closedHandShown = false
 /// Sends `events` as real input arrives: PDFView's own selection tracking takes the ones after the first from the queue.
 func input(_ events: [NSEvent]) {
+    closedHandShown = false
     for e in events.dropFirst() { NSApp.postEvent(e, atStart: false) }
     NSApp.sendEvent(events[0])
-    while let e = NSApp.nextEvent(matching: .any, until: Date().addingTimeInterval(0.05), inMode: .default, dequeue: true) { NSApp.sendEvent(e) }
+    while let e = NSApp.nextEvent(matching: .any, until: Date().addingTimeInterval(0.05), inMode: .default, dequeue: true) {
+        NSApp.sendEvent(e)
+        if NSCursor.current === NSCursor.closedHand { closedHandShown = true }
+    }
 }
 func drag(from p: NSPoint, by d: NSPoint) -> [NSEvent] {
     let to = NSPoint(x: p.x + d.x, y: p.y + d.y)
@@ -245,7 +281,7 @@ let grabbed = onPage(NSPoint(x: 60, y: 450))
 check("drag: from the margin it moves the document with the pointer and selects nothing",
       abs(grabbed.y - (margin.y + 120)) < 2 && abs(grabbed.x - margin.x) < 2 && pane.selectedText == nil,
       "\(margin) -> \(grabbed) \(origin) -> \(clip.bounds.origin) \(pane.selectedText ?? "")")
-check("drag: no cursor is left pushed after the mouse-up", NSCursor.current !== NSCursor.closedHand)
+check("drag: the closed hand shows while it moves and is let go on the mouse-up", closedHandShown && NSCursor.current !== NSCursor.closedHand)
 input(drag(from: onPage(NSPoint(x: 300, y: 1000)), by: NSPoint(x: 0, y: -120)))
 pane.go(toPage: 1)
 spin(0.1)
@@ -254,6 +290,15 @@ origin = clip.bounds.origin
 input(drag(from: text0, by: NSPoint(x: 120, y: -30)))
 check("drag: from text it selects and does not move the document", (pane.selectedText?.count ?? 0) > 10 && clip.bounds.origin == origin,
       "\(pane.selectedText ?? "nil") \(origin) -> \(clip.bounds.origin)")
+let line = page0.selectionForLine(at: NSPoint(x: 260, y: 450))!.bounds(for: page0)
+for (label, from, to) in [("from 12 pt left of a line", NSPoint(x: line.minX - 12, y: line.midY), NSPoint(x: line.midX, y: line.midY)),
+                          ("from 15 pt past a line's end, leftward", NSPoint(x: line.maxX + 15, y: line.midY), NSPoint(x: line.midX, y: line.midY))] {
+    pane.view.clearSelection()
+    let a = onPage(from), b = onPage(to)
+    input(drag(from: a, by: NSPoint(x: b.x - a.x, y: b.y - a.y)))
+    check("drag: \(label) selects and does not move the document", (pane.selectedText?.count ?? 0) > 5 && clip.bounds.origin == origin && !closedHandShown,
+          "\(line) \(pane.selectedText ?? "nil") \(origin) -> \(clip.bounds.origin)")
+}
 input([mouse(.leftMouseDown, onPage(NSPoint(x: 60, y: 450))), mouse(.leftMouseUp, onPage(NSPoint(x: 60, y: 450)))])
 check("click: in the margin it clears the selection and moves nothing", pane.selectedText == nil && clip.bounds.origin == origin)
 let word = onPage(NSPoint(x: 215, y: 450))

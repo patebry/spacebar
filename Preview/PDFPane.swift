@@ -52,6 +52,8 @@ final class PDFPane: NSObject, PDFViewDelegate, PDFDocumentDelegate, NativeDocum
     private var matches: [PDFSelection] = []
     /// The find running in the background (PDFKit's own thread), and what to call when it ends.
     private var finding: (doc: PDFDocument, found: [PDFSelection], done: (Int) -> Void)?
+    /// Bumped by every find: a callback that hops to the main thread after a newer find began is dropped.
+    private var findGeneration = 0
     private var reported: (path: String, page: Int, pages: Int)?
     private var scrollWatch: NSObjectProtocol?
 
@@ -101,13 +103,17 @@ final class PDFPane: NSObject, PDFViewDelegate, PDFDocumentDelegate, NativeDocum
     func find(_ query: String, done: @escaping (Int) -> Void) {
         findClear()
         guard !query.isEmpty, let doc = view.document else { return done(0) }
+        findGeneration += 1
         finding = (doc, [], done)
         doc.delegate = self
         doc.beginFindString(query, withOptions: [.caseInsensitive])
     }
 
     func didMatchString(_ instance: PDFSelection) {
-        guard Thread.isMainThread else { return DispatchQueue.main.async { self.didMatchString(instance) } }
+        guard Thread.isMainThread else {
+            let g = findGeneration
+            return DispatchQueue.main.async { if g == self.findGeneration { self.didMatchString(instance) } }
+        }
         guard var f = finding, instance.pages.first?.document === f.doc else { return }
         f.found.append(instance)
         finding = f
@@ -115,7 +121,10 @@ final class PDFPane: NSObject, PDFViewDelegate, PDFDocumentDelegate, NativeDocum
     }
 
     func documentDidEndDocumentFind(_ notification: Notification) {
-        guard Thread.isMainThread else { return DispatchQueue.main.async { self.documentDidEndDocumentFind(notification) } }
+        guard Thread.isMainThread else {
+            let g = findGeneration
+            return DispatchQueue.main.async { if g == self.findGeneration { self.documentDidEndDocumentFind(notification) } }
+        }
         guard let f = finding, notification.object as? PDFDocument === f.doc else { return }
         endFind()
     }
@@ -175,6 +184,7 @@ final class PDFPane: NSObject, PDFViewDelegate, PDFDocumentDelegate, NativeDocum
     /// Shows `doc` above `web`, in `web`'s superview, from the top of its first page. The same file again (a change on disk)
     /// keeps the page that was on screen. The view joins the container only when the page first places it (see attach).
     func show(_ doc: PDFDocument, path: String, over web: NSView) {
+        view.endDrag()
         let keep = path == self.path ? view.currentPage.flatMap { view.document?.index(for: $0) } : nil
         matches = []
         reported = nil
@@ -312,15 +322,21 @@ final class PanningPDFView: PDFView {
     private var drag: (at: NSPoint, origin: NSPoint)?
     private var moved = false
 
-    /// Whether `p`, in the view, is on a link or other annotation, or within a few points of a character.
+    /// Whether `p`, in the view, is on a link, a form field or another annotation that acts, or in a line of text: within 24
+    /// page points of its ends, where a selection starting just off the glyphs begins. A page with too much text to probe on
+    /// a click counts as text, PDFView's own behaviour.
     private func onContent(_ p: NSPoint) -> Bool {
         guard let page = page(for: p, nearest: false) else { return false }
         let q = convert(p, to: page), r = 4 / max(scaleFactor, 0.01)
-        if page.annotation(at: q) != nil { return true }
-        return [(0, 0), (r, 0), (-r, 0), (0, r), (0, -r)].contains { page.characterIndex(at: NSPoint(x: q.x + $0.0, y: q.y + $0.1)) != NSNotFound }
+        if let a = page.annotation(at: q), a.type == "Link" || a.type == "Widget" || (a.shouldDisplay && a.action != nil) { return true }
+        guard page.numberOfCharacters <= 200_000 else { return true }
+        return [0, r, -r].contains { dy in
+            stride(from: -24, through: 24, by: 4).contains { dx in page.characterIndex(at: NSPoint(x: q.x + dx, y: q.y + dy)) != NSNotFound }
+        }
     }
 
     override func mouseDown(with e: NSEvent) {
+        endDrag()
         guard e.clickCount == 1, e.modifierFlags.intersection([.shift, .command, .option, .control]).isEmpty,
               let clip = documentView?.enclosingScrollView?.contentView, !onContent(convert(e.locationInWindow, from: nil))
         else { return super.mouseDown(with: e) }
@@ -344,6 +360,11 @@ final class PanningPDFView: PDFView {
         guard drag != nil else { return super.mouseUp(with: e) }
         if !moved { clearSelection() }
         endDrag()
+    }
+
+    override func viewWillMove(toWindow w: NSWindow?) {
+        endDrag()
+        super.viewWillMove(toWindow: w)
     }
 
     /// A pane closed mid-drag gets no mouse-up: its cursor is let go here.

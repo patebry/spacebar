@@ -409,6 +409,7 @@ final class ImageScrollView: NSScrollView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     override func mouseDown(with e: NSEvent) {
+        endDrag()
         drag = (e.locationInWindow, contentView.bounds.origin)
         moved = false
     }
@@ -421,6 +422,11 @@ final class ImageScrollView: NSScrollView {
         let m = magnification
         contentView.scroll(to: NSPoint(x: d.origin.x - dx / m, y: d.origin.y + (contentView.isFlipped ? dy : -dy) / m))
         reflectScrolledClipView(contentView)
+    }
+
+    override func viewWillMove(toWindow w: NSWindow?) {
+        endDrag()
+        super.viewWillMove(toWindow: w)
     }
 
     /// A pane closed mid-drag gets no mouse-up: its cursor is let go here.

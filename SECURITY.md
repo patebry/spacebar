@@ -141,7 +141,7 @@ drive Finder.
 | Code | its own few files and the settings reader; none of the file-reading code, no WebKit (the claims test checks the binary's symbols and libraries) | the preview extension's code, reused |
 | Touches files | never: it reads Finder's focus and selection through Accessibility and passes paths on | reads and renders them, as the extension does |
 | Keys | sees them all | only the key names the helper sends it |
-| Trackpad | sees the gesture events (a pinch, a two-finger double tap, and the gesture stream of a two-finger scroll or swipe), no pointer moves, clicks or scroll events; takes only a pinch or a smart zoom over the open panel and passes everything else on untouched | only the pinches and smart zooms made over its panel |
+| Trackpad | while the panel is open, sees the gesture events (a pinch, a two-finger double tap, and the gesture stream of a two-finger scroll or swipe), never pointer moves, clicks or scroll events; takes only a pinch or a smart zoom begun over the open panel, to its end, and passes everything else on untouched | only the pinches and smart zooms begun over its panel, to their end, each with the pointer's location |
 
 A renderer exploit in the viewer gets what a Quick Look extension exploit gets today, plus a process that is always running;
 it gets no key events and no Accessibility.

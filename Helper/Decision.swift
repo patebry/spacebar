@@ -284,17 +284,41 @@ struct GestureEvent: Equatable {
     var windowUnder: Int = 0
     /// Global, from the top left of the main display.
     var location: CGPoint = .zero
+    /// Seconds since startup.
+    var time: Double = 0
+}
+
+enum GestureAction: Equatable {
+    case pass
+    /// Sent to the viewer and kept from Finder.
+    case forward
+    /// Kept from Finder and not sent: the pinch or smart zoom already sent, arriving again as the other event type.
+    case swallow
 }
 
 /// Takes the pinches and smart zooms made over the open panel, which the window server would otherwise hand to Finder, the
-/// active app. A pinch is decided where it begins and keeps that answer to its end, so neither app sees half of one. Every other
-/// gesture (scrolls, swipes, Mission Control) and every zoom elsewhere is Finder's or the system's.
+/// active app. A pinch is decided where it begins and keeps that answer to its end, so neither app sees half of one, and only
+/// the event type it began as is sent on. Every other gesture (scrolls, swipes, Mission Control) and every zoom elsewhere is
+/// Finder's or the system's.
 struct GestureRoute {
-    private(set) var taking: Bool?
+    /// The pinch under way: the event type it began as, and whether it is the panel's.
+    private(set) var pinch: (stream: Int64, taking: Bool)?
+    private var lastSmart: (type: Int64, time: Double)?
+    /// A smart zoom of the other type this close to one already taken is the same tap.
+    static let smartTwin = 0.05
+
+    /// The gesture tap runs only while the panel is open or a pinch it took is under way; the rest of the time no gesture
+    /// event waits on the helper.
+    static func tapOn(open: Bool, pinching: Bool) -> Bool { open || pinching }
 
     static func zooms(_ g: GestureEvent) -> Bool {
         g.type == 30 || g.type == 32 || (g.type == 29 && (g.subtype == 8 || g.subtype == 22))
     }
+
+    static func smart(_ g: GestureEvent) -> Bool { g.type == 32 || (g.type == 29 && g.subtype == 22) }
+
+    /// Placed by the panel's last known bounds, the window server having named no window under the pointer.
+    static func byBounds(_ g: GestureEvent) -> Bool { g.windowUnder == 0 }
 
     /// Over the panel by the window server's word, or by its last known bounds when the event carries no window.
     static func overPanel(_ g: GestureEvent, panelWindow: Int, bounds: CGRect) -> Bool {
@@ -302,22 +326,32 @@ struct GestureRoute {
         return g.windowUnder > 0 ? g.windowUnder == panelWindow : bounds.contains(g.location)
     }
 
-    mutating func take(_ g: GestureEvent, open: Bool, panelWindow: Int, bounds: CGRect) -> Bool {
-        guard Self.zooms(g) else { return false }
+    mutating func route(_ g: GestureEvent, open: Bool, panelWindow: Int, bounds: CGRect) -> GestureAction {
+        guard Self.zooms(g) else { return .pass }
         let here = open && Self.overPanel(g, panelWindow: panelWindow, bounds: bounds)
+        if Self.smart(g) {
+            if let s = lastSmart, s.type != g.type, abs(g.time - s.time) < Self.smartTwin {
+                lastSmart = nil
+                return here ? .swallow : .pass
+            }
+            lastSmart = here ? (g.type, g.time) : nil
+            return here ? .forward : .pass
+        }
+        if let p = pinch, p.stream != g.type { return open && p.taking ? .swallow : .pass }
         switch g.phase {
         case 1, 128:
-            taking = here
-            return here
-        case 4, 8:
-            defer { taking = nil }
-            return open && (taking ?? here)
+            pinch = (g.type, here)
+            return here ? .forward : .pass
         case 0:
-            return here
+            return here ? .forward : .pass
         default:
-            return open && (taking ?? here)
+            let ends = g.phase == 4 || g.phase == 8
+            defer { if ends { pinch = nil } }
+            if let p = pinch { return open && p.taking ? .forward : .pass }
+            // Without its beginning, a pinch is placed only by the window server's word, never by bounds that may be old.
+            return here && !Self.byBounds(g) ? .forward : .pass
         }
     }
 
-    mutating func reset() { taking = nil }
+    mutating func reset() { pinch = nil; lastSmart = nil }
 }

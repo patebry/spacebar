@@ -402,39 +402,81 @@ check("tap: a disabled tap is enabled again only while Accessibility is granted"
 
 // MARK: Gestures
 
-let panelWin = 4242, panelRect = CGRect(x: 100, y: 100, width: 800, height: 600)
-func pinch(_ phase: Int64, under: Int = panelWin, at p: CGPoint = CGPoint(x: 300, y: 300), type: Int64 = 29, subtype: Int64 = 8) -> GestureEvent {
-    GestureEvent(type: type, subtype: subtype, phase: phase, windowUnder: under, location: p)
+let panelWin = 4242, panelRect = CGRect(x: 100, y: 100, width: 800, height: 600), outside = CGPoint(x: 5, y: 5)
+func zoom(_ phase: Int64, under: Int = panelWin, at p: CGPoint = CGPoint(x: 300, y: 300), type: Int64 = 29, subtype: Int64 = 8, time: Double = 0) -> GestureEvent {
+    GestureEvent(type: type, subtype: subtype, phase: phase, windowUnder: under, location: p, time: time)
 }
-func takeOnce(_ g: GestureEvent, open: Bool = true) -> Bool { var r = GestureRoute(); return r.take(g, open: open, panelWindow: panelWin, bounds: panelRect) }
-check("gesture: a pinch over the open panel is taken", takeOnce(pinch(1)))
-check("gesture: a smart zoom (subtype 22) over the panel is taken", takeOnce(pinch(0, subtype: 22)))
-check("gesture: magnify (30) and smart magnify (32) events over the panel are taken", takeOnce(pinch(2, type: 30)) && takeOnce(pinch(0, type: 32)))
-check("gesture: a pinch with the panel closed passes", !takeOnce(pinch(1), open: false))
-check("gesture: a pinch over another window passes", !takeOnce(pinch(1, under: 77)))
-check("gesture: no panel window known: passes", { var r = GestureRoute(); return !r.take(pinch(1), open: true, panelWindow: 0, bounds: panelRect) }())
-check("gesture: no window under the pointer, inside the panel's bounds: taken", takeOnce(pinch(1, under: 0)))
-check("gesture: no window under the pointer, outside the panel's bounds: passes", !takeOnce(pinch(1, under: 0, at: CGPoint(x: 50, y: 50))))
-check("gesture: no window and no bounds known: passes", { var r = GestureRoute(); return !r.take(pinch(1, under: 0), open: true, panelWindow: panelWin, bounds: .null) }())
-for (sub, n) in [(Int64(6), "scroll"), (5, "rotate"), (16, "swipe"), (0, "unknown")] {
-    check("gesture: a \(n) gesture (subtype \(sub)) over the panel passes", !takeOnce(pinch(2, subtype: sub)))
+extension GestureRoute {
+    mutating func go(_ g: GestureEvent, open: Bool = true, window: Int = panelWin, bounds: CGRect = panelRect) -> GestureAction {
+        route(g, open: open, panelWindow: window, bounds: bounds)
+    }
 }
-for t in [Int64(22), 31, 18, 19, 20] { check("gesture: event type \(t) over the panel passes", !takeOnce(pinch(2, type: t))) }
+func once(_ g: GestureEvent, open: Bool = true, window: Int = panelWin, bounds: CGRect = panelRect) -> GestureAction {
+    var r = GestureRoute(); return r.go(g, open: open, window: window, bounds: bounds)
+}
+check("gesture tap: on while the panel is open", GestureRoute.tapOn(open: true, pinching: false))
+check("gesture tap: on to the end of a pinch it took", GestureRoute.tapOn(open: false, pinching: true))
+check("gesture tap: off with the panel closed and no pinch", !GestureRoute.tapOn(open: false, pinching: false))
 do {
     var r = GestureRoute()
-    let out = CGPoint(x: 5, y: 5)
-    check("pinch begun over the panel: taken", r.take(pinch(1), open: true, panelWindow: panelWin, bounds: panelRect))
-    check("pinch begun over the panel: its changes are taken when the pointer drifts off", r.take(pinch(2, under: 77, at: out), open: true, panelWindow: panelWin, bounds: panelRect))
-    check("pinch begun over the panel: its end is taken off the panel too", r.take(pinch(4, under: 77, at: out), open: true, panelWindow: panelWin, bounds: panelRect))
-    check("pinch ended: the next change elsewhere is decided afresh", !r.take(pinch(2, under: 77, at: out), open: true, panelWindow: panelWin, bounds: panelRect) && r.taking == nil)
-    check("pinch begun elsewhere: passes", !r.take(pinch(1, under: 77), open: true, panelWindow: panelWin, bounds: panelRect))
-    check("pinch begun elsewhere: its changes pass over the panel", !r.take(pinch(2), open: true, panelWindow: panelWin, bounds: panelRect))
-    check("pinch begun elsewhere: its cancel passes over the panel", !r.take(pinch(8), open: true, panelWindow: panelWin, bounds: panelRect) && r.taking == nil)
-    check("may-begin over the panel: taken, and holds", r.take(pinch(128), open: true, panelWindow: panelWin, bounds: panelRect) && r.taking == true)
-    check("pinch over the panel, panel closed mid-way: the rest passes", !r.take(pinch(2), open: false, panelWindow: panelWin, bounds: panelRect))
+    _ = r.go(zoom(1))
+    check("gesture tap: a pinch begun over the panel keeps it on", GestureRoute.tapOn(open: false, pinching: r.pinch != nil))
     r.reset()
-    check("reset: nothing held", r.taking == nil)
+    check("gesture tap: a close (reset) turns it off", !GestureRoute.tapOn(open: false, pinching: r.pinch != nil))
+    _ = r.go(zoom(1)); _ = r.go(zoom(4))
+    check("gesture tap: off once the pinch ends with the panel closed", !GestureRoute.tapOn(open: false, pinching: r.pinch != nil))
 }
+check("gesture: a pinch over the open panel is sent", once(zoom(1)) == .forward)
+check("gesture: a smart zoom (subtype 22) over the panel is sent", once(zoom(0, subtype: 22)) == .forward)
+check("gesture: magnify (30) and smart magnify (32) events over the panel are sent", once(zoom(1, type: 30)) == .forward && once(zoom(0, type: 32)) == .forward)
+check("gesture: a pinch with the panel closed passes", once(zoom(1), open: false) == .pass)
+check("gesture: a pinch over another window passes", once(zoom(1, under: 77)) == .pass)
+check("gesture: no panel window known: passes", once(zoom(1), window: 0) == .pass)
+check("gesture: no window under the pointer, inside the panel's bounds, at its beginning: sent", once(zoom(1, under: 0)) == .forward)
+check("gesture: no window under the pointer, outside the panel's bounds: passes", once(zoom(1, under: 0, at: outside)) == .pass)
+check("gesture: no window and no bounds known: passes", once(zoom(1, under: 0), bounds: .null) == .pass)
+check("gesture: a change without its beginning, placed only by bounds: passes", once(zoom(2, under: 0)) == .pass)
+check("gesture: an end without its beginning, placed only by bounds: passes", once(zoom(4, under: 0)) == .pass)
+check("gesture: a change without its beginning, over the panel by the window server's word: sent", once(zoom(2)) == .forward)
+check("gesture: an event without phases, inside the bounds: sent", once(zoom(0, under: 0, type: 30)) == .forward)
+for (sub, n) in [(Int64(6), "scroll"), (5, "rotate"), (16, "swipe"), (0, "unknown")] {
+    check("gesture: a \(n) gesture (subtype \(sub)) over the panel passes", once(zoom(2, subtype: sub)) == .pass)
+}
+for t in [Int64(22), 31, 18, 19, 20] { check("gesture: event type \(t) over the panel passes", once(zoom(2, type: t)) == .pass) }
+do {
+    var r = GestureRoute()
+    check("pinch begun over the panel: sent", r.go(zoom(1)) == .forward)
+    check("pinch begun over the panel: its changes are sent when the pointer drifts off", r.go(zoom(2, under: 77, at: outside)) == .forward)
+    check("pinch begun over the panel: its end is sent off the panel too", r.go(zoom(4, under: 77, at: outside)) == .forward)
+    check("pinch ended: the next change elsewhere is decided afresh", r.go(zoom(2, under: 77, at: outside)) == .pass && r.pinch == nil)
+    check("pinch begun elsewhere: passes", r.go(zoom(1, under: 77)) == .pass)
+    check("pinch begun elsewhere: its changes pass over the panel", r.go(zoom(2)) == .pass)
+    check("pinch begun elsewhere: its cancel passes over the panel", r.go(zoom(8)) == .pass && r.pinch == nil)
+    check("may-begin over the panel: sent, and holds", r.go(zoom(128)) == .forward && r.pinch?.taking == true)
+    check("pinch over the panel, panel closed mid-way: the rest passes", r.go(zoom(2), open: false) == .pass)
+    r.reset()
+    check("reset: nothing held", r.pinch == nil)
+    check("pinch begun by bounds: held to its end though later events carry no window", r.go(zoom(1, under: 0)) == .forward
+          && r.go(zoom(2, under: 0, at: outside)) == .forward && r.go(zoom(4, under: 0, at: outside)) == .forward)
+}
+do {
+    var r = GestureRoute()
+    check("one pinch as two streams: the gesture stream that began it is sent", r.go(zoom(1)) == .forward)
+    check("one pinch as two streams: the magnify stream's beginning is swallowed", r.go(zoom(1, type: 30)) == .swallow)
+    check("one pinch as two streams: its changes are swallowed, the gesture's sent", r.go(zoom(2, type: 30)) == .swallow && r.go(zoom(2)) == .forward)
+    check("one pinch as two streams: the other stream's end leaves the pinch held", r.go(zoom(4, type: 30)) == .swallow && r.pinch != nil)
+    check("one pinch as two streams: the first stream's end ends it", r.go(zoom(4)) == .forward && r.pinch == nil)
+    _ = r.go(zoom(1, under: 77))
+    check("a pinch elsewhere as two streams: both pass", r.go(zoom(2, type: 30)) == .pass && r.go(zoom(2, under: 77)) == .pass)
+    r.reset()
+    check("smart zoom as two events: the first is sent", r.go(zoom(0, subtype: 22, time: 10)) == .forward)
+    check("smart zoom as two events: the other type within 50 ms is swallowed", r.go(zoom(0, type: 32, time: 10.02)) == .swallow)
+    check("smart zoom: the next tap is sent", r.go(zoom(0, type: 32, time: 10.5)) == .forward)
+    check("smart zoom: two of the same type are two taps", r.go(zoom(0, type: 32, time: 10.51)) == .forward)
+    check("smart zoom elsewhere: passes, and its twin too", r.go(zoom(0, under: 77, subtype: 22, time: 20)) == .pass && r.go(zoom(0, under: 77, type: 32, time: 20.01)) == .pass)
+}
+check("gesture: placed by bounds only when the event names no window", GestureRoute.byBounds(zoom(1, under: 0)) && !GestureRoute.byBounds(zoom(1)))
+check("link: only the viewer may report the panel's frame", Link.permits(.viewer, .panelMoved) && !Link.permits(.app, .panelMoved))
 
 do {
     let f = NSTemporaryDirectory() + "helper-stamp-\(getpid())"

@@ -8,6 +8,7 @@ final class Stub: NSObject, SpacebarHelperProtocol {
     init(role: Link.Role) { self.role = role }
     func hello(reply: @escaping (Bool) -> Void) { reply(Link.permits(role, .hello)) }
     func panelState(_ open: Bool, requestID: Int, windowNumber: Int) {}
+    func panelMoved(x: Double, y: Double, width: Double, height: Double, windowNumber: Int) {}
     func declined(_ requestID: Int) {}
     func textSession(_ active: Bool, reply: @escaping (Bool) -> Void) { reply(Link.permits(role, .textSession)) }
     func status(reply: @escaping (Data) -> Void) {

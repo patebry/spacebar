@@ -121,52 +121,107 @@ for _ in 0..<2 {
 }
 pdfCtx.closePDF()
 
-/// The middle of the panel's content, global from the top left of the main display, as the tap reads a pointer.
-func panelMiddle() -> CGPoint {
+/// `p` in the panel, global from the top left of the main display, as the tap reads a pointer.
+func global(_ p: NSPoint) -> CGPoint {
     let top = NSScreen.screens.first!.frame.maxY, f = panel.frame
-    return CGPoint(x: f.midX, y: top - (f.minY + f.height * 0.45))
+    return CGPoint(x: f.minX + p.x, y: top - (f.minY + p.y))
 }
-func gestureEvent(_ subtype: Int64, phase: Int64, value: Double = 0) -> CGEvent {
+func gestureEvent(_ subtype: Int64, at p: NSPoint, phase: Int64, value: Double = 0) -> CGEvent {
     let e = CGEvent(source: nil)!
     e.type = CGEventType(rawValue: 29)!
     e.setIntegerValueField(CGEventField(rawValue: 110)!, value: subtype)
     e.setDoubleValueField(CGEventField(rawValue: 113)!, value: value)
     e.setIntegerValueField(CGEventField(rawValue: 132)!, value: phase)
-    e.location = panelMiddle()
+    e.location = global(p)
     return e
 }
-func pinchIn() {
-    let events = [gestureEvent(8, phase: 1)] + (0..<5).map { _ in gestureEvent(8, phase: 2, value: 0.1) } + [gestureEvent(8, phase: 4)]
+func pinchIn(at p: NSPoint) {
+    let events = [gestureEvent(8, at: p, phase: 1)] + (0..<5).map { _ in gestureEvent(8, at: p, phase: 2, value: 0.15) } + [gestureEvent(8, at: p, phase: 4)]
     for e in events { viewer.gesture(e.data! as Data); spin(0.02) }
-    spin(0.5)
+    spin(0.6)
 }
-func pdfView(_ v: NSView?) -> PDFView? {
-    guard let v else { return nil }
-    if let p = v as? PDFView, !p.isHidden { return p }
-    for s in v.subviews { if let p = pdfView(s) { return p } }
+func find<T: NSView>(_ type: T.Type, in v: NSView?) -> T? {
+    guard let v, !v.isHidden else { return nil }
+    if let t = v as? T { return t }
+    for s in v.subviews { if let t = find(type, in: s) { return t } }
     return nil
 }
-
-for (url, n) in [(png, "a PNG (the page's own image view)"), (heic, "a HEIC (ImagePane)")] {
-    show(url)
-    spin(until: 3) { zoomLabel() > 0 }
-    let before = zoomLabel()
-    pinchIn()
-    let after = zoomLabel()
-    check("a pinch handed over by the helper zooms \(n)", before > 0 && after > before, "\(before)% -> \(after)%")
+/// A point a quarter of the way in from the left and from the top of `r`: off centre both ways, so a pinch anchored at the
+/// wrong place (a flipped y) moves what is under it.
+func upperLeft(_ r: NSRect) -> NSPoint { NSPoint(x: r.minX + r.width * 0.25, y: r.maxY - r.height * 0.25) }
+/// The pinch zoomed about the pointer: what was under it (as a fraction of the image or page) still is.
+func anchored(_ n: String, _ before: CGPoint?, _ after: CGPoint?) {
+    guard let b = before, let a = after else { return check("\(n): pinch zooms about the pointer", false, "no point read") }
+    check("\(n): pinch zooms about the pointer", hypot(a.x - b.x, a.y - b.y) < 0.03, "\(b) -> \(a)")
 }
+
+// The page's own image view: the point under the pointer as a fraction of the <img>'s box.
+show(png)
+spin(until: 3) { zoomLabel() > 0 }
+let web = WebHost.shared.web
+func imgBox() -> CGRect? {
+    guard let r = js("(() => { const i = document.querySelector('#doc .img-stage img'); if (!i) return null; const b = i.getBoundingClientRect(); return [b.left, b.top, b.width, b.height]; })()") as? [Double], r.count == 4 else { return nil }
+    return CGRect(x: r[0], y: r[1], width: r[2], height: r[3])
+}
+func cssPoint(_ p: NSPoint) -> CGPoint {
+    let v = web.convert(p, from: nil), z = web.pageZoom
+    return CGPoint(x: v.x / z, y: (web.isFlipped ? v.y : web.bounds.height - v.y) / z)
+}
+func windowPoint(css c: CGPoint) -> NSPoint {
+    let z = web.pageZoom
+    return web.convert(NSPoint(x: c.x * z, y: web.isFlipped ? c.y * z : web.bounds.height - c.y * z), to: nil)
+}
+func imgFraction(_ p: NSPoint) -> CGPoint? {
+    guard let b = imgBox(), b.width > 0 else { return nil }
+    let c = cssPoint(p)
+    return CGPoint(x: (c.x - b.minX) / b.width, y: (c.y - b.minY) / b.height)
+}
+if let box = imgBox() {
+    let at = windowPoint(css: CGPoint(x: box.minX + box.width * 0.25, y: box.minY + box.height * 0.25))
+    let before = zoomLabel(), sent = viewer.gesturesSent, under = imgFraction(at)
+    pinchIn(at: at)
+    check("a pinch handed over by the helper zooms a PNG (the page's own image view)", before > 0 && zoomLabel() > before, "\(before)% -> \(zoomLabel())%")
+    check("each event of the pinch reached the open panel", viewer.gesturesSent - sent == 7, "\(viewer.gesturesSent - sent)")
+    anchored("a PNG", under, imgFraction(at))
+} else {
+    check("a PNG: the image's box", false, "no #doc .img-stage img")
+}
+
+// ImagePane: the point under the pointer as a fraction of the image view's document.
+show(heic)
+spin(until: 3) { zoomLabel() > 0 && find(ImageScrollView.self, in: panel.contentView) != nil }
+if let sv = find(ImageScrollView.self, in: panel.contentView), let doc = sv.documentView {
+    let shown = doc.convert(doc.bounds, to: nil).intersection(sv.convert(sv.bounds, to: nil))
+    let at = upperLeft(shown)
+    func fraction() -> CGPoint { let d = doc.convert(at, from: nil); return CGPoint(x: d.x / doc.bounds.width, y: d.y / doc.bounds.height) }
+    let before = zoomLabel(), under = fraction()
+    pinchIn(at: at)
+    check("a pinch handed over by the helper zooms a HEIC (ImagePane)", before > 0 && zoomLabel() > before, "\(before)% -> \(zoomLabel())%")
+    anchored("a HEIC", under, fraction())
+} else {
+    check("a HEIC: the native image view", false, "no ImageScrollView")
+}
+
+// PDFView zooms about a point of its own choosing, not the pointer, so only the zoom is checked.
 show(pdf)
-spin(until: 3) { pdfView(panel.contentView) != nil }
-let pv = pdfView(panel.contentView)
-let scaleBefore = pv?.scaleFactor ?? 0
-pinchIn()
-let scaleAfter = pv?.scaleFactor ?? 0
-check("a pinch handed over by the helper zooms a PDF", pv != nil && scaleAfter > scaleBefore * 1.05, "\(scaleBefore) -> \(scaleAfter)")
+spin(until: 3) { find(PDFView.self, in: panel.contentView) != nil }
+let pv = find(PDFView.self, in: panel.contentView)
+var scaleOpen = 0.0
+if let pv {
+    let at = upperLeft(pv.convert(pv.bounds, to: nil))
+    let scaleBefore = pv.scaleFactor
+    pinchIn(at: at)
+    scaleOpen = pv.scaleFactor
+    check("a pinch handed over by the helper zooms a PDF", scaleOpen > scaleBefore * 1.05, "\(scaleBefore) -> \(scaleOpen)")
+} else {
+    check("a PDF: the native PDF view", false, "no PDFView")
+}
 viewer.close()
 spin(0.5)
-let closedLabel = zoomLabel()
-pinchIn()
-check("a gesture with the panel closed changes nothing", zoomLabel() == closedLabel)
+let sentClosed = viewer.gesturesSent
+pinchIn(at: NSPoint(x: panel.frame.width / 2, y: panel.frame.height / 2))
+check("a gesture with the panel closed reaches nothing", viewer.gesturesSent == sentClosed && (pv?.scaleFactor ?? 0) == scaleOpen,
+      "\(viewer.gesturesSent - sentClosed) sent, scale \(scaleOpen) -> \(pv?.scaleFactor ?? 0)")
 
 print(failures == 0 ? "panel window: all passed" : "panel window: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

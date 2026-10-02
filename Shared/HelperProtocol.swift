@@ -21,6 +21,8 @@ enum HelperIDs {
     func hello(reply: @escaping (Bool) -> Void)
     /// Viewer: its panel opened (showing `requestID`) or closed.
     func panelState(_ open: Bool, requestID: Int, windowNumber: Int)
+    /// Viewer: the open panel's window moved or was resized; global, from the top left of the main display.
+    func panelMoved(x: Double, y: Double, width: Double, height: Double, windowNumber: Int)
     /// Viewer: it will not show request `requestID`; Apple's Quick Look gets the Space instead.
     func declined(_ requestID: Int)
     /// Viewer: an edit, the filter or the find field in its writer's key panel took the keyboard (`active`) or let it go. While
@@ -44,7 +46,8 @@ enum HelperIDs {
     func suspend()
     /// Finder came back: the suspended panel shows again as request `requestID`. Replies false when nothing is suspended.
     func restore(_ requestID: Int, reply: @escaping (Bool) -> Void)
-    /// A pinch or smart zoom over the open panel, as the tap took it from Finder (`CGEvent.data`).
+    /// A pinch or smart zoom begun over the open panel, as the tap took it from Finder (`CGEvent.data`, the pointer's place
+    /// included).
     func gesture(_ data: Data)
 }
 

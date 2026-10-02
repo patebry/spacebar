@@ -5,12 +5,12 @@ import Security
 /// run time from the helper's own signature, so a build signed with any identity trusts only its own siblings.
 enum Link {
     enum Role { case viewer, app }
-    enum Call { case hello, panelState, declined, textSession, status, promptAccessibility }
+    enum Call { case hello, panelState, panelMoved, declined, textSession, status, promptAccessibility }
 
     /// The viewer drives the panel; the settings app reads the status and asks for Accessibility.
     static func permits(_ role: Role, _ call: Call) -> Bool {
         switch call {
-        case .hello, .panelState, .declined, .textSession: return role == .viewer
+        case .hello, .panelState, .panelMoved, .declined, .textSession: return role == .viewer
         case .status, .promptAccessibility: return role == .app
         }
     }

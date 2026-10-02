@@ -299,12 +299,15 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
     }
 
     private typealias SetWindowLocation = @convention(c) (CGEvent, CGPoint) -> Void
+    /// Gestures the helper handed over that reached an open panel.
+    private(set) var gesturesSent = 0
     private static let setWindowLocation = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGEventSetWindowLocation")
         .map { unsafeBitCast($0, to: SetWindowLocation.self) }
 
     /// Rebuilds the gesture for the panel's window, at the pointer's place in it, and hands it to the window, which gives it to
     /// the view under the pointer: NSApp.sendEvent would drop it, the viewer not being active.
     private func sendGesture(_ data: Data) {
+        gesturesSent += 1
         guard let cg = CGEvent(withDataAllocator: nil, data: data as CFData), [29, 30, 32].contains(cg.type.rawValue),
               let place = Self.setWindowLocation, let top = NSScreen.screens.first?.frame.maxY else { return }
         let at = cg.location, f = panel.frame
@@ -460,8 +463,15 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
     }
     private var screensChanged = Date.distantPast
 
-    func windowDidMove(_ notification: Notification) { remember() }
-    func windowDidResize(_ notification: Notification) { remember() }
+    func windowDidMove(_ notification: Notification) { remember(); reportFrame() }
+    func windowDidResize(_ notification: Notification) { remember(); reportFrame() }
+
+    /// So the helper places a pinch by where the panel is now, not where its last check found it.
+    private func reportFrame() {
+        guard open, let top = NSScreen.screens.first?.frame.maxY else { return }
+        let f = panel.frame
+        helper()?.panelMoved(x: f.minX, y: top - f.maxY, width: f.width, height: f.height, windowNumber: panel.windowNumber)
+    }
     func windowDidEndLiveResize(_ notification: Notification) { remember() }
 
     /// The screen of Finder's frontmost window; nil on the Desktop, which has none.

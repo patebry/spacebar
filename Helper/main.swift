@@ -18,6 +18,11 @@ final class Endpoint: NSObject, SpacebarHelperProtocol {
         guard Link.permits(role, .panelState), let conn else { return }
         DispatchQueue.main.async { Helper.shared.panelState(open, requestID: requestID, windowNumber: windowNumber, from: conn) }
     }
+    func panelMoved(x: Double, y: Double, width: Double, height: Double, windowNumber: Int) {
+        guard Link.permits(role, .panelMoved), let conn else { return }
+        let r = CGRect(x: x, y: y, width: width, height: height)
+        DispatchQueue.main.async { Helper.shared.panelMoved(r, windowNumber: windowNumber, from: conn) }
+    }
     func declined(_ requestID: Int) {
         guard Link.permits(role, .declined) else { return }
         DispatchQueue.main.async { Helper.shared.declined(requestID) }
@@ -47,6 +52,10 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private(set) var tap: CFMachPort?
     private static let binary = HelperBinary.stamp(Bundle.main.executablePath ?? "")
     private var tapSource: CFRunLoopSource?
+    /// The trackpad's gesture (29), magnify (30) and smart magnify (32) events, on only while the panel is open
+    /// (`GestureRoute.tapOn`), so a slow turn of the main thread never holds up scrolls and swipes elsewhere.
+    private(set) var gestureTap: CFMachPort?
+    private var gestureSource: CFRunLoopSource?
     private var route = KeyRoute()
     private var viewer: NSXPCConnection?
     private var viewerPid: pid_t = 0
@@ -75,11 +84,16 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private var panelWindow = 0
     /// Checks in a row that found the panel's window off screen; one can be a frame the window server had not drawn yet.
     private var offscreenMisses = 0
-    /// Where the panel's window was at the last check: what a gesture without a window under its pointer is placed by.
+    /// Where the panel's window is, as the viewer last reported it or the last check found it: what a gesture without a window
+    /// under its pointer is placed by.
     private var panelBounds = CGRect.null
     private var gestures = GestureRoute()
-    /// One line per opening of the panel says how the first zoom gesture over it was routed.
-    private var gestureLogged = false
+    /// The first pinch of each opening of the panel, counted and logged at its end, so one live pinch shows how the window
+    /// server delivers them.
+    private var tally: PinchTally?
+    private var tallied = false
+    /// Gestures placed by the panel's bounds, the window server having named no window under the pointer.
+    private var byBounds = 0
     private var watchTimer: Timer?
     private let bg = DispatchQueue(label: "md.spacebar.helper.ax", qos: .userInteractive)
 
@@ -175,6 +189,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         panelOpen = false
         suspendedAt = nil
         text.clear()
+        gesturesOff()
     }
 
     private func lost(_ c: NSXPCConnection?, pid: pid_t) {
@@ -185,6 +200,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         panelOpen = false
         suspendedAt = nil
         text.clear()
+        gesturesOff()
         if let p = pending { fail(p.id, "viewer gone") }
         // A viewer that keeps dying is relaunched less and less often.
         nextLaunch = Date(timeIntervalSinceNow: relaunchDelay)
@@ -223,8 +239,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         guard open else {
             panelOpen = false
             panelWindow = 0
-            panelBounds = .null
-            gestures.reset()
+            gesturesOff()
             suspendedAt = nil
             text.clear()
             if Decision.closeEndsPending(pendingID: pending?.id, requestID: requestID) { pending = nil }
@@ -244,11 +259,17 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         case .accept:
             if let p = pending { lastShown = p.paths }
             pending = nil
-            if !panelOpen { gestureLogged = false }
+            if !panelOpen { tallied = false }
             panelOpen = true
             panelWindow = windowNumber
             offscreenMisses = 0
+            syncGestureTap()
         }
+    }
+
+    func panelMoved(_ r: CGRect, windowNumber: Int, from c: NSXPCConnection) {
+        guard c === viewer, panelOpen, windowNumber == panelWindow, r.width > 0, r.height > 0 else { return }
+        panelBounds = r
     }
 
     func declined(_ id: Int) {
@@ -266,8 +287,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     // MARK: Tap
 
     private func createTap() {
-        // Keys, and the trackpad's gesture (29), magnify (30) and smart magnify (32) events: no pointer moves, clicks or scrolls.
-        let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue) | (1 << 29) | (1 << 30) | (1 << 32)
+        let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
         guard let port = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
                                            eventsOfInterest: CGEventMask(mask), callback: tapCallback, userInfo: nil) else {
             return log.error("tap create failed")
@@ -278,6 +298,34 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: port, enable: true)
         log.info("tap on")
+        createGestureTap()
+    }
+
+    private func createGestureTap() {
+        guard let port = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
+                                           eventsOfInterest: CGEventMask((1 << 29) | (1 << 30) | (1 << 32)), callback: gestureTapCallback, userInfo: nil) else {
+            return log.error("gesture tap create failed")
+        }
+        CGEvent.tapEnable(tap: port, enable: false)
+        gestureTap = port
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
+        gestureSource = source
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        syncGestureTap()
+    }
+
+    private func syncGestureTap() {
+        guard let gestureTap else { return }
+        let on = GestureRoute.tapOn(open: panelOpen, pinching: gestures.pinch != nil)
+        if CGEvent.tapIsEnabled(tap: gestureTap) != on { CGEvent.tapEnable(tap: gestureTap, enable: on) }
+    }
+
+    /// The panel closed or went away: whatever pinch was under way is Finder's again, and the gesture tap stops.
+    private func gesturesOff() {
+        panelBounds = .null
+        gestures.reset()
+        tally = nil
+        syncGestureTap()
     }
 
     /// Accessibility was revoked: the tap goes, the panel closes, and a new tap is made if it is granted again.
@@ -288,6 +336,13 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         CFMachPortInvalidate(port)
         tap = nil
         tapSource = nil
+        if let gestureTap {
+            CGEvent.tapEnable(tap: gestureTap, enable: false)
+            if let gestureSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), gestureSource, .commonModes) }
+            CFMachPortInvalidate(gestureTap)
+        }
+        gestureTap = nil
+        gestureSource = nil
         route.release()
         close("accessibility revoked")
         log.error("tap off: Accessibility revoked")
@@ -322,7 +377,6 @@ final class Helper: NSObject, NSXPCListenerDelegate {
             log.error("tap re-enabled (\(why, privacy: .public))")
             return pass
         }
-        if [29, 30, 32].contains(type.rawValue) { return gesture(type, event) ? nil : pass }
         guard type == .keyDown || type == .keyUp else { return pass }
         let e = Self.keyEvent(event, down: type == .keyDown)
         // A rename or the search field can open without a focus notification arriving first: read the focus now, before a key
@@ -351,20 +405,42 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private static let gesturePhase = CGEventField(rawValue: 132)!
 
     /// A pinch or smart zoom over the open panel: sent to the viewer, which is never the active app and so is never handed one,
-    /// and true so Finder does not get it too.
-    private func gesture(_ type: CGEventType, _ event: CGEvent) -> Bool {
-        guard panelOpen || gestures.taking != nil else { return false }
+    /// and kept from Finder.
+    func handleGesture(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        let pass = Unmanaged.passUnretained(event)
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            gestures.reset()
+            log.error("gesture tap disabled (\(type == .tapDisabledByTimeout ? "timeout" : "user input", privacy: .public))")
+            if Decision.reenablesTap(trusted: AXIsProcessTrusted()) { syncGestureTap() }
+            return pass
+        }
+        guard panelOpen || gestures.pinch != nil else { return pass }
         let g = GestureEvent(type: Int64(type.rawValue), subtype: event.getIntegerValueField(Self.gestureSubtype),
                              phase: event.getIntegerValueField(Self.gesturePhase),
-                             windowUnder: Int(event.getIntegerValueField(.mouseEventWindowUnderMousePointer)), location: event.location)
-        guard GestureRoute.zooms(g) else { return false }
-        let took = gestures.take(g, open: panelOpen, panelWindow: panelWindow, bounds: panelBounds)
-        if panelOpen, !gestureLogged {
-            gestureLogged = true
-            log.info("first zoom gesture with the panel open: type \(g.type) subtype \(g.subtype) phase \(g.phase) under window \(g.windowUnder) (panel \(self.panelWindow)): \(took ? "sent to the panel" : "passed", privacy: .public)")
+                             windowUnder: Int(event.getIntegerValueField(.mouseEventWindowUnderMousePointer)), location: event.location,
+                             time: Double(event.timestamp) / 1e9)
+        guard GestureRoute.zooms(g) else { return pass }
+        let began = g.phase == 1 || g.phase == 128
+        let action = gestures.route(g, open: panelOpen, panelWindow: panelWindow, bounds: panelBounds)
+        if GestureRoute.byBounds(g), began || g.phase == 0 { byBounds += 1 }
+        count(g, action, began: began)
+        if action == .forward, let data = event.data { viewerProxy()?.gesture(data as Data) }
+        if !panelOpen { syncGestureTap() }
+        return action == .pass ? pass : nil
+    }
+
+    private func count(_ g: GestureEvent, _ action: GestureAction, began: Bool) {
+        guard panelOpen, !tallied, !GestureRoute.smart(g) else { return }
+        if tally == nil, began { tally = PinchTally() }
+        if tally == nil, g.phase == 0 {
+            tallied = true
+            return log.info("pinch event without phases with the panel open (window \(self.panelWindow)): \(g.type)/\(g.subtype), window under pointer \(g.windowUnder), \(String(describing: action), privacy: .public)")
         }
-        if took, let data = event.data { viewerProxy()?.gesture(data as Data) }
-        return took
+        tally?.add(g, action)
+        guard let t = tally, g.phase == 4 || g.phase == 8, gestures.pinch == nil else { return }
+        tallied = true
+        tally = nil
+        log.info("pinch with the panel open (window \(self.panelWindow)): \(t.summary, privacy: .public); placed by bounds \(self.byBounds) times since launch")
     }
 
     /// Space with the panel closed: true when it was taken and the viewer asked to show Finder's selection.
@@ -418,6 +494,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         viewerProxy()?.suspend()
         panelOpen = false
         text.clear()
+        gesturesOff()
         panelWindow = 0
         offscreenMisses = 0
         suspendedAt = Date()
@@ -462,6 +539,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         guard panelOpen || viewer != nil else { return }
         viewerProxy()?.close()
         panelOpen = false
+        gesturesOff()
         log.info("close (\(why, privacy: .public))")
     }
 
@@ -644,6 +722,34 @@ final class Helper: NSObject, NSXPCListenerDelegate {
 }
 
 let tapCallback: CGEventTapCallBack = { _, type, event, _ in Helper.shared.handle(type: type, event: event) }
+let gestureTapCallback: CGEventTapCallBack = { _, type, event, _ in Helper.shared.handleGesture(type: type, event: event) }
+
+/// One pinch's events, by type and HID subtype, as the tap routed them.
+struct PinchTally {
+    private var kinds: [String: Int] = [:]
+    private var order: [String] = []
+    private var events = 0, withWindow = 0, forwarded = 0, swallowed = 0, passed = 0
+    private var byBounds = false
+
+    mutating func add(_ g: GestureEvent, _ action: GestureAction) {
+        let k = "\(g.type)/\(g.subtype)"
+        if kinds[k] == nil { order.append(k) }
+        kinds[k, default: 0] += 1
+        events += 1
+        if g.windowUnder > 0 { withWindow += 1 }
+        if events == 1 { byBounds = GestureRoute.byBounds(g) }
+        switch action {
+        case .forward: forwarded += 1
+        case .swallow: swallowed += 1
+        case .pass: passed += 1
+        }
+    }
+
+    var summary: String {
+        "events " + order.map { "\($0)x\(kinds[$0]!)" }.joined(separator: " ")
+            + "; window under pointer on \(withWindow) of \(events); decided by \(byBounds ? "bounds" : "window"); forwarded \(forwarded), swallowed \(swallowed), passed \(passed)"
+    }
+}
 let axCallback: AXObserverCallback = { _, _, name, _ in Helper.shared.axNotification(name as String) }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {

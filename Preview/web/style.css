@@ -268,6 +268,7 @@
   #sidebar #side-list.keyed a.row { transition: none; }
   #side-list.keyed a.row:not(.cursor, :active) { background: transparent; }
   #side-list.keyed a.row.cursor { background: var(--row-sel); }
+  #side-list.keyed.lost a.row.active { background: var(--row-sel); }
   #side-filter { padding: 0 8px 6px; display: flex; gap: 4px; align-items: center; }
   #side-menu { flex: none; width: 24px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; cursor: default;
     color: var(--muted); background: transparent; }

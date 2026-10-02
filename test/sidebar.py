@@ -414,6 +414,7 @@ def one_selection(page, check, out):
     for i in range(40):
         open(os.path.join(d, f'{i:02d}.txt'), 'w').write(f'{i}\n')
     open(os.path.join(d, 'folder', 'inner.txt'), 'w').write('inner\n')
+    open(os.path.join(d, 'folder', 'other.txt'), 'w').write('other\n')
     LIT = """const l = document.getElementById('side-list'), nm = (a) => a && a.querySelector('.nm').textContent, c = l.querySelector('a.cursor');
       return { lit: [...l.querySelectorAll('a.row')].filter((a) => getComputedStyle(a).backgroundColor !== 'rgba(0, 0, 0, 0)').map(nm),
         cursor: nm(c) || null, active: nm(l.querySelector('a.active')) || null, hover: [...l.querySelectorAll('a.row:hover')].map(nm),
@@ -461,6 +462,65 @@ def one_selection(page, check, out):
           'one selection: a cursor in a folder closed under it moves on from the folder, not from the top', json.dumps([inside, after]))
     click(page, '#side-list a.row[data-path="' + os.path.join(d, '02.txt') + '"]')
     check(not page.js(LIT)['keyed'], 'one selection: a click hands the highlight back to the pointer')
+
+    # The pointer moving over the list hands the highlight back too; a pointermove with no movement (a redraw under it) does not.
+    key('down')
+    page.cmd('@wait:0.3')
+    move = lambda dx: page.js("document.getElementById('side-list').dispatchEvent(new PointerEvent('pointermove', { bubbles: true, movementX: " + str(dx)
+                              + " })); return document.getElementById('side-list').classList.contains('keyed')")
+    still, moved = move(0), move(3)
+    check(still and not moved and page.js(LIT)['lit'] == ['03.txt'], 'one selection: the pointer moving over the list brings its hover back; standing still does not',
+          json.dumps([still, moved]))
+
+    # The file on screen is always lit when drawn: with the cursor filtered out, and after an open the keys did not make.
+    key('down', 'down', 'home')
+    page.cmd('@wait:0.4')
+    typed = lambda q: page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.value = " + json.dumps(q)
+                               + "; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
+    typed('05')
+    page.cmd('@wait:0.4')
+    hidden = page.js(LIT)
+    typed('')
+    page.cmd('@wait:0.3')
+    page.cmd('@eval:keyed.set(' + json.dumps(os.path.join(d, '09.txt')) + ', performance.now()); post({ type: "open", path: ' + json.dumps(os.path.join(d, '12.txt')) + ' }); 0')
+    page.cmd('@wait:0.4')
+    linked = page.js(LIT)
+    check(hidden['cursor'] is None and hidden['lit'] == ['05.txt'] and hidden['active'] == '05.txt' and linked['lit'] == ['12.txt']
+          and linked['cursor'] == linked['active'] == '12.txt', 'one selection: the file on screen stays lit with the cursor filtered out, and an open '
+          'the keys did not make takes the cursor even with a key open pending', json.dumps([hidden, linked]))
+
+    # Filtered, Return with the cursor hidden leaves the folder shown for a match alone.
+    folder = os.path.join(d, 'folder')
+    page.cmd('@eval:cursor = ' + json.dumps(os.path.join(folder, 'other.txt')) + '; 0')
+    typed('inner')
+    page.cmd('@wait:0.4')
+    before = page.js('return expanded().has(' + json.dumps(folder) + ')')
+    key('return')
+    page.cmd('@wait:0.3')
+    after = page.js('return [expanded().has(' + json.dumps(folder) + '), [...document.querySelectorAll("#side-list a.row")].map((a) => a.textContent)]')
+    typed('')
+    check(after[0] == before and after[1] == ['folder', 'inner.txt'], 'one selection: Return in a filter never closes a folder from a hidden cursor',
+          json.dumps([before, after]))
+
+    # Rows that share a path are each drawn.
+    dup = page.js("""const l = document.createElement('div'), mk = () => { const a = document.createElement('a'); a.dataset.path = '/x'; return a; };
+      l.append(mk(), mk()); patchList(l, [mk(), mk(), mk()]); return [l.children.length, new Set(l.children).size]""")
+    check(dup == [3, 3], 'one selection: rows sharing a path are each kept', json.dumps(dup))
+
+    # A root of / with the cursor nowhere in the list: the keys still return, filtered or not.
+    page.cmd('@eval:sb.filterEnd({ all: true }); 0')
+    page.cmd('@root:/')
+    page.render(os.path.join(d, '00.txt'))
+    page.cmd('@wait:0.5')
+    typed('zzqqxxnomatch')
+    page.cmd('@wait:0.5')
+    a = dispatch_key(page, 'ArrowDown')
+    typed('')
+    page.cmd('@wait:0.3')
+    page.cmd("@eval:cursor = '/no-such-folder-zz/x'; 0")
+    b = dispatch_key(page, 'ArrowDown')
+    check(a['result'] is not None and b['result'] is not None and page.js(LIT)['cursor'] is not None,
+          'one selection: with a root of /, a hidden cursor does not hang the keys, filtered or not', json.dumps([a['result'], b['result']]))
     page.cmd('@eval:sb.filterEnd({ all: true }); 0')
     page.cmd('@size:1100x760')
     page.cmd('@root:')
@@ -574,6 +634,10 @@ def contents_search(page, check, out):
     top = page.js("return document.getElementById('side-list').scrollTop")
     check(m[0] > 0 and m[1] == m[0] and m[2] > 0 and top == 0,
           'contents: while the next search runs the results keep their marks, and its results start at the top of the list', json.dumps([m, top]))
+    q = page.js("""const q = document.getElementById('side-q'); q.value = 'quokka and more'; q.dispatchEvent(new Event('input', { bubbles: true }));
+      const p = hits.list.find((h) => h.path !== current.path).path; openHit(p); const out = [hits.listQ, findOnOpen && findOnOpen.q]; findOnOpen = null; return out""")
+    settle()
+    check(q[0] == q[1] == 'quokka and', 'contents: a result opened while the next search runs finds the query it was found for', json.dumps(q))
     page.cmd('@root:' + d)
     page.render(D('README.md'))
     page.cmd('@wait:0.3')
@@ -3951,6 +4015,11 @@ def main():
               'resize: nothing under the drag hovers or takes the pointer, and no text is selected', json.dumps([moves[:3], after]))
         check([m[4] for m in moves] == ['col-resize' if want(m[0]) < 450 else 'w-resize' for m in moves] and after[:2] == ['max', 'w-resize'],
               'resize: the cursor is col-resize, and at the widest says it only goes narrower', json.dumps([[m[4] for m in moves], after]))
+        stuck = page.js("""const h = document.getElementById('side-resize'), r = h.getBoundingClientRect(), on = () => document.documentElement.classList.contains('sb-resizing');
+          const down = () => h.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 9, clientX: r.left + 4, clientY: 200 }));
+          down(); const a = on(); window.dispatchEvent(new Event('blur')); const b = on();
+          down(); const c = on(); document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); return [a, b, c, on()]""")
+        check(stuck == [True, False, True, False], 'resize: the window losing focus or Esc ends a drag, so no later click is swallowed', json.dumps(stuck))
         page.cmd('@nativedrag:#side-resize,-600')
         low = page.js("const h = document.getElementById('side-resize'); return [h.dataset.at, getComputedStyle(h).cursor]")
         check(low == ['min', 'e-resize'] and st()['width'] == '160px', 'resize: at the narrowest it says it only goes wider', json.dumps(low))

@@ -1,5 +1,7 @@
 'use strict';
-const post = (msg) => window.webkit.messageHandlers.sb.postMessage(msg);
+// Watches what the page asks for before it is sent (the sidebar's keys, below, tell their own opens from the rest).
+let postHook = null;
+const post = (msg) => { if (postHook) postHook(msg); window.webkit.messageHandlers.sb.postMessage(msg); };
 window.addEventListener('error', (e) => post({ type: 'log', msg: `${e.message} @${e.lineno}` }));
 document.addEventListener('securitypolicyviolation', (e) => post({ type: 'log', msg: `csp blocked ${e.violatedDirective} ${e.blockedURI}` }));
 window.addEventListener('unhandledrejection', (e) => post({ type: 'log', msg: 'rejection: ' + e.reason }));
@@ -3628,6 +3630,9 @@ let filterSeq = 0;
 // Files the keys opened, by path, with when: their renders, and any render while one is pending, leave the cursor where the
 // keys put it since.
 const keyed = new Map();
+// Anything else that shows another file (a click, a link, the overview) takes the cursor back to it when it renders.
+let keyOpening = false;
+postHook = (m) => { if (!keyOpening && ['open', 'overview', 'link'].includes(m.type)) keyed.clear(); };
 
 function expanded() {
   if (!tree.root) return new Set();
@@ -3828,11 +3833,11 @@ function drawSideWindow(force) {
  *  a row taken out and put back loses its hover until the pointer moves, which showed as a flicker under a still pointer. */
 function patchList(list, nodes) {
   const old = new Map();
-  for (const c of list.children) old.set(c.dataset.path || c.outerHTML, c);
+  for (const c of list.children) if (!old.has(c.dataset.path || c.outerHTML)) old.set(c.dataset.path || c.outerHTML, c);
   const out = nodes.map((n) => {
-    const o = old.get(n.dataset.path || n.outerHTML);
+    const key = n.dataset.path || n.outerHTML, o = old.get(key);
     if (!o || o.tagName !== n.tagName) return n;
-    old.delete(n.dataset.path || n.outerHTML);
+    old.delete(key);
     for (const { name } of [...o.attributes]) if (!n.hasAttribute(name)) o.removeAttribute(name);
     for (const { name, value } of n.attributes) if (o.getAttribute(name) !== value) o.setAttribute(name, value);
     if (o.innerHTML !== n.innerHTML) o.replaceChildren(...n.childNodes);
@@ -3843,6 +3848,8 @@ function patchList(list, nodes) {
   let at = list.firstChild;
   for (const n of out) { if (n === at) at = at.nextSibling; else list.insertBefore(n, at); }
 }
+// The pointer moving over the list hands the highlight back to it, as in Finder; a redraw under a still pointer does not.
+$('side-list').addEventListener('pointermove', (e) => { if (e.movementX || e.movementY) $('side-list').classList.remove('keyed'); }, { passive: true });
 let sideScrollQueued = false;
 $('side-list').addEventListener('scroll', () => {
   if (sideScrollQueued || sideRows.length <= SIDE_VIRTUAL) return;
@@ -4130,8 +4137,11 @@ function endResize() {
 handle.addEventListener('pointerup', endResize);
 handle.addEventListener('pointercancel', endResize);
 handle.addEventListener('lostpointercapture', endResize);
-// Without the capture a release away from the handle reaches only the page, and nothing else takes the pointer until it ends.
+// Without the capture a release away from the handle reaches only the page, and nothing else takes the pointer until it ends:
+// so does the window losing focus mid-drag, or Esc.
 document.addEventListener('pointerup', endResize, true);
+window.addEventListener('blur', endResize);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && resizing) { endResize(); e.preventDefault(); } }, true);
 handle.addEventListener('dblclick', (e) => { e.preventDefault(); choose('sidebarWidth', SIDE_DEFAULT); });
 
 // ---------- the sidebar's filter and keys ----------
@@ -4258,8 +4268,8 @@ function hitRow(r) {
 /** Opens a result, then finds the query in it; one already on screen is searched at once. */
 function openHit(path) {
   if (!showingHits() || !hits.list.some((h) => h.path === path)) return false;
-  if (path === current.path) { findFor(hits.q); return false; }
-  findOnOpen = { path, q: hits.q };
+  if (path === current.path) { findFor(hits.listQ); return false; }
+  findOnOpen = { path, q: hits.listQ };
   return true;
 }
 
@@ -4318,6 +4328,8 @@ Object.assign(window.sb, {
 });
 
 function markCursor() {
+  // With no row for the cursor (filtered out, or never there) the file on screen keeps its highlight under the keys.
+  $('side-list').classList.toggle('lost', !sideRows.some((x) => x.e && x.e.path === cursor));
   for (const r of $('side-list').querySelectorAll('a.row')) {
     const on = r.dataset.path === cursor;
     r.classList.toggle('cursor', on);
@@ -4345,7 +4357,7 @@ function moveCursor(r, open, repeat) {
   if (!open || r.e.dir || r.e.broken || cursor === current.path) return;
   const path = cursor;
   keyed.set(path, performance.now());
-  const go = () => { peek(false); openHit(path); post({ type: 'open', path }); };
+  const go = () => { peek(false); openHit(path); keyOpening = true; post({ type: 'open', path }); keyOpening = false; };
   if (repeat) openTimer = setTimeout(go, 90); else go();
 }
 
@@ -4356,8 +4368,9 @@ function sideKey(key, inFilter, repeat) {
   const rows = sideRows.filter((x) => x.e && !x.e.broken);
   if (!rows.length) return false;
   let i = rows.findIndex((x) => x.e.path === cursor);
-  // A cursor hidden in a folder closed by a click moves from that folder, as Finder's selection does.
-  for (let p = cursor; i < 0 && inTree(p);) { p = parentOf(p); i = rows.findIndex((x) => x.e.path === p); }
+  // A cursor hidden in a folder closed by a click moves from that folder, as Finder's selection does. Filtered, a hidden cursor
+  // starts from the top: the folder above it may be shown only for another match, and Return would close it.
+  if (!filtered()) for (let p = cursor; i < 0 && inTree(p) && p !== tree.root;) { p = parentOf(p); i = rows.findIndex((x) => x.e.path === p); }
   const r = rows[i];
   const step = (d) => rows[i < 0 ? (d > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, i + d))];
   switch (key) {

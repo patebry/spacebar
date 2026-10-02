@@ -4730,6 +4730,9 @@ const FIND_PAINT = 150;
 const FIND_SKIP = '.viewer-head, .viewer-note, .gutter, .katex-mathml, .md-editing, pre.mermaid, svg, button, .jt-sum, .fence-bar';
 const findBar = $('find'), findField = $('find-q');
 const highlights = typeof CSS !== 'undefined' && CSS.highlights && typeof Highlight === 'function' ? CSS.highlights : null;
+// WebKit repaints the ranges added to or cleared from a Highlight, but not those of one the registry drops for another under
+// the same name: a shorter query's matches would stay painted. So each name keeps one Highlight, emptied and filled again.
+const findMarks = highlights && { all: new Highlight(), cur: Object.assign(new Highlight(), { priority: 1 }) };
 // q: the text looked for; how: 'dom', 'csv' or 'json'; hits: { s, e } in the text (dom), with { k, c } a table cell (k -1 the
 // header) or { ptr, part } a JSON row's key or value; at: the current match, -1 before the first step.
 let finder = { q: '', path: '', how: 'dom', hits: [], at: -1, more: false, index: null, ranges: null, goto: false };
@@ -4885,10 +4888,13 @@ function visibleMatches(ranges) {
 function paintFind() {
   const ranges = findRanges(), cur = ranges.get(finder.at);
   if (highlights) {
-    highlights.set('sb-find', new Highlight(...visibleMatches(ranges).filter((i) => i !== finder.at).map((i) => ranges.get(i))));
-    const h = cur ? new Highlight(cur) : new Highlight();
-    h.priority = 1;
-    highlights.set('sb-find-cur', h);
+    const { all, cur: one } = findMarks;
+    all.clear();
+    one.clear();
+    for (const i of visibleMatches(ranges)) if (i !== finder.at) all.add(ranges.get(i));
+    if (cur) one.add(cur);
+    highlights.set('sb-find', all);
+    highlights.set('sb-find-cur', one);
   }
   return cur;
 }
@@ -5049,7 +5055,7 @@ function closeFind() {
   if (finder.how === 'native' && !finder.goto && current.path) { nativeFindSeq++; post({ type: 'nativeFindEnd', path: current.path }); }
   if (finder.goto) { finder.q = ''; findField.placeholder = 'Find'; findField.setAttribute('aria-label', 'Find in this file'); }
   Object.assign(finder, { hits: [], at: -1, more: false, index: null, ranges: null, goto: false });
-  if (highlights) { highlights.delete('sb-find'); highlights.delete('sb-find-cur'); }
+  if (highlights) { findMarks.all.clear(); findMarks.cur.clear(); highlights.delete('sb-find'); highlights.delete('sb-find-cur'); }
 }
 
 /** The find field holding the writer's key panel, as the sidebar's filter does: its text comes back through sb.filterText,

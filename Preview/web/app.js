@@ -3607,8 +3607,9 @@ let cursor = '';
 // The filter's mode, Names or Contents, for as long as the page lives (never saved).
 let sideMode = 'names';
 // The search on screen: its sequence number and query, the files found so far ({ path, name, icon, count, line, snippet }),
-// how far it got, and whether it is done (with why it stopped short, if it did). `version` redraws the list.
-let hits = { seq: 0, q: '', list: [], searched: 0, total: 0, done: true, stopped: '', listedOnly: false, fresh: false, version: 0 };
+// how far it got, and whether it is done (with why it stopped short, if it did). `listQ` is the query `list` was found for, and
+// `version` redraws the list.
+let hits = { seq: 0, q: '', listQ: '', list: [], searched: 0, total: 0, done: true, stopped: '', listedOnly: false, fresh: false, version: 0 };
 let searchSeq = 0;
 // The Names filter's search of the whole tree (ContentSearch.runNames): every file and folder under the root whose name matches,
 // listed or not, merged into the filtered tree. `list` holds { path, name, dir, icon }.
@@ -3782,6 +3783,8 @@ function treeRow(r) {
 // list shows a Contents search's results (style.css).
 let sideRows = [];
 let sideWin = '';
+// The query of the Contents results last drawn: new results start at the top of the list.
+let sideHitsQ = '';
 const SIDE_ROW_H = 24, SIDE_HIT_H = 40, SIDE_VIRTUAL = 300, SIDE_OVERSCAN = 30;
 const sideRowH = () => (showingHits() ? SIDE_HIT_H : SIDE_ROW_H);
 
@@ -3789,6 +3792,7 @@ function sideNode(r) {
   if (r.hit) return hitRow(r);
   if (r.e) return treeRow(r);
   const n = el('div', 'row-note', r.note);
+  n.title = r.note;
   n.style.setProperty('--depth', r.depth);
   return n;
 }
@@ -3816,8 +3820,28 @@ function drawSideWindow(force) {
   if (a > 0) nodes.push(sidePad(a * rh));
   for (let i = a; i < b; i++) nodes.push(sideNode(sideRows[i]));
   if (b < n) nodes.push(sidePad((n - b) * rh));
-  list.replaceChildren(...nodes);
+  patchList(list, nodes);
   markCursor();
+}
+
+/** Puts `nodes` in the list, keeping each row already there (by path, or a note by its markup) and only changing what differs:
+ *  a row taken out and put back loses its hover until the pointer moves, which showed as a flicker under a still pointer. */
+function patchList(list, nodes) {
+  const old = new Map();
+  for (const c of list.children) old.set(c.dataset.path || c.outerHTML, c);
+  const out = nodes.map((n) => {
+    const o = old.get(n.dataset.path || n.outerHTML);
+    if (!o || o.tagName !== n.tagName) return n;
+    old.delete(n.dataset.path || n.outerHTML);
+    for (const { name } of [...o.attributes]) if (!n.hasAttribute(name)) o.removeAttribute(name);
+    for (const { name, value } of n.attributes) if (o.getAttribute(name) !== value) o.setAttribute(name, value);
+    if (o.innerHTML !== n.innerHTML) o.replaceChildren(...n.childNodes);
+    return o;
+  });
+  const keep = new Set(out);
+  for (const c of [...list.children]) if (!keep.has(c)) c.remove();
+  let at = list.firstChild;
+  for (const n of out) { if (n === at) at = at.nextSibling; else list.insertBefore(n, at); }
 }
 let sideScrollQueued = false;
 $('side-list').addEventListener('scroll', () => {
@@ -3944,13 +3968,20 @@ function renderSidebar() {
   // Keep the document on screen in view; the list scrolls on its own, never the page.
   const at = sideRows.findIndex((r) => r.e && !r.e.dir && r.e.path === current.path);
   for (const [p, t] of keyed) if (performance.now() - t > 2000) keyed.delete(p);
-  if (moved && !keyed.delete(current.path) && !keyed.size) cursor = current.path;
+  // While the keys are ahead of the renders they own the cursor and the scrolling: a late render never pulls either back.
+  const byKeys = (moved && keyed.delete(current.path)) || keyed.size > 0;
+  if (moved && !byKeys) cursor = current.path;
   // The list is drawn at its new height first: a scrollTop set while it still holds fewer rows would be clamped. A folder
-  // opened or closed above the document leaves the list where it is.
+  // opened or closed above the document leaves the list where it is, and a row already in view never moves.
   drawSideWindow(true);
+  const hitsQ = showingHits() ? hits.listQ : '';
+  if (hitsQ !== sideHitsQ) {
+    sideHitsQ = hitsQ;
+    if (hitsQ) { list.scrollTop = 0; drawSideWindow(false); return; }
+  }
   const rh = sideRowH(), y = at * rh;
   const off = y < list.scrollTop || y + rh > list.scrollTop + list.clientHeight;
-  if (at >= 0 && (moved || ((refiltered || !hadActive) && off))) {
+  if (at >= 0 && off && !byKeys && (moved || (!hitsQ && (refiltered || !hadActive)))) {
     list.scrollTop = Math.max(0, y - list.clientHeight / 3);
     drawSideWindow(false);
   }
@@ -4069,16 +4100,23 @@ const sideLimit = () => Math.max(SIDE_MIN, Math.min(SIDE_MAX, Math.floor(window.
 const clampSide = (w) => Math.round(Math.max(SIDE_MIN, Math.min(sideLimit(), w)));
 let resizing = null;
 const handle = $('side-resize');
+/** The cursor says which ways the edge can still go, as macOS's split views do: only wider at the minimum, only narrower at the maximum. */
+function sideEdge(w) {
+  handle.dataset.at = w <= SIDE_MIN ? 'min' : w >= sideLimit() ? 'max' : '';
+}
+handle.addEventListener('pointerenter', () => { if (!resizing) sideEdge(Math.round($('sidebar').getBoundingClientRect().width)); });
 handle.addEventListener('pointerdown', (e) => {
   if (e.button !== 0 || narrow.matches) return;
   e.preventDefault();
   try { handle.setPointerCapture(e.pointerId); } catch (err) { /* a pointer the page cannot capture still resizes while over the handle */ }
   resizing = { x: e.clientX, w: $('sidebar').getBoundingClientRect().width, now: null };
+  sideEdge(Math.round(resizing.w));
   root.classList.add('sb-resizing');
 });
 handle.addEventListener('pointermove', (e) => {
   if (!resizing) return;
   resizing.now = clampSide(resizing.w + e.clientX - resizing.x);
+  sideEdge(resizing.now);
   root.style.setProperty('--side-saved', resizing.now + 'px');
 });
 function endResize() {
@@ -4092,6 +4130,8 @@ function endResize() {
 handle.addEventListener('pointerup', endResize);
 handle.addEventListener('pointercancel', endResize);
 handle.addEventListener('lostpointercapture', endResize);
+// Without the capture a release away from the handle reaches only the page, and nothing else takes the pointer until it ends.
+document.addEventListener('pointerup', endResize, true);
 handle.addEventListener('dblclick', (e) => { e.preventDefault(); choose('sidebarWidth', SIDE_DEFAULT); });
 
 // ---------- the sidebar's filter and keys ----------
@@ -4138,7 +4178,7 @@ function searchContents(q) {
   if (q === hits.q && hits.seq === searchSeq) return;
   if (q.length < SEARCH_MIN || !tree.root || new TextEncoder().encode(q).length > SEARCH_MAX_BYTES) {
     if (hits.q) post({ type: 'searchStop' });
-    hits = { ...hits, q: '', list: [], done: true, tooLong: q.length >= SEARCH_MIN && !!tree.root, version: hits.version + 1 };
+    hits = { ...hits, q: '', listQ: '', list: [], done: true, tooLong: q.length >= SEARCH_MIN && !!tree.root, version: hits.version + 1 };
     return;
   }
   searchSeq++;
@@ -4207,7 +4247,7 @@ function hitRow(r) {
   if (dir) top.append(el('span', 'hit-dir', plainName(dir)));
   top.append(el('span', 'hit-n', hit.count >= 9999 ? '9999+' : String(hit.count)));
   const snip = el('span', 'hit-snip');
-  snip.append(...marked(hit.snippet, hits.q));
+  snip.append(...marked(hit.snippet, hits.listQ));
   const body = el('span', 'hit-body');
   body.append(top, snip);
   a.append(icon(e.icon), body);
@@ -4270,7 +4310,7 @@ Object.assign(window.sb, {
     const found = (Array.isArray(m.hits) ? m.hits : []).filter((h) => h && typeof h.path === 'string' && inTree(h.path) && typeof h.name === 'string'
       && typeof h.snippet === 'string').map((h) => ({ path: h.path, name: h.name, icon: typeof h.icon === 'string' ? h.icon : 'text',
       count: Math.max(1, num(h.count)), line: Math.max(1, num(h.line)), snippet: h.snippet.slice(0, 400) }));
-    hits = { ...hits, list: (hits.fresh ? [] : hits.list).concat(found).slice(0, 5000), searched: num(m.searched), total: num(m.total),
+    hits = { ...hits, listQ: hits.q, list: (hits.fresh ? [] : hits.list).concat(found).slice(0, 5000), searched: num(m.searched), total: num(m.total),
       done: m.done === true, stopped: typeof m.stopped === 'string' ? m.stopped : '', listedOnly: m.listedOnly === true, fresh: false,
       version: hits.version + 1 };
     renderSidebar();
@@ -4315,7 +4355,9 @@ function sideKey(key, inFilter, repeat) {
   // A broken link is never where the cursor rests: nothing would open, and two rows would look selected.
   const rows = sideRows.filter((x) => x.e && !x.e.broken);
   if (!rows.length) return false;
-  const i = rows.findIndex((x) => x.e.path === cursor);
+  let i = rows.findIndex((x) => x.e.path === cursor);
+  // A cursor hidden in a folder closed by a click moves from that folder, as Finder's selection does.
+  for (let p = cursor; i < 0 && inTree(p);) { p = parentOf(p); i = rows.findIndex((x) => x.e.path === p); }
   const r = rows[i];
   const step = (d) => rows[i < 0 ? (d > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, i + d))];
   switch (key) {
@@ -4534,7 +4576,7 @@ if (HOST === 'panel') {
   const drag = (on) => { if (on !== dragOn) { dragOn = on; post({ type: 'dragZone', on }); } };
   const check = () => {
     const t = at && document.elementFromPoint(at[0], at[1]);
-    drag(!!t && (at[1] < barH || t === $('side-head')) && !t.closest(controls)
+    drag(!!t && (at[1] < barH || t === $('side-head')) && !t.closest(controls) && !root.classList.contains('sb-resizing')
       && $('aa-pop').hidden && $('side-pop').hidden && $('ow-pop').hidden && !editing);
   };
   document.addEventListener('mousemove', (e) => { at = [e.clientX, e.clientY]; check(); }, { passive: true });

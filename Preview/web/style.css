@@ -243,18 +243,19 @@
     transition: color .12s; }
   #side-title:hover { color: var(--fg); }
   #side-title:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 2px; }
-  #side-list { padding: 0 8px 12px; }
+  #side-list { padding: 0 8px 12px; --row-sel: color-mix(in srgb, var(--accent) 12%, transparent); }
   /* Every row is as tall as app.js's SIDE_ROW_H: the list draws only the rows in view and spaces out the rest by that height. */
   #side-list a.row { display: flex; align-items: center; gap: 5px; height: 24px; box-sizing: border-box; padding: 0 8px 0 calc(2px + var(--depth, 0) * 14px);
     border-radius: 6px; color: var(--fg); text-decoration: none; white-space: nowrap; }
-  #side-list a.row { transition: background-color .12s; }
+  /* Only the hover fades: a row lit as selected, or let go, changes at once, as in Finder. */
+  #side-list a.row:hover:not(.active) { transition: background-color .12s; }
   #side-list a.row:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
   #side-list a.row.folder:hover .twisty { color: var(--fg); }
   #side-list a.row:active { background: color-mix(in srgb, var(--fg) 10%, transparent); }
   #side-list a.row.broken { opacity: .45; cursor: default; }
   #side-list a.row.hidden-file > .nm, #side-list a.row.hidden-file > .ic { opacity: .55; }
   /* The active row keeps the weight of the others, so its name is cut where it was. */
-  #side-list a.row.active { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  #side-list a.row.active { background: var(--row-sel); }
   /* A name too long for the row is cut in the middle (app.js nameNode): the head gives way, the tail and extension stay. */
   #side-list .nm { min-width: 0; display: flex; overflow: hidden; }
   #side-list .nm-h { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -262,7 +263,11 @@
   #side-list .twisty { flex: none; width: 12px; height: 12px; display: inline-grid; place-items: center; color: var(--muted); }
   #side-list .twisty svg { width: 10px; height: 10px; fill: currentColor; transition: transform .12s ease-out; }
   #side-list a.open .twisty svg { transform: rotate(90deg); }
-  #side-list.keyed a.row.cursor:not(.active) { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent); }
+  /* Moving with the keys, the cursor is the one selected row, at once: the file on screen catches up with it, and the hover of a
+     pointer left over the list waits for the next click. */
+  #sidebar #side-list.keyed a.row { transition: none; }
+  #side-list.keyed a.row:not(.cursor, :active) { background: transparent; }
+  #side-list.keyed a.row.cursor { background: var(--row-sel); }
   #side-filter { padding: 0 8px 6px; display: flex; gap: 4px; align-items: center; }
   #side-menu { flex: none; width: 24px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; cursor: default;
     color: var(--muted); background: transparent; }
@@ -284,6 +289,7 @@
   #side-q:focus, #side-q.held { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
   #side-q:disabled { opacity: .5; }
   /* Names | Contents: two equal segments on a row of their own, so the field never changes width. */
+  #sidebar > #side-mode { width: calc(var(--side-w) - 16px); }
   #side-mode { display: grid; grid-template-columns: 1fr 1fr; margin: 0 8px 6px; padding: 2px; gap: 2px; border-radius: 7px;
     background: color-mix(in srgb, var(--fg) 6%, transparent); }
   #side-mode button { height: 18px; padding: 0 4px; border: 0; border-radius: 5px; cursor: default; font: inherit; font-size: 11px; color: var(--muted);
@@ -305,13 +311,14 @@
   #side-list .hit-n { flex: none; margin-left: auto; font-size: 10.5px; color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
   #side-list .hit-snip { overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: var(--muted); font-weight: 400; }
   #side-list .hit-snip mark { background: none; color: var(--fg); font-weight: 600; }
-  #side-list .row-note { height: 24px; box-sizing: border-box; display: flex; align-items: center; padding: 0 8px 0 calc(21px + var(--depth, 0) * 14px);
-    font-size: 11.5px; color: var(--muted); white-space: nowrap; }
-  #side-more { padding: 4px 16px 14px; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #side-resize::after { content: ""; position: absolute; top: 0; bottom: 0; right: 0; width: 2px; background: transparent; transition: background .12s; }
+  #side-list .row-note { height: 24px; line-height: 24px; box-sizing: border-box; padding: 0 8px 0 calc(21px + var(--depth, 0) * 14px);
+    font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The search's progress wraps in a narrow sidebar rather than lose its counts. */
+  #side-more { padding: 4px 16px 14px; font-size: 11.5px; line-height: 1.35; color: var(--muted); overflow-wrap: anywhere; }
+  #side-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background .12s; }
   #side-resize:hover::after, :root.sb-resizing #side-resize::after { background: color-mix(in srgb, var(--accent) 60%, transparent); }
   @media (prefers-reduced-motion: reduce) {
-    #side-list .twisty svg, #side-list a.row, #side-title, #doc a.ov-row, #doc .gt-pic img { transition: none; }
+    #side-list .twisty svg, #side-list a.row:hover:not(.active), #side-title, #doc a.ov-row, #doc .gt-pic img { transition: none; }
     #toolbar > button, #side-toggle, #doc .viewer button { transition: none !important; transform: none !important; }
   }
 
@@ -734,8 +741,8 @@
       background: color-mix(in srgb, var(--fg) 9%, transparent); }
     :root:not([data-chrome=minimal]) :is(#toolbar > #raw[aria-pressed=true], #toolbar > #find-btn[aria-expanded=true]) {
       background: color-mix(in srgb, var(--fg) 11%, transparent); }
-    :root:not([data-chrome=minimal]) #side-list a.row.active { background: color-mix(in srgb, var(--accent) 11%, transparent); }
-    :root[data-theme=solarized] #side-list a.row.active { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+    :root:not([data-chrome=minimal]) #side-list { --row-sel: color-mix(in srgb, var(--accent) 11%, transparent); }
+    :root[data-theme=solarized] #side-list { --row-sel: color-mix(in srgb, var(--accent) 9%, transparent); }
     :root:not([data-chrome=minimal]) #toolbar > #edit { padding: 0 10px; box-shadow: inset 0 0 0 1px var(--frame-line); }
     :root:not([data-chrome=minimal]) #crumbs { color: var(--muted); font-size: 12.5px; line-height: var(--bar-h); }
     :root:not([data-chrome=minimal]) #side-head { padding-top: calc(var(--bar-h) + 8px); }

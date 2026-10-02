@@ -405,6 +405,67 @@ def big_folder(page, check, T):
     check(a == ['m-4999.txt'], 'the filter cleared: the file opened from it, far down the list, is scrolled to and drawn', json.dumps(a))
 
 
+def one_selection(page, check, out):
+    """After a click or Return, the arrows leave one row looking selected, the cursor: the file on screen catches up with it, a row
+    left under the pointer keeps no highlight and is never redrawn under it, a row already in view never scrolls, and a cursor in
+    a folder closed under it moves on from that folder."""
+    d = os.path.join(out, 'one-selection')
+    os.makedirs(os.path.join(d, 'folder'))
+    for i in range(40):
+        open(os.path.join(d, f'{i:02d}.txt'), 'w').write(f'{i}\n')
+    open(os.path.join(d, 'folder', 'inner.txt'), 'w').write('inner\n')
+    LIT = """const l = document.getElementById('side-list'), nm = (a) => a && a.querySelector('.nm').textContent, c = l.querySelector('a.cursor');
+      return { lit: [...l.querySelectorAll('a.row')].filter((a) => getComputedStyle(a).backgroundColor !== 'rgba(0, 0, 0, 0)').map(nm),
+        cursor: nm(c) || null, active: nm(l.querySelector('a.active')) || null, hover: [...l.querySelectorAll('a.row:hover')].map(nm),
+        top: l.scrollTop, fade: c ? getComputedStyle(c).transitionDuration : null,
+        kept: [...l.querySelectorAll('a.row')].every((a) => a.__kept), keyed: l.classList.contains('keyed') };"""
+    keep = lambda: page.cmd("@eval:document.querySelectorAll('#side-list a.row').forEach((a) => { a.__kept = 1; }); 0")
+    page.cmd('@root:' + d)
+    page.cmd('@size:1000x500')
+    page.render(os.path.join(d, '03.txt'))
+    page.cmd('@wait:0.3')
+    r = page.cmd('@nativeclick:#side-list a.row[data-path="' + os.path.join(d, '03.txt') + '"]')
+    fb = [m for m in r['messages'] if m.get('type') == 'filterBegin']
+    seq = int(fb[0]['seq']) if fb else -1
+    key = lambda *ks: page.cmd('@eval:' + ''.join('sb.filterKey(' + json.dumps({'seq': seq, 'key': k}) + '); ' for k in ks) + '0')
+    key('return')
+    page.cmd('@wait:0.3')
+    keep()
+    key('down')
+    page.cmd('@wait:0.3')
+    one = page.js(LIT)
+    check(one['lit'] == ['04.txt'] and one['cursor'] == one['active'] == '04.txt' and one['hover'] == ['03.txt'] and one['fade'] == '0s' and one['kept'],
+          'one selection: after a click and Return, ↓ leaves the row under the pointer unlit; nothing fades or is redrawn under it', json.dumps(one))
+    ahead = page.js("sb.filterKey(" + json.dumps({'seq': seq, 'key': 'down'}) + "); sb.filterKey(" + json.dumps({'seq': seq, 'key': 'down'}) + "); " + LIT)
+    page.cmd('@wait:0.5')
+    caught = page.js(LIT)
+    check(ahead['lit'] == ['06.txt'] and ahead['active'] == '04.txt' and caught['lit'] == ['06.txt'] and caught['cursor'] == caught['active'] == '06.txt'
+          and caught['top'] == 0, 'one selection: keys ahead of the renders light the cursor alone; the file on screen catches up, nothing scrolls',
+          json.dumps([ahead, caught]))
+    key(*['down'] * 14)
+    page.cmd('@wait:0.5')
+    low = page.js("""const l = document.getElementById('side-list'), c = l.querySelector('a.cursor').getBoundingClientRect(), b = l.getBoundingClientRect();
+      return [l.scrollTop, Math.round(b.bottom - c.bottom), l.querySelector('a.cursor .nm').textContent]""")
+    check(low[0] > 0 and 0 <= low[1] <= 1 and low[2] == '20.txt', 'one selection: the list scrolls only once the cursor reaches its edge, and no further',
+          json.dumps(low))
+    key('home', 'right')
+    page.cmd('@wait:0.3')
+    key('down')
+    page.cmd('@wait:0.3')
+    inside = page.js(LIT)['cursor']
+    page.cmd('@eval:toggleFolder(' + json.dumps(os.path.join(d, 'folder')) + '); 0')
+    key('down')
+    page.cmd('@wait:0.3')
+    after = page.js(LIT)
+    check(inside == 'inner.txt' and after['cursor'] == '00.txt' and after['lit'] == ['00.txt'],
+          'one selection: a cursor in a folder closed under it moves on from the folder, not from the top', json.dumps([inside, after]))
+    click(page, '#side-list a.row[data-path="' + os.path.join(d, '02.txt') + '"]')
+    check(not page.js(LIT)['keyed'], 'one selection: a click hands the highlight back to the pointer')
+    page.cmd('@eval:sb.filterEnd({ all: true }); 0')
+    page.cmd('@size:1100x760')
+    page.cmd('@root:')
+
+
 def contents_search(page, check, out):
     """The filter's Contents mode: the Names / Contents toggle and its placeholder, results with a match count, a folder and a
     snippet, find in the file run for the same query when a result opens (by a click or the arrows), a new keystroke cancelling
@@ -504,6 +565,15 @@ def contents_search(page, check, out):
     check(seen and all(m.get('seq') == seq for m in seen) and h['status'] == 'Showing the first 500 files' and n == 500,
           'contents: a new keystroke cancels the search before it, which reports nothing more; results stop at 500 files',
           json.dumps([seq, [m.get('seq') for m in seen][:10], h['status'], n]))
+    # Typing on: the results on screen keep the marks of the query they were found for, and the new results start at the top.
+    page.cmd("@eval:document.getElementById('side-list').scrollTop = 3000; 0")
+    m = page.js("""const l = document.getElementById('side-list'), before = l.querySelectorAll('.hit-snip mark').length, top = l.scrollTop;
+      const q = document.getElementById('side-q'); q.value = 'quokka and'; q.dispatchEvent(new Event('input', { bubbles: true }));
+      return [before, l.querySelectorAll('.hit-snip mark').length, top]""")
+    settle()
+    top = page.js("return document.getElementById('side-list').scrollTop")
+    check(m[0] > 0 and m[1] == m[0] and m[2] > 0 and top == 0,
+          'contents: while the next search runs the results keep their marks, and its results start at the top of the list', json.dumps([m, top]))
     page.cmd('@root:' + d)
     page.render(D('README.md'))
     page.cmd('@wait:0.3')
@@ -587,6 +657,32 @@ def contents_search(page, check, out):
     check(h['mode'] == 'Names' and h['placeholder'] == 'Filter' and 'searchStop' in types_of(r) and h['rows'] == [],
           'contents: back to Names, the search stops and the filter matches names only', json.dumps([h, types_of(r)]))
     typed('')
+
+    # At the narrowest sidebar nothing in the search controls is cut: the field, the toggle level with it, and the longest
+    # progress line, which wraps.
+    FIT = """const s = document.getElementById('sidebar').getBoundingClientRect(), cut = [];
+      for (const e of document.querySelectorAll('#side-q, #side-menu, #side-mode, #side-mode button, #side-more:not([hidden]), #side-list a.row.hit .hit-n')) {
+        const r = e.getBoundingClientRect();
+        if (r.left < s.left - 0.5 || r.right > s.right + 0.5 || e.scrollWidth > e.clientWidth + 0.5) cut.push([e.id || e.className, r.left, r.right, e.scrollWidth, e.clientWidth]);
+      }
+      const m = document.getElementById('side-mode').getBoundingClientRect(), b = document.getElementById('side-menu').getBoundingClientRect();
+      return { width: s.width, cut, level: [m.left - document.getElementById('side-q').getBoundingClientRect().left, m.right - b.right],
+        more: document.getElementById('side-more').hidden ? '' : document.getElementById('side-more').textContent };"""
+    page.apply(sidebarWidth=160)
+    page.cmd('@wait:0.4')
+    fits = []
+    for mode in ('names', 'contents'):
+        click(page, f'#side-mode [data-mode={mode}]')
+        typed('quokka')
+        settle()
+        if mode == 'contents':
+            page.cmd('@eval:hits = { ...hits, done: false, total: 123456, searched: 98765, version: hits.version + 1 }; renderSidebar(); 0')
+        fits.append(page.js(FIT))
+    check(all(f['width'] == 160 and not f['cut'] and f['level'] == [0, 0] for f in fits) and fits[1]['more'].startswith('Searching… 98,765 of 123,456'),
+          'contents: at the narrowest sidebar the field, the toggle, the counts and the progress line all fit', json.dumps(fits))
+    typed('')
+    click(page, '#side-mode [data-mode=names]')
+    page.apply(sidebarWidth=240)
 
 def make_viewers(out):
     """Files for the viewers: a large and a small image, CSVs with other delimiters and past the row cap, nested and large JSON, a
@@ -3827,6 +3923,40 @@ def main():
         r = page.cmd("@eval:document.getElementById('side-resize').dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true })); 0")
         page.cmd('@wait:0.3')
         check(st()['width'] == '240px' and disk().get('sidebarWidth') == 240, 'double-click resets to the default width', st()['width'])
+        # The edge takes a press either side of its line, follows the pointer 1:1 to its limits, lights and selects nothing it
+        # passes, and its cursor says which ways it can still go.
+        EDGE_AT = """const w = document.getElementById('sidebar').getBoundingClientRect().width, at = (x) => (document.elementFromPoint(x, 300) || {}).id;
+          return [at(w - 3), at(w + 3)]"""
+        straddle = [page.js(EDGE_AT)]
+        page.apply(minimalChrome=True)
+        straddle.append(page.js(EDGE_AT))
+        page.apply(minimalChrome=False)
+        check(straddle == [['side-resize'] * 2] * 2, 'resize: a press just inside or just outside the edge takes it, in either chrome', json.dumps(straddle))
+        page.render(os.path.join(folder, 'a.md'))
+        page.cmd("""@eval:(() => { const h = document.getElementById('side-resize'), s = document.getElementById('sidebar'); window.__drag = { moves: [] };
+          h.addEventListener('pointerdown', (e) => { window.__drag.x = e.clientX; window.__drag.w = s.getBoundingClientRect().width; });
+          h.addEventListener('pointermove', (e) => { const t = document.elementFromPoint(e.clientX, 300);
+            window.__drag.moves.push([e.clientX, s.getBoundingClientRect().width, document.querySelectorAll('#side-list :hover, #side-filter :hover, #side-mode :hover, #doc :hover').length,
+              t && (t.id || t.tagName), getComputedStyle(document.body).cursor]); });
+          return 0; })()""")
+        page.cmd('@nativedrag:#side-resize,300')
+        drag = page.js('return window.__drag')
+        after = page.js("""const h = document.getElementById('side-resize');
+          return [h.dataset.at, getComputedStyle(h).cursor, document.documentElement.classList.contains('sb-resizing'), String(getSelection())]""")
+        want = lambda x: max(160, min(450, drag['w'] + x - drag['x']))
+        moves = drag['moves']
+        check(drag.get('w') == 240 and len(moves) >= 10 and all(abs(m[1] - want(m[0])) <= 0.5 for m in moves) and moves[-1][1] == 450,
+              'resize: the width follows the pointer 1:1 from the grab, and stops at the limit', json.dumps(drag)[:400])
+        check(all(m[2] == 0 and m[3] in ('side-resize', 'BODY', 'HTML') for m in moves) and after[3] == '' and not after[2],
+              'resize: nothing under the drag hovers or takes the pointer, and no text is selected', json.dumps([moves[:3], after]))
+        check([m[4] for m in moves] == ['col-resize' if want(m[0]) < 450 else 'w-resize' for m in moves] and after[:2] == ['max', 'w-resize'],
+              'resize: the cursor is col-resize, and at the widest says it only goes narrower', json.dumps([[m[4] for m in moves], after]))
+        page.cmd('@nativedrag:#side-resize,-600')
+        low = page.js("const h = document.getElementById('side-resize'); return [h.dataset.at, getComputedStyle(h).cursor]")
+        check(low == ['min', 'e-resize'] and st()['width'] == '160px', 'resize: at the narrowest it says it only goes wider', json.dumps(low))
+        page.cmd("@eval:document.getElementById('side-resize').dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true })); 0")
+        page.cmd('@wait:0.3')
+        page.render(os.path.join(folder, 'b.md'))
         page.cmd('@nativedrag:#side-resize,60')
         r = page.cmd("@eval:(() => { const h = document.getElementById('side-resize'); const r = h.getBoundingClientRect();"
                      " h.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 7, clientX: r.left + 2, clientY: 200 }));"
@@ -3978,6 +4108,7 @@ def main():
         tools(page, check, page.out)
         steady_chrome(page, check, page.out)
         missing_images(page, check, page.out)
+        one_selection(page, check, page.out)
         contents_search(page, check, page.out)
         archive_entries(page, check, page.out)
         sidebar_and_folders(page, check, page.out)

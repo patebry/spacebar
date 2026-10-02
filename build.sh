@@ -201,6 +201,8 @@ HELPER_DIR="$APP/Contents/Helpers/$APP_NAME Helper.app"
 mkdir -p "$HELPER_DIR/Contents/MacOS" "$APP/Contents/Library/LaunchAgents"
 cp "$HELPER_BIN" "$HELPER_DIR/Contents/MacOS/$HELPER_EXE"
 plist Helper/Info.plist "$HELPER_DIR/Contents/Info.plist" "$HELPER_ID" "$HELPER_EXE" "$APP_NAME"
+# System Settings lists the helper under Accessibility by its own icon.
+if [ -f App/AppIcon.icns ]; then mkdir -p "$HELPER_DIR/Contents/Resources"; cp App/AppIcon.icns "$HELPER_DIR/Contents/Resources/AppIcon.icns"; fi
 sed -e "s#__HELPER_ID__#$HELPER_ID#g" -e "s#__HELPER_PROGRAM__#Contents/Helpers/$APP_NAME Helper.app/Contents/MacOS/$HELPER_EXE#g" -e "s#__APP_ID__#$APP_ID#g" \
   Helper/agent.plist > "$APP/Contents/Library/LaunchAgents/$HELPER_ID.plist"
 codesign "${SIGN_ARGS[@]}" --options runtime "$HELPER_DIR"

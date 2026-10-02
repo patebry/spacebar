@@ -1,7 +1,10 @@
 // The Space panel as a real window, parked off screen (test/offscreen.swift): the frame it is given is the frame it keeps, through
 // showing a file, layout, closing and opening again. A preferred content size on the panel's controller once overrode every frame
-// (AppKit turns it into constraints at priority 501), so remembered sizes and the default placement never applied.
+// (AppKit turns it into constraints at priority 501), so remembered sizes and the default placement never applied. Then pinches
+// as the helper hands them over.
 import Cocoa
+import ImageIO
+import PDFKit
 import WebKit
 
 var failures = 0
@@ -79,6 +82,91 @@ show(notes)
 check("opened again at the new frame, not the controller's size", panel.frame == next, panel.frame)
 viewer.close()
 spin(0.3)
+
+// A pinch on the trackpad, as the helper's tap takes it from Finder and hands it over (Viewer.gesture): the window server's
+// gesture events, at a global point over the panel, never through NSApp.sendEvent, which drops them in an app that is not active.
+func js(_ source: String) -> Any? {
+    var out: Any?, done = false
+    WebHost.shared.web.evaluateJavaScript(source) { r, _ in out = r; done = true }
+    spin(until: 3) { done }
+    return out
+}
+func zoomLabel() -> Int { Int(((js("(document.querySelector('#kind .img-zoom') || {}).textContent || ''") as? String) ?? "").dropLast()) ?? -1 }
+func picture(_ w: Int, _ h: Int) -> CGImage {
+    let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.setFillColor(CGColor(srgbRed: 0.9, green: 0.2, blue: 0.2, alpha: 1))
+    ctx.fill(CGRect(x: 0, y: 0, width: w / 2, height: h))
+    ctx.setFillColor(CGColor(srgbRed: 0.2, green: 0.3, blue: 0.9, alpha: 1))
+    ctx.fill(CGRect(x: w / 2, y: 0, width: w - w / 2, height: h))
+    return ctx.makeImage()!
+}
+let png = dir.appendingPathComponent("large.png"), heic = dir.appendingPathComponent("large.heic"), pdf = dir.appendingPathComponent("doc.pdf")
+let pngOut = CGImageDestinationCreateWithURL(png as CFURL, "public.png" as CFString, 1, nil)!
+CGImageDestinationAddImage(pngOut, picture(4000, 3000), nil)
+CGImageDestinationFinalize(pngOut)
+let sips = Process()
+sips.executableURL = URL(fileURLWithPath: "/usr/bin/sips")
+sips.arguments = ["-s", "format", "heic", png.path, "--out", heic.path]
+sips.standardOutput = FileHandle.nullDevice
+try! sips.run()
+sips.waitUntilExit()
+var box = CGRect(x: 0, y: 0, width: 612, height: 792)
+let pdfCtx = CGContext(pdf as CFURL, mediaBox: &box, nil)!
+for _ in 0..<2 {
+    pdfCtx.beginPDFPage(nil)
+    pdfCtx.setFillColor(CGColor(srgbRed: 0.2, green: 0.3, blue: 0.9, alpha: 1))
+    pdfCtx.fill(CGRect(x: 72, y: 72, width: 468, height: 648))
+    pdfCtx.endPDFPage()
+}
+pdfCtx.closePDF()
+
+/// The middle of the panel's content, global from the top left of the main display, as the tap reads a pointer.
+func panelMiddle() -> CGPoint {
+    let top = NSScreen.screens.first!.frame.maxY, f = panel.frame
+    return CGPoint(x: f.midX, y: top - (f.minY + f.height * 0.45))
+}
+func gestureEvent(_ subtype: Int64, phase: Int64, value: Double = 0) -> CGEvent {
+    let e = CGEvent(source: nil)!
+    e.type = CGEventType(rawValue: 29)!
+    e.setIntegerValueField(CGEventField(rawValue: 110)!, value: subtype)
+    e.setDoubleValueField(CGEventField(rawValue: 113)!, value: value)
+    e.setIntegerValueField(CGEventField(rawValue: 132)!, value: phase)
+    e.location = panelMiddle()
+    return e
+}
+func pinchIn() {
+    let events = [gestureEvent(8, phase: 1)] + (0..<5).map { _ in gestureEvent(8, phase: 2, value: 0.1) } + [gestureEvent(8, phase: 4)]
+    for e in events { viewer.gesture(e.data! as Data); spin(0.02) }
+    spin(0.5)
+}
+func pdfView(_ v: NSView?) -> PDFView? {
+    guard let v else { return nil }
+    if let p = v as? PDFView, !p.isHidden { return p }
+    for s in v.subviews { if let p = pdfView(s) { return p } }
+    return nil
+}
+
+for (url, n) in [(png, "a PNG (the page's own image view)"), (heic, "a HEIC (ImagePane)")] {
+    show(url)
+    spin(until: 3) { zoomLabel() > 0 }
+    let before = zoomLabel()
+    pinchIn()
+    let after = zoomLabel()
+    check("a pinch handed over by the helper zooms \(n)", before > 0 && after > before, "\(before)% -> \(after)%")
+}
+show(pdf)
+spin(until: 3) { pdfView(panel.contentView) != nil }
+let pv = pdfView(panel.contentView)
+let scaleBefore = pv?.scaleFactor ?? 0
+pinchIn()
+let scaleAfter = pv?.scaleFactor ?? 0
+check("a pinch handed over by the helper zooms a PDF", pv != nil && scaleAfter > scaleBefore * 1.05, "\(scaleBefore) -> \(scaleAfter)")
+viewer.close()
+spin(0.5)
+let closedLabel = zoomLabel()
+pinchIn()
+check("a gesture with the panel closed changes nothing", zoomLabel() == closedLabel)
 
 print(failures == 0 ? "panel window: all passed" : "panel window: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

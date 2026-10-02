@@ -44,6 +44,8 @@ enum HelperIDs {
     func suspend()
     /// Finder came back: the suspended panel shows again as request `requestID`. Replies false when nothing is suspended.
     func restore(_ requestID: Int, reply: @escaping (Bool) -> Void)
+    /// A pinch or smart zoom over the open panel, as the tap took it from Finder (`CGEvent.data`).
+    func gesture(_ data: Data)
 }
 
 struct HelperStatus: Codable, Equatable {

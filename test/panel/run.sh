@@ -1,7 +1,8 @@
 #!/bin/bash
 # Builds and runs the Space panel's own checks: the frame it remembers per display (Viewer/PanelFrame.swift), in memory
 # defaults, and what ⌘C puts on the pasteboard (Viewer/FinderCopy.swift), on a private named pasteboard, never the
-# clipboard. Then the panel as a real window, parked off screen (test/panel/window/main.swift): the frame it is given holds.
+# clipboard. Then the panel as a real window, parked off screen (test/panel/window/main.swift): the frame it is given holds,
+# and a pinch the helper hands over zooms an image and a PDF.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 out=$(mktemp -d)

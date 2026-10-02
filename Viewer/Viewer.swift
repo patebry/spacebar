@@ -294,6 +294,26 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
         }
     }
 
+    func gesture(_ data: Data) {
+        DispatchQueue.main.async { if self.open { self.sendGesture(data) } }
+    }
+
+    private typealias SetWindowLocation = @convention(c) (CGEvent, CGPoint) -> Void
+    private static let setWindowLocation = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGEventSetWindowLocation")
+        .map { unsafeBitCast($0, to: SetWindowLocation.self) }
+
+    /// Rebuilds the gesture for the panel's window, at the pointer's place in it, and hands it to the window, which gives it to
+    /// the view under the pointer: NSApp.sendEvent would drop it, the viewer not being active.
+    private func sendGesture(_ data: Data) {
+        guard let cg = CGEvent(withDataAllocator: nil, data: data as CFData), [29, 30, 32].contains(cg.type.rawValue),
+              let place = Self.setWindowLocation, let top = NSScreen.screens.first?.frame.maxY else { return }
+        let at = cg.location, f = panel.frame
+        cg.setIntegerValueField(CGEventField(rawValue: 51)!, value: Int64(panel.windowNumber))
+        place(cg, CGPoint(x: at.x - f.minX, y: at.y - (top - f.maxY)))
+        guard let e = NSEvent(cgEvent: cg) else { return }
+        panel.sendEvent(e)
+    }
+
     // MARK: The panel
 
     private func present(_ urls: [URL], id: Int) {

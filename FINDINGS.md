@@ -387,6 +387,14 @@ get a keylogger) and hosting the Quick Look extension remotely (no public API). 
   window, which dispatches them to the view under the pointer. Found and checked in-process: `test/imagepane/run.sh` shows the
   drop without the router, and it, `test/sidebar.py` and `test/viewerlatency/run.sh` send pinches, two-finger taps, scrolls
   and double-clicks through NSApp.sendEvent to a window that is never key.
+  *That was not enough on a real trackpad:* a real pinch over the panel did nothing, while the same events sent in-process
+  zoomed. In-process events cannot show where the window server sends a pinch; most likely to Finder, the active app, so
+  the viewer never sees one. The helper's tap now takes gesture events
+  too, and only a pinch or smart zoom over the open panel (`GestureRoute` in Helper/Decision.swift, decided where the pinch
+  begins and held to its end) is swallowed and sent to the viewer, which re-targets it at its window and hands it to the
+  window (`Viewer.gesture`). `test/panel/run.sh` pinches a PNG, a HEIC and a PDF that way. The helper logs how it routed the
+  first zoom gesture each time the panel opens; whether the window server marks a gesture with the window under the pointer
+  (else the panel's bounds from the last 2 s check decide) is not yet checked live.
 
 **Why the helper stays down after an update, and what brings it back.** The helper is signed without a Team ID (self-signed
 for development and for releases until there is a Developer ID). Background Task Management then ignores the plist's bundle

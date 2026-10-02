@@ -400,6 +400,42 @@ check("tap: removed once Accessibility is revoked", Decision.tapAction(exists: t
 check("tap: a disabled tap is enabled again only while Accessibility is granted",
       Decision.reenablesTap(trusted: true) && !Decision.reenablesTap(trusted: false))
 
+// MARK: Gestures
+
+let panelWin = 4242, panelRect = CGRect(x: 100, y: 100, width: 800, height: 600)
+func pinch(_ phase: Int64, under: Int = panelWin, at p: CGPoint = CGPoint(x: 300, y: 300), type: Int64 = 29, subtype: Int64 = 8) -> GestureEvent {
+    GestureEvent(type: type, subtype: subtype, phase: phase, windowUnder: under, location: p)
+}
+func takeOnce(_ g: GestureEvent, open: Bool = true) -> Bool { var r = GestureRoute(); return r.take(g, open: open, panelWindow: panelWin, bounds: panelRect) }
+check("gesture: a pinch over the open panel is taken", takeOnce(pinch(1)))
+check("gesture: a smart zoom (subtype 22) over the panel is taken", takeOnce(pinch(0, subtype: 22)))
+check("gesture: magnify (30) and smart magnify (32) events over the panel are taken", takeOnce(pinch(2, type: 30)) && takeOnce(pinch(0, type: 32)))
+check("gesture: a pinch with the panel closed passes", !takeOnce(pinch(1), open: false))
+check("gesture: a pinch over another window passes", !takeOnce(pinch(1, under: 77)))
+check("gesture: no panel window known: passes", { var r = GestureRoute(); return !r.take(pinch(1), open: true, panelWindow: 0, bounds: panelRect) }())
+check("gesture: no window under the pointer, inside the panel's bounds: taken", takeOnce(pinch(1, under: 0)))
+check("gesture: no window under the pointer, outside the panel's bounds: passes", !takeOnce(pinch(1, under: 0, at: CGPoint(x: 50, y: 50))))
+check("gesture: no window and no bounds known: passes", { var r = GestureRoute(); return !r.take(pinch(1, under: 0), open: true, panelWindow: panelWin, bounds: .null) }())
+for (sub, n) in [(Int64(6), "scroll"), (5, "rotate"), (16, "swipe"), (0, "unknown")] {
+    check("gesture: a \(n) gesture (subtype \(sub)) over the panel passes", !takeOnce(pinch(2, subtype: sub)))
+}
+for t in [Int64(22), 31, 18, 19, 20] { check("gesture: event type \(t) over the panel passes", !takeOnce(pinch(2, type: t))) }
+do {
+    var r = GestureRoute()
+    let out = CGPoint(x: 5, y: 5)
+    check("pinch begun over the panel: taken", r.take(pinch(1), open: true, panelWindow: panelWin, bounds: panelRect))
+    check("pinch begun over the panel: its changes are taken when the pointer drifts off", r.take(pinch(2, under: 77, at: out), open: true, panelWindow: panelWin, bounds: panelRect))
+    check("pinch begun over the panel: its end is taken off the panel too", r.take(pinch(4, under: 77, at: out), open: true, panelWindow: panelWin, bounds: panelRect))
+    check("pinch ended: the next change elsewhere is decided afresh", !r.take(pinch(2, under: 77, at: out), open: true, panelWindow: panelWin, bounds: panelRect) && r.taking == nil)
+    check("pinch begun elsewhere: passes", !r.take(pinch(1, under: 77), open: true, panelWindow: panelWin, bounds: panelRect))
+    check("pinch begun elsewhere: its changes pass over the panel", !r.take(pinch(2), open: true, panelWindow: panelWin, bounds: panelRect))
+    check("pinch begun elsewhere: its cancel passes over the panel", !r.take(pinch(8), open: true, panelWindow: panelWin, bounds: panelRect) && r.taking == nil)
+    check("may-begin over the panel: taken, and holds", r.take(pinch(128), open: true, panelWindow: panelWin, bounds: panelRect) && r.taking == true)
+    check("pinch over the panel, panel closed mid-way: the rest passes", !r.take(pinch(2), open: false, panelWindow: panelWin, bounds: panelRect))
+    r.reset()
+    check("reset: nothing held", r.taking == nil)
+}
+
 do {
     let f = NSTemporaryDirectory() + "helper-stamp-\(getpid())"
     FileManager.default.createFile(atPath: f, contents: Data("a".utf8))

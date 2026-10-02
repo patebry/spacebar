@@ -272,3 +272,52 @@ struct KeyRoute {
         return nil
     }
 }
+
+/// A trackpad event of the zooming kinds as the tap saw it. Type 29 is the window server's gesture event, `subtype` its HID
+/// kind (8 a pinch, 22 a two-finger double tap); 30 and 32 are a pinch and a smart zoom already typed as such.
+struct GestureEvent: Equatable {
+    var type: Int64
+    var subtype: Int64 = 0
+    /// CGGesturePhase: 1 began, 2 changed, 4 ended, 8 cancelled, 128 may begin; 0 for an event without phases.
+    var phase: Int64 = 0
+    /// The window under the pointer as the window server annotated it; 0 when it did not.
+    var windowUnder: Int = 0
+    /// Global, from the top left of the main display.
+    var location: CGPoint = .zero
+}
+
+/// Takes the pinches and smart zooms made over the open panel, which the window server would otherwise hand to Finder, the
+/// active app. A pinch is decided where it begins and keeps that answer to its end, so neither app sees half of one. Every other
+/// gesture (scrolls, swipes, Mission Control) and every zoom elsewhere is Finder's or the system's.
+struct GestureRoute {
+    private(set) var taking: Bool?
+
+    static func zooms(_ g: GestureEvent) -> Bool {
+        g.type == 30 || g.type == 32 || (g.type == 29 && (g.subtype == 8 || g.subtype == 22))
+    }
+
+    /// Over the panel by the window server's word, or by its last known bounds when the event carries no window.
+    static func overPanel(_ g: GestureEvent, panelWindow: Int, bounds: CGRect) -> Bool {
+        guard panelWindow > 0 else { return false }
+        return g.windowUnder > 0 ? g.windowUnder == panelWindow : bounds.contains(g.location)
+    }
+
+    mutating func take(_ g: GestureEvent, open: Bool, panelWindow: Int, bounds: CGRect) -> Bool {
+        guard Self.zooms(g) else { return false }
+        let here = open && Self.overPanel(g, panelWindow: panelWindow, bounds: bounds)
+        switch g.phase {
+        case 1, 128:
+            taking = here
+            return here
+        case 4, 8:
+            defer { taking = nil }
+            return open && (taking ?? here)
+        case 0:
+            return here
+        default:
+            return open && (taking ?? here)
+        }
+    }
+
+    mutating func reset() { taking = nil }
+}

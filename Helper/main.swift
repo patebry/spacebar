@@ -75,6 +75,11 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private var panelWindow = 0
     /// Checks in a row that found the panel's window off screen; one can be a frame the window server had not drawn yet.
     private var offscreenMisses = 0
+    /// Where the panel's window was at the last check: what a gesture without a window under its pointer is placed by.
+    private var panelBounds = CGRect.null
+    private var gestures = GestureRoute()
+    /// One line per opening of the panel says how the first zoom gesture over it was routed.
+    private var gestureLogged = false
     private var watchTimer: Timer?
     private let bg = DispatchQueue(label: "md.spacebar.helper.ax", qos: .userInteractive)
 
@@ -130,6 +135,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
               let b = (w[kCGWindowBounds as String] as? NSDictionary).flatMap({ CGRect(dictionaryRepresentation: $0) }) else { return false }
         let info = WindowInfo(owner: w[kCGWindowOwnerPID as String] as? pid_t ?? 0, onScreen: w[kCGWindowIsOnscreen as String] as? Bool == true,
                               alpha: w[kCGWindowAlpha as String] as? Double ?? 0, bounds: b)
+        panelBounds = b
         return Decision.panelVisible(info, viewerPid: viewerPid, displays: Self.displays())
     }
 
@@ -217,6 +223,8 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         guard open else {
             panelOpen = false
             panelWindow = 0
+            panelBounds = .null
+            gestures.reset()
             suspendedAt = nil
             text.clear()
             if Decision.closeEndsPending(pendingID: pending?.id, requestID: requestID) { pending = nil }
@@ -236,6 +244,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         case .accept:
             if let p = pending { lastShown = p.paths }
             pending = nil
+            if !panelOpen { gestureLogged = false }
             panelOpen = true
             panelWindow = windowNumber
             offscreenMisses = 0
@@ -257,7 +266,8 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     // MARK: Tap
 
     private func createTap() {
-        let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue)
+        // Keys, and the trackpad's gesture (29), magnify (30) and smart magnify (32) events: no pointer moves, clicks or scrolls.
+        let mask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue) | (1 << 29) | (1 << 30) | (1 << 32)
         guard let port = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
                                            eventsOfInterest: CGEventMask(mask), callback: tapCallback, userInfo: nil) else {
             return log.error("tap create failed")
@@ -312,6 +322,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
             log.error("tap re-enabled (\(why, privacy: .public))")
             return pass
         }
+        if [29, 30, 32].contains(type.rawValue) { return gesture(type, event) ? nil : pass }
         guard type == .keyDown || type == .keyUp else { return pass }
         let e = Self.keyEvent(event, down: type == .keyDown)
         // A rename or the search field can open without a focus notification arriving first: read the focus now, before a key
@@ -334,6 +345,26 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         case .space:
             return space() ? nil : pass
         }
+    }
+
+    private static let gestureSubtype = CGEventField(rawValue: 110)!
+    private static let gesturePhase = CGEventField(rawValue: 132)!
+
+    /// A pinch or smart zoom over the open panel: sent to the viewer, which is never the active app and so is never handed one,
+    /// and true so Finder does not get it too.
+    private func gesture(_ type: CGEventType, _ event: CGEvent) -> Bool {
+        guard panelOpen || gestures.taking != nil else { return false }
+        let g = GestureEvent(type: Int64(type.rawValue), subtype: event.getIntegerValueField(Self.gestureSubtype),
+                             phase: event.getIntegerValueField(Self.gesturePhase),
+                             windowUnder: Int(event.getIntegerValueField(.mouseEventWindowUnderMousePointer)), location: event.location)
+        guard GestureRoute.zooms(g) else { return false }
+        let took = gestures.take(g, open: panelOpen, panelWindow: panelWindow, bounds: panelBounds)
+        if panelOpen, !gestureLogged {
+            gestureLogged = true
+            log.info("first zoom gesture with the panel open: type \(g.type) subtype \(g.subtype) phase \(g.phase) under window \(g.windowUnder) (panel \(self.panelWindow)): \(took ? "sent to the panel" : "passed", privacy: .public)")
+        }
+        if took, let data = event.data { viewerProxy()?.gesture(data as Data) }
+        return took
     }
 
     /// Space with the panel closed: true when it was taken and the viewer asked to show Finder's selection.

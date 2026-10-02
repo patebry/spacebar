@@ -38,7 +38,7 @@ func scrollPage(_ sv: NSScrollView, down: Bool) {
 final class PDFPane: NSObject, PDFViewDelegate, PDFDocumentDelegate, NativeDocument {
     enum LoadError: Error, Equatable { case unreadable, locked }
 
-    let view: PDFView
+    let view: PanningPDFView
     /// The file on screen, symlinks resolved as the sidebar lists it.
     private(set) var path: String?
     /// Whether the page has placed the view yet; it stays hidden until then, so it never shows at a stale position.
@@ -56,7 +56,7 @@ final class PDFPane: NSObject, PDFViewDelegate, PDFDocumentDelegate, NativeDocum
     private var scrollWatch: NSObjectProtocol?
 
     override init() {
-        view = PDFView(frame: .zero)
+        view = PanningPDFView(frame: .zero)
         super.init()
         view.autoScales = true
         view.displayMode = .singlePageContinuous
@@ -284,6 +284,7 @@ final class PDFPane: NSObject, PDFViewDelegate, PDFDocumentDelegate, NativeDocum
 
     /// Takes the view down and lets the document go, which closes the file.
     func close() {
+        view.endDrag()
         matches = []
         view.highlightedSelections = nil
         view.document = nil
@@ -303,4 +304,52 @@ final class PDFPane: NSObject, PDFViewDelegate, PDFDocumentDelegate, NativeDocum
     }
     /// A link to another PDF file: not followed.
     func pdfViewOpenPDF(_ sender: PDFView, forRemoteGoToAction action: PDFActionRemoteGoTo) {}
+}
+
+/// A drag that starts on text or a link selects or follows it, as PDFView does; one that starts anywhere else (a margin, the
+/// gap between pages, an image) moves the document, at any zoom.
+final class PanningPDFView: PDFView {
+    private var drag: (at: NSPoint, origin: NSPoint)?
+    private var moved = false
+
+    /// Whether `p`, in the view, is on a link or other annotation, or within a few points of a character.
+    private func onContent(_ p: NSPoint) -> Bool {
+        guard let page = page(for: p, nearest: false) else { return false }
+        let q = convert(p, to: page), r = 4 / max(scaleFactor, 0.01)
+        if page.annotation(at: q) != nil { return true }
+        return [(0, 0), (r, 0), (-r, 0), (0, r), (0, -r)].contains { page.characterIndex(at: NSPoint(x: q.x + $0.0, y: q.y + $0.1)) != NSNotFound }
+    }
+
+    override func mouseDown(with e: NSEvent) {
+        guard e.clickCount == 1, e.modifierFlags.intersection([.shift, .command, .option, .control]).isEmpty,
+              let clip = documentView?.enclosingScrollView?.contentView, !onContent(convert(e.locationInWindow, from: nil))
+        else { return super.mouseDown(with: e) }
+        window?.makeFirstResponder(self)
+        drag = (e.locationInWindow, clip.bounds.origin)
+        moved = false
+    }
+
+    override func mouseDragged(with e: NSEvent) {
+        guard let d = drag, let sv = documentView?.enclosingScrollView else { return super.mouseDragged(with: e) }
+        let dx = e.locationInWindow.x - d.at.x, dy = e.locationInWindow.y - d.at.y
+        if !moved, hypot(dx, dy) < 4 { return }
+        if !moved { moved = true; NSCursor.closedHand.push() }
+        let clip = sv.contentView, m = sv.magnification
+        let o = NSPoint(x: d.origin.x - dx / m, y: d.origin.y + (clip.isFlipped ? dy : -dy) / m)
+        clip.scroll(to: clip.constrainBoundsRect(NSRect(origin: o, size: clip.bounds.size)).origin)
+        sv.reflectScrolledClipView(clip)
+    }
+
+    override func mouseUp(with e: NSEvent) {
+        guard drag != nil else { return super.mouseUp(with: e) }
+        if !moved { clearSelection() }
+        endDrag()
+    }
+
+    /// A pane closed mid-drag gets no mouse-up: its cursor is let go here.
+    func endDrag() {
+        if moved { NSCursor.pop() }
+        drag = nil
+        moved = false
+    }
 }

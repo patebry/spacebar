@@ -199,6 +199,77 @@ check("links: file, javascript, mailto and other schemes are refused",
       [URL(fileURLWithPath: a.path), URL(string: "javascript:alert(1)")!, URL(string: "mailto:x@example.com")!, URL(string: "x-apple.systempreferences:")!,
        URL(string: "spacebar://file/etc/hosts")!].allSatisfy { PDFPane.linkRefusal($0) != nil })
 
+// ---- a drag off text moves the document; one on text selects; a link is still followed ----
+let c = dir.appendingPathComponent("c.pdf")
+do {
+    var box = CGRect(x: 0, y: 0, width: 600, height: 800)
+    let ctx = CGContext(c as CFURL, mediaBox: &box, nil)!
+    for _ in 0..<3 {
+        ctx.beginPDFPage(nil)
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+        for i in 0..<5 {
+            NSAttributedString(string: "Lorem ipsum dolor sit amet \(i)", attributes: [.font: NSFont.systemFont(ofSize: 16)]).draw(at: NSPoint(x: 200, y: 400 + i * 22))
+        }
+        ctx.endPDFPage()
+    }
+    ctx.closePDF()
+}
+guard case .success(let docC) = PDFPane.open(c) else { fatalError("c.pdf did not open") }
+let link = PDFAnnotation(bounds: NSRect(x: 40, y: 600, width: 80, height: 30), forType: .link, withProperties: nil)
+link.url = URL(string: "https://example.com/link")!
+docC.page(at: 0)!.addAnnotation(link)
+pane.show(docC, path: c.path, over: web)
+pane.place(message: msg.merging(["path": c.path]) { _, n in n }, in: web)
+spin(0.2)
+func mouse(_ type: NSEvent.EventType, _ p: NSPoint, clicks: Int = 1) -> NSEvent {
+    NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                       context: nil, eventNumber: 0, clickCount: clicks, pressure: 1)!
+}
+/// Sends `events` as real input arrives: PDFView's own selection tracking takes the ones after the first from the queue.
+func input(_ events: [NSEvent]) {
+    for e in events.dropFirst() { NSApp.postEvent(e, atStart: false) }
+    NSApp.sendEvent(events[0])
+    while let e = NSApp.nextEvent(matching: .any, until: Date().addingTimeInterval(0.05), inMode: .default, dequeue: true) { NSApp.sendEvent(e) }
+}
+func drag(from p: NSPoint, by d: NSPoint) -> [NSEvent] {
+    let to = NSPoint(x: p.x + d.x, y: p.y + d.y)
+    return [mouse(.leftMouseDown, p), mouse(.leftMouseDragged, NSPoint(x: p.x + d.x / 2, y: p.y + d.y / 2)), mouse(.leftMouseDragged, to), mouse(.leftMouseUp, to)]
+}
+let page0 = docC.page(at: 0)!
+func onPage(_ p: NSPoint) -> NSPoint { pane.view.convert(pane.view.convert(p, from: page0), to: nil) }
+let clip = pane.view.documentView!.enclosingScrollView!.contentView
+let margin = onPage(NSPoint(x: 60, y: 450))
+var origin = clip.bounds.origin
+input(drag(from: margin, by: NSPoint(x: 0, y: 120)))
+let grabbed = onPage(NSPoint(x: 60, y: 450))
+check("drag: from the margin it moves the document with the pointer and selects nothing",
+      abs(grabbed.y - (margin.y + 120)) < 2 && abs(grabbed.x - margin.x) < 2 && pane.selectedText == nil,
+      "\(margin) -> \(grabbed) \(origin) -> \(clip.bounds.origin) \(pane.selectedText ?? "")")
+check("drag: no cursor is left pushed after the mouse-up", NSCursor.current !== NSCursor.closedHand)
+input(drag(from: onPage(NSPoint(x: 300, y: 1000)), by: NSPoint(x: 0, y: -120)))
+pane.go(toPage: 1)
+spin(0.1)
+let text0 = onPage(NSPoint(x: 260, y: 450))
+origin = clip.bounds.origin
+input(drag(from: text0, by: NSPoint(x: 120, y: -30)))
+check("drag: from text it selects and does not move the document", (pane.selectedText?.count ?? 0) > 10 && clip.bounds.origin == origin,
+      "\(pane.selectedText ?? "nil") \(origin) -> \(clip.bounds.origin)")
+input([mouse(.leftMouseDown, onPage(NSPoint(x: 60, y: 450))), mouse(.leftMouseUp, onPage(NSPoint(x: 60, y: 450)))])
+check("click: in the margin it clears the selection and moves nothing", pane.selectedText == nil && clip.bounds.origin == origin)
+let word = onPage(NSPoint(x: 215, y: 450))
+input([mouse(.leftMouseDown, word), mouse(.leftMouseUp, word), mouse(.leftMouseDown, word, clicks: 2), mouse(.leftMouseUp, word, clicks: 2)])
+check("double-click: on text it selects the word", pane.selectedText?.trimmingCharacters(in: .whitespaces) == "Lorem", pane.selectedText ?? "nil")
+links = []
+let onLink = onPage(NSPoint(x: 80, y: 615))
+input([mouse(.leftMouseDown, onLink), mouse(.leftMouseUp, onLink)])
+check("click: a link in the margin is followed, not taken as a drag", links == [URL(string: "https://example.com/link")!], "\(links)")
+let m2 = onPage(NSPoint(x: 60, y: 450))
+NSApp.sendEvent(mouse(.leftMouseDown, m2))
+NSApp.sendEvent(mouse(.leftMouseDragged, NSPoint(x: m2.x, y: m2.y + 60)))
+check("drag: the closed hand shows while the document moves", NSCursor.current === NSCursor.closedHand)
+pane.close()
+check("close: mid-drag, the cursor is let go", NSCursor.current !== NSCursor.closedHand)
+
 // ---- teardown: the view leaves, the document is freed, no descriptor stays on the file ----
 weak var weakB: PDFDocument?
 autoreleasepool {

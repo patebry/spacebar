@@ -18,6 +18,98 @@ jobs:
         with:
           persist-credentials: false
 
+      # From v0.3 a release ships only signed with the Developer ID, notarized and stapled, as spacebar.zip and spacebar.dmg;
+      # earlier tags build the zip alone, as before. The secrets that takes are checked here and in the next step, before the
+      # tests, so a missing or wrong one fails at once.
+      - name: Release kind
+        env:
+          P12: ${{ secrets.SPACEBAR_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.SPACEBAR_SIGNING_PASSWORD }}
+          NOTARY_KEY: ${{ secrets.SPACEBAR_NOTARY_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.SPACEBAR_NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.SPACEBAR_NOTARY_ISSUER }}
+        run: |
+          v=${GITHUB_REF_NAME#v}
+          if [ "$(printf '0.3.0\n%s\n' "$v" | sort -V | head -1)" != 0.3.0 ]; then
+            echo "$GITHUB_REF_NAME is before v0.3: not notarized, no .dmg"
+            echo "NOTARIZE=0" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          missing=
+          for pair in SPACEBAR_SIGNING_P12:P12 SPACEBAR_SIGNING_PASSWORD:P12_PASSWORD SPACEBAR_NOTARY_KEY:NOTARY_KEY \
+                      SPACEBAR_NOTARY_KEY_ID:NOTARY_KEY_ID SPACEBAR_NOTARY_ISSUER:NOTARY_ISSUER; do
+            var=${pair#*:}
+            [ -n "${!var}" ] || missing="$missing ${pair%%:*}"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error title=Missing secrets::$GITHUB_REF_NAME is signed with the Developer ID and notarized, so it needs these repository secrets:$missing"
+            exit 1
+          fi
+          # The notary credentials are tried now, by listing past submissions, rather than after the tests and the build.
+          key="$RUNNER_TEMP/notary.p8"
+          trap 'rm -f "$key"' EXIT
+          (umask 077; printf '%s\n' "$NOTARY_KEY" > "$key")
+          grep -q 'BEGIN PRIVATE KEY' "$key" || (umask 077; printf '%s' "$NOTARY_KEY" | base64 --decode > "$key" 2>/dev/null) || true
+          grep -q 'BEGIN PRIVATE KEY' "$key" ||
+            { echo "::error title=Bad notary key::SPACEBAR_NOTARY_KEY must hold the App Store Connect API key's .p8 file, as text or base64"; exit 1; }
+          xcrun notarytool history --key "$key" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" > /dev/null ||
+            { echo "::error title=Notary credentials refused::notarytool could not sign in with SPACEBAR_NOTARY_KEY, SPACEBAR_NOTARY_KEY_ID and SPACEBAR_NOTARY_ISSUER"; exit 1; }
+          echo "NOTARIZE=1" >> "$GITHUB_ENV"
+
+      # One stable identity for every release keeps the designated requirement the same, so an update does not make macOS
+      # ask again about the extension's sandbox container (FINDINGS.md). SIGN_ID is the one identity SPACEBAR_SIGNING_P12 holds:
+      # from v0.3 a Developer ID Application identity, before it "spacebar Release". Forks without the secrets build ad-hoc,
+      # and only before v0.3.
+      - name: Signing identity
+        env:
+          P12: ${{ secrets.SPACEBAR_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.SPACEBAR_SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$P12" ] || [ -z "$P12_PASSWORD" ]; then
+            echo "::warning title=Ad-hoc signed::SPACEBAR_SIGNING_P12 or SPACEBAR_SIGNING_PASSWORD is not set, so this build is ad-hoc signed. Its signer changes with every build, and users updating to it may see a macOS data-sharing prompt."
+            echo "SIGN_ID=-" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          kc="$RUNNER_TEMP/spacebar-signing.keychain-db"
+          kcpw=$(openssl rand -hex 24)
+          echo "::add-mask::$kcpw"
+          security create-keychain -p "$kcpw" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$kcpw" "$kc"
+          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security import "$RUNNER_TEMP/signing.p12" -k "$kc" -P "$P12_PASSWORD" -T /usr/bin/codesign -f pkcs12
+          rm -f "$RUNNER_TEMP/signing.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kcpw" "$kc" > /dev/null
+          # codesign finds the certificate only through the keychain search list.
+          existing=$(security list-keychains -d user | tr -d '"' | xargs)
+          # shellcheck disable=SC2086
+          security list-keychains -d user -s "$kc" $existing
+          if [ "$NOTARIZE" = 1 ]; then
+            # Apple's Developer ID intermediates, so codesign embeds the whole chain whatever this runner has installed.
+            for ca in DeveloperIDG2CA DeveloperIDCA; do
+              if curl -fsSL --retry 3 -o "$RUNNER_TEMP/$ca.cer" "https://www.apple.com/certificateauthority/$ca.cer"; then
+                security import "$RUNNER_TEMP/$ca.cer" -k "$kc" || true
+              else
+                echo "::warning::could not download $ca.cer; relying on the runner's copy"
+              fi
+            done
+          fi
+          found=$(security find-identity -p codesigning "$kc" | sed -nE 's/^ *[0-9]+\) ([0-9A-F]{40}) "([^"]*)".*$/\1 \2/p' | sort -u)
+          n=$(printf '%s' "$found" | grep -c '^' || true)
+          [ "$n" = 1 ] || { echo "::error::SPACEBAR_SIGNING_P12 must hold exactly one code signing identity; it holds $n"; exit 1; }
+          sign_id=${found%% *}
+          sign_name=${found#* }
+          echo "signing as \"$sign_name\" ($sign_id)"
+          if [ "$NOTARIZE" = 1 ]; then
+            case $sign_name in
+              "Developer ID Application: "*) ;;
+              *) echo "::error title=Not a Developer ID::$GITHUB_REF_NAME must be signed with a Developer ID Application identity, but SPACEBAR_SIGNING_P12 holds \"$sign_name\""; exit 1 ;;
+            esac
+            security find-identity -v -p codesigning "$kc" | grep -qF "$sign_id" ||
+              { echo "::error title=Identity not valid::\"$sign_name\" is not a valid signing identity here: expired, revoked, or its chain to Apple's root is incomplete"; exit 1; }
+          fi
+          { echo "SIGN_ID=$sign_id"; echo "SIGN_NAME=$sign_name"; echo "SIGN_KEYCHAIN=$kc"; } >> "$GITHUB_ENV"
+
       - name: Unit tests
         # Apple's Quick Look generators may not answer on a runner: test/qlpane skips its renders.
         env:
@@ -51,36 +143,6 @@ jobs:
       - name: Editing
         run: test/editflows/run.sh
 
-      # One stable identity for every release keeps the designated requirement the same, so an update does not make macOS
-      # ask again about the extension's sandbox container (FINDINGS.md). Forks without the secrets build ad-hoc.
-      - name: Signing identity
-        env:
-          P12: ${{ secrets.SPACEBAR_SIGNING_P12 }}
-          P12_PASSWORD: ${{ secrets.SPACEBAR_SIGNING_PASSWORD }}
-        run: |
-          if [ -z "$P12" ] || [ -z "$P12_PASSWORD" ]; then
-            echo "::warning title=Ad-hoc signed::SPACEBAR_SIGNING_P12 or SPACEBAR_SIGNING_PASSWORD is not set, so this build is ad-hoc signed. Its signer changes with every build, and users updating to it may see a macOS data-sharing prompt."
-            echo "SIGN_ID=-" >> "$GITHUB_ENV"
-            exit 0
-          fi
-          kc="$RUNNER_TEMP/spacebar-signing.keychain-db"
-          kcpw=$(openssl rand -hex 24)
-          echo "::add-mask::$kcpw"
-          security create-keychain -p "$kcpw" "$kc"
-          security set-keychain-settings -lut 3600 "$kc"
-          security unlock-keychain -p "$kcpw" "$kc"
-          printf '%s' "$P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
-          security import "$RUNNER_TEMP/signing.p12" -k "$kc" -P "$P12_PASSWORD" -T /usr/bin/codesign -f pkcs12
-          rm -f "$RUNNER_TEMP/signing.p12"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$kcpw" "$kc" > /dev/null
-          # codesign finds the certificate only through the keychain search list.
-          existing=$(security list-keychains -d user | tr -d '"' | xargs)
-          # shellcheck disable=SC2086
-          security list-keychains -d user -s "$kc" $existing
-          security find-identity -p codesigning "$kc" | grep -q '"spacebar Release"' ||
-            { echo "::error::SPACEBAR_SIGNING_P12 holds no \"spacebar Release\" identity"; exit 1; }
-          { echo "SIGN_ID=spacebar Release"; echo "SIGN_KEYCHAIN=$kc"; } >> "$GITHUB_ENV"
-
       # The helper's XPC gate against clients signed with this identity; skipped for an ad-hoc build. It bootstraps a test
       # launchd job in the runner's GUI domain and removes it; without that domain it warns and skips.
       - name: Helper link
@@ -89,12 +151,17 @@ jobs:
         run: test/helperlink/run.sh
 
       - name: Build (universal, not installed)
-        run: VERSION="${GITHUB_REF_NAME#v}" BUILD_NUMBER="$GITHUB_RUN_NUMBER" ./build.sh --no-install
+        run: TIMESTAMP="$NOTARIZE" VERSION="${GITHUB_REF_NAME#v}" BUILD_NUMBER="$GITHUB_RUN_NUMBER" ./build.sh --no-install
 
       # The built plists claim exactly scripts/quicklook-types.txt, and the helper's and viewer's bundles have their layout,
       # entitlements, hardened runtime and signatures; checked on this build, not a rebuild.
       - name: Quick Look claims and helper bundles
         run: SKIP_BUILD=1 test/claims/run.sh
+
+      # Every Mach-O under the hardened runtime, with its entitlements listed; from v0.3 each also signed with the Developer ID
+      # and a secure timestamp, which notarization requires.
+      - name: Signatures
+        run: NOTARY="$NOTARIZE" test/signing/run.sh
 
       - name: Check and package
         working-directory: build
@@ -120,56 +187,90 @@ jobs:
           shasum -a 256 spacebar.zip > spacebar.zip.sha256
           cat spacebar.zip.sha256
 
-      # From v0.3 a release ships only notarized and stapled: without the credentials, or if Apple refuses the build, the
-      # release fails here. Earlier tags skip this. The credentials, Developer ID signing and the .dmg come with P6.
-      - name: Notarize (v0.3 and later)
+      # The zip is notarized and the app stapled; the zip is made again from the stapled app, and the .dmg from it, which is
+      # signed, notarized and stapled in turn. Without the credentials, or if Apple refuses either, the release fails here.
+      - name: Notarize, staple and make the .dmg (v0.3 and later)
+        if: env.NOTARIZE == '1'
         env:
           NOTARY_KEY: ${{ secrets.SPACEBAR_NOTARY_KEY }}
           NOTARY_KEY_ID: ${{ secrets.SPACEBAR_NOTARY_KEY_ID }}
           NOTARY_ISSUER: ${{ secrets.SPACEBAR_NOTARY_ISSUER }}
         run: |
-          v=${GITHUB_REF_NAME#v}
-          if [ "$(printf '0.3.0\n%s\n' "$v" | sort -V | head -1)" != 0.3.0 ]; then
-            echo "$GITHUB_REF_NAME is before v0.3: not notarized"
-            exit 0
-          fi
-          if [ -z "$NOTARY_KEY" ] || [ -z "$NOTARY_KEY_ID" ] || [ -z "$NOTARY_ISSUER" ]; then
-            echo "::error title=Not notarized::$GITHUB_REF_NAME needs SPACEBAR_NOTARY_KEY, SPACEBAR_NOTARY_KEY_ID and SPACEBAR_NOTARY_ISSUER: from v0.3 every release is notarized"
-            exit 1
-          fi
           key="$RUNNER_TEMP/notary.p8"
-          printf '%s' "$NOTARY_KEY" > "$key"
-          xcrun notarytool submit build/spacebar.zip --key "$key" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" \
-            --wait --output-format json > "$RUNNER_TEMP/notary.json"
-          rm -f "$key"
-          cat "$RUNNER_TEMP/notary.json"
-          status=$(plutil -extract status raw -o - "$RUNNER_TEMP/notary.json" 2>/dev/null || true)
-          [ "$status" = Accepted ] || { echo "::error title=Not notarized::notarytool status: ${status:-none}"; exit 1; }
+          trap 'rm -f "$key"' EXIT
+          (umask 077; printf '%s\n' "$NOTARY_KEY" > "$key")
+          grep -q 'BEGIN PRIVATE KEY' "$key" || (umask 077; printf '%s' "$NOTARY_KEY" | base64 --decode > "$key")
+          notarize() {
+            local json="$RUNNER_TEMP/notary-${1##*/}.json" rc=0 id status
+            xcrun notarytool submit "$1" --key "$key" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" \
+              --wait --timeout 1h --output-format json > "$json" || rc=$?
+            cat "$json"
+            id=$(plutil -extract id raw -o - "$json" 2>/dev/null || true)
+            status=$(plutil -extract status raw -o - "$json" 2>/dev/null || true)
+            # Apple's log names each file it refused, and why; it lists warnings for an accepted one.
+            [ -z "$id" ] || xcrun notarytool log "$id" --key "$key" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER" || true
+            [ "$status" = Accepted ] || { echo "::error title=Not notarized::$1: notarytool status ${status:-none} (exit $rc)"; return 1; }
+          }
+          notarize build/spacebar.zip
           xcrun stapler staple build/spacebar.app
           xcrun stapler validate build/spacebar.app
-          # The zip is made again from the stapled app, and its checksum with it.
-          cd build
-          rm -f spacebar.zip spacebar.zip.sha256
-          ditto -c -k --keepParent spacebar.app spacebar.zip
-          shasum -a 256 spacebar.zip > spacebar.zip.sha256
-          cat spacebar.zip.sha256
+          codesign --verify --deep --strict build/spacebar.app
+          rm -f build/spacebar.zip build/spacebar.zip.sha256
+          (cd build && ditto -c -k --keepParent spacebar.app spacebar.zip && shasum -a 256 spacebar.zip > spacebar.zip.sha256)
+          TIMESTAMP=1 scripts/dmg.sh
+          notarize build/spacebar.dmg
+          xcrun stapler staple build/spacebar.dmg
+          xcrun stapler validate build/spacebar.dmg
+          (cd build && shasum -a 256 spacebar.dmg > spacebar.dmg.sha256)
+          cat build/spacebar.zip.sha256 build/spacebar.dmg.sha256
+          if spctl --status 2>/dev/null | grep -q 'assessments enabled'; then
+            spctl -a -vvv -t exec build/spacebar.app 2>&1 | tee "$RUNNER_TEMP/spctl-app.txt"
+            spctl -a -vvv -t open --context context:primary-signature build/spacebar.dmg 2>&1 | tee "$RUNNER_TEMP/spctl-dmg.txt"
+            for f in app dmg; do
+              grep -q 'source=Notarized Developer ID' "$RUNNER_TEMP/spctl-$f.txt" ||
+                { echo "::error title=Gatekeeper::spctl does not accept spacebar.$f as notarized Developer ID"; exit 1; }
+            done
+          else
+            echo "::warning::Gatekeeper assessments are off on this runner, so spctl was not asked"
+          fi
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: build/spacebar.zip
 
+      - name: Attest build provenance of the .dmg (v0.3 and later)
+        if: env.NOTARIZE == '1'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: build/spacebar.dmg
+
       - name: Release notes
         run: |
           sum=$(awk '{ print $1; exit }' build/spacebar.zip.sha256)
           if [ "$SIGN_ID" = - ]; then
             signing="This build is ad-hoc signed, so its signer differs from every other release's: macOS may show a data-sharing prompt when you update to it."
+          elif [ "$NOTARIZE" = 1 ]; then
+            signing="Releases from v0.3 are signed with spacebar's Apple Developer ID. Earlier releases were signed with a self-signed certificate, so when you update from one, macOS may ask once about spacebar's data; allow it."
           else
             signing="Releases are signed with one stable, self-signed identity (\"spacebar Release\"). If you are upgrading from v0.1.0, which was ad-hoc signed, you may see one macOS prompt about spacebar's data; allow it. Later updates keep the same signer and should not ask again."
+          fi
+          dmg=
+          dmgsum=
+          dmgverify=
+          if [ "$NOTARIZE" = 1 ]; then
+            nl=$'\n'
+            dmg="Or download \`spacebar.dmg\` below and open it.$nl$nl"
+            dmgsum="SHA-256 of \`spacebar.dmg\`: \`$(awk '{ print $1; exit }' build/spacebar.dmg.sha256)\`$nl$nl"
+            dmgverify="${nl}gh attestation verify spacebar.dmg -R patebry/spacebar"
           fi
           # The Gatekeeper paragraph lives in README.md only, between its gatekeeper markers.
           gatekeeper=$(sed -n '/^<!-- gatekeeper/,/^<!-- \/gatekeeper -->/{/^<!--/d;p;}' README.md)
           [ -n "$gatekeeper" ] || { echo "::error::README.md has no gatekeeper paragraph"; exit 1; }
+          v=${GITHUB_REF_NAME#v}
+          if [ "$(printf '0.3.0\n%s\n' "$v" | sort -V | head -1)" = 0.3.0 ] && printf '%s' "$gatekeeper" | grep -qi 'not notarized'; then
+            echo "::error::$GITHUB_REF_NAME is notarized, but README.md's gatekeeper paragraph says it is not"; exit 1
+          fi
           cat > "$RUNNER_TEMP/notes.md" <<EOF
           ## Install
 
@@ -177,22 +278,22 @@ jobs:
           curl -fsSL https://spacebar.patebryant.com/install.sh | sh
           \`\`\`
 
-          $gatekeeper
+          ${dmg}$gatekeeper
 
           $signing
 
           ## Uninstall
 
           \`\`\`sh
-          curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh
+          curl -fsSL https://spacebar.patebryant.com/uninstall.sh | sh
           \`\`\`
 
           ## Verify
 
           SHA-256 of \`spacebar.zip\`: \`$sum\`
 
-          \`\`\`sh
-          gh attestation verify spacebar.zip -R patebry/spacebar
+          ${dmgsum}\`\`\`sh
+          gh attestation verify spacebar.zip -R patebry/spacebar$dmgverify
           \`\`\`
           EOF
           cat "$RUNNER_TEMP/notes.md"
@@ -200,7 +301,10 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >
-          gh release create "$GITHUB_REF_NAME" build/spacebar.zip build/spacebar.zip.sha256
-          --repo "$GITHUB_REPOSITORY" --verify-tag --title "spacebar $GITHUB_REF_NAME"
-          --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
+        run: |
+          assets=(build/spacebar.zip build/spacebar.zip.sha256)
+          [ "$NOTARIZE" != 1 ] || assets+=(build/spacebar.dmg build/spacebar.dmg.sha256)
+          for a in "${assets[@]}"; do [ -s "$a" ] || { echo "::error::$a is missing"; exit 1; }; done
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --title "spacebar $GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/notes.md" --generate-notes

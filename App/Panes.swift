@@ -375,7 +375,10 @@ struct SettingsPane: View {
                 Text("Check off tasks")
                 Text("Click a task list checkbox to check or uncheck it in the file.")
             }
-            Toggle("Show hidden files in the sidebar", isOn: store.binding(\.showHiddenFiles, "showHiddenFiles"))
+            Toggle(isOn: store.binding(\.showHiddenFiles, "showHiddenFiles")) {
+                Text("Show hidden files in the sidebar")
+                Text("Always. They also show while Finder shows them (⇧⌘.).")
+            }
         } header: {
             Text("Preview")
         }

@@ -4,14 +4,15 @@
 "list", "open", "openFile" and "reveal" through the same checks as the extension, and sends "setting" through the extension's
 gate (Settings.panelPatch) and the writer's update (SettingsFile.updateFromPanel) into a scratch SPACEBAR_SUPPORT_DIR.
 
-Checks the tree (folders first, icons, lazy expand and collapse, remembered expansion, the current file's folders opened, hidden
-files, the cap, links out of the root), every file view (Markdown, image, SVG, PDF, code, JSON, CSV, text, the info card), the
+Checks the tree (Finder's order and Finder's own folders-on-top and hidden-files preferences from a plist, the sort menu, icons,
+lazy expand and collapse, remembered expansion, the current file's folders opened, hidden files, the cap, links out of the
+root), every file view (Markdown, image, SVG, PDF, code, JSON, CSV, text, the info card), the
 hostile fixtures in test/hostile/browser beside a link to /etc and names made of dots, the resize handle, the no-flash
 document-start state, the toggle and its persistence, the message gate, and that inline editing, task toggles, the TOC, the Aa
 popover, themes and narrow panels still work with the sidebar open or collapsed, and the native PDF view: laid over the page's
 PDF area, following the sidebar and the panel, and torn down cleanly. A sandboxed copy of the harness, signed with the
 extension's entitlements, shows that a PDF and an image render under the extension's sandbox."""
-import base64, json, os, random, shutil, struct, subprocess, sys, tempfile, urllib.parse, wave, zlib
+import base64, json, os, plistlib, random, shutil, struct, subprocess, sys, tempfile, urllib.parse, wave, zlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webthemes import Page, ROOT, THEMES, HELPERS, TASK_NAMES, click
 import hostile
@@ -393,7 +394,8 @@ def big_folder(page, check, T):
     check(b['cursor'] == 'wide.csv' and b['dom'] < 300, 'End reaches the last row, far below the rows drawn, and draws it', json.dumps(b))
     dispatch_key(page, 'Home')
     b = page.js(ROWS)
-    check(b['cursor'] == 'hostile' and b['top'] == 0, 'Home goes back to the first row', json.dumps(b))
+    check(b['cursor'] == page.js("return document.querySelector('#side-list a.row').textContent") == 'big.csv' and b['top'] == 0,
+          'Home goes back to the first row (a file, in Finder\'s order)', json.dumps(b))
     page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.value = 'm-4999'; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
     f = page.js("return [...document.querySelectorAll('#side-list a.row')].map((a) => a.textContent)")
     check(f == ['many', 'm-4999.txt'], 'the filter finds a file past the old cap of 500', json.dumps(f))
@@ -923,8 +925,9 @@ def viewers(page, check, out, st):
     click(page, '#side-menu')
     menu = page.js("""const p = document.getElementById('side-pop'); return { open: !p.hidden, items: [...p.querySelectorAll('button')].map((b) => [b.textContent, b.getAttribute('aria-checked')]),
       expanded: document.getElementById('side-menu').getAttribute('aria-expanded'), inside: p.getBoundingClientRect().right <= document.getElementById('sidebar').getBoundingClientRect().right + 1 }""")
-    check(menu == {'open': True, 'items': [['Sort by Name', 'true'], ['Sort by Date Modified', 'false'], ['Show Hidden Files…', 'false']], 'expanded': 'true', 'inside': True},
-          'sidebar menu: sort order checked, hidden files shown as off', json.dumps(menu))
+    check(menu == {'open': True, 'items': [['Sort by Name', 'true'], ['Sort by Date Modified', 'false'], ['Folders First', 'false'], ['Show Hidden Files…', 'false']],
+                   'expanded': 'true', 'inside': True},
+          'sidebar menu: sort order checked, folders first and hidden files shown as off (Finder\'s defaults; no Finder plist here)', json.dumps(menu))
     shoot(page, 'sidebar-menu')
     keys = dispatch_key(page, 'ArrowDown')
     check(keys['result'] == 'false', 'sidebar menu: the tree keys wait while it is open')
@@ -934,6 +937,16 @@ def viewers(page, check, out, st):
           and page.js("return document.querySelector('#side-pop [data-sort=modified]').getAttribute('aria-checked')") == 'true',
           'sidebar menu: Sort by Date Modified saves folderSort through the panel gate', json.dumps(written))
     r = click(page, '#side-pop [data-sort=name]')
+    click(page, '#side-menu')
+    r = click(page, '#side-folders')
+    written = [m.get('patch') for m in r['messages'] if m.get('type') == '_written']
+    check(written == ['{"foldersFirst":"always"}'] and page.js("return document.getElementById('side-pop').hidden"),
+          'sidebar menu: Folders First saves foldersFirst through the panel gate', json.dumps(written))
+    click(page, '#side-menu')
+    check(page.js("return document.getElementById('side-folders').getAttribute('aria-checked')") == 'true', 'sidebar menu: Folders First shows as on')
+    r = click(page, '#side-folders')
+    written = [m.get('patch') for m in r['messages'] if m.get('type') == '_written']
+    check(written == ['{"foldersFirst":"never"}'], 'sidebar menu: Folders First again turns it off for good, not back to Finder\'s', json.dumps(written))
     click(page, '#side-menu')
     r = click(page, '#side-hidden')
     o = [m for m in r['messages'] if m.get('type') == 'openSettings']
@@ -1758,7 +1771,8 @@ def keys_and_filter(page, check, T, st, types):
     check(k['taken'] and c['cursor'] == last and opened(k) == [T(last)], 'keys: End jumps to the last row and opens it', json.dumps([last, opened(k)]))
     k = key('Home')
     c = page.js(CURSOR)
-    check(k['taken'] and c['cursor'] == c['rows'][0][0] == 'hostile' and not opened(k), 'keys: Home jumps to the first row (a folder: nothing opens)', json.dumps(c['cursor']))
+    check(k['taken'] and c['cursor'] == c['rows'][0][0] == 'big.csv' and opened(k) == [T('big.csv')],
+          'keys: Home jumps to the first row and opens it (a file, in Finder\'s order)', json.dumps([c['cursor'], opened(k)]))
     top = page.js("return document.getElementById('side-list').scrollTop")
     key('End')
     bottom = page.js("""const l = document.getElementById('side-list'), r = l.querySelector('a.cursor').getBoundingClientRect(), b = l.getBoundingClientRect();
@@ -2006,7 +2020,11 @@ def list_session(page, check, T, types, opened):
     native('filterText', {'seq': seq, 'text': 'zzz'})
     check(cur()['q'] == '' and 'No matches' not in cur()['notes'], 'list session: text for it is ignored (it has no field)')
     native('filterKey', {'seq': seq, 'key': 'home'})
-    first = cur()['cursor']
+    # In Finder's order the first folder sits below a few files: ↓ steps to it (each step opens the file it lands on).
+    first = next(x[0] for x in cur()['rows'] if x[2] is not None)
+    for _ in range(12):
+        if cur()['cursor'] == first: break
+        native('filterKey', {'seq': seq, 'key': 'down'})
     k = native('filterKey', {'seq': seq, 'key': 'right'})
     expanded = [x for x in cur()['rows'] if x[0] == first]
     check(expanded and expanded[0][2] == 'true' and 'list' in k['types'], 'list session: → opens the folder under the cursor', json.dumps([first, expanded, k['types']]))
@@ -2035,10 +2053,16 @@ def list_session(page, check, T, types, opened):
     check(not k['types'] or 'open' not in k['types'], 'filter session: ← and → from the writer are not list keys while typing')
     native('filterEnd', {'seq': fseq})
 
+    # Left open by an earlier walk (expansion is remembered per root), the folder is closed first so the click opens it.
+    if [x for x in cur()['rows'] if x[0] == 'sub' and x[2] == 'true']:
+        page.cmd('@nativeclick:' + row(T('sub')))
+        page.cmd('@wait:0.3')
     r = page.cmd('@nativeclick:' + row(T('sub')))
     begins = msgs(r, 'filterBegin')
-    check(begins and islist(begins[0]) and 'list' in types(r) + types(page.cmd('@wait:0.3')),
-          'list session: a real click on a folder opens it and holds the keys too', json.dumps(types(r)))
+    page.cmd('@wait:0.3')
+    # Listed once already in this page, the folder opens from what the page kept, with no second "list" to native.
+    check(begins and islist(begins[0]) and [x for x in cur()['rows'] if x[0] == 'sub' and x[2] == 'true'],
+          'list session: a real click on a folder opens it and holds the keys too', json.dumps([types(r), [x for x in cur()['rows'] if x[0] == 'sub']]))
     seq = int(begins[0]['seq']) if begins else -1
     r = click(page, '#doc')
     check([int(m['seq']) for m in msgs(r, 'filterStop')] == [seq], 'list session: a click in the document ends it', json.dumps(types(r)))
@@ -2270,7 +2294,8 @@ def panel_host(check):
           return [r.dataset.host, getComputedStyle(r).getPropertyValue('--titlebar-inset').trim(), Math.round(t.left)];""")
         check(g[0] == 'panel' and g[1] == '56px' and g[2] >= 56, "panel: the host is set at document start, and the sidebar button clears the traffic lights", json.dumps(g))
         calm_header(page, check, 'panel')
-        page.render(T('README.md'))
+        # In Finder's order the rows run b.md, c.txt, README.md, sub: from b.md the next row is a file.
+        page.render(T('b.md'))
         page.cmd('@wait:0.3')
         r = page.cmd('@eval:sb.listKeysWanted(' + json.dumps({'root': root}) + '); 0')
         fb = msgs(r, 'filterBegin') + msgs(page.cmd('@wait:0.3'), 'filterBegin')
@@ -2281,7 +2306,7 @@ def panel_host(check):
         r = page.cmd('@eval:sb.filterKey(' + json.dumps({'seq': seq, 'key': 'down'}) + '); 0')
         w = page.cmd('@wait:0.4')
         opened = [m.get('path') for m in msgs(r, 'open') + msgs(w, 'open')]
-        check(opened == [T('b.md')], 'panel: a routed ↓ opens the next file in the sidebar', json.dumps(opened))
+        check(opened == [T('c.txt')], 'panel: a routed ↓ opens the next file in the sidebar', json.dumps(opened))
         page.cmd('@eval:sb.status(\'\'); sb.filterEnd({ seq: ' + str(seq) + ' }); sb.listEnded({ reason: "escape" }); 0')
         check('Press Space' not in status(), 'panel: never "Press Space again to close"', status())
         page.render(T('README.md'))
@@ -3313,21 +3338,48 @@ def main():
         page.cmd('@size:1000x760')
         page.render(os.path.join(folder, 'b.md'))
         s = st()
-        want = ['sub', 'README.md', 'a.md', 'b.md', 'c9.md', 'c10.md', 'link.md', 'notes.txt', 'tasks.md', HOSTILE]
+        want = ['a.md', 'b.md', 'c9.md', 'c10.md', 'link.md', 'notes.txt', 'README.md', 'sub', 'tasks.md', HOSTILE]
         check(s['names'] == want and s['head'] == 'notes' and s['active'] == [['b.md', 'page']] and not s['hidden'] and not s['toggleHidden'],
-              'single file: its folder listed, folders first, README first, names in Finder order, current file highlighted', json.dumps(s))
+              'single file: its folder listed in Finder\'s order, folders among the files by name, current file highlighted', json.dumps(s))
+        page.apply(foldersFirst='always', folderReadmeFirst=True)
+        page.render(os.path.join(folder, 'b.md'))
+        check(st()['names'] == ['sub', 'README.md', 'a.md', 'b.md', 'c9.md', 'c10.md', 'link.md', 'notes.txt', 'tasks.md', HOSTILE],
+              'folders first always, README first: the folder, then the README, then the files by name', json.dumps(st()['names']))
         check(page.js("return [document.querySelectorAll('#sidebar img').length, window.__pwned || null]") == [0, None],
               'a hostile file name is shown as text')
         page.cmd('@size:1000x760')
-        page.apply(folderSort='modified')
+        page.apply(folderSort='modified', foldersFirst='finder', folderReadmeFirst=False)
         for i, n in enumerate(['tasks.md', 'c9.md', 'a.md']):
             os.utime(os.path.join(folder, n), (1e9 + i, 2e9 - i * 100))
         page.render(os.path.join(folder, 'b.md'))
-        check(st()['names'][:5] == ['sub', 'README.md', 'tasks.md', 'c9.md', 'a.md'], 'sorted by date modified with README still first', json.dumps(st()['names']))
-        page.apply(folderSort='name', folderReadmeFirst=False)
+        check(st()['names'][:3] == ['tasks.md', 'c9.md', 'a.md'], 'sorted by date modified, newest first, the folder among the files', json.dumps(st()['names']))
+        page.apply(folderSort='modified', foldersFirst='always', folderReadmeFirst=True)
         page.render(os.path.join(folder, 'b.md'))
-        check(st()['names'][1] == 'a.md', 'README first off: plain name order')
-        page.apply(folderReadmeFirst=True)
+        check(st()['names'][:5] == ['sub', 'README.md', 'tasks.md', 'c9.md', 'a.md'], 'by date with folders first always: the folder, README, then newest first', json.dumps(st()['names']))
+        page.apply(folderSort='name', foldersFirst='finder', folderReadmeFirst=True)
+        page.render(os.path.join(folder, 'b.md'))
+        check(st()['names'][:2] == ['README.md', 'a.md'], 'README first in Finder\'s order: at the very top, then the names', json.dumps(st()['names']))
+        page.apply(foldersFirst='finder', folderReadmeFirst=False)
+        # Finder's own preferences, from the plist the harness points SPACEBAR_FINDER_PLIST at: folders on top and hidden files.
+        with open(page.finder_plist, 'wb') as fp:
+            plistlib.dump({'_FXSortFoldersFirst': True, 'AppleShowAllFiles': True}, fp)
+        page.apply(foldersFirst='finder', folderReadmeFirst=False)
+        page.render(os.path.join(folder, 'b.md'))
+        s = st()
+        check(s['names'][0] == 'sub' and '.hidden.md' in s['names'] and 'a.md' in s['names'],
+              'Finder keeps folders on top and shows hidden files: so does the sidebar, from Finder\'s plist', json.dumps(s['names']))
+        click(page, '#side-menu')
+        menu = page.js("return [...document.querySelectorAll('#side-pop button')].map((b) => b.getAttribute('aria-checked'))")
+        check(menu == ['true', 'false', 'true', 'true'], 'sidebar menu: Folders First and Show Hidden Files shown as on while Finder has them on', json.dumps(menu))
+        click(page, '#side-menu')
+        page.apply(foldersFirst='never', folderReadmeFirst=False)
+        page.render(os.path.join(folder, 'b.md'))
+        check(st()['names'][0] != 'sub' and 'sub' in st()['names'] and '.hidden.md' in st()['names'],
+              'foldersFirst never overrides Finder\'s folders on top; hidden files still follow Finder', json.dumps(st()['names']))
+        os.remove(page.finder_plist)
+        page.apply(foldersFirst='finder', folderReadmeFirst=False)
+        page.render(os.path.join(folder, 'b.md'))
+        check(st()['names'][0] == 'a.md' and '.hidden.md' not in st()['names'], 'Finder\'s plist gone: back to Finder\'s defaults', json.dumps(st()['names']))
 
         # ---- the folder watch: a file added or removed shows up in the list without a re-render ----
         page.render(os.path.join(folder, 'b.md'))
@@ -3525,16 +3577,16 @@ def main():
             page.cmd('@wait:0.3')
             return r
 
-        # ---- the tree: folders first, each with its icon, links out of the root and hidden files left out ----
+        # ---- the tree: Finder's order, each row with its icon, links out of the root and hidden files left out ----
         page.apply(width='medium')
         page.cmd('@size:1200x800')
         view(T('README.md'))
         s = st()
         top = [r for r in s['rows'] if r[1] == 1]
         names = [r[0] for r in top]
-        check(names[:3] == ['hostile', 'many', 'sub'] and all(r[2] == 'd' for r in top[:3]) and all(r[2] == 'f' for r in top[3:])
-              and names[3] == 'README.md' and s['head'] == 'tree',
-              'tree: the root, folders first, then README, then files', json.dumps(names))
+        check(names == sorted(names, key=str.casefold) and s['head'] == 'tree' and {r[2] for r in top if r[0] in ('hostile', 'many', 'sub')} == {'d'}
+              and names.index('hostile') > names.index('doc.pdf') and names.index('README.md') > names.index('many'),
+              'tree: the root in Finder\'s order, folders among the files by name', json.dumps(names))
         icons = {r[0]: r[3] for r in top}
         want_icons = {'hostile': 'ic-folder', 'README.md': 'ic-markdown', 'photo.png': 'ic-image', 'doc.pdf': 'ic-pdf', 'code.ts': 'ic-code',
                       'data.json': 'ic-data', 'table.csv': 'ic-data', 'notes.txt': 'ic-text', 'blob.dat': 'ic-other', 'tool': 'ic-app',
@@ -3589,9 +3641,15 @@ def main():
         click(page, '#side-list a.row[data-path$="/many"]')
         page.cmd('@wait:0.4')
         big_folder(page, check, T)
-        click(page, '#side-list a.row[data-path$="/many"]')
+        # The big folder closed again (a blind click would reopen one the walk left closed), and the list back at its top: past
+        # 300 rows only those near the view are drawn, and in Finder's order the dot names sort first.
+        if ['many', 1, 'd', 'ic-folder', 'true'] in st()['rows']:
+            click(page, '#side-list a.row[data-path$="/many"]')
+            page.cmd('@wait:0.4')
         page.apply(showHiddenFiles=True)
         page.cmd('@relist')
+        page.cmd("@eval:(() => { const l = document.getElementById('side-list'); l.scrollTop = 0; l.dispatchEvent(new Event('scroll')); return 0; })()")
+        page.cmd('@wait:0.3')
         shown = [x[0] for x in st()['rows'] if x[1] == 1]
         dots = T('..%2F..%2Fetc%2Fpasswd.md')
         r = click(page, '#side-list a.row[data-path=' + json.dumps(dots) + ']')

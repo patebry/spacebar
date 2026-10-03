@@ -5711,12 +5711,14 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') { findStep(e.shiftKey ? -1 : 1); e.preventDefault(); } else if (e.key === 'Escape') { closeFind(); e.preventDefault(); }
 });
 
-// ---------- the sidebar's menu: sort order (a panel key) and hidden files (the settings window's, never the page's) ----------
+// ---------- the sidebar's menu: sort order and folders first (panel keys) and hidden files (the settings window's, never the
+// page's). Folders first and hidden files show the state in force, which follows Finder until a setting says otherwise. ----------
 
 const sidePop = $('side-pop');
 function syncSideMenu() {
   sidePop.querySelectorAll('[data-sort]').forEach((b) => b.setAttribute('aria-checked', String((settings.folderSort || 'name') === b.dataset.sort)));
-  $('side-hidden').setAttribute('aria-checked', String(settings.showHiddenFiles === true));
+  $('side-folders').setAttribute('aria-checked', String(settings.listsFoldersFirst === true));
+  $('side-hidden').setAttribute('aria-checked', String(settings.listsHidden === true));
 }
 
 function showSideMenu(open) {
@@ -5736,7 +5738,12 @@ sidePop.addEventListener('click', (e) => {
   e.preventDefault();
   showSideMenu(false);
   if (b.dataset.sort) choose('folderSort', b.dataset.sort);
-  else if (b.id === 'side-hidden') post({ type: 'openSettings', tab: 'folders' });
+  else if (b.id === 'side-folders') {
+    // The choice leaves Finder's setting behind for either sort; the native side echoes the state in force back.
+    const value = settings.listsFoldersFirst === true ? 'never' : 'always';
+    post({ type: 'setting', key: 'foldersFirst', value });
+    window.sb.applySettings({ ...settings, foldersFirst: value, listsFoldersFirst: value === 'always' });
+  } else if (b.id === 'side-hidden') post({ type: 'openSettings', tab: 'folders' });
 });
 // While the menu is open, a click anywhere else only closes it.
 document.addEventListener('click', (e) => {

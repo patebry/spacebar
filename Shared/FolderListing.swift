@@ -886,8 +886,48 @@ enum FileView {
     }
 }
 
-/// One folder of the sidebar's tree, for a single file and a folder alike: folders first, then files, each sorted by `sort`
-/// ("name", or "modified", newest first), with a README first among the files when `readmeFirst`.
+/// Finder's own preferences the sidebar follows, so a folder lists as its Finder window does: "Keep folders on top" (Finder ›
+/// Settings › Advanced) and hidden files shown (⌘⇧.). They are read from Finder's plist in the real home: the extension's
+/// sandbox lets it read the file, while cfprefsd refuses it another app's domain. A missing key is Finder's default, off.
+/// SPACEBAR_FINDER_PLIST names another file (tests), and empty names none; under SPACEBAR_SUPPORT_DIR with it unset there is
+/// none either, so the Finder of the machine running the tests never shapes them.
+enum FinderPrefs {
+    struct Values: Equatable {
+        var foldersFirst = false
+        var showHidden = false
+    }
+
+    static var path: String? {
+        // getenv, not ProcessInfo's cached copy: a test sets and clears the variable while it runs.
+        if let p = getenv("SPACEBAR_FINDER_PLIST").map({ String(cString: $0) }) { return p.isEmpty ? nil : p }
+        if let p = getenv("SPACEBAR_SUPPORT_DIR").map({ String(cString: $0) }), !p.isEmpty { return nil }
+        let home = getpwuid(getuid()).flatMap { String(validatingUTF8: $0.pointee.pw_dir) } ?? NSHomeDirectory()
+        return home + "/Library/Preferences/com.apple.finder.plist"
+    }
+
+    /// The values in `path` now: a small file, parsed at each call. Nil, a missing or unreadable file or one that is not a
+    /// property list gives the defaults.
+    static func read(at path: String? = FinderPrefs.path) -> Values {
+        guard let path, let data = FileManager.default.contents(atPath: path), data.count <= 16 << 20,
+              let plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else { return Values() }
+        return parse(plist)
+    }
+
+    static func parse(_ plist: [String: Any]) -> Values {
+        Values(foldersFirst: flag(plist["_FXSortFoldersFirst"]), showHidden: flag(plist["AppleShowAllFiles"]))
+    }
+
+    /// Finder reads a boolean, a number, or the strings years of `defaults write` advice left behind (YES, TRUE, 1).
+    static func flag(_ v: Any?) -> Bool {
+        if let n = v as? NSNumber { return n.boolValue }
+        if let s = v as? String { return ["yes", "true", "1"].contains(s.lowercased()) }
+        return false
+    }
+}
+
+/// One folder of the sidebar's tree, for a single file and a folder alike, in Finder's order: by `sort` ("name", or "modified",
+/// newest first), folders among the files unless `foldersFirst`, and a README first when `readmeFirst` (above the files, or
+/// at the very top when folders are not first).
 ///
 /// Hidden files (a leading dot or the hidden flag) are skipped unless `showHidden`. A symbolic link is listed only when it
 /// resolves inside the root to a regular file or a folder, so the tree never reaches outside the root; one that loops or leads
@@ -971,10 +1011,30 @@ enum FolderListing {
 
     static func isHidden(_ name: String, _ st: stat) -> Bool { name.hasPrefix(".") || st.st_flags & UInt32(UF_HIDDEN) != 0 }
 
+    /// How a folder is listed. `foldersFirst` from the setting of that name: "always", "never", or "finder" for Finder's own
+    /// "Keep folders on top", which Finder applies only when sorting by name. Hidden files show when the setting or Finder says so.
+    struct Options: Equatable {
+        var sort = "name"
+        var foldersFirst = false
+        var readmeFirst = false
+        var showHidden = false
+
+        init(sort: String = "name", foldersFirst: Bool = false, readmeFirst: Bool = false, showHidden: Bool = false) {
+            self.sort = sort
+            self.foldersFirst = foldersFirst
+            self.readmeFirst = readmeFirst
+            self.showHidden = showHidden
+        }
+
+        init(sort: String, foldersFirst mode: String, readmeFirst: Bool, showHidden: Bool, finder: FinderPrefs.Values) {
+            self.init(sort: sort, foldersFirst: mode == "always" || (mode == "finder" && finder.foldersFirst && sort == "name"),
+                      readmeFirst: readmeFirst, showHidden: showHidden || finder.showHidden)
+        }
+    }
+
     /// Reads one folder of the tree rooted at `root`; call it off the main thread. `pinned` (the document on screen) is listed
     /// even past the cap. A folder outside the root lists nothing.
-    static func list(_ dir: String, root: String? = nil, sort: String, readmeFirst: Bool, showHidden: Bool = false, cap: Int = cap,
-                     pinned: String? = nil) -> Listing {
+    static func list(_ dir: String, root: String? = nil, options o: Options, cap: Int = cap, pinned: String? = nil) -> Listing {
         let root = root ?? dir
         guard let realRoot = realPath(root), isInside(dir, root: root, allowRoot: true) else { return Listing(dir: dir, entries: [], more: 0) }
         let inside = realRoot == "/" ? "/" : realRoot + "/"
@@ -999,7 +1059,7 @@ enum FolderListing {
             var st = stat()
             guard lstat(path, &st) == 0 else { continue }
             let hidden = isHidden(name, st)
-            if !showHidden && hidden { continue }
+            if !o.showHidden && hidden { continue }
             if st.st_mode & S_IFMT == S_IFLNK {
                 guard let real = realPath(path) else {
                     let e = errno
@@ -1024,12 +1084,12 @@ enum FolderListing {
                                hidden: hidden))
         }
         found.sort { a, b in
-            if a.isDirectory != b.isDirectory { return a.isDirectory }
-            if sort == "modified", a.modified != b.modified { return a.modified > b.modified }
+            if o.foldersFirst, a.isDirectory != b.isDirectory { return a.isDirectory }
+            if o.sort == "modified", a.modified != b.modified { return a.modified > b.modified }
             return a.name.localizedStandardCompare(b.name) == .orderedAscending
         }
-        if readmeFirst, let i = found.firstIndex(where: { !$0.isDirectory && $0.kind == .markdown && isReadme($0.name) }),
-           let first = found.firstIndex(where: { !$0.isDirectory }) {
+        if o.readmeFirst, let i = found.firstIndex(where: { !$0.isDirectory && $0.kind == .markdown && isReadme($0.name) }),
+           let first = o.foldersFirst ? found.firstIndex(where: { !$0.isDirectory }) : 0 {
             found.insert(found.remove(at: i), at: first)
         }
         var shown = Array(found.prefix(max(cap, 0)))
@@ -1047,6 +1107,14 @@ enum FolderListing {
         return String(decoding: buf[0..<n].map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
+    /// The tests' spelling, folders first unless said otherwise; the app derives its Options from the settings and Finder.
+    static func list(_ dir: String, root: String? = nil, sort: String, readmeFirst: Bool, showHidden: Bool = false, foldersFirst: Bool = true,
+                     cap: Int = cap, pinned: String? = nil) -> Listing {
+        list(dir, root: root, options: Options(sort: sort, foldersFirst: foldersFirst, readmeFirst: readmeFirst, showHidden: showHidden), cap: cap, pinned: pinned)
+    }
+
+    /// The Markdown file a folder preview opens on when the folder itself holds one: its README, else its first Markdown file in
+    /// the sidebar's order. Nil sends the preview to FolderScan.
     /// `l` with only the entries named in `names`: the sidebar of a multiple selection, which moves among the selected items.
     /// Entries past the listing's caps are not in `l` (but for the pinned file on screen).
     /// A selection's view of a listing: the selected items (paths) in it, and the folders on the way to one. A selected folder,

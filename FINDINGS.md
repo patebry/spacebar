@@ -270,7 +270,8 @@ The threat is a downloaded Markdown file, and whatever sits beside it, driving t
    A binary property list is converted to XML only under a node count and an estimate of the XML's size, so a small file
    naming one large blob many times is refused before it is written out.
 12. **Updates:** `installUpdate` refuses a version that is not newer than the running one or not a plain version, or when
-   checks are off, and runs only from `~/Applications/spacebar.app`. The script it runs is the app's own `install.sh`, copied
+   checks are off, and runs only from the copy install.sh would replace (`~/Applications/spacebar.app`, or
+   `/Applications/spacebar.app` when that is the only one) when this account can write it. The script it runs is the app's own `install.sh`, copied
    to a private folder first so replacing the app cannot cut it off mid-read, with only `HOME`, `PATH`, `TMPDIR` and the status
    path in its environment and no inherited descriptors. The installer verifies the release's SHA-256 before it replaces
    anything.
@@ -346,6 +347,38 @@ self-signed certificate, "spacebar Release", and v0.1.0 ad-hoc. Local builds kee
   Before v0.3 it builds the zip alone, as before; without the secrets, as in a fork, ad-hoc with a warning. Each
   `spacebar.zip` (and `spacebar.dmg`) has a GitHub build provenance attestation
   (`gh attestation verify spacebar.zip -R patebry/spacebar`).
+
+## Install
+
+spacebar is installed in `~/Applications` by the install command, or in `/Applications` by dragging it there from
+`spacebar.dmg`. There is one managed copy: `~/Applications/spacebar.app` when it is there (or a swap of it was cut short),
+else `/Applications/spacebar.app`. install.sh updates that copy in place with the same checksum, exact paths and rollback;
+the Update button runs only from it; the uninstaller removes either or both. With a copy in both, install.sh keeps to
+`~/Applications` and warns about the other, as before.
+
+- **A standard account cannot change `/Applications`** (`root:admin`, `drwxrwxr-x`), and a copy an administrator dragged
+  there is owned by them with folders mode 755, so even another administrator cannot delete what is inside it. install.sh
+  checks the folder and every folder inside the copy before it downloads, and stops with nothing changed rather than
+  install a second copy in `~/Applications`: that one and the old one would claim the same bundle IDs and file types, Quick
+  Look could go on using the old one, and nobody on that account could update or remove it. The uninstaller leaves such a
+  copy, names it, and exits 1; the preview does not offer Update for it, and Uninstall in Settings says why it cannot.
+- **Launching an app registers its extensions, but turns them neither on nor off.** Measured on macOS 15.4.1 with a probe
+  app of unique bundle IDs (self-signed, a sandboxed Quick Look preview extension) in a scratch folder: `pluginkit -mAv`
+  listed nothing after the bundle was made, and listed the extension within 2 s of `open`, with a blank mark (neither `+`
+  nor `-`). The probe was unregistered and deleted afterwards. A copy made by Finder from a disk image was not measured.
+  So at each launch the managed copy adds an extension pluginkit does not list at its path, and turns on (`pluginkit -e
+  use`) one with a blank mark, the folder one only while folder previews are on; one the user turned on or off keeps its
+  mark, and a second copy does nothing.
+- **App Management** (macOS 13) refuses changes to a notarized app's bundle by a process of another Team ID unless the user
+  allows it, wherever the app is (lapcatsoftware.com/articles/AppManagement.html), so it is not new with `/Applications`:
+  from v0.3 a release is notarized, and the install command run from a terminal without App Management may be refused when
+  it moves the old copy aside. install.sh then stops with the old copy in place and re-registered, and says where to allow
+  it. Not observed here: the terminal used for this work has App Management (and Full Disk Access) granted, and local
+  builds are self-signed and not notarized, which App Management does not protect. The Update button runs install.sh from
+  the writer inside the same Developer ID-signed app, which App Management should allow as the same Team ID; that is untested until a notarized
+  release updates to a later one.
+- **The Space helper** is registered by the app through SMAppService for its own bundle, so an update in place keeps its
+  path and nothing about the helper changes. Two copies would each register the same label; that is left as before.
 
 ## Space helper
 

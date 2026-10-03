@@ -250,11 +250,19 @@ an older version's defaults are applied to it (`stats` and `folderReadmeFirst` a
 
 ## Install
 
+Download [`spacebar.dmg`](https://github.com/patebry/spacebar/releases/latest/download/spacebar.dmg) from the latest release,
+open it, drag spacebar to Applications, and open spacebar once from Applications: that first launch turns its Quick Look
+extensions on. Or run the install command, which installs into `~/Applications` and needs no administrator password:
+
 ```sh
 curl -fsSL https://spacebar.patebryant.com/install.sh | sh
 ```
 
 Then select a file or folder in Finder and press Space.
+
+Either way there is one copy, and the install command, the **Update** button and the uninstaller all work on it:
+`~/Applications/spacebar.app`, or `/Applications/spacebar.app` when that is the only one. An account that cannot change the
+copy in `/Applications` (one an administrator put there, seen from a standard account) is told so, and nothing is changed.
 
 `curl -fsSL` fetches the script: `-f` stops on an HTTP error instead of passing an error page to the shell, `-s` hides the
 progress bar, `-S` still shows errors, and `-L` follows redirects. `sh` runs it: the script is plain POSIX `sh`, which every
@@ -267,11 +275,12 @@ install command checks the release's SHA-256 before it changes anything.
 <!-- /gatekeeper -->
 Read [`scripts/install.sh`](scripts/install.sh) before you run it. It:
 
-1. checks for macOS 13 or later;
+1. checks for macOS 13 or later, and picks the copy to update: `~/Applications/spacebar.app`, or
+   `/Applications/spacebar.app` when that is the only one. It stops here if this account cannot change that one;
 2. downloads `spacebar.zip` and `spacebar.zip.sha256` from the latest release (or `SPACEBAR_VERSION=vX.Y.Z`) through
    `github.com/patebry/spacebar/releases/latest/download/`, with no GitHub API calls, and stops unless the SHA-256 matches;
-3. copies the new app into `~/Applications` beside the old one (no `sudo`);
-4. if `~/Applications/spacebar.app` exists, quits it and its Quick Look extensions (the helpers that save edits first, so a
+3. copies the new app beside that copy, or into `~/Applications` for a first install (no `sudo`);
+4. if there is a copy, quits it and its Quick Look extensions (the helpers that save edits first, so a
    save in flight finishes), unregisters them, moves it aside, moves the new copy into its place, quits the Space helper's
    viewer the same way, and only then deletes the old one (it is put back if the move fails). Nothing else is deleted;
 5. registers it with `lsregister` and `pluginkit`, turns the preview on, turns folder previews on unless you turned them off,
@@ -280,7 +289,7 @@ Read [`scripts/install.sh`](scripts/install.sh) before you run it. It:
    `~/Library/Logs/spacebar-helper.log`. Opening spacebar's settings does the same when the helper is not answering;
 6. lists other Quick Look extensions that are turned on and claim file types spacebar previews (QLMarkdown for Markdown,
    a syntax highlighter for code), with how many of spacebar's types each claims by kind, says how to turn them off, and warns
-   if another copy of spacebar is in `/Applications`. It never turns off or deletes anything itself.
+   if there is a second copy of spacebar in `/Applications`. It never turns off or deletes anything itself.
 
 `install.sh --help` lists its options, including `--dry-run`, which downloads and verifies but changes nothing. Options go
 after `sh -s --`, and a variable goes before `sh`, not before `curl`:
@@ -316,7 +325,8 @@ curl -fsSL https://spacebar.patebryant.com/uninstall.sh | sh
 
 This stops the Space helper (its launchd agent, then the helper, the viewer and the viewer's writer), resets the
 Accessibility permission the helper had and every permission the viewer had, unregisters spacebar's Quick Look extensions and
-deletes `~/Applications/spacebar.app`, which takes its Login Items entry with it. **Uninstall spacebar…** in Settings runs the same
+deletes `~/Applications/spacebar.app` and `/Applications/spacebar.app`, whichever are there, which takes its Login Items
+entry with it. A copy this account cannot delete is left as it is, and named. **Uninstall spacebar…** in Settings runs the same
 script from inside the app (not while an update runs), after removing the helper from Login Items. Both quit spacebar's
 Quick Look extensions first. To also delete your settings and themes in `~/Library/Application Support/spacebar` and the
 helper's log in `~/Library/Logs`:

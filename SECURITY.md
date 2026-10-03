@@ -76,7 +76,9 @@ Nine features reach further than a rendered page, and are in scope:
   table at most 16 MB and 2 million entries; nothing is mounted or run.
 - **The one-click update** runs the app's own copy of `scripts/install.sh`, sealed by the app's signature, detached from Quick
   Look with only `HOME`, `PATH`, `TMPDIR` and a status path in its environment. It installs only a version newer than the
-  running one, only into `~/Applications/spacebar.app`, and only after the downloaded zip's SHA-256 matches the release's.
+  running one, only into the copy it runs from and only when that is the one the installer picks (`~/Applications/spacebar.app`,
+  or `/Applications/spacebar.app` when that is the only one) and this account can change it, and only after the downloaded
+  zip's SHA-256 matches the release's.
   The version check reads just the version number of GitHub's latest release, at most once a day. The uninstaller, started
   from Settings, quits the extensions' helpers before it deletes anything and does not start while an update runs.
 - **Copy** puts plain text on the clipboard through the writer; the sandboxed extension never touches the pasteboard. The

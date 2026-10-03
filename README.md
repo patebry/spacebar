@@ -31,7 +31,7 @@ Space on in Finder:
 | File | Shown as |
 |---|---|
 | Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`, `.mkdn`) | rendered, with inline editing and task toggles; Raw shows its source, read only |
-| Images (`.png`, `.jpg`, `.gif`, `.webp`, `.bmp`, `.ico`, `.svg`) | fitted to the panel, its dimensions and zoom in the toolbar; a double-click or a two-finger double tap toggles fitted and actual size, a pinch zooms about the pointer, two fingers or a drag move it, ⌘+ ⌘− ⌘0 zoom and fit; SVG as an image only |
+| Images (`.png`, `.jpg`, `.gif`, `.webp`, `.bmp`, `.ico`, `.svg`) | fitted to the panel, its dimensions and zoom in the toolbar; a double-click (or, in Quick Look, a two-finger double tap) toggles fitted and actual size, a pinch zooms about the pointer in Quick Look, two fingers or a drag move it, ⌘+ ⌘− ⌘0 zoom and fit; SVG as an image only |
 | HEIC, AVIF, TIFF, camera RAW (`.dng`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.orf`, `.raf`, `.rw2`), Photoshop (`.psd`), OpenEXR, TGA, JPEG 2000, icons (`.icns`) | decoded by macOS's own ImageIO and drawn natively in the panel, turned as the camera recorded it, with the same fit, zoom and pan |
 | PDF | drawn natively by PDFKit in the panel, fitted to its width, pages in one scroll |
 | HTML (`.html`, `.htm`) | rendered in its own web view: with its scripts and web content unless it was marked as downloaded, with neither when it was (see below) |

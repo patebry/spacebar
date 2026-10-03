@@ -781,9 +781,9 @@ enum FinderPrefs {
     }
 
     static var path: String? {
-        let env = ProcessInfo.processInfo.environment
-        if let p = env["SPACEBAR_FINDER_PLIST"] { return p.isEmpty ? nil : p }
-        if let p = env["SPACEBAR_SUPPORT_DIR"], !p.isEmpty { return nil }
+        // getenv, not ProcessInfo's cached copy: a test sets and clears the variable while it runs.
+        if let p = getenv("SPACEBAR_FINDER_PLIST").map({ String(cString: $0) }) { return p.isEmpty ? nil : p }
+        if let p = getenv("SPACEBAR_SUPPORT_DIR").map({ String(cString: $0) }), !p.isEmpty { return nil }
         let home = getpwuid(getuid()).flatMap { String(validatingUTF8: $0.pointee.pw_dir) } ?? NSHomeDirectory()
         return home + "/Library/Preferences/com.apple.finder.plist"
     }
@@ -791,7 +791,7 @@ enum FinderPrefs {
     /// The values in `path` now: a small file, parsed at each call. Nil, a missing or unreadable file or one that is not a
     /// property list gives the defaults.
     static func read(at path: String? = FinderPrefs.path) -> Values {
-        guard let path, let data = FileManager.default.contents(atPath: path), data.count <= 1 << 20,
+        guard let path, let data = FileManager.default.contents(atPath: path), data.count <= 16 << 20,
               let plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else { return Values() }
         return parse(plist)
     }
@@ -970,7 +970,7 @@ enum FolderListing {
         return Listing(dir: dir, entries: shown, more: found.count - shown.count + unseen)
     }
 
-    /// The same, spelled out: folders first unless said otherwise.
+    /// The tests' spelling, folders first unless said otherwise; the app derives its Options from the settings and Finder.
     static func list(_ dir: String, root: String? = nil, sort: String, readmeFirst: Bool, showHidden: Bool = false, foldersFirst: Bool = true,
                      cap: Int = cap, pinned: String? = nil) -> Listing {
         list(dir, root: root, options: Options(sort: sort, foldersFirst: foldersFirst, readmeFirst: readmeFirst, showHidden: showHidden), cap: cap, pinned: pinned)

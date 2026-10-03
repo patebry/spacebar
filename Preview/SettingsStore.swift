@@ -55,6 +55,7 @@ final class SettingsStore {
     func checkNow(reason: String) -> Bool {
         let sig = currentSignature()
         guard sig != signature else { return false }
+        let before = payload
         let next = SettingsFile.load()
         signature = []
         let old = settings
@@ -62,6 +63,9 @@ final class SettingsStore {
         finder = FinderPrefs.read()
         signature = currentSignature()
         rearm()
+        // Finder rewrites its plist for window positions and view settings too: when nothing the page or the controller
+        // would see has changed (the settings, the CSS versions, Finder's two values), the reload stops here.
+        if NSDictionary(dictionary: before).isEqual(to: payload) { return true }
         slog.info("settings reloaded (\(reason, privacy: .public)) theme=\(next.theme, privacy: .public)\(old == next ? " (css changed)" : "", privacy: .public)")
         observers.forEach { $0(next) }
         return true

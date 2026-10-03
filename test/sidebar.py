@@ -4,14 +4,15 @@
 "list", "open", "openFile" and "reveal" through the same checks as the extension, and sends "setting" through the extension's
 gate (Settings.panelPatch) and the writer's update (SettingsFile.updateFromPanel) into a scratch SPACEBAR_SUPPORT_DIR.
 
-Checks the tree (folders first, icons, lazy expand and collapse, remembered expansion, the current file's folders opened, hidden
-files, the cap, links out of the root), every file view (Markdown, image, SVG, PDF, code, JSON, CSV, text, the info card), the
+Checks the tree (Finder's order and Finder's own folders-on-top and hidden-files preferences from a plist, the sort menu, icons,
+lazy expand and collapse, remembered expansion, the current file's folders opened, hidden files, the cap, links out of the
+root), every file view (Markdown, image, SVG, PDF, code, JSON, CSV, text, the info card), the
 hostile fixtures in test/hostile/browser beside a link to /etc and names made of dots, the resize handle, the no-flash
 document-start state, the toggle and its persistence, the message gate, and that inline editing, task toggles, the TOC, the Aa
 popover, themes and narrow panels still work with the sidebar open or collapsed, and the native PDF view: laid over the page's
 PDF area, following the sidebar and the panel, and torn down cleanly. A sandboxed copy of the harness, signed with the
 extension's entitlements, shows that a PDF and an image render under the extension's sandbox."""
-import base64, json, os, random, shutil, struct, subprocess, sys, tempfile, wave, zlib
+import base64, json, os, plistlib, random, shutil, struct, subprocess, sys, tempfile, wave, zlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webthemes import Page, ROOT, THEMES, HELPERS, TASK_NAMES, click
 import hostile
@@ -1965,6 +1966,26 @@ def main():
         page.render(os.path.join(folder, 'b.md'))
         check(st()['names'][:2] == ['README.md', 'a.md'], 'README first in Finder\'s order: at the very top, then the names', json.dumps(st()['names']))
         page.apply(foldersFirst='finder', folderReadmeFirst=False)
+        # Finder's own preferences, from the plist the harness points SPACEBAR_FINDER_PLIST at: folders on top and hidden files.
+        with open(page.finder_plist, 'wb') as fp:
+            plistlib.dump({'_FXSortFoldersFirst': True, 'AppleShowAllFiles': True}, fp)
+        page.apply(foldersFirst='finder', folderReadmeFirst=False)
+        page.render(os.path.join(folder, 'b.md'))
+        s = st()
+        check(s['names'][0] == 'sub' and '.secret.md' in s['names'] and 'a.md' in s['names'],
+              'Finder keeps folders on top and shows hidden files: so does the sidebar, from Finder\'s plist', json.dumps(s['names']))
+        click(page, '#side-menu')
+        menu = page.js("return [...document.querySelectorAll('#side-pop button')].map((b) => b.getAttribute('aria-checked'))")
+        check(menu == ['true', 'false', 'true', 'true'], 'sidebar menu: Folders First and Show Hidden Files shown as on while Finder has them on', json.dumps(menu))
+        click(page, '#side-menu')
+        page.apply(foldersFirst='never', folderReadmeFirst=False)
+        page.render(os.path.join(folder, 'b.md'))
+        check(st()['names'][0] != 'sub' and 'sub' in st()['names'] and '.secret.md' in st()['names'],
+              'foldersFirst never overrides Finder\'s folders on top; hidden files still follow Finder', json.dumps(st()['names']))
+        os.remove(page.finder_plist)
+        page.apply(foldersFirst='finder', folderReadmeFirst=False)
+        page.render(os.path.join(folder, 'b.md'))
+        check(st()['names'][0] == 'a.md' and '.secret.md' not in st()['names'], 'Finder\'s plist gone: back to Finder\'s defaults', json.dumps(st()['names']))
 
         # ---- the folder watch: a file added or removed shows up in the list without a re-render ----
         page.render(os.path.join(folder, 'b.md'))
@@ -2162,7 +2183,7 @@ def main():
             page.cmd('@wait:0.3')
             return r
 
-        # ---- the tree: folders first, each with its icon, links out of the root and hidden files left out ----
+        # ---- the tree: Finder's order, each row with its icon, links out of the root and hidden files left out ----
         page.apply(width='medium')
         page.cmd('@size:1200x800')
         view(T('README.md'))

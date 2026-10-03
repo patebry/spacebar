@@ -314,10 +314,10 @@ def search_status(page, check, out):
     empty['contents'] = page.js(G)
     page.cmd("@eval:filterField.value = 'a'; setSideQuery('a'); 0")
     page.cmd('@wait:0.2')
-    sample(page, {'list': '#side-list'}, "document.getElementById('side-more').textContent")
-    seen = {'1 char': page.js(G)}
+    one = page.js(G)
     page.cmd("@eval:filterField.value = 'al'; setSideQuery('al'); 0")
-    seen['2 chars'] = page.js(G)
+    sample(page, {'list': '#side-list'}, "document.getElementById('side-more').textContent")
+    seen = {'2 chars': page.js(G)}
     page.cmd("@eval:filterField.value = 'alp'; setSideQuery('alp'); hits = { ...hits, done: false, total: 56789, searched: 1234, version: hits.version + 1 }; renderSidebar(); 0")
     seen['searching'] = page.js(G)
     page.cmd("@eval:hits = { ...hits, done: true, list: hits.list.length ? hits.list : [{ path: current.path, name: 'note-00.txt', icon: 'text', count: 1, line: 1, snippet: 'alpha' }], version: hits.version + 1 }; renderSidebar(); 0")
@@ -329,8 +329,9 @@ def search_status(page, check, out):
     page.cmd("@eval:filterField.value = ''; setSideQuery(''); setSideMode('names'); 0")
     page.apply(sidebarWidth=240)
     texts = {f['extra'] for f in fr}
-    check(len({v[2] for v in seen.values()}) >= 3 and len({tuple(v[:2]) for v in seen.values()}) == 1 and still(spread(fr, 'list', (2, 3))) and len(texts) >= 3,
-          'jank J15: the Contents search\'s status line keeps the list\'s size, every frame, as it appears, wraps and changes', json.dumps(seen))
+    check(one == empty['contents'], 'jank J15: one character, which searches nothing, takes no room from the list', json.dumps([one, empty]))
+    check(len({v[2] for v in seen.values()}) >= 2 and len({tuple(v[:2]) for v in seen.values()}) == 1 and still(spread(fr, 'list', (2, 3))) and len(texts) >= 3,
+          'jank J15: the Contents search\'s status line keeps the list\'s size, every frame, as the search runs, wraps and changes', json.dumps(seen))
     check(empty['contents'] == empty['names'] and empty['names'][2] is None,
           'jank J15: with the field empty, Contents leaves the list the size it is in Names: no room is kept for a status yet', json.dumps(empty))
     page.cmd('@root:')

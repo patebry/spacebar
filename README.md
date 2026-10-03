@@ -252,7 +252,8 @@ an older version's defaults are applied to it (`stats` and `folderReadmeFirst` a
 
 Download [`spacebar.dmg`](https://github.com/patebry/spacebar/releases/latest/download/spacebar.dmg) from the latest release,
 open it, drag spacebar to Applications, and open spacebar once from there. Unless spacebar is also in `~/Applications`,
-that first launch turns its Quick Look extensions on (or leaves them as you last set them). Or run the install command, which installs into `~/Applications` and needs no administrator password:
+that first launch turns its Quick Look extensions on (or leaves them as you last set them). Or run the install command,
+which installs into `~/Applications` and needs no administrator password:
 
 ```sh
 curl -fsSL https://spacebar.patebryant.com/install.sh | sh

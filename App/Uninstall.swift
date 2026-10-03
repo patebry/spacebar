@@ -6,8 +6,12 @@ import AppKit
 /// the settings folder and the helper's log.
 enum Uninstall {
     static var home: URL { URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true) }
-    /// The copies the script would remove: it leaves one this account cannot delete.
-    static var installed: [String] { Updates.installPlaces(home: home.path).filter { FileManager.default.fileExists(atPath: $0) && Updates.canChange($0) } }
+    /// The copies there are, split into those the script removes and those it leaves (this account cannot delete them). It
+    /// walks their folders, so it is worked out once as the dialog opens.
+    static func copies() -> (removed: [String], left: [String]) {
+        let there = Updates.installPlaces(home: home.path).filter { FileManager.default.fileExists(atPath: $0) }
+        return (there.filter(Updates.canChange), there.filter { !Updates.canChange($0) })
+    }
     static func shown(_ path: String) -> String { path.hasPrefix(home.path + "/") ? "~" + path.dropFirst(home.path.count) : path }
     static var log: URL { home.appendingPathComponent("Library/Logs/spacebar-uninstall.log") }
     static var updateLog: URL { home.appendingPathComponent("Library/Logs/spacebar-update.log") }

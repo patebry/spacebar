@@ -106,6 +106,15 @@ check "a link in an install place is removed as a link, the copy it points to as
   test "$(dry | sed -n -e 's/^would run: rm -f //p' -e 's/^would run: rm -rf //p')" = "$(printf '%s\n%s' "$home/Applications/spacebar.app" "$theirs")"
 check "and nothing is unregistered through the link" sh -c "! (HOME='$home' sh scripts/uninstall.sh --dry-run </dev/null 2>&1 | grep -q 'pluginkit -r $home/Applications/')"
 rm "$home/Applications/spacebar.app"
+# A real run, files only: a link this account cannot delete is named, and the run goes on and fails.
+mkdir -p "$out/locked"
+ln -s "$theirs" "$out/locked/spacebar.app"
+chmod 555 "$out/locked"
+code=0
+linked=$(HOME="$out/nohome" SPACEBAR_SYSTEM_APPLICATIONS="$out/locked" sh scripts/uninstall.sh --no-register </dev/null 2>&1) || code=$?
+chmod 755 "$out/locked"
+check "a link this account cannot delete is named, and the run fails" \
+  sh -c "[ $code = 1 ] && printf '%s\n' \"\$1\" | grep -qx 'Left the link $out/locked/spacebar.app: this account cannot delete it.' && [ -L '$out/locked/spacebar.app' ] && [ -d '$theirs' ]" sh "$linked"
 # A real run, files only, in the scratch folders: a copy rm cannot delete (a locked file) is named, the other still goes.
 mkdir -p "$app/Contents/PlugIns/SpacebarPreview.appex"
 touch "$app/Contents/locked"

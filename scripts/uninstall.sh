@@ -142,8 +142,12 @@ for DEST in "$@"; do
   [ -e "$DEST" ] || continue
   # Only the link goes: the copy it points to is not one of these two, or is removed as itself.
   if [ -L "$DEST" ]; then
-    run rm -f "$DEST"
-    [ "$DRY_RUN" = 1 ] || say "Removed the link $DEST"
+    if run rm -f "$DEST"; then
+      [ "$DRY_RUN" = 1 ] || say "Removed the link $DEST"
+    else
+      say "Left the link $DEST: this account cannot delete it."
+      LEFT=1
+    fi
     continue
   fi
   if ! removable "$DEST"; then

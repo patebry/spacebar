@@ -171,8 +171,8 @@ helper sees nothing and Space reaches Finder's own Quick Look. Settings shows "S
 - A compromised viewer has what the Quick Look extension has, plus a process that runs for as long as the helper is on (a
   fresh one every 30 minutes the panel stays closed).
 - The signing key now also gates Accessibility: whoever holds it can build a viewer the helper trusts, and a helper that
-  inherits the Accessibility grant. It lives only in CI secrets. Until the Developer ID release, the certificate is
-  self-signed, so macOS pins the helper's launch constraint to its code hash rather than to a Team ID.
+  inherits the Accessibility grant. It lives only in CI secrets. From v0.3 it is spacebar's Developer ID, so macOS can tie
+  the helper's launch constraint to the Team ID; a self-signed local build has none, and macOS pins it to the code hash.
 - A file swapped between the viewer's type check and Quick Look's read may reach Apple's generator for a type spacebar claims.
   It is still parsed by Apple's generator, out of process, and shown in the sandboxed viewer.
 

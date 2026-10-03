@@ -22,10 +22,17 @@ case $TIMESTAMP in 1) TIMESTAMP_ARG=--timestamp ;; 0) TIMESTAMP_ARG=--timestamp=
 
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
+chmod 755 "$stage"
 ditto "$APP" "$stage/spacebar.app"
 ln -s /Applications "$stage/Applications"
 rm -f "$DMG"
-hdiutil create -quiet -volname spacebar -srcfolder "$stage" -fs HFS+ -format UDZO -imagekey zlib-level=9 "$DMG"
+# hdiutil sometimes fails with "Resource busy" on a CI runner; a second try a few seconds later succeeds.
+for try in 1 2 3; do
+  hdiutil create -quiet -volname spacebar -srcfolder "$stage" -fs HFS+ -format UDZO -imagekey zlib-level=9 "$DMG" && break
+  [ "$try" = 3 ] && { echo "hdiutil create failed 3 times" >&2; exit 1; }
+  rm -f "$DMG"
+  sleep 5
+done
 if [ -n "$SIGN_ID" ] && [ "$SIGN_ID" != - ]; then
   codesign --force --sign "$SIGN_ID" ${SIGN_KEYCHAIN:+--keychain "$SIGN_KEYCHAIN"} "$TIMESTAMP_ARG" "$DMG"
   codesign --verify --strict --verbose=2 "$DMG"

@@ -287,7 +287,7 @@ after `sh -s --`, and a variable goes before `sh`, not before `curl`:
 
 ```sh
 curl -fsSL https://spacebar.patebryant.com/install.sh | sh -s -- --dry-run
-curl -fsSL https://spacebar.patebryant.com/install.sh | SPACEBAR_VERSION=v0.2.2 sh
+curl -fsSL https://spacebar.patebryant.com/install.sh | SPACEBAR_VERSION=vX.Y.Z sh
 ```
 
 ### Updates

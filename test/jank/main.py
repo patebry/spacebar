@@ -604,6 +604,61 @@ def raw_toggle(page, check, out):
     page.cmd('@size:1100x760')
 
 
+def raw_toggle_json(page, check, out):
+    """R3: Raw keeps the place outside Markdown. A notebook read at its middle cell comes back to it after Raw on and off; Raw on
+    from a JSON tree shows the source of the key at the top of the tree, Raw off from the source returns to that key, and switched
+    back with no scroll between, each view is where it was left."""
+    cells = [{'cell_type': 'markdown', 'metadata': {}, 'source': [f'## Cell {i:03d}\n', 'Some words. ' * 10]} for i in range(120)]
+    nb = os.path.join(out, 'nb.ipynb')
+    open(nb, 'w').write(json.dumps({'nbformat': 4, 'nbformat_minor': 5, 'metadata': {}, 'cells': cells}, indent=1))
+    data = os.path.join(out, 'data.json')
+    text = json.dumps({f'k{i:03d}': {'deep': 'z' * 40, 'n': i} for i in range(200)}, indent=1)
+    open(data, 'w').write(text)
+    # What is at the top: in Raw the source line the page anchors on, else the row or cell under the toolbar row.
+    TOP = r"""const bar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bar-h')) || 40;
+      if (document.querySelector('#doc pre.code')) { takeAnchor(); const pl = anchorPlace(); return pl ? pl.line : null; }
+      const e = [...document.querySelectorAll('#doc .jt-row, #doc .nb-cell')].find((x) => { const r = x.getBoundingClientRect(); return x.classList.contains('jt-row') ? (r.top + r.bottom) / 2 > bar : r.bottom > bar + 25; });
+      return e ? (e.dataset.ptr || '') + '@' + Math.round(e.getBoundingClientRect().top) : null;"""
+    raw = lambda: (page.cmd("@eval:document.getElementById('raw').click(); 0"), page.cmd('@wait:0.3'))
+    page.cmd('@size:1100x760')
+    page.cmd('@root:' + out)
+    page.render(nb)
+    page.cmd('@wait:0.4')
+    to = "const bar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bar-h')) || 40; window.scrollBy(0, e.getBoundingClientRect().top - bar - 2); 0"
+    page.cmd("@eval:(() => { const e = [...document.querySelectorAll('#doc .nb-cell')][61]; " + to + " })()")
+    page.cmd('@wait:0.3')
+    a = page.js(TOP)
+    raw()
+    b = page.js(TOP)
+    raw()
+    c = page.js(TOP)
+    check(a == c and a.startswith('/cells/61@') and b is not None and 0 < b,
+          'Raw: a notebook read at cell 61 shows its source, and Raw off returns to cell 61 where it was', json.dumps([a, b, c]))
+
+    page.render(data)
+    page.cmd('@wait:0.4')
+    page.cmd("@eval:document.querySelector('#doc .json-tree [data-action=jsonToggle]').click(); 0")
+    page.cmd('@wait:0.3')
+    page.cmd("@eval:(() => { const e = document.querySelector('#doc .jt-row[data-ptr=\"/k120\"]'); " + to + " })()")
+    page.cmd('@wait:0.3')
+    a = page.js(TOP)
+    raw()
+    b = page.js(TOP)
+    want = text.split('\n').index(' "k120": {')
+    page.cmd('@eval:window.scrollBy(0, -400); 0')
+    page.cmd('@wait:0.3')
+    b2 = page.js(TOP)
+    raw()
+    c = page.js(TOP)
+    key = next(i for i in range(200) if text.split('\n').index(f' "k{i:03d}": {{') > b2) - 1
+    check(a.startswith('/k120@') and abs(b - want) <= 1 and c.startswith(f'/k{key:03d}@'),
+          'Raw: from a JSON tree the source of the key at the top, and back from the source the key it was at',
+          json.dumps({'tree': a, 'raw line': b, 'k120 line': want, 'raw scrolled to': b2, 'tree after': c, 'want key': key}))
+    raw()
+    raw()
+    check(page.js(TOP) == c, 'Raw: on and off again with no scroll between, the tree is where it was left', json.dumps([c, page.js(TOP)]))
+
+
 def zoom_label(page, check, out):
     """N13: a fitted image's zoom label follows the stage when the sidebar hides or its width changes."""
     img = os.path.join(out, 'wide.png')
@@ -841,7 +896,7 @@ def main():
     page = Page()
     try:
         for i, part in enumerate([reading_position, grid_back, under_the_bar, toc_scroll, redraw_keeps_scroll, late_thumbnail, math_and_toc,
-                                   reflow_every_view, redraw_keeps_line, markdown_caret, grid_width, windows_on_resize, raw_toggle, zoom_label,
+                                   reflow_every_view, redraw_keeps_line, markdown_caret, grid_width, windows_on_resize, raw_toggle, raw_toggle_json, zoom_label,
                                    anchor_vs_highlight, anchor_vs_width_hold, reload_vs_highlight, raw_vs_highlight]):
             out = os.path.join(page.out, f'part{i}')
             os.makedirs(out)

@@ -5296,10 +5296,11 @@ function jsonFrom() {
   if (rawOn(current)) { const r = rawFrom(); return r && r.line !== undefined ? { want: r.want, line: r.line } : null; }
   const parts = jsonParts(), box = jsonScroller(), top = box ? Math.max(box.getBoundingClientRect().top, barHeight()) : barHeight();
   for (let i = 0; i < parts.length; i++) {
-    const [e, l] = parts[i], b = e.getBoundingClientRect();
-    if (b.bottom <= top) continue;
-    // Into a cell, the share of it above the top, as the same share of its lines.
-    const f = box ? 0 : Math.max(0, Math.min(1, (top - b.top) / Math.max(1, b.height)));
+    const [e, l] = parts[i], b = e.getBoundingClientRect(), row = e.classList.contains('jt-row');
+    // A tree's row half under the top is the next one's place; into a cell, the share of it above the top is the same share
+    // of its lines.
+    if (row ? (b.top + b.bottom) / 2 <= top : b.bottom <= top) continue;
+    const f = row ? 0 : Math.max(0, Math.min(1, (top - b.top) / Math.max(1, b.height)));
     const next = i + 1 < parts.length ? parts[i + 1][1] : lineCount(current.text);
     return { want: b.top + f * b.height, line: l + Math.floor(f * Math.max(0, next - l)) };
   }

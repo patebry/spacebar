@@ -6,11 +6,11 @@ import AppKit
 /// the settings folder and the helper's log.
 enum Uninstall {
     static var home: URL { URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true) }
-    /// The copies there are, split into those the script removes and those it leaves (this account cannot delete them). It
-    /// walks their folders, so it is worked out once as the dialog opens.
+    /// The copies (or links) there are, split into those the script removes and those it leaves (this account cannot delete
+    /// them). It walks their folders, so it is worked out once as the dialog opens.
     static func copies() -> (removed: [String], left: [String]) {
-        let there = Updates.installPlaces(home: home.path).filter { FileManager.default.fileExists(atPath: $0) }
-        return (there.filter(Updates.canChange), there.filter { !Updates.canChange($0) })
+        let there = Updates.installPlaces(home: home.path).filter(Updates.isThere)
+        return (there.filter(Updates.canRemove), there.filter { !Updates.canRemove($0) })
     }
     static func shown(_ path: String) -> String { path.hasPrefix(home.path + "/") ? "~" + path.dropFirst(home.path.count) : path }
     static var log: URL { home.appendingPathComponent("Library/Logs/spacebar-uninstall.log") }
@@ -27,9 +27,10 @@ enum Uninstall {
     /// Starts the script and quits, or says why it did not start.
     static func run(purge: Bool) -> String? {
         guard isInstalledCopy else { return "This copy of spacebar isn't in ~/Applications or /Applications, so there is nothing to uninstall from here." }
-        // The script would leave it and say so in its log, after the app had quit.
-        let app = Bundle.main.bundleURL.path
-        guard Updates.canChange(app) else { return "This account can't delete \(app). An administrator can move it to the Trash." }
+        // The script removes what it can and leaves the rest, which the dialog names; with nothing to remove it would only quit.
+        guard !copies().removed.isEmpty else {
+            return "This account can't delete \(shown(Bundle.main.bundleURL.path)). An administrator can move it to the Trash."
+        }
         guard let script = Bundle.main.url(forResource: "uninstall", withExtension: "sh") else { return "The uninstaller is missing from this copy of spacebar." }
         // The installer would put back what the uninstaller removes, or find its app gone mid-swap.
         guard !Updates.isRunning(log: updateLog) else { return "An update is running. Try again once it has finished." }

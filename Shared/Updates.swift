@@ -164,11 +164,23 @@ enum Updates {
         [home + "/Applications/spacebar.app", system + "/spacebar.app"]
     }
 
-    /// The copy install.sh updates, as it picks it: ~/Applications/spacebar.app when it is there (or a swap of it was cut
-    /// short), else /Applications/spacebar.app (dragged there from spacebar.dmg) when that is; nil when neither is.
-    static func managedCopy(home: String, system: String = systemApplications,
-                            exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> String? {
-        installPlaces(home: home, system: system).first { exists($0) || exists(($0 as NSString).deletingLastPathComponent + "/.spacebar.app.old") }
+    /// Whether something is at `path`, a link included (dangling or not).
+    static func isThere(_ path: String) -> Bool {
+        var st = stat()
+        return lstat(path, &st) == 0
+    }
+
+    static func isLink(_ path: String) -> Bool {
+        var st = stat()
+        return lstat(path, &st) == 0 && st.st_mode & S_IFMT == S_IFLNK
+    }
+
+    /// The copy install.sh updates, as it picks it: ~/Applications/spacebar.app, else /Applications/spacebar.app (dragged
+    /// there from spacebar.dmg); with neither, the one whose swap was cut short (its .old is there), ~/Applications's first;
+    /// nil when there is none of these. A link counts as there (both refuse it later).
+    static func managedCopy(home: String, system: String = systemApplications, exists: (String) -> Bool = isThere) -> String? {
+        let places = installPlaces(home: home, system: system)
+        return places.first(where: exists) ?? places.first { exists(($0 as NSString).deletingLastPathComponent + "/.spacebar.app.old") }
     }
 
     /// Whether this account can rename or delete `path`, and make a sibling of it: its folder writable and, when it is there,
@@ -188,14 +200,20 @@ enum Updates {
         return ok && all != nil
     }
 
+    /// Whether uninstall.sh would remove `path`: a link it deletes as a link, so only its folder must be writable.
+    static func canRemove(_ path: String) -> Bool {
+        isLink(path) ? access((path as NSString).deletingLastPathComponent, W_OK) == 0 : canChange(path)
+    }
+
     /// Whether install.sh would update `copy` for this account: it, and the .new and .old it puts beside it, changeable.
     static func canUpdate(_ copy: String) -> Bool {
         let dir = (copy as NSString).deletingLastPathComponent
         return FileManager.default.fileExists(atPath: copy) && [copy, dir + "/.spacebar.app.new", dir + "/.spacebar.app.old"].allSatisfy(canChange)
     }
 
-    /// What `pluginkit -mAv -i <id>` lists, one version a line: the mark that leads it ("+" turned on, "-" turned off, " "
-    /// never chosen either way) and its path, the line's last tab-separated field.
+    /// What `pluginkit -mADv -i <id>` lists, one registered copy a line (-D includes copies of one version at other paths):
+    /// the mark that leads it ("+" turned on, "-" turned off, " " never chosen either way) and its path, the line's last
+    /// tab-separated field.
     static func elections(pluginkit output: String) -> [(mark: Character, path: String)] {
         output.split(separator: "\n").compactMap { line in
             let f = line.split(separator: "\t")

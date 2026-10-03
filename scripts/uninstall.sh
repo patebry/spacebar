@@ -109,15 +109,19 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+# Root's HOME may be kept by sudo: launchctl, tccutil and pluginkit would act on root's, not the user's.
+[ "$(id -u)" != 0 ] || { echo "error: run this as yourself, without sudo: it removes spacebar for your account." >&2; exit 1; }
+
 SUPPORT="$HOME/Library/Application Support/spacebar"
 LEGACY_SUPPORT="$HOME/Library/Application Support/spacebar.md"
 # Overridable only so a copy there can be tested without touching /Applications.
 SYSTEM_APPS=${SPACEBAR_SYSTEM_APPLICATIONS:-/Applications}
 
-# The copies there are, ~/Applications's first. With none, a helper still running from ~/Applications is quit all the same.
+# The copies there are, ~/Applications's first, and links (a dangling one included). With none, a helper still running
+# from ~/Applications is quit all the same.
 set --
 for c in "$HOME/Applications/$APP_NAME" "$SYSTEM_APPS/$APP_NAME"; do
-  if [ -e "$c" ]; then set -- "$@" "$c"; fi
+  if [ -e "$c" ] || [ -L "$c" ]; then set -- "$@" "$c"; fi
 done
 FOUND=$#
 [ "$FOUND" -gt 0 ] || set -- "$HOME/Applications/$APP_NAME"
@@ -139,7 +143,7 @@ fi
 
 [ "$FOUND" -gt 0 ] || say "spacebar is not installed at $HOME/Applications/$APP_NAME or $SYSTEM_APPS/$APP_NAME"
 for DEST in "$@"; do
-  [ -e "$DEST" ] || continue
+  [ -e "$DEST" ] || [ -L "$DEST" ] || continue
   # Only the link goes: the copy it points to is not one of these two, or is removed as itself.
   if [ -L "$DEST" ]; then
     if run rm -f "$DEST"; then

@@ -427,8 +427,72 @@ do {
     r = pick(["--no-register"])
     check("install.sh --no-register stops there too", r.0 == 1 && r.1.contains("which this account cannot change"))
     chmod(inner, 0o755)
+
+    // A .old left in ~/Applications by a swap cut short there no longer hides the copy in /Applications: it is named.
+    let staleOld = h2.appendingPathComponent("Applications/.spacebar.app.old").path
+    bundle(staleOld)
+    r = pick()
+    check("install.sh updates /Applications's copy over a stale .old in ~/Applications, and names that .old", r.0 == 0
+          && r.1.contains("Would replace \(theirs)\n") && r.1.contains("note: \(staleOld) is left from an install there that was cut short."))
+    try! fm.removeItem(atPath: h2.appendingPathComponent("Applications").path)
+
+    for side in [".spacebar.app.new", ".spacebar.app.old"] {
+        let l = sys.appendingPathComponent(side).path
+        try! fm.createSymbolicLink(atPath: l, withDestinationPath: h2.path)
+        r = pick()
+        check("install.sh stops at a link at \(side), before downloading", r.0 == 1 && r.1.contains("\(l) is a link") && !r.1.contains("Downloading"))
+        try! fm.removeItem(atPath: l)
+    }
+
+    let sysOld = sys.appendingPathComponent(".spacebar.app.old").path
+    try! fm.moveItem(atPath: theirs, toPath: sysOld)
+    chmod(sys.path, 0o555)
+    r = pick()
+    check("install.sh names the .old it cannot change when that is all /Applications holds", r.0 == 1
+          && r.1.contains("spacebar is in \(sysOld), which this account cannot change."))
+    chmod(sys.path, 0o755)
+    try! fm.moveItem(atPath: sysOld, toPath: theirs)
+
+    // Never as root: sudo can keep the user's HOME, so the copy, Launch Services and pluginkit would be root's.
+    let rootStubs = dir.appendingPathComponent("rootstubs", isDirectory: true)
+    try! fm.createDirectory(at: rootStubs, withIntermediateDirectories: true)
+    try! "#!/bin/sh\n[ \"$1\" = -u ] && { echo 0; exit 0; }\nexec /usr/bin/id \"$@\"\n".write(to: rootStubs.appendingPathComponent("id"), atomically: true, encoding: .utf8)
+    chmod(rootStubs.appendingPathComponent("id").path, 0o755)
+    r = sh("sh scripts/install.sh --no-prompt", env: ["HOME": h2.path, "PATH": "\(rootStubs.path):\(stubs.path):/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": dir.path + "/",
+                                                  "SPACEBAR_RELEASE_URL": "file://\(rel.path)", "SPACEBAR_SYSTEM_APPLICATIONS": sys.path])
+    check("install.sh refuses to run as root, before anything", r.0 == 1 && r.1.contains("run this as yourself, without sudo") && !r.1.contains("Downloading"))
     check("install.sh dry runs change nothing in either folder", tree(h2) == before.0 && tree(sys) == before.1
           && !fm.fileExists(atPath: h2.appendingPathComponent("Applications").path))
+
+    // Real runs, files only (--no-register), in the scratch folders: the copy in /Applications swapped in place, put back
+    // when the new one cannot be moved in, and a swap cut short there finished.
+    let marker = theirs + "/Contents/old-copy"
+    func real(_ path: String = "\(stubs.path):/usr/bin:/bin:/usr/sbin:/sbin") -> (Int32, String) {
+        sh("sh scripts/install.sh --no-register --no-prompt", env: ["HOME": h2.path, "PATH": path, "TMPDIR": dir.path + "/",
+                                                                   "SPACEBAR_RELEASE_URL": "file://\(rel.path)", "SPACEBAR_SYSTEM_APPLICATIONS": sys.path])
+    }
+    let swapped = ["spacebar.app", "spacebar.app/Contents", "spacebar.app/Contents/PlugIns", "spacebar.app/Contents/PlugIns/SpacebarPreview.appex",
+                   "spacebar.app/Contents/PlugIns/SpacebarPreview.appex/Contents"]
+    fm.createFile(atPath: marker, contents: Data())
+    r = real()
+    check("install.sh replaces the copy in /Applications in place", r.0 == 0 && r.1.contains("Installed spacebar") && r.1.contains("to \(theirs)\n")
+          && tree(sys) == swapped && !fm.fileExists(atPath: h2.appendingPathComponent("Applications").path))
+
+    let mvStubs = dir.appendingPathComponent("mvstubs", isDirectory: true)
+    try! fm.createDirectory(at: mvStubs, withIntermediateDirectories: true)
+    try! "#!/bin/sh\n[ \"$1\" = '\(sys.path)/.spacebar.app.new' ] && [ \"$2\" = '\(theirs)' ] && { echo 'mv: refused' >&2; exit 1; }\nexec /bin/mv \"$@\"\n"
+        .write(to: mvStubs.appendingPathComponent("mv"), atomically: true, encoding: .utf8)
+    chmod(mvStubs.appendingPathComponent("mv").path, 0o755)
+    fm.createFile(atPath: marker, contents: Data())
+    r = real("\(mvStubs.path):\(stubs.path):/usr/bin:/bin:/usr/sbin:/sbin")
+    check("install.sh puts the copy in /Applications back when the new one cannot be moved in", r.0 == 1
+          && r.1.contains("could not move the new copy into \(theirs). The previous copy was put back.") && fm.fileExists(atPath: marker)
+          && tree(sys) == (swapped + ["spacebar.app/Contents/old-copy"]).sorted())
+
+    try! fm.moveItem(atPath: theirs, toPath: sysOld)
+    r = real()
+    check("install.sh finishes a swap cut short in /Applications: the copy back from .old, then replaced", r.0 == 0
+          && r.1.contains("Replacing \(theirs)") && tree(sys) == swapped)
 }
 
 // The copy the installer and the in-app update pick, and where the uninstaller looks.
@@ -437,8 +501,10 @@ do {
     func managed(_ there: Set<String>) -> String? { Updates.managedCopy(home: h, system: s, exists: there.contains) }
     check("managed copy: ~/Applications first", managed(["/Users/u/Applications/spacebar.app", "/Apps/spacebar.app"]) == "/Users/u/Applications/spacebar.app")
     check("managed copy: /Applications when it is the only one", managed(["/Apps/spacebar.app"]) == "/Apps/spacebar.app")
-    check("managed copy: a cut-short swap in ~/Applications still counts",
-          managed(["/Users/u/Applications/.spacebar.app.old", "/Apps/spacebar.app"]) == "/Users/u/Applications/spacebar.app")
+    check("managed copy: a cut-short swap in ~/Applications counts with no copy in either",
+          managed(["/Users/u/Applications/.spacebar.app.old"]) == "/Users/u/Applications/spacebar.app"
+          && managed(["/Users/u/Applications/.spacebar.app.old", "/Apps/.spacebar.app.old"]) == "/Users/u/Applications/spacebar.app")
+    check("managed copy: but not over the copy in /Applications", managed(["/Users/u/Applications/.spacebar.app.old", "/Apps/spacebar.app"]) == "/Apps/spacebar.app")
     check("managed copy: and in /Applications", managed(["/Apps/.spacebar.app.old"]) == "/Apps/spacebar.app")
     check("managed copy: none", managed([]) == nil && managed(["/Users/u/spacebar.app", "/Apps/spacebar copy.app"]) == nil)
     check("install places: the two exact paths", Updates.installPlaces(home: h, system: s) == ["/Users/u/Applications/spacebar.app", "/Apps/spacebar.app"]
@@ -468,6 +534,18 @@ do {
     let link = place.appendingPathComponent("link.app")
     try! fm.createSymbolicLink(at: link, withDestinationURL: app)
     check("a link to a copy is never changeable", !Updates.canChange(link.path) && !Updates.canUpdate(link.path))
+    check("a link is there and removable as a link", Updates.isLink(link.path) && Updates.isThere(link.path) && Updates.canRemove(link.path)
+          && !Updates.isLink(app.path) && Updates.canRemove(app.path))
+    let dangling = place.appendingPathComponent("dangling.app")
+    try! fm.createSymbolicLink(atPath: dangling.path, withDestinationPath: place.appendingPathComponent("gone.app").path)
+    check("a dangling link is there too", Updates.isThere(dangling.path) && !Updates.isThere(place.appendingPathComponent("gone.app").path))
+    chmod(place.path, 0o555)
+    check("a link in a folder this account cannot write is not removable", !Updates.canRemove(link.path))
+    chmod(place.path, 0o755)
+    let lhome = dir.appendingPathComponent("linkhome", isDirectory: true)
+    try! fm.createDirectory(atPath: lhome.path + "/Applications", withIntermediateDirectories: true)
+    try! fm.createSymbolicLink(atPath: lhome.path + "/Applications/spacebar.app", withDestinationPath: place.appendingPathComponent("gone.app").path)
+    check("the pick sees a link, dangling or not, as install.sh does", Updates.managedCopy(home: lhome.path, system: place.path) == lhome.path + "/Applications/spacebar.app")
 
     let listed = "+    md.spacebar.preview(0.3.0)\tE1\t2026-10-03 15:18:01 +0000\t/Users/u/Applications/spacebar.app/Contents/PlugIns/SpacebarPreview.appex\n"
         + "     md.spacebar.preview(0.2.2)\tE2\t2026-09-03 15:18:01 +0000\t/Apps/spacebar.app/Contents/PlugIns/SpacebarPreview.appex\n (2 plug-ins)\n"

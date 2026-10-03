@@ -125,5 +125,23 @@ chflags nouchg "$app/Contents/locked"
 check "a copy rm cannot delete is named and the run goes on to the other, then fails" \
   sh -c "[ $code = 1 ] && printf '%s\n' \"\$1\" | grep -qx 'Could not delete $app. If macOS said your terminal was prevented from modifying apps, allow it in System' && [ ! -e '$theirs' ]" sh "$real"
 rm -rf "$home/Applications"
+# A link in /Applications to the copy in ~/Applications: removing the copy first must not leave the link, dangling, behind.
+mkdir -p "$app/Contents/PlugIns/SpacebarPreview.appex"
+rm -rf "$theirs"
+ln -s "$app" "$theirs"
+code=0
+real=$(HOME="$home" sh scripts/uninstall.sh --no-register </dev/null 2>&1) || code=$?
+check "a link in /Applications to the copy in ~/Applications goes too, after the copy" \
+  sh -c "[ $code = 0 ] && [ ! -e '$app' ] && [ ! -L '$theirs' ] && printf '%s\n' \"\$1\" | grep -qx 'Removed the link $theirs'" sh "$real"
+mkdir -p "$theirs/Contents/PlugIns/SpacebarPreview.appex"
+# Never as root: sudo can keep the user's HOME, and launchctl, tccutil and pluginkit would act on root's.
+mkdir -p "$out/rootstubs"
+printf '#!/bin/sh\n[ "$1" = -u ] && { echo 0; exit 0; }\nexec /usr/bin/id "$@"\n' >"$out/rootstubs/id"
+chmod 755 "$out/rootstubs/id"
+code=0
+real=$(HOME="$home" PATH="$out/rootstubs:$PATH" sh scripts/uninstall.sh </dev/null 2>&1) || code=$?
+check "uninstall.sh refuses to run as root, and removes nothing" \
+  sh -c "[ $code = 1 ] && printf '%s\n' \"\$1\" | grep -q 'run this as yourself, without sudo' && [ -d '$theirs' ]" sh "$real"
+rm -rf "$theirs"
 check "with neither, it says where it looked" grep -qx "spacebar is not installed at $home/Applications/spacebar.app or $sys/spacebar.app" <<<"$(rm -rf "$theirs"; dry)"
 exit $fail

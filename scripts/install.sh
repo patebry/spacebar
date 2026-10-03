@@ -5,8 +5,9 @@
 #   curl -fsSL https://spacebar.patebryant.com/install.sh | sh -s -- --dry-run    (options go after sh -s --)
 #
 # What this does, in order:
-#   1. Checks for macOS 13 or later, and picks the folder: ~/Applications, unless spacebar is only in /Applications (dragged
-#      there from spacebar.dmg), whose copy is then updated in place. It stops if this account cannot change a copy there.
+#   1. Refuses to run as root, checks for macOS 13 or later, and picks the folder: ~/Applications, unless spacebar is only
+#      in /Applications (dragged there from spacebar.dmg), whose copy is then updated in place. It stops if this account
+#      cannot change a copy there, or at a link where a copy or its .new or .old would be.
 #   2. Downloads spacebar.zip and spacebar.zip.sha256 from the latest GitHub release (or SPACEBAR_VERSION) with curl
 #      into a temporary folder, and stops unless the SHA-256 matches. It makes no GitHub API calls, so it is never
 #      rate-limited.
@@ -177,6 +178,9 @@ start_reregister() {
   nohup "$1/Contents/MacOS/Spacebar" --reregister >>"$2" 2>&1 </dev/null &
 }
 
+# there <path>: something is at it, a link included.
+there() { [ -e "$1" ] || [ -L "$1" ]; }
+
 # replaceable <folder>: whether this account can do the swap there: write the folder, and every folder inside each copy it
 # would rename or delete (one dragged in by another account is that account's).
 replaceable() {
@@ -249,6 +253,9 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+# Root's HOME may be kept by sudo: the copy would be root's, and Launch Services and pluginkit root's, not the user's.
+[ "$(id -u)" != 0 ] || { echo "error: run this as yourself, without sudo: it installs spacebar for your account only." >&2; exit 1; }
+
 # 1. macOS 13 or later.
 [ "$(uname -s)" = Darwin ] || { echo "error: spacebar is a macOS app." >&2; exit 1; }
 os=$(sw_vers -productVersion)
@@ -256,10 +263,10 @@ os=$(sw_vers -productVersion)
 
 # Overridable only so the choice between the two can be tested without touching /Applications.
 SYSTEM_APPS=${SPACEBAR_SYSTEM_APPLICATIONS:-/Applications}
-# ~/Applications, unless spacebar is only in /Applications (a swap cut short counts as a copy where it was cut).
+# The copy in ~/Applications, else the one in /Applications; with neither, the folder where a swap was cut short (its .old),
+# else ~/Applications. A link counts as there: it is refused below. Updates.managedCopy picks the same.
 DEST_DIR="$HOME/Applications"
-if [ ! -e "$DEST_DIR/$APP_NAME" ] && [ ! -e "$DEST_DIR/.$APP_NAME.old" ] &&
-  { [ -e "$SYSTEM_APPS/$APP_NAME" ] || [ -e "$SYSTEM_APPS/.$APP_NAME.old" ]; }; then
+if ! there "$DEST_DIR/$APP_NAME" && { there "$SYSTEM_APPS/$APP_NAME" || { ! there "$DEST_DIR/.$APP_NAME.old" && there "$SYSTEM_APPS/.$APP_NAME.old"; }; }; then
   DEST_DIR=$SYSTEM_APPS
 fi
 DEST="$DEST_DIR/$APP_NAME"
@@ -273,12 +280,16 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 # A link would be moved aside and replaced, and the copy it points to left as it was: a second copy.
-[ ! -L "$DEST" ] || fail "$DEST is a link, not a copy of spacebar. Nothing was installed. Delete the link and run this again."
+for p in "$DEST" "$NEW" "$OLD"; do
+  [ ! -L "$p" ] || fail "$p is a link, not a copy of spacebar. Nothing was installed. Delete the link and run this again."
+done
 # Not a second copy in ~/Applications instead: Quick Look could go on using this one, which nobody here could then change.
 if [ "$DEST_DIR" = "$SYSTEM_APPS" ] && ! replaceable "$DEST_DIR"; then
-  fail "spacebar is in $DEST, which this account cannot change. Nothing was installed. Ask an administrator to update it
-(open spacebar.dmg and drag spacebar to Applications, or run this command as them), or to delete it, so that this command
-installs spacebar in ~/Applications instead."
+  where=$DEST
+  [ -e "$where" ] || where=$OLD
+  fail "spacebar is in $where, which this account cannot change. Nothing was installed. Ask an administrator to update it
+(open spacebar.dmg and drag spacebar to Applications, or run this command signed in as that administrator), or to delete
+it, so that this command installs spacebar in ~/Applications instead."
 fi
 
 # 2. Resolve the release and download it. github.com/<repo>/releases/latest/download/<asset> redirects to the newest
@@ -436,6 +447,11 @@ if [ "$DEST_DIR" != "$SYSTEM_APPS" ] && [ -e "$SYSTEM_APPS/$APP_NAME" ]; then
   say "warning: there is another copy at $SYSTEM_APPS/$APP_NAME. Both copies claim the same files, so Quick Look"
   say "may use either one. This installer manages only $DEST and has left the other copy alone;"
   say "delete it yourself if you do not need it."
+fi
+if [ "$DEST_DIR" = "$SYSTEM_APPS" ] && there "$HOME/Applications/.$APP_NAME.old"; then
+  say ""
+  say "note: $HOME/Applications/.$APP_NAME.old is left from an install there that was cut short. This installer updates"
+  say "$DEST while that copy is there; delete the old one yourself if you do not need it."
 fi
 if [ -n "$rivals" ]; then
   say ""

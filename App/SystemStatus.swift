@@ -75,13 +75,15 @@ final class SystemStatus: ObservableObject {
     /// install.sh would update does this, so a second copy never takes them over.
     func registerIfNew() {
         let app = Bundle.main.bundleURL.resolvingSymlinksInPath().path
-        guard let managed = Updates.managedCopy(home: NSHomeDirectory()), URL(fileURLWithPath: managed).resolvingSymlinksInPath().path == app else { return }
+        // Not through a link, which install.sh refuses to update.
+        guard let managed = Updates.managedCopy(home: NSHomeDirectory()), !Updates.isLink(managed),
+              URL(fileURLWithPath: managed).resolvingSymlinksInPath().path == app else { return }
         queue.async {
             var changed = false
             let folders = SettingsFile.load().folderMode
             for (id, name, on) in [(Self.previewID, "SpacebarPreview", true), (Self.foldersID, "SpacebarFolders", folders)] {
                 let appex = app + "/Contents/PlugIns/\(name).appex"
-                let listed = Updates.elections(pluginkit: Self.run("/usr/bin/pluginkit", ["-mAv", "-i", id]).output)
+                let listed = Updates.elections(pluginkit: Self.run("/usr/bin/pluginkit", ["-mADv", "-i", id]).output)
                 if !listed.contains(where: { $0.path == appex }) { _ = Self.run("/usr/bin/pluginkit", ["-a", appex]) }
                 guard !listed.contains(where: { $0.mark == "+" || $0.mark == "-" }) else { continue }
                 NSLog("spacebar: turning %@ %@ for %@", id, on ? "on" : "off", app)

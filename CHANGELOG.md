@@ -94,7 +94,7 @@ Waits for the Developer ID: the first release with the Space helper is notarized
 
 - Signed with spacebar's Apple Developer ID and notarized by Apple, so a copy downloaded in a browser opens as any
   notarized app does. Each release also has a `spacebar.dmg` beside the zip.
-- A copy dragged into /Applications from the `.dmg` turns its Quick Look extensions on when first opened, and updates and
-  uninstalls itself like one installed with the install command.
+- spacebar can live in /Applications, dragged there from the `.dmg`. When it is the only copy, its first launch turns its
+  Quick Look extensions on, and Update and Uninstall work on it, as long as this account can change it.
 - 0.2 was signed with a self-signed certificate, so on the first update from it macOS may ask once about spacebar's data;
   allow it.

@@ -352,10 +352,13 @@ self-signed certificate, "spacebar Release", and v0.1.0 ad-hoc. Local builds kee
 ## Install
 
 spacebar is installed in `~/Applications` by the install command, or in `/Applications` by dragging it there from
-`spacebar.dmg`. There is one managed copy: `~/Applications/spacebar.app` when it is there (or a swap of it was cut short),
-else `/Applications/spacebar.app`. install.sh updates that copy in place with the same checksum, exact paths and rollback;
-the Update button runs only from it; the uninstaller removes either or both. With a copy in both, install.sh keeps to
-`~/Applications` and warns about the other, as before.
+`spacebar.dmg`. There is one managed copy: `~/Applications/spacebar.app` when it is there, else
+`/Applications/spacebar.app`; with neither, the one whose swap was cut short (its `.spacebar.app.old`). A stale `.old` in
+`~/Applications` does not hide a copy in `/Applications`: install.sh updates that copy and names the `.old`. install.sh
+updates the managed copy in place with the same checksum, exact paths and rollback; the Update button runs only from it;
+the uninstaller removes either or both. With a copy in both, install.sh keeps to `~/Applications` and warns about the
+other, as before. Both scripts refuse to run as root: `sudo` can keep the user's HOME, which would leave a root-owned copy
+there, registered with root's Launch Services and pluginkit.
 
 - **A standard account cannot change `/Applications`** (`root:admin`, `drwxrwxr-x`), and a copy an administrator dragged
   there is owned by them with folders mode 755, so even another administrator cannot delete what is inside it. install.sh
@@ -369,10 +372,11 @@ the Update button runs only from it; the uninstaller removes either or both. Wit
   app of unique bundle IDs (self-signed, a sandboxed Quick Look preview extension) in a scratch folder: `pluginkit -mAv`
   listed nothing after the bundle was made, and listed the extension within 2 s of `open`, with a blank mark (neither `+`
   nor `-`). The probe was unregistered and deleted afterwards. A copy made by Finder from a disk image was not measured.
-  So at each launch the managed copy adds an extension pluginkit does not list at its path, and turns it on (`pluginkit
+  So at each launch the managed copy (not a link) adds an extension pluginkit does not list at its path, and turns it on (`pluginkit
   -e use`) while no listed version of it has a mark, the folder one only while folder previews are on. `pluginkit -e`
   acts on the bundle ID, not a path, so a `+` or `-` on any copy's line counts as the user's choice and is left alone. A
-  second copy does nothing.
+  second copy does nothing. The list comes from `pluginkit -mADv`: without `-D`, a copy of the same version at another
+  path is not listed (here three registered copies of 0.1.0 showed as one, each with the same mark).
 - **App Management** (macOS 13) refuses changes to a notarized app's bundle by a process of another Team ID unless the user
   allows it, wherever the app is (lapcatsoftware.com/articles/AppManagement.html), so it is not new with `/Applications`:
   from v0.3 a release is notarized, and the install command run from a terminal without App Management may be refused when

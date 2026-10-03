@@ -251,8 +251,8 @@ an older version's defaults are applied to it (`stats` and `folderReadmeFirst` a
 ## Install
 
 Download [`spacebar.dmg`](https://github.com/patebry/spacebar/releases/latest/download/spacebar.dmg) from the latest release,
-open it, drag spacebar to Applications, and open spacebar once from Applications: that first launch turns its Quick Look
-extensions on. Or run the install command, which installs into `~/Applications` and needs no administrator password:
+open it, drag spacebar to Applications, and open spacebar once from there. Unless spacebar is also in `~/Applications`,
+that first launch turns its Quick Look extensions on (or leaves them as you last set them). Or run the install command, which installs into `~/Applications` and needs no administrator password:
 
 ```sh
 curl -fsSL https://spacebar.patebryant.com/install.sh | sh
@@ -275,9 +275,9 @@ install command checks the release's SHA-256 before it changes anything.
 <!-- /gatekeeper -->
 Read [`scripts/install.sh`](scripts/install.sh) before you run it. It:
 
-1. checks for macOS 13 or later, and picks the copy to update: `~/Applications/spacebar.app`, or
-   `/Applications/spacebar.app` when that is the only one. It stops here if this account cannot change a copy in
-   `/Applications`, or if the copy is a link;
+1. refuses to run as root (no `sudo`), checks for macOS 13 or later, and picks the copy to update:
+   `~/Applications/spacebar.app`, or `/Applications/spacebar.app` when that is the only one. It stops here if this account
+   cannot change a copy in `/Applications`, or if the copy, or a `.spacebar.app.new` or `.old` beside it, is a link;
 2. downloads `spacebar.zip` and `spacebar.zip.sha256` from the latest release (or `SPACEBAR_VERSION=vX.Y.Z`) through
    `github.com/patebry/spacebar/releases/latest/download/`, with no GitHub API calls, and stops unless the SHA-256 matches;
 3. copies the new app beside that copy, or into `~/Applications` for a first install (no `sudo`);

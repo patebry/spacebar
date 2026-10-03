@@ -847,12 +847,24 @@ function blockRange(b) {
 
 /** Every redraw makes new diagram nodes holding their source; each is drawn here, whatever redrew the document. */
 let drawnMermaid = Promise.resolve();
+/** The boxes that may scroll on their own, in document order: a code view, a code block, a wide table, a JSON tree. */
+const ownScrollers = () => $('doc').querySelectorAll('.code-view, .json-tree, pre, :scope > table');
+let drawnDoc = '';
 function draw() {
   if (editing && !editing.whole && rawOn(current)) { stopEditing(); return; }
   if (!gridWanted(current)) gridStop();
   clearKind();
+  // The same file drawn again (a change on disk, a setting) keeps each box's own scroll, and a zoomed image's pan.
+  const which = `${current.path}\n${current.entry ? current.entry.name : ''}`, same = which === drawnDoc;
+  const kept = same ? [...ownScrollers()].map((b) => [b.scrollLeft, b.scrollTop]) : [];
+  const stage = same && $('doc').querySelector('.img-stage');
+  imgPan = stage ? [stage.scrollLeft, stage.scrollTop] : null;
+  drawnDoc = which;
+  if (isMarkdown(current) && !rawOn(current)) anchorObserver.observe($('doc')); else anchorObserver.unobserve($('doc'));
+  const restore = () => ownScrollers().forEach((b, i) => { if (kept[i]) [b.scrollLeft, b.scrollTop] = kept[i]; });
   if (!isMarkdown(current) || rawOn(current)) {
     $('doc').replaceChildren(viewNode(current));
+    restore();
     // The view no longer shows the file's text (Raw turned off): the edit ends.
     if (editing && editing.whole && !paintTextEditor()) {
       const seq = editing.seq;
@@ -869,6 +881,7 @@ function draw() {
   const frag = render(current.text);
   mountMermaid(frag, heights);
   $('doc').replaceChildren(frag);
+  restore();
   if (editing) spliceEditor([editing.start, editing.start + editing.lines]);
   setKind(current, [fmtSize(current.entry ? current.size : textBytes(current.text))]);
   decorate();
@@ -1127,7 +1140,12 @@ function paintTextEditor(scroll = false, change = null) {
   const gutter = pre.parentElement.querySelector('.gutter');
   const n = Math.max(1, lineCount(text) + (text.endsWith('\n') && selStart + selLen >= text.length ? 1 : 0));
   if (gutter && +gutter.dataset.n !== n) { gutter.dataset.n = n; gutter.textContent = Array.from({ length: n }, (_, i) => i + 1).join('\n'); }
-  if (scroll) { const c = code.querySelector('.caret, .sel'); if (c) c.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+  if (scroll) {
+    const c = code.querySelector('.caret, .sel');
+    // The line numbers are sticky over the text's left edge: the caret is revealed beside them, not under them.
+    if (gutter && pre.parentElement) pre.parentElement.style.scrollPaddingLeft = gutter.offsetWidth + 8 + 'px';
+    if (c) c.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
   return true;
 }
 
@@ -1303,13 +1321,62 @@ function spy() {
   const line = (parseFloat(getComputedStyle(root).getPropertyValue('--bar-h')) || 40) + window.innerHeight * 0.3;
   const end = window.scrollY > 0 && window.scrollY + window.innerHeight >= document.scrollingElement.scrollHeight - 2;
   tocTargets.forEach((h, i) => { if (h.isConnected && (h.getBoundingClientRect().top < line || (end && h.getBoundingClientRect().top < window.innerHeight))) cur = i; });
-  $('toc').querySelectorAll('a').forEach((a, i) => a.classList.toggle('active', i === cur));
+  const nav = $('toc');
+  // A new document's contents start at their top, not where the last document's were scrolled.
+  const which = `${current.path}\n${current.entry ? current.entry.name : ''}`;
+  if (tocPath !== which) { tocPath = which; tocCur = -1; nav.scrollTop = 0; }
+  nav.querySelectorAll('a').forEach((a, i) => a.classList.toggle('active', i === cur));
+  // The entry just marked is scrolled into the TOC's own view (never the window's), a third of the way down when it was out.
+  const a = cur !== tocCur && nav.querySelector('a.active');
+  tocCur = cur;
+  if (a) {
+    const r = a.getBoundingClientRect(), n = nav.getBoundingClientRect();
+    const top = Math.max(n.top, parseFloat(getComputedStyle(root).getPropertyValue('--bar-h')) || 40) + 8;
+    if (r.top < top || r.bottom > n.bottom - 8) nav.scrollTop += r.top - (n.top + nav.clientHeight / 3);
+  }
 }
+let tocPath = null, tocCur = -1;
 let spyQueued = false;
 window.addEventListener('scroll', () => {
   if (spyQueued || !tocTargets.length) return;
   spyQueued = true;
   requestAnimationFrame(() => { spyQueued = false; spy(); });
+}, { passive: true });
+
+/* WebKit has no scroll anchoring: a reflow of the document (the sidebar animating open or shut, the text's width or size, the
+   window resized) would keep scrollY and lose the line being read. The block at the top of the page is held in place instead.
+   It is taken after every scroll and every correction, so a resize is measured against the layout last painted. */
+let readAnchor = null, anchorOwnY = -1, userScrollAt = 0;
+function takeAnchor() {
+  readAnchor = null;
+  if (root.dataset.view !== 'markdown' || window.scrollY <= 0) return;
+  const kids = $('doc').children, bar = parseFloat(getComputedStyle(root).getPropertyValue('--bar-h')) || 40;
+  let lo = 0, hi = kids.length - 1;
+  while (lo < hi) { const m = (lo + hi) >> 1; if (kids[m].getBoundingClientRect().bottom > bar) hi = m; else lo = m + 1; }
+  if (kids[lo]) readAnchor = { el: kids[lo], top: kids[lo].getBoundingClientRect().top, y: window.scrollY };
+}
+/** Where the anchor would be now had nothing reflowed: { i: its index in #doc, top }, or null. */
+function anchorWant() {
+  const a = readAnchor;
+  return a && a.el.isConnected ? { i: Array.prototype.indexOf.call($('doc').children, a.el), top: a.top - (window.scrollY - a.y) } : null;
+}
+function holdAnchor(want, el) {
+  if (want && el && root.dataset.view === 'markdown') {
+    const d = el.getBoundingClientRect().top - want.top;
+    if (Math.abs(d) >= 1) { window.scrollBy({ top: d, behavior: 'instant' }); anchorOwnY = window.scrollY; }
+  }
+  takeAnchor();
+}
+// Watched only while Markdown is shown: the folder grid sizes #doc from an observer of its own, deeper in the page.
+const anchorObserver = new ResizeObserver(() => {
+  // A reflow while the reader is scrolling is left to the scroll.
+  if (performance.now() - userScrollAt < 150) { takeAnchor(); return; }
+  holdAnchor(anchorWant(), readAnchor && readAnchor.el);
+});
+window.addEventListener('scroll', () => {
+  if (window.scrollY !== anchorOwnY) userScrollAt = performance.now();
+  anchorOwnY = -1;
+  takeAnchor();
 }, { passive: true });
 
 let statsTimer = 0;
@@ -1441,9 +1508,10 @@ window.sb = {
     syncSideMenu();
     syncRaw(current);
     if (RENDER_KEYS.some((k) => prev[k] !== settings[k]) && current.path) {
-      const y = window.scrollY;
+      const y = window.scrollY, want = anchorWant();
       draw();
       window.scrollTo(0, y);
+      holdAnchor(want, want && $('doc').children[want.i]);
     } else if (LOOK_KEYS.some((k) => prev[k] !== settings[k])) {
       runMermaid();
     }
@@ -2646,11 +2714,12 @@ function loadingView(p) {
 }
 
 // The image on screen is fitted to the panel (scale null) or drawn at `scale` × its own size; kept across redraws of that image.
-let imgScale = null, imgScalePath = '';
+let imgScale = null, imgScalePath = '', imgPan = null;
 const IMG_MAX = 8;
 
 function imageView(p) {
   if (p.path !== imgScalePath) { imgScale = null; imgScalePath = p.path; }
+  const pan = imgPan;
   const box = el('figure', 'viewer viewer-image');
   const stage = el('div', 'img-stage');
   const img = document.createElement('img');
@@ -2662,6 +2731,7 @@ function imageView(p) {
   img.addEventListener('load', () => {
     meta.textContent = [p.kindName, vector ? (typeof p.svgSize === 'string' ? p.svgSize : '') : `${img.naturalWidth} × ${img.naturalHeight}`, fmtSize(p.size), entryPosition(p)].filter(Boolean).join(' · ');
     applyZoom(stage, img, vector ? null : zoom, imgScale);
+    if (pan) [stage.scrollLeft, stage.scrollTop] = pan;
   });
   img.addEventListener('error', () => {
     if (!box.isConnected) return;
@@ -3282,7 +3352,7 @@ function overviewView(p) {
   if (total || folders) head.append(viewToggle(p));
   document.documentElement.toggleAttribute('data-grid', gridWanted(p));
   // A folder shown as a list has no grid to go back to.
-  if (!gridWanted(p)) gridReturn = null;
+  if (!gridWanted(p)) gridReturn = gridRestore = null;
   if (gridWanted(p)) { box.append(gridView(p)); return box; }
   const chips = el('div', 'ov-counts');
   const chip = (ic, n, one, many) => {
@@ -3380,6 +3450,13 @@ function gridLayout() {
   const tile = Math.floor((w - (cols - 1) * GRID_GAP) / cols);
   if (cols !== grid.cols || tile !== grid.tile) { grid.cols = cols; grid.tile = tile; grid.rowH = tile + GRID_LABEL + GRID_GAP; grid.win = ''; }
   grid.box.style.height = `${Math.max(0, Math.ceil(grid.entries.length / cols) * grid.rowH - GRID_GAP)}px`;
+  // Back from a file opened here: the grid's scroll, which only its height allows, then its tile in view.
+  if (gridRestore && gridRestore.root === grid.p.root && grid.entries.length) {
+    window.scrollTo(0, gridRestore.y);
+    gridRestore = null;
+    const path = gridCursor.get(tree.root);
+    if (path) gridSelect(path, true);
+  }
   gridWindow();
   gridKeysNow();
 }
@@ -3505,12 +3582,13 @@ function gridOpen(path) {
   const e = grid.entries.find((x) => x.path === path);
   if (!e || e.broken) return;
   peek(false);
-  gridReturn = { root: tree.root };
+  gridReturn = { root: tree.root, y: window.scrollY };
   post({ type: 'open', path });
 }
 
-// The root whose grid a file was opened from: while a file of that root is on screen, Back, ← and ⌫ return to the grid.
-let gridReturn = null;
+// The root whose grid a file was opened from, and its scroll: while a file of that root is on screen, Back, ← and ⌫ return to
+// the grid, scrolled where it was (gridRestore, until the grid is laid out).
+let gridReturn = null, gridRestore = null;
 const fromGrid = (p) => !!gridReturn && gridReturn.root === tree.root && !!p && typeof p.path === 'string' && !p.entry
   && p.view !== 'overview' && p.view !== 'loading' && inTree(p.path) && parentOf(p.path) === tree.root;
 
@@ -3518,6 +3596,7 @@ const fromGrid = (p) => !!gridReturn && gridReturn.root === tree.root && !!p && 
 function gridBack() {
   if (!fromGrid(current) || editing) return false;
   gridCursor.set(tree.root, current.path);
+  gridRestore = { root: tree.root, y: gridReturn.y || 0 };
   peek(false);
   post({ type: 'overview' });
   return true;
@@ -3657,7 +3736,7 @@ function resetTree(rootPath, name) {
   $('side-q').value = '';
   if (hits.q) searchContents('');
   names = { ...names, q: '', list: [], done: true, version: names.version + 1 };
-  gridReturn = null;
+  gridReturn = gridRestore = null;
   findOnOpen = null;
 }
 

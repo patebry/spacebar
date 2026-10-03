@@ -134,7 +134,10 @@
     :root:not([data-chrome=minimal]) #doc, :root:not([data-chrome=minimal]) #crumbs:not([hidden]) + #doc { padding-top: calc(var(--bar-h) + 28px); }
     :root:not([data-chrome=minimal]) #doc { padding-bottom: calc(80px + var(--gap)); }
     :root:not([data-chrome=minimal]) #toc { padding-top: calc(var(--bar-h) + 30px); padding-right: calc(20px + var(--gap)); }
-    :root:not([data-chrome=minimal]) #doc > :is(h1, h2, h3, h4, h5, h6) { scroll-margin-top: calc(var(--bar-h) + 16px); }
+    /* What scrollIntoView reveals (an archive row, the edit caret, a table cell) stays clear of the toolbar row and the frame's
+       bottom edge. A heading or an anchor scrolled to the top adds its own margin to this padding. */
+    :root:not([data-chrome=minimal]) { scroll-padding-top: calc(var(--bar-h) + 8px); scroll-padding-bottom: calc(var(--gap) + 8px); --anchor-mt: 8px; }
+    :root:not([data-chrome=minimal]) #doc > :is(h1, h2, h3, h4, h5, h6) { scroll-margin-top: var(--anchor-mt); }
   }
   @media (prefers-reduced-motion: reduce) { :root.sb-anim #frame, :root.sb-anim #crumbs { transition: none !important; } }
   /* The sidebar shown over a narrow page: an opaque sheet above the page and the path, with its button still on top. */

@@ -432,9 +432,9 @@ Found a security problem? Please report it privately as described in [SECURITY.m
 
 ## Contributing
 
-Issues and pull requests are welcome. Please run the off-screen tests above before sending a change, and keep new
-dependencies out of the extension unless they are vendored with their licence (see `Preview/web/vendor/VERSIONS.txt` and
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
+Issues and pull requests are welcome; [CONTRIBUTING.md](CONTRIBUTING.md) has the steps. Please run the off-screen tests
+above before sending a change, and keep new dependencies out of the extension unless they are vendored with their
+licence (see `Preview/web/vendor/VERSIONS.txt` and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
 
 ## Licence
 

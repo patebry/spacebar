@@ -9,6 +9,8 @@ permissions: {}
 jobs:
   release:
     runs-on: macos-15
+    # Its secrets live in the release environment, which only v* tags reach and which waits for the maintainer's approval.
+    environment: release
     # The most a hosted runner allows, so a notarization Apple holds for hours (notarytool waits up to 3) still fits.
     timeout-minutes: 360
     permissions:

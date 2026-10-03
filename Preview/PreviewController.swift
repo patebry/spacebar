@@ -2048,7 +2048,7 @@ class PreviewController: NSViewController {
         }
         let cancel = ContentSearch.Cancel()
         search = (seq, cancel)
-        let root = rootDir, s = SettingsStore.shared.settings, only = selection
+        let root = rootDir, s = SettingsStore.shared.settings, hidden = SettingsStore.shared.listing.showHidden, only = selection
         let found = { [weak self] (paths: [String], done: Bool, send: @escaping (PreviewController) -> Void) in
             DispatchQueue.main.async {
                 guard let self, self.search?.cancel === cancel, !cancel.isCancelled, root == self.rootDir else { return }
@@ -2061,7 +2061,7 @@ class PreviewController: NSViewController {
         }
         ContentSearch.queue.async {
             if names {
-                ContentSearch.runNames(query: query, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles,
+                ContentSearch.runNames(query: query, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: hidden,
                                        only: only, cancel: cancel) { p in
                     let payload = ContentSearch.payload(p, seq: seq), dirs = p.hits.filter(\.isDir).map(\.path)
                     // A folder found may then be listed, to show what is in it.
@@ -2069,7 +2069,7 @@ class PreviewController: NSViewController {
                 }
                 return
             }
-            ContentSearch.run(query: query, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles,
+            ContentSearch.run(query: query, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: hidden,
                               only: only, cancel: cancel) { p in
                 let payload = ContentSearch.payload(p, seq: seq)
                 found(p.hits.map(\.path), p.done) { $0.js("sb.searchResults", payload) }

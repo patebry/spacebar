@@ -587,11 +587,11 @@ rec.onMessage = { type, body in
         guard let q = body["q"] as? String, q.utf8.count <= ContentSearch.maxQueryBytes, let seq = body["seq"] as? Int else {
             rec.messages.append(["type": "_searchRefused"]); return
         }
-        let cancel = ContentSearch.Cancel(), r = root, s = Settings(dictionary: settingsDict), limits = searchLimits
+        let cancel = ContentSearch.Cancel(), r = root, s = Settings(dictionary: settingsDict), hidden = listOptions().showHidden, limits = searchLimits
         searchCancel = cancel
         if body["names"] as? Bool == true {
             ContentSearch.queue.async {
-                ContentSearch.runNames(query: q, root: r, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles,
+                ContentSearch.runNames(query: q, root: r, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: hidden,
                                        limits: limits, cancel: cancel) { p in
                     DispatchQueue.main.async {
                         guard !cancel.isCancelled, r == root else { return }
@@ -606,7 +606,7 @@ rec.onMessage = { type, body in
             return
         }
         ContentSearch.queue.async {
-            ContentSearch.run(query: q, root: r, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles,
+            ContentSearch.run(query: q, root: r, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: hidden,
                               limits: limits, cancel: cancel) { p in
                 DispatchQueue.main.async {
                     guard !cancel.isCancelled, r == root else { return }

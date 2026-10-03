@@ -1058,6 +1058,7 @@ enum FolderListing {
             let path = (dir as NSString).appendingPathComponent(name)
             var st = stat()
             guard lstat(path, &st) == 0 else { continue }
+            if name == ".DS_Store" || name == ".localized" { continue }
             let hidden = isHidden(name, st)
             if !o.showHidden && hidden { continue }
             if st.st_mode & S_IFMT == S_IFLNK {

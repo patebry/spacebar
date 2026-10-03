@@ -4952,6 +4952,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (inFilter ? !['ArrowUp', 'ArrowDown', 'Enter'].includes(e.key) : e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable]')) return;
+  if (!inFilter && e.key === 'Enter' && e.target instanceof Element && e.target.closest('button, a[href], [role="menuitem"], summary')) return;
   const arc = !inFilter && { ArrowUp: 'up', ArrowDown: 'down', Home: 'home', End: 'end', ArrowLeft: 'left', ArrowRight: 'right', Enter: 'return', Backspace: 'back' }[e.key];
   if (arc && arcKey(arc)) { e.preventDefault(); return; }
   if (!inFilter && !(e.target instanceof Element && e.target.closest('button')) && gridTakesKeys() && gridKey(e.key)) { e.preventDefault(); return; }
@@ -5884,7 +5885,7 @@ document.addEventListener('click', (e) => {
   e.preventDefault();
   e.stopPropagation();
 }, true);
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !pop.hidden) showPopover(false); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !pop.hidden) { showPopover(false); e.preventDefault(); } });
 syncPopover();
 
 // Clicks in the editor move the caret and double-clicks select a word; the page's own selection stays out of the editor.

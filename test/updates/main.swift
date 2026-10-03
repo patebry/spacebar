@@ -458,7 +458,7 @@ do {
     try! fm.createDirectory(at: rootStubs, withIntermediateDirectories: true)
     try! "#!/bin/sh\n[ \"$1\" = -u ] && { echo 0; exit 0; }\nexec /usr/bin/id \"$@\"\n".write(to: rootStubs.appendingPathComponent("id"), atomically: true, encoding: .utf8)
     chmod(rootStubs.appendingPathComponent("id").path, 0o755)
-    r = sh("sh scripts/install.sh --no-prompt", env: ["HOME": h2.path, "PATH": "\(rootStubs.path):\(stubs.path):/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": dir.path + "/",
+    r = sh("sh scripts/install.sh --no-prompt --dry-run --no-register", env: ["HOME": h2.path, "PATH": "\(rootStubs.path):\(stubs.path):/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": dir.path + "/",
                                                   "SPACEBAR_RELEASE_URL": "file://\(rel.path)", "SPACEBAR_SYSTEM_APPLICATIONS": sys.path])
     check("install.sh refuses to run as root, before anything", r.0 == 1 && r.1.contains("run this as yourself, without sudo") && !r.1.contains("Downloading"))
     check("install.sh dry runs change nothing in either folder", tree(h2) == before.0 && tree(sys) == before.1

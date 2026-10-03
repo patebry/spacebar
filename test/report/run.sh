@@ -139,7 +139,7 @@ mkdir -p "$out/rootstubs"
 printf '#!/bin/sh\n[ "$1" = -u ] && { echo 0; exit 0; }\nexec /usr/bin/id "$@"\n' >"$out/rootstubs/id"
 chmod 755 "$out/rootstubs/id"
 code=0
-real=$(HOME="$home" PATH="$out/rootstubs:$PATH" sh scripts/uninstall.sh </dev/null 2>&1) || code=$?
+real=$(HOME="$home" PATH="$out/rootstubs:$PATH" sh scripts/uninstall.sh --dry-run --no-register </dev/null 2>&1) || code=$?
 check "uninstall.sh refuses to run as root, and removes nothing" \
   sh -c "[ $code = 1 ] && printf '%s\n' \"\$1\" | grep -q 'run this as yourself, without sudo' && [ -d '$theirs' ]" sh "$real"
 rm -rf "$theirs"

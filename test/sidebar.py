@@ -474,20 +474,23 @@ def steady_list(page, check, out):
           'steady list: ↓ past the bottom scrolls by one row, the cursor edge-aligned at the bottom, never centred', json.dumps([a, b, c]))
 
     # A folder opened under the pointer, and a file in it, hold still; so does a folder holding the file on screen opened again.
-    a, b, c, _ = press(P('zfolder'), 0)
-    check(c['cursor'] == P('zfolder') and still(a, b, c) and page.js('return expanded().has(' + json.dumps(P('zfolder')) + ')'),
+    # In Finder's order afolder is the first row and zfolder the last, so the folder at the top of the list is afolder.
+    a, b, c, _ = press(P('afolder'), 0)
+    check(c['cursor'] == P('afolder') and still(a, b, c) and page.js('return expanded().has(' + json.dumps(P('afolder')) + ')'),
           'steady list: a folder opened by a click stays where it was clicked', json.dumps([a, b, c]))
-    a, b, c, _ = press(P('zfolder', 'z12.txt'), mid(P('zfolder', 'z12.txt')))
-    check(c['current'] == P('zfolder', 'z12.txt') and still(a, b, c), 'steady list: a click on a file in an open folder moves nothing',
+    a, b, c, _ = press(P('afolder', 'a12.txt'), mid(P('afolder', 'a12.txt')))
+    check(c['current'] == P('afolder', 'a12.txt') and still(a, b, c), 'steady list: a click on a file in an open folder moves nothing',
           json.dumps([a, b, c]))
-    page.render(P('zfolder', 'z29.txt'))
+    page.render(P('afolder', 'a29.txt'))
     page.cmd('@wait:0.3')
-    a, b, c, _ = press(P('zfolder'), 0)
-    a2, b2, c2, _ = press(P('zfolder'), 0)
-    check(page.js('return expanded().has(' + json.dumps(P('zfolder')) + ')') is True and still(a, b, c) and still(a2, b2, c2) and a2['top'] == 0,
+    a, b, c, _ = press(P('afolder'), 0)
+    a2, b2, c2, _ = press(P('afolder'), 0)
+    check(page.js('return expanded().has(' + json.dumps(P('afolder')) + ')') is True and still(a, b, c) and still(a2, b2, c2) and a2['top'] == 0,
           'steady list: a folder holding the file on screen, closed and opened again, never scrolls to that file', json.dumps([a, c, a2, c2]))
 
-    # Rows put in above the cursor leave it where it is on screen.
+    # Rows put in above the cursor leave it where it is on screen (the folder closed again first, so opening it adds the rows).
+    page.cmd('@eval:toggleFolder(' + json.dumps(P('afolder')) + '); 0')
+    page.cmd('@wait:0.4')
     press(P('f40.txt'), mid(P('f40.txt')))
     a = at(P('f40.txt'))
     page.cmd('@eval:toggleFolder(' + json.dumps(P('afolder')) + '); 0')
@@ -554,16 +557,17 @@ def one_selection(page, check, out):
       return [l.scrollTop, Math.round(b.bottom - c.bottom), l.querySelector('a.cursor .nm').textContent]""")
     check(low[0] > 0 and 0 <= low[1] <= 1 and low[2] == '20.txt', 'one selection: the list scrolls only once the cursor reaches its edge, and no further',
           json.dumps(low))
-    key('home', 'right')
+    # In Finder's order the folder is the last row (digits sort before letters): End reaches it, and ↑ is the way on from it.
+    key('end', 'right')
     page.cmd('@wait:0.3')
     key('down')
     page.cmd('@wait:0.3')
     inside = page.js(LIT)['cursor']
     page.cmd('@eval:toggleFolder(' + json.dumps(os.path.join(d, 'folder')) + '); 0')
-    key('down')
+    key('up')
     page.cmd('@wait:0.3')
     after = page.js(LIT)
-    check(inside == 'inner.txt' and after['cursor'] == '00.txt' and after['lit'] == ['00.txt'],
+    check(inside == 'inner.txt' and after['cursor'] == '39.txt' and after['lit'] == ['39.txt'],
           'one selection: a cursor in a folder closed under it moves on from the folder, not from the top', json.dumps([inside, after]))
     click(page, '#side-list a.row[data-path="' + os.path.join(d, '02.txt') + '"]')
     check(not page.js(LIT)['keyed'], 'one selection: a click hands the highlight back to the pointer')
@@ -578,7 +582,8 @@ def one_selection(page, check, out):
           json.dumps([still, moved]))
 
     # The file on screen is always lit when drawn: with the cursor filtered out, and after an open the keys did not make.
-    key('down', 'down', 'home')
+    # End parks the cursor on the folder (the last row), which opens nothing, so 05.txt stays the file on screen.
+    key('down', 'down', 'end')
     page.cmd('@wait:0.4')
     typed = lambda q: page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.value = " + json.dumps(q)
                                + "; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
@@ -3087,7 +3092,7 @@ def folder_grid(page, check, out):
     r = page.cmd('@folder:' + photos)
     page.cmd('@wait:0.6')
     g = grid()
-    check(r['result'] == 'overview' and g['grid'] and g['attr'] and not g['list'] and g['names'][:3] == ['README.md', 'notes.txt', 'p00.png']
+    check(r['result'] == 'overview' and g['grid'] and g['attr'] and not g['list'] and g['names'][:3] == ['notes.txt', 'p00.png', 'p01.png']
           and g['pressed'] == [['grid', 'true'], ['list', 'false']],
           'grid: a folder mostly of images opens on its grid, not its README', json.dumps([r['result'], g]))
     check(g['loaded'] >= 20 and g['lefts'] >= 3, 'grid: the thumbnails in view fill in, in several columns', json.dumps([g['loaded'], g['lefts']]))

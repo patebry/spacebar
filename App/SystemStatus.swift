@@ -68,6 +68,30 @@ final class SystemStatus: ObservableObject {
         loadEditors()
     }
 
+    /// A copy dragged into Applications from spacebar.dmg has not had install.sh register it. Launching it registers its
+    /// extensions (FINDINGS.md, Install) but turns them neither on nor off. So at launch each one pluginkit does not list at
+    /// this copy's path is added, and each one listed without a choice either way is turned on as install.sh does, the
+    /// folder one only while folder previews are on. One the user turned on or off is left so. Only the copy
+    /// install.sh would update does this, so a second copy never takes them over.
+    func registerIfNew() {
+        let app = Bundle.main.bundleURL.resolvingSymlinksInPath().path
+        guard let managed = Updates.managedCopy(home: NSHomeDirectory()), URL(fileURLWithPath: managed).resolvingSymlinksInPath().path == app else { return }
+        queue.async {
+            var changed = false
+            let folders = SettingsFile.load().folderMode
+            for (id, name, on) in [(Self.previewID, "SpacebarPreview", true), (Self.foldersID, "SpacebarFolders", folders)] {
+                let appex = app + "/Contents/PlugIns/\(name).appex"
+                let mark = Updates.election(appex, pluginkit: Self.run("/usr/bin/pluginkit", ["-mAv", "-i", id]).output)
+                if mark == nil { _ = Self.run("/usr/bin/pluginkit", ["-a", appex]) }
+                guard mark == nil || mark == " " else { continue }
+                NSLog("spacebar: turning %@ %@ for %@", id, on ? "on" : "off", app)
+                _ = Self.run("/usr/bin/pluginkit", ["-e", on ? "use" : "ignore", "-i", id])
+                changed = true
+            }
+            if changed { _ = Self.run("/usr/bin/qlmanage", ["-r"]); _ = Self.run("/usr/bin/qlmanage", ["-r", "cache"]) }
+        }
+    }
+
     /// Asks pluginkit to ignore another app's extension. Only ever called from the user's confirmed click.
     func turnOff(_ rival: RivalExtension) {
         queue.async {

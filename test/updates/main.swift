@@ -76,7 +76,7 @@ for bad in [#"{"state":"available"}"#, #"{"state":"available","version":"v0.1.3"
 let busy = Updates.advice(for: "an update is already running"), cannot = Updates.advice(for: "could not start the installer: x")
 check("advice: already running, no install command", busy == ("An update is already running.", false))
 check("advice: start failure offers the install command", cannot.copy && cannot.text == "Could not start the installer: x.")
-check("advice: not in ~/Applications, no install command", !Updates.advice(for: "spacebar is not in ~/Applications").copy)
+check("advice: not a copy the installer updates, no install command", !Updates.advice(for: "this copy of spacebar is not one the installer can update").copy)
 check("advice: installer failure offers the install command", Updates.advice(for: "The installer stopped with status 1. See x.").copy)
 
 check("checkUpdates defaults on", Settings().checkUpdates)
@@ -423,6 +423,40 @@ do {
           && !fm.fileExists(atPath: h2.appendingPathComponent("Applications").path))
 }
 
+// The copy the installer and the in-app update pick, and where the uninstaller looks.
+do {
+    let h = "/Users/u", s = "/Apps"
+    func managed(_ there: Set<String>) -> String? { Updates.managedCopy(home: h, system: s, exists: there.contains) }
+    check("managed copy: ~/Applications first", managed(["/Users/u/Applications/spacebar.app", "/Apps/spacebar.app"]) == "/Users/u/Applications/spacebar.app")
+    check("managed copy: /Applications when it is the only one", managed(["/Apps/spacebar.app"]) == "/Apps/spacebar.app")
+    check("managed copy: a cut-short swap in ~/Applications still counts",
+          managed(["/Users/u/Applications/.spacebar.app.old", "/Apps/spacebar.app"]) == "/Users/u/Applications/spacebar.app")
+    check("managed copy: and in /Applications", managed(["/Apps/.spacebar.app.old"]) == "/Apps/spacebar.app")
+    check("managed copy: none", managed([]) == nil && managed(["/Users/u/spacebar.app", "/Apps/spacebar copy.app"]) == nil)
+    check("install places: the two exact paths", Updates.installPlaces(home: h, system: s) == ["/Users/u/Applications/spacebar.app", "/Apps/spacebar.app"]
+          && Updates.installPlaces(home: h).last == "/Applications/spacebar.app")
+    let fm = FileManager.default
+    let place = dir.appendingPathComponent("replace", isDirectory: true), app = place.appendingPathComponent("spacebar.app")
+    try! fm.createDirectory(at: app, withIntermediateDirectories: true)
+    check("can replace a copy in a folder of this account's", Updates.canReplace(app.path))
+    chmod(place.path, 0o555)
+    check("cannot replace one in a folder it cannot write", !Updates.canReplace(app.path))
+    chmod(place.path, 0o755)
+    chmod(app.path, 0o555)
+    check("nor one it cannot write itself", !Updates.canReplace(app.path))
+    chmod(app.path, 0o755)
+    check("cannot replace a missing copy", !Updates.canReplace(place.appendingPathComponent("none.app").path))
+
+    let listed = "+    md.spacebar.preview(0.3.0)\tE1\t2026-10-03 15:18:01 +0000\t/Users/u/Applications/spacebar.app/Contents/PlugIns/SpacebarPreview.appex\n"
+        + "     md.spacebar.preview(0.2.2)\tE2\t2026-09-03 15:18:01 +0000\t/Apps/spacebar.app/Contents/PlugIns/SpacebarPreview.appex\n (2 plug-ins)\n"
+    let a = "/Users/u/Applications/spacebar.app/Contents/PlugIns/SpacebarPreview.appex", b = "/Apps/spacebar.app/Contents/PlugIns/SpacebarPreview.appex"
+    check("election: each listed path's mark", Updates.election(a, pluginkit: listed) == "+" && Updates.election(b, pluginkit: listed) == " ")
+    check("election: off", Updates.election(a, pluginkit: listed.replacingOccurrences(of: "+    md", with: "-    md")) == "-")
+    check("election: none for another copy's path, a prefix of one, or no listing",
+          Updates.election("/Applications/spacebar.app/Contents/PlugIns/SpacebarPreview.appex", pluginkit: listed) == nil
+          && Updates.election("/Apps/spacebar.app/Contents/PlugIns", pluginkit: listed) == nil && Updates.election(a, pluginkit: "") == nil
+          && Updates.election(a, pluginkit: "  (no matches)\n") == nil)
+}
 close(leaked)
 
 // Every private copy goes once its shell is reaped, and a run that never started leaves none.

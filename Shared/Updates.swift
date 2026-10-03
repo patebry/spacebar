@@ -157,6 +157,31 @@ enum Updates {
 
     static func installerArguments(_ version: String) -> [String] { ["--version", "v\(version)", "--no-prompt"] }
 
+    static let systemApplications = "/Applications"
+
+    /// The copies uninstall.sh removes, and the only places a copy updates or registers itself from.
+    static func installPlaces(home: String, system: String = systemApplications) -> [String] {
+        [home + "/Applications/spacebar.app", system + "/spacebar.app"]
+    }
+
+    /// The copy install.sh updates, as it picks it: ~/Applications/spacebar.app when it is there (or a swap of it was cut
+    /// short), else /Applications/spacebar.app (dragged there from spacebar.dmg) when that is; nil when neither is.
+    static func managedCopy(home: String, system: String = systemApplications,
+                            exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> String? {
+        installPlaces(home: home, system: system).first { exists($0) || exists(($0 as NSString).deletingLastPathComponent + "/.spacebar.app.old") }
+    }
+
+    /// Whether this account can rename and replace `bundle`. install.sh checks every folder inside it as well.
+    static func canReplace(_ bundle: String) -> Bool {
+        access((bundle as NSString).deletingLastPathComponent, W_OK) == 0 && access(bundle, W_OK) == 0
+    }
+
+    /// How `pluginkit -mAv -i <id>` lists the extension at `appex`, by the mark that leads its line: "+" turned on, "-" turned
+    /// off, " " never chosen either way; nil when it lists no version there (each version's line ends in a tab and its path).
+    static func election(_ appex: String, pluginkit output: String) -> Character? {
+        output.split(separator: "\n").first { $0.split(separator: "\t").last.map(String.init) == appex }?.first
+    }
+
     struct SpawnError: Error, Equatable { let message: String }
 
     /// What runDetached runs, for its messages.

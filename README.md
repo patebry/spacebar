@@ -260,10 +260,10 @@ Then select a file or folder in Finder and press Space.
 progress bar, `-S` still shows errors, and `-L` follows redirects. `sh` runs it: the script is plain POSIX `sh`, which every
 Mac has (`/bin/sh` is bash in POSIX mode), so it runs the same whatever your login shell is.
 
-<!-- gatekeeper: the release notes copy this paragraph (.github/workflows/release.yml) -->
-spacebar is **not notarized**: there is no Apple Developer ID behind it yet. Use the install command; a browser download
-of the zip will be blocked by Gatekeeper. Files that curl downloads are not quarantined, so Gatekeeper does not stop the app,
-but it also means you are trusting this repository's build rather than Apple's check.
+<!-- gatekeeper: the release notes copy this paragraph (.github/workflows/release.yml); it is the one place that says how a release is signed for Gatekeeper -->
+spacebar is **notarized**: from v0.3 every release is signed with an Apple Developer ID, checked by Apple's notary service
+and stapled, and the release fails if Apple refuses it. A copy downloaded in a browser opens as any notarized app does. The
+install command checks the release's SHA-256 before it changes anything.
 <!-- /gatekeeper -->
 Read [`scripts/install.sh`](scripts/install.sh) before you run it. It:
 
@@ -298,11 +298,11 @@ Once a day spacebar asks GitHub for the latest release's version number, and not
 while the installer replaces the extension; press Space again after. An edit in progress is saved first, and no edit, task
 toggle or sidebar filter starts while the update runs. The installer's output goes to `~/Library/Logs/spacebar-update.log`.
 
-The release zip is built by [GitHub Actions](.github/workflows/release.yml) from the tagged commit. Releases after v0.1.0
-are signed with a self-signed "spacebar Release" certificate, so every release has the same signer and an update does not
-make macOS ask again about the extension's data ([why](FINDINGS.md#release-signing)). v0.1.0 was ad-hoc signed, so the first
-update from it may show one prompt. Those releases also carry a build provenance attestation, which the
-[GitHub CLI](https://cli.github.com) checks:
+The release zip is built by [GitHub Actions](.github/workflows/release.yml) from the tagged commit. From v0.3 releases are
+signed with spacebar's Apple Developer ID, so every release has the same signer and an update does not make macOS ask again
+about the extension's data ([why](FINDINGS.md#release-signing)). v0.1.1 to v0.2.2 were signed with a self-signed "spacebar
+Release" certificate and v0.1.0 ad-hoc, so the first update from one of them may show one prompt. Releases after v0.1.0 also
+carry a build provenance attestation, which the [GitHub CLI](https://cli.github.com) checks:
 
 ```sh
 gh attestation verify spacebar.zip -R patebry/spacebar

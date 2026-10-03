@@ -89,3 +89,10 @@ Waits for the Developer ID: the first release with the Space helper is notarized
 - The Quick Look extension's state and other apps' Quick Look extensions that claim spacebar's types show at the top of
   Settings only while something is wrong, with Open Quick Look Extensions or a Turn Off button.
 - A welcome window on first launch, and a new app icon.
+
+### Signing
+
+- Signed with spacebar's Apple Developer ID and notarized by Apple, so a copy downloaded in a browser opens as any
+  notarized app does. Each release also has a `spacebar.dmg` beside the zip.
+- 0.2 was signed with a self-signed certificate, so on the first update from it macOS may ask once about spacebar's data;
+  allow it.

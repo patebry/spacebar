@@ -3,7 +3,8 @@
 # claiming the viewer's identifier, a client signed by the same certificate under another identifier, and the viewer's identity
 # without the hardened runtime or with an entitlement that lets a library in (either way one could be injected into it). The listener runs as
 # a temporary launchd job under a test Mach name, removed at the end; the real md.spacebar.helper agent is never touched.
-#   SIGN_ID=...  the identity to sign with (CI's "spacebar Release", self-signed, so not "valid" to find-identity -v); - skips
+#   SIGN_ID=...  the identity to sign with, by name or hash (CI's imported one; a self-signed one is not "valid" to
+#                find-identity -v); - skips
 #   HELPERLINK_OPTIONAL=1  (CI) a session without a GUI launchd domain, or one that refuses the test job, skips instead of failing
 set -euo pipefail
 cd "$(dirname "$0")/../.."

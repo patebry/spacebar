@@ -10,6 +10,8 @@
 #   SIGN_ID=...               codesigning identity; default the name in .sign-id (untracked), else the first valid local
 #                             identity, else ad-hoc. SIGN_ID=- forces ad-hoc. A stable identity keeps TCC grants across rebuilds.
 #   SIGN_KEYCHAIN=...         keychain file holding SIGN_ID, when it is not in the search list (CI's temporary keychain)
+#   TIMESTAMP=1|0             a secure timestamp from Apple's server on every signature, as notarization requires (needs the
+#                             network); default 1 for a Developer ID identity, else 0, so a local build signs offline
 set -euo pipefail
 cd "$(dirname "$0")"
 for arg in "$@"; do
@@ -58,7 +60,20 @@ if [ -z "${SIGN_ID:-}" ]; then
   fi
 fi
 
-SIGN_ARGS=(--force --sign "$SIGN_ID" --timestamp=none)
+if [ -z "${TIMESTAMP:-}" ]; then
+  TIMESTAMP=0
+  if [ "$SIGN_ID" != - ]; then
+    identity=$(security find-identity -p codesigning ${SIGN_KEYCHAIN:+"$SIGN_KEYCHAIN"} 2>/dev/null | grep -F -- "$SIGN_ID" || true)
+    [[ $identity == *'"Developer ID Application: '* ]] && TIMESTAMP=1
+  fi
+fi
+case $TIMESTAMP in
+  1) TIMESTAMP_ARG=--timestamp ;;
+  0) TIMESTAMP_ARG=--timestamp=none ;;
+  *) echo "TIMESTAMP must be 1 or 0" >&2; exit 2 ;;
+esac
+# Every executable runs under the hardened runtime: the helper admits only peers that do, and notarization requires it.
+SIGN_ARGS=(--force --sign "$SIGN_ID" --options runtime "$TIMESTAMP_ARG")
 [ -n "${SIGN_KEYCHAIN:-}" ] && SIGN_ARGS+=(--keychain "$SIGN_KEYCHAIN")
 
 rm -rf "$OUT"
@@ -191,22 +206,20 @@ cp -R Preview/web "$VIEWER_DIR/Contents/Resources/web"
 cp LICENSE THIRD_PARTY_NOTICES.md scripts/quicklook-types.txt "$VIEWER_DIR/Contents/Resources/"
 plist Viewer/Info.plist "$VIEWER_DIR/Contents/Info.plist" "$VIEWER_ID" "$VIEWER_EXE" "$APP_NAME"
 plist Writer/Info.plist "$VIEWER_XPC/Contents/Info.plist" "$VIEWER_ID"
-# Under the hardened runtime, like the helper: the helper admits only peers that are, so no library can be injected into a
-# process it trusts.
-codesign "${SIGN_ARGS[@]}" --options runtime "$VIEWER_XPC"
-codesign "${SIGN_ARGS[@]}" --options runtime --entitlements "$VIEWER_ENT" "$VIEWER_DIR"
+codesign "${SIGN_ARGS[@]}" "$VIEWER_XPC"
+codesign "${SIGN_ARGS[@]}" --entitlements "$VIEWER_ENT" "$VIEWER_DIR"
 
-# The helper: unsandboxed and without entitlements, under the hardened runtime. launchd starts it from the app's agent plist.
+# The helper: unsandboxed and without entitlements. launchd starts it from the app's agent plist.
 HELPER_DIR="$APP/Contents/Helpers/$APP_NAME Helper.app"
 mkdir -p "$HELPER_DIR/Contents/MacOS" "$APP/Contents/Library/LaunchAgents"
 cp "$HELPER_BIN" "$HELPER_DIR/Contents/MacOS/$HELPER_EXE"
 plist Helper/Info.plist "$HELPER_DIR/Contents/Info.plist" "$HELPER_ID" "$HELPER_EXE" "$APP_NAME"
 sed -e "s#__HELPER_ID__#$HELPER_ID#g" -e "s#__HELPER_PROGRAM__#Contents/Helpers/$APP_NAME Helper.app/Contents/MacOS/$HELPER_EXE#g" -e "s#__APP_ID__#$APP_ID#g" \
   Helper/agent.plist > "$APP/Contents/Library/LaunchAgents/$HELPER_ID.plist"
-codesign "${SIGN_ARGS[@]}" --options runtime "$HELPER_DIR"
-codesign "${SIGN_ARGS[@]}" --options runtime "$APP"
+codesign "${SIGN_ARGS[@]}" "$HELPER_DIR"
+codesign "${SIGN_ARGS[@]}" "$APP"
 rm -rf "$OBJ"
-echo "built $APP ($(lipo -archs "$APP/Contents/MacOS/$APP_EXE"), macOS $MIN_OS+)"
+echo "built $APP ($(lipo -archs "$APP/Contents/MacOS/$APP_EXE"), macOS $MIN_OS+, TIMESTAMP=$TIMESTAMP)"
 [ "${NO_INSTALL:-0}" = 1 ] && exit 0
 
 mkdir -p "$INSTALL_DIR"

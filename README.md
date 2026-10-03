@@ -276,7 +276,8 @@ install command checks the release's SHA-256 before it changes anything.
 Read [`scripts/install.sh`](scripts/install.sh) before you run it. It:
 
 1. checks for macOS 13 or later, and picks the copy to update: `~/Applications/spacebar.app`, or
-   `/Applications/spacebar.app` when that is the only one. It stops here if this account cannot change that one;
+   `/Applications/spacebar.app` when that is the only one. It stops here if this account cannot change a copy in
+   `/Applications`, or if the copy is a link;
 2. downloads `spacebar.zip` and `spacebar.zip.sha256` from the latest release (or `SPACEBAR_VERSION=vX.Y.Z`) through
    `github.com/patebry/spacebar/releases/latest/download/`, with no GitHub API calls, and stops unless the SHA-256 matches;
 3. copies the new app beside that copy, or into `~/Applications` for a first install (no `sudo`);
@@ -326,7 +327,7 @@ curl -fsSL https://spacebar.patebryant.com/uninstall.sh | sh
 This stops the Space helper (its launchd agent, then the helper, the viewer and the viewer's writer), resets the
 Accessibility permission the helper had and every permission the viewer had, unregisters spacebar's Quick Look extensions and
 deletes `~/Applications/spacebar.app` and `/Applications/spacebar.app`, whichever are there, which takes its Login Items
-entry with it. A copy this account cannot delete is left as it is, and named. **Uninstall spacebar…** in Settings runs the same
+entry with it. A copy this account cannot delete is left in place, and named. **Uninstall spacebar…** in Settings runs the same
 script from inside the app (not while an update runs), after removing the helper from Login Items. Both quit spacebar's
 Quick Look extensions first. To also delete your settings and themes in `~/Library/Application Support/spacebar` and the
 helper's log in `~/Library/Logs`:

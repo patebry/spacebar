@@ -3793,7 +3793,7 @@ function showUpdate(u) {
     ? `Still updating to spacebar ${v}…` : u.state === 'done' ? `spacebar ${v} is installed` : `spacebar ${v} is available`;
   $('aa-update-title').textContent = title;
   $('aa-update-sub').textContent = failed ? String(u.reason || 'The update did not start.')
-    : u.state === 'elsewhere' ? `This copy is in ${u.place}, which the installer does not update. Replace it with the download on the release page.`
+    : u.state === 'elsewhere' ? `This copy is in ${u.place}, which Update cannot replace. Get the new version from the release page.`
     : u.state === 'done' ? 'Close this preview and open it again to use it.'
     : running ? 'Quick Look shows an error for a moment while spacebar updates. Press Space again in a few seconds.'
     : 'Quick Look shows an error for a moment while spacebar updates. Press Space again after.';

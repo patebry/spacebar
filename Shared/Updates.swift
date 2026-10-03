@@ -171,15 +171,37 @@ enum Updates {
         installPlaces(home: home, system: system).first { exists($0) || exists(($0 as NSString).deletingLastPathComponent + "/.spacebar.app.old") }
     }
 
-    /// Whether this account can rename and replace `bundle`. install.sh checks every folder inside it as well.
-    static func canReplace(_ bundle: String) -> Bool {
-        access((bundle as NSString).deletingLastPathComponent, W_OK) == 0 && access(bundle, W_OK) == 0
+    /// Whether this account can rename or delete `path`, and make a sibling of it: its folder writable and, when it is there,
+    /// every folder inside it, as install.sh's `replaceable` and uninstall.sh's `removable` check. A link is never counted:
+    /// the scripts would move or delete the link and leave the copy it points to.
+    static func canChange(_ path: String) -> Bool {
+        guard access((path as NSString).deletingLastPathComponent, W_OK) == 0 else { return false }
+        var st = stat()
+        guard lstat(path, &st) == 0 else { return errno == ENOENT }
+        guard st.st_mode & S_IFMT == S_IFDIR, access(path, W_OK) == 0 else { return false }
+        var ok = true
+        let all = FileManager.default.enumerator(at: URL(fileURLWithPath: path), includingPropertiesForKeys: [.isDirectoryKey], options: [],
+                                                 errorHandler: { _, _ in ok = false; return false })
+        while ok, let u = all?.nextObject() as? URL {
+            if (try? u.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true, access(u.path, W_OK) != 0 { ok = false }
+        }
+        return ok && all != nil
     }
 
-    /// How `pluginkit -mAv -i <id>` lists the extension at `appex`, by the mark that leads its line: "+" turned on, "-" turned
-    /// off, " " never chosen either way; nil when it lists no version there (each version's line ends in a tab and its path).
-    static func election(_ appex: String, pluginkit output: String) -> Character? {
-        output.split(separator: "\n").first { $0.split(separator: "\t").last.map(String.init) == appex }?.first
+    /// Whether install.sh would update `copy` for this account: it, and the .new and .old it puts beside it, changeable.
+    static func canUpdate(_ copy: String) -> Bool {
+        let dir = (copy as NSString).deletingLastPathComponent
+        return FileManager.default.fileExists(atPath: copy) && [copy, dir + "/.spacebar.app.new", dir + "/.spacebar.app.old"].allSatisfy(canChange)
+    }
+
+    /// What `pluginkit -mAv -i <id>` lists, one version a line: the mark that leads it ("+" turned on, "-" turned off, " "
+    /// never chosen either way) and its path, the line's last tab-separated field.
+    static func elections(pluginkit output: String) -> [(mark: Character, path: String)] {
+        output.split(separator: "\n").compactMap { line in
+            let f = line.split(separator: "\t")
+            guard f.count >= 2, let mark = line.first, let path = f.last, path.hasPrefix("/") else { return nil }
+            return (mark, String(path))
+        }
     }
 
     struct SpawnError: Error, Equatable { let message: String }

@@ -6,8 +6,8 @@ import AppKit
 /// the settings folder and the helper's log.
 enum Uninstall {
     static var home: URL { URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true) }
-    /// The copies the script would remove.
-    static var installed: [String] { Updates.installPlaces(home: home.path).filter { FileManager.default.fileExists(atPath: $0) } }
+    /// The copies the script would remove: it leaves one this account cannot delete.
+    static var installed: [String] { Updates.installPlaces(home: home.path).filter { FileManager.default.fileExists(atPath: $0) && Updates.canChange($0) } }
     static func shown(_ path: String) -> String { path.hasPrefix(home.path + "/") ? "~" + path.dropFirst(home.path.count) : path }
     static var log: URL { home.appendingPathComponent("Library/Logs/spacebar-uninstall.log") }
     static var updateLog: URL { home.appendingPathComponent("Library/Logs/spacebar-update.log") }
@@ -25,7 +25,7 @@ enum Uninstall {
         guard isInstalledCopy else { return "This copy of spacebar isn't in ~/Applications or /Applications, so there is nothing to uninstall from here." }
         // The script would leave it and say so in its log, after the app had quit.
         let app = Bundle.main.bundleURL.path
-        guard Updates.canReplace(app) else { return "This account can't delete \(app). An administrator can move it to the Trash." }
+        guard Updates.canChange(app) else { return "This account can't delete \(app). An administrator can move it to the Trash." }
         guard let script = Bundle.main.url(forResource: "uninstall", withExtension: "sh") else { return "The uninstaller is missing from this copy of spacebar." }
         // The installer would put back what the uninstaller removes, or find its app gone mid-swap.
         guard !Updates.isRunning(log: updateLog) else { return "An update is running. Try again once it has finished." }

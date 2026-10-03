@@ -6,7 +6,7 @@
 #
 # Stops the Space helper and quits its viewer, resets the permissions macOS keeps for them, quits
 # ~/Applications/spacebar.app and /Applications/spacebar.app, whichever are there, unregisters their Quick Look extensions,
-# and deletes them. A copy this account cannot delete is left as it is, and named. Settings in
+# and deletes them. A copy this account cannot delete is left in place, and named. Settings in
 # ~/Library/Application Support/spacebar and the helper's log are kept unless you pass --purge; sandbox containers are
 # listed, not deleted. Safe to run more
 # than once.
@@ -140,6 +140,12 @@ fi
 [ "$FOUND" -gt 0 ] || say "spacebar is not installed at $HOME/Applications/$APP_NAME or $SYSTEM_APPS/$APP_NAME"
 for DEST in "$@"; do
   [ -e "$DEST" ] || continue
+  # Only the link goes: the copy it points to is not one of these two, or is removed as itself.
+  if [ -L "$DEST" ]; then
+    run rm -f "$DEST"
+    [ "$DRY_RUN" = 1 ] || say "Removed the link $DEST"
+    continue
+  fi
   if ! removable "$DEST"; then
     say "Left $DEST: this account cannot delete it. An administrator can move it to the Trash."
     LEFT=1
@@ -153,7 +159,12 @@ for DEST in "$@"; do
     done
     run "$LSREGISTER" -u "$DEST" || true
   fi
-  run rm -rf "$DEST"
+  if ! run rm -rf "$DEST"; then
+    say "Could not delete $DEST. If macOS said your terminal was prevented from modifying apps, allow it in System"
+    say "Settings > Privacy & Security > App Management, then run this again."
+    LEFT=1
+    continue
+  fi
   if [ "$SKIP_REGISTER" != 1 ]; then
     run_quiet qlmanage -r || true
     run_quiet qlmanage -r cache || true

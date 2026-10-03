@@ -6,7 +6,7 @@
 #
 # What this does, in order:
 #   1. Checks for macOS 13 or later, and picks the folder: ~/Applications, unless spacebar is only in /Applications (dragged
-#      there from spacebar.dmg), whose copy is then updated in place. It stops if this account cannot change that copy.
+#      there from spacebar.dmg), whose copy is then updated in place. It stops if this account cannot change a copy there.
 #   2. Downloads spacebar.zip and spacebar.zip.sha256 from the latest GitHub release (or SPACEBAR_VERSION) with curl
 #      into a temporary folder, and stops unless the SHA-256 matches. It makes no GitHub API calls, so it is never
 #      rate-limited.
@@ -272,6 +272,8 @@ UNREGISTERED=0
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
+# A link would be moved aside and replaced, and the copy it points to left as it was: a second copy.
+[ ! -L "$DEST" ] || fail "$DEST is a link, not a copy of spacebar. Nothing was installed. Delete the link and run this again."
 # Not a second copy in ~/Applications instead: Quick Look could go on using this one, which nobody here could then change.
 if [ "$DEST_DIR" = "$SYSTEM_APPS" ] && ! replaceable "$DEST_DIR"; then
   fail "spacebar is in $DEST, which this account cannot change. Nothing was installed. Ask an administrator to update it

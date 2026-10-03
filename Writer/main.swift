@@ -170,8 +170,10 @@ final class Writer: NSObject, SpacebarWriterProtocol {
     func updateOffer(reply: @escaping (Data?) -> Void) {
         guard SettingsFile.load().checkUpdates, updatesAllowed else { return reply(nil) }
         let answer = { (latest: String?) in
+            // Where this copy is matters only for a newer release, and finding out walks the bundle's folders.
+            let newer = latest.map { Updates.isNewer($0, than: self.currentVersion) } ?? false
             reply(Updates.offer(current: self.currentVersion, latest: latest, started: Updates.readCache()?.started, finished: Updates.readStatus(),
-                                place: self.misplaced(), running: Updates.isRunning(log: self.updateLog)).json)
+                                place: newer ? self.misplaced() : nil, running: Updates.isRunning(log: self.updateLog)).json)
         }
         let cached = Updates.readCache()
         if let c = cached, (0..<Updates.interval).contains(Date().timeIntervalSince1970 - c.checked) { return answer(c.latest) }
@@ -257,7 +259,7 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         let home = NSHomeDirectory()
         guard let app = containingApp()?.resolvingSymlinksInPath().path else { return "an unknown folder" }
         if let managed = Updates.managedCopy(home: home), app == URL(fileURLWithPath: managed).resolvingSymlinksInPath().path,
-           Updates.canReplace(managed) { return nil }
+           Updates.canUpdate(managed) { return nil }
         return app.hasPrefix(home + "/") ? "~" + app.dropFirst(home.count) : app
     }
 

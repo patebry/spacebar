@@ -191,7 +191,8 @@ func dryRun(tmp: String, status: URL?) -> (code: Int32, said: String, copyLeft: 
     let sh = Process()
     sh.executableURL = URL(fileURLWithPath: "/bin/sh")
     sh.arguments = [script.path, "--dry-run", "--no-prompt", "--version", "v9.9.9"]
-    var env = ["HOME": dir.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": tmp, "SPACEBAR_RELEASE_URL": "file://\(dir.path)/no-such-release"]
+    var env = ["HOME": dir.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": tmp, "SPACEBAR_RELEASE_URL": "file://\(dir.path)/no-such-release",
+               "SPACEBAR_SYSTEM_APPLICATIONS": dir.appendingPathComponent("none").path]
     if let status { env["SPACEBAR_UPDATE_STATUS"] = status.path }
     sh.environment = env
     let out = Pipe()
@@ -406,6 +407,13 @@ do {
           && r.1.contains("would move \(sys.path)/.spacebar.app.old back to \(theirs)"))
     try! fm.moveItem(atPath: sys.appendingPathComponent(".spacebar.app.old").path, toPath: theirs)
 
+    try! fm.createDirectory(atPath: h2.appendingPathComponent("Applications").path, withIntermediateDirectories: true)
+    try! fm.createSymbolicLink(atPath: mine, withDestinationPath: theirs)
+    r = pick()
+    check("install.sh stops at a link where the copy should be, before downloading", r.0 == 1
+          && r.1.contains("\(mine) is a link, not a copy of spacebar. Nothing was installed.") && !r.1.contains("Downloading"))
+    try! fm.removeItem(atPath: h2.appendingPathComponent("Applications").path)
+
     chmod(sys.path, 0o555)
     r = pick()
     check("install.sh stops before downloading when this account cannot change /Applications", r.0 == 1
@@ -437,25 +445,37 @@ do {
           && Updates.installPlaces(home: h).last == "/Applications/spacebar.app")
     let fm = FileManager.default
     let place = dir.appendingPathComponent("replace", isDirectory: true), app = place.appendingPathComponent("spacebar.app")
-    try! fm.createDirectory(at: app, withIntermediateDirectories: true)
-    check("can replace a copy in a folder of this account's", Updates.canReplace(app.path))
+    let deep = app.appendingPathComponent("Contents/PlugIns/P.appex").path
+    try! fm.createDirectory(atPath: deep, withIntermediateDirectories: true)
+    check("can change a copy in a folder of this account's", Updates.canChange(app.path) && Updates.canUpdate(app.path))
     chmod(place.path, 0o555)
-    check("cannot replace one in a folder it cannot write", !Updates.canReplace(app.path))
+    check("cannot change one in a folder it cannot write", !Updates.canChange(app.path) && !Updates.canUpdate(app.path))
     chmod(place.path, 0o755)
     chmod(app.path, 0o555)
-    check("nor one it cannot write itself", !Updates.canReplace(app.path))
+    check("nor one it cannot write itself", !Updates.canChange(app.path))
     chmod(app.path, 0o755)
-    check("cannot replace a missing copy", !Updates.canReplace(place.appendingPathComponent("none.app").path))
+    chmod(deep, 0o555)
+    check("nor one with a folder inside it this account cannot change, as install.sh checks", !Updates.canChange(app.path) && !Updates.canUpdate(app.path))
+    chmod(deep, 0o755)
+    let old = place.appendingPathComponent(".spacebar.app.old/Contents").path
+    try! fm.createDirectory(atPath: old, withIntermediateDirectories: true)
+    chmod(old, 0o555)
+    check("nor update one whose .old beside it cannot be deleted", Updates.canChange(app.path) && !Updates.canUpdate(app.path))
+    chmod(old, 0o755)
+    try! fm.removeItem(atPath: place.appendingPathComponent(".spacebar.app.old").path)
+    check("a missing path needs only its folder; a missing copy is not one to update",
+          Updates.canChange(place.appendingPathComponent("none.app").path) && !Updates.canUpdate(place.appendingPathComponent("none.app").path))
+    let link = place.appendingPathComponent("link.app")
+    try! fm.createSymbolicLink(at: link, withDestinationURL: app)
+    check("a link to a copy is never changeable", !Updates.canChange(link.path) && !Updates.canUpdate(link.path))
 
     let listed = "+    md.spacebar.preview(0.3.0)\tE1\t2026-10-03 15:18:01 +0000\t/Users/u/Applications/spacebar.app/Contents/PlugIns/SpacebarPreview.appex\n"
         + "     md.spacebar.preview(0.2.2)\tE2\t2026-09-03 15:18:01 +0000\t/Apps/spacebar.app/Contents/PlugIns/SpacebarPreview.appex\n (2 plug-ins)\n"
-    let a = "/Users/u/Applications/spacebar.app/Contents/PlugIns/SpacebarPreview.appex", b = "/Apps/spacebar.app/Contents/PlugIns/SpacebarPreview.appex"
-    check("election: each listed path's mark", Updates.election(a, pluginkit: listed) == "+" && Updates.election(b, pluginkit: listed) == " ")
-    check("election: off", Updates.election(a, pluginkit: listed.replacingOccurrences(of: "+    md", with: "-    md")) == "-")
-    check("election: none for another copy's path, a prefix of one, or no listing",
-          Updates.election("/Applications/spacebar.app/Contents/PlugIns/SpacebarPreview.appex", pluginkit: listed) == nil
-          && Updates.election("/Apps/spacebar.app/Contents/PlugIns", pluginkit: listed) == nil && Updates.election(a, pluginkit: "") == nil
-          && Updates.election(a, pluginkit: "  (no matches)\n") == nil)
+    let e = Updates.elections(pluginkit: listed)
+    check("elections: each listed version's mark and path", e.map { "\($0.mark)\($0.path)" } == ["+/Users/u/Applications/spacebar.app/Contents/PlugIns/SpacebarPreview.appex",
+                                                                                              " /Apps/spacebar.app/Contents/PlugIns/SpacebarPreview.appex"])
+    check("elections: off", Updates.elections(pluginkit: listed.replacingOccurrences(of: "+    md", with: "-    md")).first?.mark == "-")
+    check("elections: nothing from no listing", Updates.elections(pluginkit: "").isEmpty && Updates.elections(pluginkit: "  (no matches)\n").isEmpty)
 }
 close(leaked)
 

@@ -101,5 +101,20 @@ chmod 755 "$sys"
 chmod 555 "$theirs/Contents"
 check "and so is one with a folder inside it this account cannot change" sh -c "HOME='$home' sh scripts/uninstall.sh --dry-run </dev/null 2>&1 | grep -q '^Left $theirs:'"
 chmod 755 "$theirs/Contents"
+ln -s "$theirs" "$home/Applications/spacebar.app" 2>/dev/null || { mkdir -p "$home/Applications"; ln -s "$theirs" "$home/Applications/spacebar.app"; }
+check "a link in an install place is removed as a link, the copy it points to as itself" \
+  test "$(dry | sed -n -e 's/^would run: rm -f //p' -e 's/^would run: rm -rf //p')" = "$(printf '%s\n%s' "$home/Applications/spacebar.app" "$theirs")"
+check "and nothing is unregistered through the link" sh -c "! (HOME='$home' sh scripts/uninstall.sh --dry-run </dev/null 2>&1 | grep -q 'pluginkit -r $home/Applications/')"
+rm "$home/Applications/spacebar.app"
+# A real run, files only, in the scratch folders: a copy rm cannot delete (a locked file) is named, the other still goes.
+mkdir -p "$app/Contents/PlugIns/SpacebarPreview.appex"
+touch "$app/Contents/locked"
+chflags uchg "$app/Contents/locked"
+code=0
+real=$(HOME="$home" sh scripts/uninstall.sh --no-register </dev/null 2>&1) || code=$?
+chflags nouchg "$app/Contents/locked"
+check "a copy rm cannot delete is named and the run goes on to the other, then fails" \
+  sh -c "[ $code = 1 ] && printf '%s\n' \"\$1\" | grep -qx 'Could not delete $app. If macOS said your terminal was prevented from modifying apps, allow it in System' && [ ! -e '$theirs' ]" sh "$real"
+rm -rf "$home/Applications"
 check "with neither, it says where it looked" grep -qx "spacebar is not installed at $home/Applications/spacebar.app or $sys/spacebar.app" <<<"$(rm -rf "$theirs"; dry)"
 exit $fail

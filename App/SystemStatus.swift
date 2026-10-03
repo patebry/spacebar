@@ -69,9 +69,9 @@ final class SystemStatus: ObservableObject {
     }
 
     /// A copy dragged into Applications from spacebar.dmg has not had install.sh register it. Launching it registers its
-    /// extensions (FINDINGS.md, Install) but turns them neither on nor off. So at launch each one pluginkit does not list at
-    /// this copy's path is added, and each one listed without a choice either way is turned on as install.sh does, the
-    /// folder one only while folder previews are on. One the user turned on or off is left so. Only the copy
+    /// extensions (FINDINGS.md, Install) but turns them neither on nor off. So at launch an extension pluginkit does not list
+    /// at this copy's path is added, and one no listed version of which was ever turned on or off is turned on as install.sh
+    /// does, the folder one only while folder previews are on. A choice made for any copy is left alone. Only the copy
     /// install.sh would update does this, so a second copy never takes them over.
     func registerIfNew() {
         let app = Bundle.main.bundleURL.resolvingSymlinksInPath().path
@@ -81,9 +81,9 @@ final class SystemStatus: ObservableObject {
             let folders = SettingsFile.load().folderMode
             for (id, name, on) in [(Self.previewID, "SpacebarPreview", true), (Self.foldersID, "SpacebarFolders", folders)] {
                 let appex = app + "/Contents/PlugIns/\(name).appex"
-                let mark = Updates.election(appex, pluginkit: Self.run("/usr/bin/pluginkit", ["-mAv", "-i", id]).output)
-                if mark == nil { _ = Self.run("/usr/bin/pluginkit", ["-a", appex]) }
-                guard mark == nil || mark == " " else { continue }
+                let listed = Updates.elections(pluginkit: Self.run("/usr/bin/pluginkit", ["-mAv", "-i", id]).output)
+                if !listed.contains(where: { $0.path == appex }) { _ = Self.run("/usr/bin/pluginkit", ["-a", appex]) }
+                guard !listed.contains(where: { $0.mark == "+" || $0.mark == "-" }) else { continue }
                 NSLog("spacebar: turning %@ %@ for %@", id, on ? "on" : "off", app)
                 _ = Self.run("/usr/bin/pluginkit", ["-e", on ? "use" : "ignore", "-i", id])
                 changed = true

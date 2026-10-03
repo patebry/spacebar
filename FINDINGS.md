@@ -362,22 +362,25 @@ the Update button runs only from it; the uninstaller removes either or both. Wit
   checks the folder and every folder inside the copy before it downloads, and stops with nothing changed rather than
   install a second copy in `~/Applications`: that one and the old one would claim the same bundle IDs and file types, Quick
   Look could go on using the old one, and nobody on that account could update or remove it. The uninstaller leaves such a
-  copy, names it, and exits 1; the preview does not offer Update for it, and Uninstall in Settings says why it cannot.
+  copy, names it, and exits 1; the preview does not offer Update for it, and Uninstall in Settings says why it cannot. The
+  app checks the same folders the scripts do (`Updates.canChange`). A link where a copy should be is never treated as one:
+  install.sh stops, and the uninstaller deletes only the link.
 - **Launching an app registers its extensions, but turns them neither on nor off.** Measured on macOS 15.4.1 with a probe
   app of unique bundle IDs (self-signed, a sandboxed Quick Look preview extension) in a scratch folder: `pluginkit -mAv`
   listed nothing after the bundle was made, and listed the extension within 2 s of `open`, with a blank mark (neither `+`
   nor `-`). The probe was unregistered and deleted afterwards. A copy made by Finder from a disk image was not measured.
-  So at each launch the managed copy adds an extension pluginkit does not list at its path, and turns on (`pluginkit -e
-  use`) one with a blank mark, the folder one only while folder previews are on; one the user turned on or off keeps its
-  mark, and a second copy does nothing.
+  So at each launch the managed copy adds an extension pluginkit does not list at its path, and turns it on (`pluginkit
+  -e use`) while no listed version of it has a mark, the folder one only while folder previews are on. `pluginkit -e`
+  acts on the bundle ID, not a path, so a `+` or `-` on any copy's line counts as the user's choice and is left alone. A
+  second copy does nothing.
 - **App Management** (macOS 13) refuses changes to a notarized app's bundle by a process of another Team ID unless the user
   allows it, wherever the app is (lapcatsoftware.com/articles/AppManagement.html), so it is not new with `/Applications`:
   from v0.3 a release is notarized, and the install command run from a terminal without App Management may be refused when
   it moves the old copy aside. install.sh then stops with the old copy in place and re-registered, and says where to allow
-  it. Not observed here: the terminal used for this work has App Management (and Full Disk Access) granted, and local
+  it; the uninstaller, refused at `rm`, names the copy, goes on to the other and exits 1. Not observed here: the terminal used for this work has App Management (and Full Disk Access) granted, and local
   builds are self-signed and not notarized, which App Management does not protect. The Update button runs install.sh from
-  the writer inside the same Developer ID-signed app, which App Management should allow as the same Team ID; that is untested until a notarized
-  release updates to a later one.
+  the writer inside the same Developer ID-signed app, which App Management should allow as the same Team ID; that is
+  untested until a notarized release updates to a later one.
 - **The Space helper** is registered by the app through SMAppService for its own bundle, so an update in place keeps its
   path and nothing about the helper changes. Two copies would each register the same label; that is left as before.
 

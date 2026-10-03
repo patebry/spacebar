@@ -1343,6 +1343,32 @@ def steady_chrome(page, check, out):
     hit = page.js("""const r = document.getElementById('find-btn').getBoundingClientRect(); const e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
       return !!e && !!e.closest('#find-btn');""")
     check(hit is False, 'toolbar: a hidden tool in its slot takes no click')
+    # Floating over the page (Minimal chrome, or a panel under 480px) the slots hold too, on every frame of the switches. There
+    # Open is the viewer's own button for a file that is not Markdown, so the toolbar's keeps its slot empty.
+    SLOTS = """const W = window.__slots = { f: [], stop: false }; const fr = () => { if (W.stop) return;
+        W.f.push(['raw', 'find-btn', 'aa', 'edit'].map((id) => { const r = document.getElementById(id).getBoundingClientRect(); return [Math.round(r.left), Math.round(r.width)]; }));
+        requestAnimationFrame(fr); }; requestAnimationFrame(fr); return 1;"""
+    floating = {}
+    for label, minimal, size in (('minimal', True, '1100x760'), ('narrow', False, '470x700'), ('minimal narrow', True, '470x700')):
+        page.apply(minimalChrome=minimal)
+        page.cmd('@size:' + size)
+        view('notes.md')
+        page.js(SLOTS)
+        ps = {}
+        for n in ('code.ts', 'rows.csv', 'pic.png', 'notes.md', 'data.json', 'tool'):
+            view(n)
+            ps[n] = page.js(PLACES)
+        frames = page.js('window.__slots.stop = true; return window.__slots.f')
+        view('pic.png')
+        taken = page.js("""const r = document.getElementById('find-btn').getBoundingClientRect(); const e = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          return !!e && !!e.closest('#find-btn');""")
+        floating[label] = {'slots': {k: sorted({tuple(p[k][:2]) for p in ps.values()}) for k in ('raw', 'find', 'aa', 'edit')},
+                           'frames': sorted({json.dumps(f) for f in frames}), 'open shown': {n: p['edit'][2] for n, p in ps.items()}, 'hidden takes a click': taken}
+    page.apply(minimalChrome=False)
+    page.cmd('@size:1100x760')
+    check(all(all(len(v) == 1 for v in m['slots'].values()) and len(m['frames']) == 1 and not m['hidden takes a click']
+              and m['open shown']['notes.md'] and not m['open shown']['code.ts'] for m in floating.values()),
+          'toolbar: in Minimal chrome and under 480px too, Raw, Find, Aa and Open keep their slots on every file and every frame', json.dumps(floating))
     labels = {n: [p['label'], p['title']] for n, p in places.items()}
     check(all(p['label'] == 'Open' for n, p in places.items() if n != 'tool') and places['tool']['label'] == 'Reveal'
           and places['tool']['title'] == 'Reveal in Finder' and places['notes.md']['title'] == 'Open in your editor'
@@ -2625,7 +2651,7 @@ def sidebar_and_folders(page, check, out):
     page.render(D('src', 'components', 'Modal.tsx'))
     page.cmd('@wait:0.4')
     crumbs = page.js("return [...document.querySelectorAll('#crumbs .crumb')].map((c) => [c.tagName, c.textContent, c.title])")
-    check([c[0] for c in crumbs] == ['BUTTON', 'BUTTON', 'BUTTON', 'SPAN'] and crumbs[0][2] == 'Show the folder overview',
+    check([c[0] for c in crumbs] == ['BUTTON', 'BUTTON', 'BUTTON', 'SPAN'] and crumbs[0][2] == crumbs[0][1] + '\nShow the folder overview',
           'crumbs: every step but the file is a button', json.dumps(crumbs))
     page.cmd('@eval:(() => { if (expanded().has(' + json.dumps(D('src')) + ')) toggleFolder(' + json.dumps(D('src')) + '); return 0; })()')
     r = page.cmd("@eval:(() => { [...document.querySelectorAll('#crumbs button.crumb')][1].click(); return 0; })()")

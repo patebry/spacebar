@@ -249,7 +249,7 @@ function callouts(frag) {
     bq.classList.add('callout');
     bq.dataset.callout = CALLOUTS[type] || 'blue';
     bq.insertBefore(title, p);
-    if (!p.textContent.trim() && !p.querySelector('img, input, .katex')) p.remove();
+    if (!p.textContent.trim() && !p.querySelector('img, input, .katex, span.tex')) p.remove();
     // `[!tip]-` folds the body away until the title is clicked; `[!tip]+` can be folded but starts open.
     if (m[2]) {
       const fold = el('details', 'callout-fold');
@@ -368,6 +368,7 @@ function render(text, depth = 0) {
   try { html = md.render(fm ? fm.body : text, depth ? { docId: `e${++embedDocs}` } : {}); } finally { renderDepth = 0; }
   const frag = DOMPurify.sanitize(html, PURIFY);
   frag.querySelectorAll('input:not([type=checkbox]), textarea, select').forEach((n) => n.remove());
+  const math = [];
   frag.querySelectorAll('span.tex[data-tex]').forEach((n) => {
     if (!settings.math) {
       const display = n.dataset.display === '1';
@@ -375,9 +376,9 @@ function render(text, depth = 0) {
       if (display) { const pre = el('pre', 'tex-src'); pre.appendChild(code); n.replaceWith(pre); } else n.replaceWith(code);
       return;
     }
-    try { katex.render(n.dataset.tex, n, { displayMode: n.dataset.display === '1', throwOnError: false }); }
-    catch (e) { n.textContent = n.dataset.tex; }
+    if (window.katex) texNode(n); else math.push(n);
   });
+  if (math.length) drawMathLater(math);
   obsidian(frag, depth);
   labelTasks(frag);
   tables(frag);
@@ -392,11 +393,41 @@ function render(text, depth = 0) {
 
 let embedDocs = 0;
 
+/** KaTeX is loaded the first time a document has math, as mermaid is, so no other file pays for it. Until it is, each formula
+ *  is an empty placeholder (style.css), drawn in place once it arrives, in the document or not yet put in it. */
+let katexLoaded = null;
+function loadKatex() {
+  if (!katexLoaded) {
+    katexLoaded = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'spacebar://bundle/vendor/katex.min.js';
+      s.onload = () => resolve();
+      s.onerror = (e) => { katexLoaded = null; reject(e); };
+      document.head.appendChild(s);
+    });
+  }
+  return katexLoaded;
+}
+function texNode(n) {
+  try { katex.render(n.dataset.tex, n, { displayMode: n.dataset.display === '1', throwOnError: false }); }
+  catch (e) { n.textContent = n.dataset.tex; }
+}
+function drawMathLater(nodes) {
+  loadKatex().then(() => {
+    for (const n of nodes) if (!n.firstChild) texNode(n);
+    // A heading's formula is in its TOC entry too, and the formulas count in the stats and find.
+    if (nodes.some((n) => n.isConnected && n.closest('#doc > :is(h1, h2, h3)'))) buildToc();
+    if (nodes.some((n) => n.isConnected && n.closest('#doc'))) { updateStats(); findAfterDraw(); }
+  }, () => { for (const n of nodes) if (!n.firstChild) n.textContent = n.dataset.tex; });
+}
+
 /** Tables keep short cells on one line and scroll sideways rather than wrap every cell; a long one keeps its header row in view. */
 const TABLE_NOWRAP = 30, TABLE_TALL = 40;
 function tables(frag) {
   for (const t of frag.querySelectorAll('table:not(.frontmatter)')) {
-    for (const c of t.querySelectorAll('th, td')) if (c.textContent.length <= TABLE_NOWRAP) c.classList.add('nw');
+    // A formula counts as its TeX, drawn or still a placeholder (KaTeX loading), so a cell is classed the same either way.
+    const len = (c) => [...c.querySelectorAll('span.tex[data-tex]')].reduce((n, x) => n + x.dataset.tex.length - x.textContent.length, c.textContent.length);
+    for (const c of t.querySelectorAll('th, td')) if (len(c) <= TABLE_NOWRAP) c.classList.add('nw');
     if (t.tBodies.length && t.tBodies[0].rows.length > TABLE_TALL) t.classList.add('tall');
   }
 }
@@ -1546,7 +1577,7 @@ window.sb = {
   /** Runs the renderers once on a sample, into nothing on screen, so the first document shown does not pay for their first run
    *  (the panel's page is loaded long before it). */
   warm() {
-    try { render('# a\n\n**b** [c](#d) `e`\n\n- [ ] f\n\n| g | h |\n|---|---|\n| 1 | 2 |\n\n$x^2$\n\n```js\nconst i = 1;\n```\n'); codeBlock('let j = 1\n', 'swift'); }
+    try { render('# a\n\n**b** [c](#d) `e`\n\n- [ ] f\n\n| g | h |\n|---|---|\n| 1 | 2 |\n\n```js\nconst i = 1;\n```\n'); codeBlock('let j = 1\n', 'swift'); }
     catch (e) { /* a warm-up only */ }
   },
   /** A two-finger double tap at (x, y), in CSS pixels of the viewport: the image viewer toggles as on a double-click. */
@@ -1569,7 +1600,7 @@ window.sb = {
     current.page = m.page;
     current.pages = m.pages;
     const b = document.querySelector('#kind .pdf-page');
-    if (b) b.textContent = `${m.page.toLocaleString()} / ${m.pages.toLocaleString()}`;
+    if (b) { b.textContent = `${m.page.toLocaleString()} / ${m.pages.toLocaleString()}`; pageCounterWidth(b, m.pages); }
   },
   /** What the video or audio file on screen holds (its size and length, its title and artist), for the kind line. */
   mediaInfo(m) {
@@ -1669,6 +1700,7 @@ window.sb = {
    *  until native clears it (''). */
   status(s, sticky) {
     if (sticky) { stickyStatus = s; syncAlert(); return; }
+    if (/^Not (switched|saved)/.test(s)) unclick();
     clearHint();
     const st = $('status');
     st.textContent = s;
@@ -1878,9 +1910,18 @@ function setKind(p, more = [], zoom = false, label = kindLabel(p)) {
   const drag = HOST === 'panel' && !!p.path && !p.entry && !['overview', 'loading'].includes(p.view);
   k.replaceChildren(...[drag ? icon(isMarkdown(p) ? 'markdown' : p.icon, 14) : null, text, z].filter(Boolean));
   k.classList.toggle('drag', drag);
-  if (drag) k.title = 'Drag to copy the file'; else k.removeAttribute('title');
+  syncKindTitle();
   return { text, zoom: z };
 }
+
+/** The kind line's tooltip: its text in full, which the toolbar may cut, kept as the text fills in (an image's size, a media
+ *  file's length). */
+function syncKindTitle() {
+  const k = $('kind'), t = k.querySelector('.kind-text');
+  const tip = [t ? t.textContent : '', k.classList.contains('drag') ? 'Drag to copy the file' : ''].filter(Boolean).join('\n');
+  if (tip) k.title = tip; else k.removeAttribute('title');
+}
+new MutationObserver(syncKindTitle).observe($('kind'), { childList: true, characterData: true, subtree: true });
 
 // The kind as spacebar names it, the same for every file of a kind: the system's names differ from file to file (".ts" is
 // "Source code", ".tsx" "script", a CSV "comma-separated values").
@@ -1902,6 +1943,11 @@ function kindLabel(p) {
   return typeof p.encoding === 'string' && p.encoding ? `${base} (${p.encoding})` : base;
 }
 const zoomLabel = () => document.querySelector('#kind .img-zoom');
+/** The PDF page counter is as wide as its widest page number ("120 / 120"), so it keeps its width as the pages turn. */
+function pageCounterWidth(b, pages) {
+  const n = pages.toLocaleString().length;
+  b.style.minWidth = `calc(${2 * n + 3}ch + 12px)`;
+}
 function clearKind() {
   const k = $('kind');
   k.replaceChildren();
@@ -1957,6 +2003,8 @@ function codeBlock(text, lang, file = false, { wrap: wrapped = false, log = fals
   const n = Math.max(1, lineCount(text));
   const gutter = el('pre', 'gutter', Array.from({ length: n }, (_, i) => i + 1).join('\n'));
   gutter.dataset.n = n;
+  // A file's text may be edited: room for one more digit, so typing past line 99 or 999 moves no character.
+  if (file) gutter.style.minWidth = `${String(n).length + 1}ch`;
   wrap.append(gutter);
   const pre = el('pre', 'code');
   if (file) pre.dataset.fileText = '';
@@ -2654,13 +2702,15 @@ function imageView(p) {
   const box = el('figure', 'viewer viewer-image');
   const stage = el('div', 'img-stage');
   const img = document.createElement('img');
-  const { text: meta, zoom } = setKind(p, [fmtSize(p.size)], true);
-  img.alt = p.name;
-  img.draggable = false;
   // A vector image has the size its file gives it, and no zoom percentage: WebKit's own size for it is a default.
   const vector = /\.svg$/i.test(p.name || '');
+  // The size the extension read from the file's header, so the kind line is drawn whole before the image decodes.
+  const dims = (w, h) => (vector ? (typeof p.svgSize === 'string' ? p.svgSize : '') : Number.isInteger(w) && Number.isInteger(h) && w > 0 ? `${w} × ${h}` : '');
+  const { text: meta, zoom } = setKind(p, [dims(p.width, p.height), fmtSize(p.size)], !vector);
+  img.alt = p.name;
+  img.draggable = false;
   img.addEventListener('load', () => {
-    meta.textContent = [p.kindName, vector ? (typeof p.svgSize === 'string' ? p.svgSize : '') : `${img.naturalWidth} × ${img.naturalHeight}`, fmtSize(p.size), entryPosition(p)].filter(Boolean).join(' · ');
+    meta.textContent = [p.kindName, dims(img.naturalWidth, img.naturalHeight), fmtSize(p.size), entryPosition(p)].filter(Boolean).join(' · ');
     applyZoom(stage, img, vector ? null : zoom, imgScale);
   });
   img.addEventListener('error', () => {
@@ -3125,6 +3175,7 @@ function pdfView(p) {
   if (p.view === 'pdf' && Number.isInteger(p.pages) && p.pages > 0) {
     const b = el('button', 'pdf-page', `${(+p.page || 1).toLocaleString()} / ${p.pages.toLocaleString()}`);
     b.type = 'button';
+    pageCounterWidth(b, p.pages);
     b.title = 'Go to page';
     $('kind').append(b);
   }
@@ -3255,7 +3306,7 @@ function ovFill(box) {
   });
   if (d.more) rows.push(el('div', 'ov-note', moreNote(d.more)));
   if (!rows.length) rows.push(el('div', 'ov-note', 'Nothing here yet.'));
-  box.replaceChildren(...rows);
+  patchList(box, rows);
 }
 
 function overviewView(p) {
@@ -3797,6 +3848,8 @@ let sideHitsQ = '';
 // folder revealFolder showed); a click, a key or the wheel on the list cancels it.
 let sideWinH = 0;
 let sideOwed = '';
+// The file a click on its row opened: the row is in view, so its render owes no reveal (a wheel since then must not be undone).
+let sideClicked = '';
 // Set while revealFolder places the list itself: clearing the filter for it owes the file on screen no reveal.
 let sideHold = false;
 const SIDE_ROW_H = 24, SIDE_HIT_H = 40, SIDE_VIRTUAL = 300, SIDE_OVERSCAN = 30;
@@ -3871,6 +3924,8 @@ function patchList(list, nodes) {
 // The pointer moving over the list hands the highlight back to it, as in Finder; a redraw under a still pointer does not.
 $('side-list').addEventListener('pointermove', (e) => { if (e.movementX || e.movementY) $('side-list').classList.remove('keyed'); }, { passive: true });
 $('side-list').addEventListener('wheel', () => { sideOwed = ''; }, { passive: true });
+// A press on the list (its scroll bar too) cancels a reveal still owed, as the wheel does.
+$('side-list').addEventListener('pointerdown', () => { sideOwed = ''; }, { passive: true });
 let sideScrollQueued = false;
 $('side-list').addEventListener('scroll', () => {
   if (sideScrollQueued || sideRows.length <= SIDE_VIRTUAL) return;
@@ -3988,18 +4043,22 @@ function renderSidebar() {
   }
   // Rows put in or taken out above it leave the row in view where it was on screen, as in Finder.
   const anchor = !refiltered && sideWinH === sideRowH() ? sideAnchor() : null;
+  // The room revealRow added below the last row is for those rows only.
+  if (list.style.paddingBottom && rows.length !== sideRows.length) { const keep = list.scrollTop; list.style.paddingBottom = ''; list.scrollTop = keep; }
   sideRows = rows;
   const status = sideMode === 'contents' && sideQuery ? searchStatus() : '';
   const more = $('side-more');
-  more.hidden = !status && (!(top && top.more) || !!sideQuery);
+  more.hidden = !status && (!(top && top.more) || !!sideQuery) && sideMode !== 'contents';
+  more.classList.toggle('reserve', sideMode === 'contents');
   more.textContent = status || (top && top.more ? moreNote(top.more) : '');
   more.title = more.textContent;
   for (const [p, t] of keyed) if (performance.now() - t > 2000) keyed.delete(p);
   // While the keys are ahead of the renders they own the cursor and the scrolling: a late render never pulls either back.
   const byKeys = (moved && keyed.delete(current.path)) || keyed.size > 0;
   if (moved && !byKeys) cursor = current.path;
+  if (moved) list.classList.remove('clicked');
   // The document on screen is shown once its row is listed: the list scrolls on its own, never the page.
-  if (moved) sideOwed = byKeys ? '' : current.path;
+  if (moved) { sideOwed = byKeys || current.path === sideClicked ? '' : current.path; sideClicked = ''; }
   else if (refiltered && !sideHold && !showingHits()) sideOwed = current.path;
   // The list is drawn at its new height first: a scrollTop set while it still holds fewer rows would be clamped.
   drawSideWindow(true);
@@ -4062,7 +4121,7 @@ function showCrumbs(p) {
       s = el('button', 'crumb', plainName(name));
       s.type = 'button';
       s.dataset.path = at;
-      s.title = i ? 'Show in the sidebar' : 'Show the folder overview';
+      s.title = `${plainName(name)}\n${i ? 'Show in the sidebar' : 'Show the folder overview'}`;
     }
     return i ? [el('span', 'crumb-sep', '›'), s] : [s];
   }));
@@ -4085,12 +4144,13 @@ function revealFolder(path) {
   treeVersion++;
   cursor = path;
   sideHold = true;
-  if (sideQuery) { filterField.value = ''; setSideQuery(''); }
-  if (narrow.matches) peek(true);
-  else if (settings.sidebarCollapsed === true) choose('sidebarCollapsed', false);
-  requestFolders();
-  renderSidebar();
-  sideHold = false;
+  try {
+    if (sideQuery) { filterField.value = ''; setSideQuery(''); }
+    if (narrow.matches) peek(true);
+    else if (settings.sidebarCollapsed === true) choose('sidebarCollapsed', false);
+    requestFolders();
+    renderSidebar();
+  } finally { sideHold = false; }
   markCursor();
   sideOwed = path;
   const r = sideRows.find((x) => x.e && x.e.path === path);
@@ -4367,13 +4427,29 @@ function markCursor() {
   }
 }
 
+/** The open a click asked for was refused (the status line says why): the file on screen keeps its highlight. */
+function unclick() {
+  if (!sideClicked) return;
+  sideClicked = '';
+  $('side-list').classList.remove('clicked');
+  cursor = current.path;
+  markCursor();
+}
+
 /** Scrolls the list, never the page, just enough to show the row, and draws the rows now in view. `whole` keeps the top row
  *  whole, for a list placed afresh rather than stepped through. */
 function revealRow(r, whole) {
   const list = $('side-list'), rh = sideRowH(), y = sideRows.indexOf(r) * rh;
   if (y < 0) return;
   if (y < list.scrollTop) list.scrollTop = y;
-  else if (y + rh > list.scrollTop + list.clientHeight) list.scrollTop = whole ? Math.ceil((y + rh - list.clientHeight) / rh) * rh : y + rh - list.clientHeight;
+  else if (y + rh > list.scrollTop + list.clientHeight) {
+    const top = whole ? Math.ceil((y + rh - list.clientHeight) / rh) * rh : y + rh - list.clientHeight;
+    // Near the end the list could not scroll that far, and stopping short would cut the top row: the bottom margin grows to fit.
+    list.style.paddingBottom = '';
+    const short = top - (list.scrollHeight - list.clientHeight);
+    if (whole && short > 0) list.style.paddingBottom = `${parseFloat(getComputedStyle(list).paddingBottom) + short}px`;
+    list.scrollTop = top;
+  }
   drawSideWindow(false);
 }
 
@@ -5375,11 +5451,15 @@ document.addEventListener('click', (e) => {
     // The cursor's ring is for the keys; a click shows only the highlight.
     $('side-list').classList.remove('keyed');
     const at = row.getBoundingClientRect();
+    let opening = false;
     if (row.dataset.dir) toggleFolder(row.dataset.path);
     else if (!row.classList.contains('broken')) {
       peek(false);
-      if (openHit(row.dataset.path) || row.dataset.path !== current.path) post({ type: 'open', path: row.dataset.path });
+      if (openHit(row.dataset.path) || row.dataset.path !== current.path) { post({ type: 'open', path: row.dataset.path }); opening = true; }
     }
+    // The row clicked is lit at once, as the keys light theirs; the highlight of the file on screen goes when it does.
+    $('side-list').classList.toggle('clicked', opening);
+    sideClicked = opening ? row.dataset.path : '';
     if (e.isTrusted) beginListKeys(e, at);
     return;
   }

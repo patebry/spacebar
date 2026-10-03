@@ -1510,6 +1510,11 @@ class PreviewController: NSViewController {
             case "video" where cloud, "audio" where cloud, "quicklook" where cloud: _ = FileTypes.materializing { try? FileHandle(forReadingFrom: url).read(upToCount: 1) }
             default: break
             }
+            // An image's size from its header, so the toolbar's kind line is whole in the first frame, before WebKit decodes it.
+            if p["view"] as? String == "image", let s = ImagePane.pixelSize(url) {
+                p["width"] = Int(s.width)
+                p["height"] = Int(s.height)
+            }
             // Only what FileView downloads counts: an evicted archive is its info card without a download.
             let fetched = ["pdf", "image", "bitmap", "html", "video", "audio", "rtf", "quicklook"].contains(p["view"] as? String)
                 || ([.code, .json, .csv, .text].contains(kind) && (p["size"] as? Int64 ?? .max) <= FolderListing.maxDocumentBytes)

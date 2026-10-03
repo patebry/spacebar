@@ -347,11 +347,15 @@ enum ShellPolicy {
     }
 }
 
-/// What the page is told about the settings: the settings themselves plus the URLs of the user CSS to load, each versioned by
+/// What the page is told about the settings: the settings themselves, the folders-first and hidden-files states in force
+/// (Finder's where the settings follow it, for the sidebar's menu), and the URLs of the user CSS to load, each versioned by
 /// its modification time so an edit to the file reloads it.
 enum PageSettings {
-    static func payload(_ s: Settings, supportDir dir: URL = SettingsFile.supportDir) -> [String: Any] {
+    static func payload(_ s: Settings, finder: FinderPrefs.Values = FinderPrefs.read(), supportDir dir: URL = SettingsFile.supportDir) -> [String: Any] {
         var p = s.dictionary
+        let o = FolderListing.Options(sort: s.folderSort, foldersFirst: s.foldersFirst, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles, finder: finder)
+        p["listsFoldersFirst"] = o.foldersFirst
+        p["listsHidden"] = o.showHidden
         func versioned(_ f: URL, _ path: String) -> Any {
             var st = stat()
             guard stat(f.path, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return NSNull() }

@@ -477,8 +477,9 @@ def viewers(page, check, out, st):
     click(page, '#side-menu')
     menu = page.js("""const p = document.getElementById('side-pop'); return { open: !p.hidden, items: [...p.querySelectorAll('button')].map((b) => [b.textContent, b.getAttribute('aria-checked')]),
       expanded: document.getElementById('side-menu').getAttribute('aria-expanded'), inside: p.getBoundingClientRect().right <= document.getElementById('sidebar').getBoundingClientRect().right + 1 }""")
-    check(menu == {'open': True, 'items': [['Sort by Name', 'true'], ['Sort by Date Modified', 'false'], ['Show Hidden Files…', 'false']], 'expanded': 'true', 'inside': True},
-          'sidebar menu: sort order checked, hidden files shown as off', json.dumps(menu))
+    check(menu == {'open': True, 'items': [['Sort by Name', 'true'], ['Sort by Date Modified', 'false'], ['Folders First', 'false'], ['Show Hidden Files…', 'false']],
+                   'expanded': 'true', 'inside': True},
+          'sidebar menu: sort order checked, folders first and hidden files shown as off (Finder\'s defaults; no Finder plist here)', json.dumps(menu))
     shoot(page, 'sidebar-menu')
     keys = dispatch_key(page, 'ArrowDown')
     check(keys['result'] == 'false', 'sidebar menu: the tree keys wait while it is open')
@@ -488,6 +489,16 @@ def viewers(page, check, out, st):
           and page.js("return document.querySelector('#side-pop [data-sort=modified]').getAttribute('aria-checked')") == 'true',
           'sidebar menu: Sort by Date Modified saves folderSort through the panel gate', json.dumps(written))
     r = click(page, '#side-pop [data-sort=name]')
+    click(page, '#side-menu')
+    r = click(page, '#side-folders')
+    written = [m.get('patch') for m in r['messages'] if m.get('type') == '_written']
+    check(written == ['{"foldersFirst":"always"}'] and page.js("return document.getElementById('side-pop').hidden"),
+          'sidebar menu: Folders First saves foldersFirst through the panel gate', json.dumps(written))
+    click(page, '#side-menu')
+    check(page.js("return document.getElementById('side-folders').getAttribute('aria-checked')") == 'true', 'sidebar menu: Folders First shows as on')
+    r = click(page, '#side-folders')
+    written = [m.get('patch') for m in r['messages'] if m.get('type') == '_written']
+    check(written == ['{"foldersFirst":"never"}'], 'sidebar menu: Folders First again turns it off for good, not back to Finder\'s', json.dumps(written))
     click(page, '#side-menu')
     r = click(page, '#side-hidden')
     o = [m for m in r['messages'] if m.get('type') == 'openSettings']
@@ -1932,21 +1943,28 @@ def main():
         page.cmd('@size:1000x760')
         page.render(os.path.join(folder, 'b.md'))
         s = st()
-        want = ['sub', 'README.md', 'a.md', 'b.md', 'c9.md', 'c10.md', 'link.md', 'notes.txt', 'tasks.md', HOSTILE]
+        want = ['a.md', 'b.md', 'c9.md', 'c10.md', 'link.md', 'notes.txt', 'README.md', 'sub', 'tasks.md', HOSTILE]
         check(s['names'] == want and s['head'] == 'notes' and s['active'] == [['b.md', 'page']] and not s['hidden'] and not s['toggleHidden'],
-              'single file: its folder listed, folders first, README first, names in Finder order, current file highlighted', json.dumps(s))
+              'single file: its folder listed in Finder\'s order, folders among the files by name, current file highlighted', json.dumps(s))
+        page.apply(foldersFirst='always', folderReadmeFirst=True)
+        page.render(os.path.join(folder, 'b.md'))
+        check(st()['names'] == ['sub', 'README.md', 'a.md', 'b.md', 'c9.md', 'c10.md', 'link.md', 'notes.txt', 'tasks.md', HOSTILE],
+              'folders first always, README first: the folder, then the README, then the files by name', json.dumps(st()['names']))
         check(page.js("return [document.querySelectorAll('#sidebar img').length, window.__pwned || null]") == [0, None],
               'a hostile file name is shown as text')
         page.cmd('@size:1000x760')
-        page.apply(folderSort='modified')
+        page.apply(folderSort='modified', foldersFirst='finder', folderReadmeFirst=False)
         for i, n in enumerate(['tasks.md', 'c9.md', 'a.md']):
             os.utime(os.path.join(folder, n), (1e9 + i, 2e9 - i * 100))
         page.render(os.path.join(folder, 'b.md'))
-        check(st()['names'][:5] == ['sub', 'README.md', 'tasks.md', 'c9.md', 'a.md'], 'sorted by date modified with README still first', json.dumps(st()['names']))
-        page.apply(folderSort='name', folderReadmeFirst=False)
+        check(st()['names'][:3] == ['tasks.md', 'c9.md', 'a.md'], 'sorted by date modified, newest first, the folder among the files', json.dumps(st()['names']))
+        page.apply(folderSort='modified', foldersFirst='always', folderReadmeFirst=True)
         page.render(os.path.join(folder, 'b.md'))
-        check(st()['names'][1] == 'a.md', 'README first off: plain name order')
-        page.apply(folderReadmeFirst=True)
+        check(st()['names'][:5] == ['sub', 'README.md', 'tasks.md', 'c9.md', 'a.md'], 'by date with folders first always: the folder, README, then newest first', json.dumps(st()['names']))
+        page.apply(folderSort='name', foldersFirst='finder', folderReadmeFirst=True)
+        page.render(os.path.join(folder, 'b.md'))
+        check(st()['names'][:2] == ['README.md', 'a.md'], 'README first in Finder\'s order: at the very top, then the names', json.dumps(st()['names']))
+        page.apply(foldersFirst='finder', folderReadmeFirst=False)
 
         # ---- the folder watch: a file added or removed shows up in the list without a re-render ----
         page.render(os.path.join(folder, 'b.md'))
@@ -2151,9 +2169,9 @@ def main():
         s = st()
         top = [r for r in s['rows'] if r[1] == 1]
         names = [r[0] for r in top]
-        check(names[:3] == ['hostile', 'many', 'sub'] and all(r[2] == 'd' for r in top[:3]) and all(r[2] == 'f' for r in top[3:])
-              and names[3] == 'README.md' and s['head'] == 'tree',
-              'tree: the root, folders first, then README, then files', json.dumps(names))
+        check(names == sorted(names, key=str.casefold) and s['head'] == 'tree' and {r[2] for r in top if r[0] in ('hostile', 'many', 'sub')} == {'d'}
+              and names.index('hostile') > names.index('doc.pdf') and names.index('README.md') > names.index('many'),
+              'tree: the root in Finder\'s order, folders among the files by name', json.dumps(names))
         icons = {r[0]: r[3] for r in top}
         want_icons = {'hostile': 'ic-folder', 'README.md': 'ic-markdown', 'photo.png': 'ic-image', 'doc.pdf': 'ic-pdf', 'code.ts': 'ic-code',
                       'data.json': 'ic-data', 'table.csv': 'ic-data', 'notes.txt': 'ic-text', 'blob.dat': 'ic-other', 'tool': 'ic-app',

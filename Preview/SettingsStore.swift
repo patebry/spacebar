@@ -2,10 +2,13 @@ import Foundation
 import os
 
 /// The settings as the extension sees them, kept current by watching the support folder (settings.json, custom.css and themes/)
-/// and re-checked at every prepare, since a watch can miss changes made while the extension was suspended.
+/// and Finder's own preferences file, and re-checked at every prepare, since a watch can miss changes made while the extension
+/// was suspended.
 final class SettingsStore {
     static let shared = SettingsStore()
     private(set) var settings: Settings
+    /// Finder's preferences the sidebar follows, read with the settings.
+    private(set) var finder: FinderPrefs.Values
     private var signature: [String]
     private var sources: [String: DispatchSourceFileSystemObject] = [:]
     private var pending = false
@@ -14,6 +17,7 @@ final class SettingsStore {
 
     private init() {
         settings = SettingsFile.load()
+        finder = FinderPrefs.read()
         signature = []
         signature = currentSignature()
         rearm()
@@ -21,12 +25,20 @@ final class SettingsStore {
 
     func observe(_ f: @escaping (Settings) -> Void) { observers.append(f) }
 
-    var payload: [String: Any] { PageSettings.payload(settings) }
+    var payload: [String: Any] { PageSettings.payload(settings, finder: finder) }
 
-    /// Every file whose change can alter what the page shows: identity and modification time, or "-" when missing.
+    /// How the sidebar lists a folder now: the settings, with Finder's preferences where they say to follow them.
+    var listing: FolderListing.Options {
+        FolderListing.Options(sort: settings.folderSort, foldersFirst: settings.foldersFirst, readmeFirst: settings.folderReadmeFirst,
+                              showHidden: settings.showHiddenFiles, finder: finder)
+    }
+
+    /// Every file whose change can alter what the page shows: identity and modification time, or "-" when missing. Finder
+    /// replaces its plist on each change, so the file is watched by its identity and found again at the next look.
     private func watchedFiles(_ s: Settings) -> [URL] {
         var files = [SettingsFile.supportDir, SettingsFile.url, SettingsFile.customCSS, SettingsFile.themesDir]
         if let t = s.userTheme { files.append(SettingsFile.themesDir.appendingPathComponent(t)) }
+        if let p = FinderPrefs.path { files.append(URL(fileURLWithPath: p)) }
         return files
     }
 
@@ -47,6 +59,7 @@ final class SettingsStore {
         signature = []
         let old = settings
         settings = next
+        finder = FinderPrefs.read()
         signature = currentSignature()
         rearm()
         slog.info("settings reloaded (\(reason, privacy: .public)) theme=\(next.theme, privacy: .public)\(old == next ? " (css changed)" : "", privacy: .public)")

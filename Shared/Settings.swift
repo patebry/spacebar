@@ -21,8 +21,10 @@ struct Settings: Codable, Equatable {
     var inlineEditing = true
     var taskToggles = true
     var folderMode = true
-    var folderReadmeFirst = true
+    var folderReadmeFirst = false
     var folderSort = "name"
+    /// Folders above the files in the sidebar: as Finder's own "Keep folders on top" ("finder"), "always" or "never".
+    var foldersFirst = "finder"
     var sidebarCollapsed = false
     var sidebarWidth = 240
     var sidebarKeys = true
@@ -57,7 +59,9 @@ struct Settings: Codable, Equatable {
     /// 3: reading stats became off by default.
     /// 4: reading stats left the settings window, so a file from before is read and rewritten with them off: its "on" was almost
     /// always the old default, which the window could no longer turn off.
-    static let currentVersion = 4
+    /// 5: README first became off by default, so the sidebar lists a folder as Finder does; a file from before is read and
+    /// rewritten with it off, its "on" being the old default.
+    static let currentVersion = 5
     static func fileVersion(_ raw: [String: Any]) -> Int { (raw["version"] as? NSNumber)?.intValue ?? 1 }
 
     static let themes = ["apple", "github", "paper", "solarized", "nord", "contrast"]
@@ -70,6 +74,7 @@ struct Settings: Codable, Equatable {
         "monoFont": ["system", "menlo", "monaco", "courier"],
         "width": ["narrow", "medium", "wide", "full"],
         "folderSort": ["name", "modified"],
+        "foldersFirst": ["finder", "always", "never"],
         "frontMatter": ["table", "hide", "raw"],
         "toc": ["auto", "on", "off"],
         "mdLinks": ["preview", "editor"],
@@ -88,9 +93,9 @@ struct Settings: Codable, Equatable {
     static var allKeys: Set<String> { Set(choices.keys).union(intRanges.keys).union(doubleRanges.keys).union(boolKeys).union(optionalKeys) }
     /// The only keys the preview panel may change (its Aa popover and sidebar controls). The page renders an untrusted document,
     /// so even a page that was somehow scripted can restyle the preview but never pick a CSS file, an editor app, or what is
-    /// rendered or opened. folderSort only reorders what is listed; showHiddenFiles would list, and so open, more, so it is
-    /// changed in the settings window only.
-    static let panelKeys: Set<String> = Set(["theme", "appearance", "fontSize", "width", "bodyFont", "sidebarCollapsed", "sidebarWidth", "folderSort"])
+    /// rendered or opened. folderSort and foldersFirst only reorder what is listed; showHiddenFiles would list, and so open,
+    /// more, so it is changed in the settings window only.
+    static let panelKeys: Set<String> = Set(["theme", "appearance", "fontSize", "width", "bodyFont", "sidebarCollapsed", "sidebarWidth", "folderSort", "foldersFirst"])
         .union(rawKeys)
     /// The keys the settings window shows, on its page and under Advanced. Every other key is changed in the preview (panelKeys),
     /// by spacebar itself, or in settings.json only, and keeps its stored value.
@@ -161,6 +166,7 @@ struct Settings: Codable, Equatable {
         }
         if !raw.isEmpty, Self.fileVersion(raw) < 2 { d["folderMode"] = true }
         if !raw.isEmpty, Self.fileVersion(raw) < 4 { d["stats"] = false }
+        if !raw.isEmpty, Self.fileVersion(raw) < 5 { d["folderReadmeFirst"] = false }
         let data = try! JSONSerialization.data(withJSONObject: d)
         self = (try? JSONDecoder().decode(Settings.self, from: data)) ?? Settings()
     }
@@ -183,7 +189,7 @@ struct Settings: Codable, Equatable {
         if let n = try? c.decodeIfPresent(Double.self, forKey: .lineHeight), let v = Self.sanitize("lineHeight", n) as? Double { s.lineHeight = v }
         take(.width, \.width); takeOptional(.editorBundleID, \.editorBundleID)
         take(.inlineEditing, \.inlineEditing); take(.taskToggles, \.taskToggles); take(.folderMode, \.folderMode)
-        take(.folderReadmeFirst, \.folderReadmeFirst); take(.folderSort, \.folderSort); take(.frontMatter, \.frontMatter)
+        take(.folderReadmeFirst, \.folderReadmeFirst); take(.folderSort, \.folderSort); take(.foldersFirst, \.foldersFirst); take(.frontMatter, \.frontMatter)
         take(.sidebarCollapsed, \.sidebarCollapsed); take(.sidebarKeys, \.sidebarKeys); take(.showHiddenFiles, \.showHiddenFiles); take(.minimalChrome, \.minimalChrome)
         if let n = try? c.decodeIfPresent(Double.self, forKey: .sidebarWidth), let v = Self.sanitize("sidebarWidth", n) as? Int { s.sidebarWidth = v }
         take(.toc, \.toc); take(.stats, \.stats); take(.mdLinks, \.mdLinks); take(.webLinks, \.webLinks)
@@ -309,7 +315,8 @@ enum SettingsFile {
         // Migrated before the patch, so a user's "off" in the same write is kept.
         if Settings.fileVersion(obj) < Settings.currentVersion {
             // No file yet: nothing was written under an older default.
-            if !obj.isEmpty, obj["stats"] as? Bool == true { obj["stats"] = false }
+            if !obj.isEmpty, Settings.fileVersion(obj) < 4, obj["stats"] as? Bool == true { obj["stats"] = false }
+            if !obj.isEmpty, Settings.fileVersion(obj) < 5, obj["folderReadmeFirst"] as? Bool == true { obj["folderReadmeFirst"] = false }
             if Settings.fileVersion(obj) < 2 { obj["folderMode"] = true }
             obj["version"] = Settings.currentVersion
             changed = true
@@ -325,7 +332,8 @@ enum SettingsFile {
 
     /// Brings an existing settings.json up to Settings.currentVersion. Run by the app and the writer, never the sandboxed extension.
     /// A symbolic link (a dotfiles setup) is never written, so it is not migrated: until its target gains the current "version"
-    /// it reads as folder previews on whatever its folderMode says, and reading stats off. The failure is returned for the caller's log.
+    /// it reads as folder previews on whatever its folderMode says, and reading stats and README first off. The failure is
+    /// returned for the caller's log.
     @discardableResult
     static func migrate(at url: URL = url) -> Failure? {
         var st = stat()

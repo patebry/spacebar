@@ -62,6 +62,10 @@ Waits for the Developer ID: the first release with the Space helper is notarized
 
 ### Sidebar and settings
 
+- **The sidebar lists a folder as Finder does**: by name, folders among the files unless Finder's own Keep folders on top
+  is on, and hidden files while Finder shows them (⇧⌘.); a change in Finder shows in an open preview. The sort menu gains
+  Folders First for either way whatever Finder does (`foldersFirst` in settings.json). README first is off by default and a
+  settings file from before is read with it off; `"folderReadmeFirst": true` brings it back.
 - Big folders stay fast (the sidebar draws only the rows in view), and it takes the arrow keys as soon as the preview opens.
 - The toolbar holds still while the arrows move from file to file: its buttons keep their places, Open is one word with the
   app in its tooltip, and a button with a key gives it in its tooltip.

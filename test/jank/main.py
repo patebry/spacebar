@@ -2,12 +2,14 @@
 """Position and scroll state that must hold still, in the page on its own (the offscreen harness, test/web/main.swift): the line
 being read through a reflow and through each frame of the sidebar's animation, the folder grid's place after Back, rows and the
 edit caret clear of the toolbar row and the line numbers, the TOC's own scroll, the boxes' scroll through a redraw of the same
-file, and an info card under a late thumbnail. This WebKit has no layout-shift entries, so positions are read before and after
+file, an info card under a late thumbnail, the line being read as KaTeX draws late, and the TOC's
+column and scroll between notes with and without one. This WebKit has no layout-shift entries, so positions are read before and after
 each action, and per frame where the change animates."""
 import base64, json, os, shutil, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from webthemes import Page, ROOT, click
 from sidebar import make_png
+import jankchrome as JC
 
 LONG = ''.join(f'## Section {i}\n\n' + ('Some words that wrap differently at each width. ' * 25) + '\n\n' for i in range(60))
 HEAD30 = "[...document.querySelectorAll('#doc h2')].find((x) => x.textContent === 'Section 30')"
@@ -249,6 +251,71 @@ def late_thumbnail(page, check, out):
     check(before == after and shown, "info card: a late thumbnail takes the icon's box; nothing below it moves", json.dumps([before, after, shown]))
 
 
+def math_and_toc(page, check, out):
+    # Lazy KaTeX (jank-chrome) under the reading anchor (jank-doc J1): formulas above the line being read grow from their
+    # placeholders when KaTeX arrives, and the line stays put. KaTeX is held back until the page is scrolled and settled.
+    tall = '$$\n\\begin{pmatrix} a & b \\\\ c & d \\\\ e & f \\\\ g & h \\end{pmatrix} = \\sum_{k=0}^{n} \\frac{x_k^2}{k!}\n$$\n\n'
+    md = os.path.join(out, 'math.md')
+    open(md, 'w').write(''.join(f'## Section {i}' + (' with $x_{%d}$' % i if i % 5 == 0 else '') + '\n\n'
+                                + 'Words that run on, with $e^{i\\pi} + 1 = 0$ inline. ' * 6 + '\n\n' + tall for i in range(40)))
+    page.cmd('@size:1300x700')
+    page.cmd('@root:' + out)
+    gated = page.js("""if (window.katex) return 'loaded';
+      katexLoaded = new Promise((r) => { window.__releaseKatex = () => { const s = document.createElement('script');
+        s.src = 'spacebar://bundle/vendor/katex.min.js'; s.onload = () => r(); document.head.appendChild(s); }; }); return 'gated';""")
+    page.render(md)
+    page.cmd('@wait:0.3')
+    H = "[...document.querySelectorAll('#doc h2')].find((x) => x.textContent.startsWith('Section 20'))"
+    page.cmd(f"@eval:{H}.scrollIntoView({{ block: 'start' }}); 0")
+    page.cmd('@wait:0.4')
+    before = page.js(f"""return {{ top: Math.round({H}.getBoundingClientRect().top), y: Math.round(scrollY), h: document.scrollingElement.scrollHeight,
+      holders: document.querySelectorAll('#doc span.tex:empty').length, drawn: document.querySelectorAll('#doc .katex').length,
+      tocTop: document.getElementById('toc').scrollTop }};""")
+    # Per frame, after the page's own resize handling and before paint (an observer made after the page's runs after it).
+    page.js(f"""const h = {H}, W = window.__mt = [];
+      new ResizeObserver(() => W.push(Math.round(h.getBoundingClientRect().top))).observe(document.getElementById('doc'));
+      window.__releaseKatex(); return 1;""")
+    page.cmd('@wait:1.2')
+    after = page.js(f"""const t = document.getElementById('toc'), a = t.querySelector('a.active'), r = a && a.getBoundingClientRect(), tr = t.getBoundingClientRect();
+      return {{ top: Math.round({H}.getBoundingClientRect().top), y: Math.round(scrollY), h: document.scrollingElement.scrollHeight,
+      holders: document.querySelectorAll('#doc span.tex:empty').length, drawn: document.querySelectorAll('#doc .katex').length,
+      tocTop: t.scrollTop, active: a && a.textContent, activeVisible: !!r && r.top >= Math.max(tr.top, 40) && r.bottom <= tr.bottom }};""")
+    tops = page.js('return window.__mt')
+    check(gated == 'gated' and before['holders'] > 100 and before['drawn'] == 0 and after['holders'] == 0 and after['h'] - before['h'] > 200
+          and abs(after['top'] - before['top']) <= 2 and max(tops) - min(tops) <= 2
+          and after['active'] and after['active'].startswith('Section 2') and after['activeVisible'],
+          'jank J1 + lazy KaTeX: a note with math read at its middle keeps the line being read, every frame, as KaTeX draws the '
+          'formulas above it; the TOC rebuilt for the drawn headings keeps the entry being read in view',
+          json.dumps({'before': before, 'after': after, 'heading top spread': [min(tops), max(tops)] if tops else None}))
+
+    # J5 with J6: a TOC note, a note with none, another TOC note. The column never moves and each TOC opens at its top.
+    body = ('Words in a paragraph that is long enough to fill the measure. ' * 12) + '\n\n'
+    toc1, toc2, plain = (os.path.join(out, n) for n in ('toc1.md', 'toc2.md', 'plain.md'))
+    open(toc1, 'w').write(''.join(f'## One {i}\n\n' + body for i in range(80)))
+    open(toc2, 'w').write(''.join(f'## Two {i}\n\n' + body for i in range(80)))
+    open(plain, 'w').write(body * 40)
+    page.render(toc1)
+    page.cmd('@wait:0.3')
+    page.cmd('@eval:window.scrollTo(0, document.scrollingElement.scrollHeight * 0.8); 0')
+    page.cmd('@wait:0.3')
+    TOC = "const t = document.getElementById('toc'); return [t.scrollTop, t.querySelectorAll('a').length, getComputedStyle(t).visibility];"
+    scrolled = page.js(TOC)
+    JC.sample(page, {'p': '#doc p'})
+    seen = {}
+    for n, p in (('plain', plain), ('toc2', toc2), ('plain again', plain), ('toc1', toc1)):
+        page.render(p)
+        page.cmd('@wait:0.3')
+        seen[n] = page.js(TOC)
+    fr = JC.sampled(page)
+    col = JC.spread(fr, 'p')
+    check(scrolled[0] > 100 and JC.still(col) and seen['plain'][1] == 0 and seen['plain'][2] == 'hidden'
+          and all(seen[k][0] == 0 and seen[k][1] == 80 and seen[k][2] == 'visible' for k in ('toc2', 'toc1')),
+          'jank J5 + J6: between TOC notes and a note with none the column keeps its left edge and width on every frame, and each '
+          "TOC opens at its top, not the last one's scroll", json.dumps({'toc scrolled first': scrolled, 'toc [scrollTop, entries, visibility]': seen, 'column [left, width]': col}))
+    page.cmd('@size:1100x760')
+
+
+
 def main():
     results = []
 
@@ -258,7 +325,7 @@ def main():
 
     page = Page()
     try:
-        for i, part in enumerate([reading_position, grid_back, under_the_bar, toc_scroll, redraw_keeps_scroll, late_thumbnail]):
+        for i, part in enumerate([reading_position, grid_back, under_the_bar, toc_scroll, redraw_keeps_scroll, late_thumbnail, math_and_toc]):
             out = os.path.join(page.out, f'part{i}')
             os.makedirs(out)
             part(page, check, out)

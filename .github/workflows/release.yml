@@ -163,6 +163,11 @@ jobs:
       - name: Signatures
         run: NOTARY="$NOTARIZE" test/signing/run.sh
 
+      # The extension's code signed as this build signs it (its entitlements, the sandbox, the hardened runtime, this
+      # identity) shows Markdown, JSON, a zip through its writer, a PDF and an image, off screen.
+      - name: Hardened extension
+        run: SKIP_BUILD=1 test/hardened/run.sh
+
       - name: Check and package
         working-directory: build
         run: |

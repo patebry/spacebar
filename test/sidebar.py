@@ -2505,6 +2505,19 @@ def archive_entries(page, check, out):
     b = st()
     check(b['view'] == 'archive' and b['sel'] == 'notes.txt' and b['crumbs'] != None and '›' not in (b['crumbs'] or '')[:2],
           'archive entry: Back returns to the listing, the file it came from selected', json.dumps(b))
+    r = page.cmd('@nativeclick:#doc tr[data-key="docs/notes.txt"] td.arc-date')
+    page.cmd('@wait:0.6')
+    v = st()['view']
+    back()
+    fold = "return document.querySelector('#doc tr[data-key=\"img\"] .arc-dir').getAttribute('aria-expanded')"
+    was = page.js(fold)
+    page.cmd('@nativeclick:#doc tr[data-key="img"] td.arc-size')
+    page.cmd('@wait:0.3')
+    now = page.js(fold)
+    page.cmd('@nativeclick:#doc tr[data-key="img"] td.arc-size')
+    page.cmd('@wait:0.3')
+    check(msgs(r, 'archiveEntry') and v == 'text' and now != was and page.js(fold) == was,
+          'archive entry: a click anywhere on a row opens its file or folder, not only on the name', json.dumps([v, was, now]))
 
     entry('docs/readme.md')
     m = st()

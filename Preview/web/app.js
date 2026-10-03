@@ -5945,7 +5945,9 @@ document.addEventListener('click', (e) => {
   const crumb = e.target.closest('#crumbs button.crumb[data-path]');
   if (crumb) { e.preventDefault(); crumbGo(crumb.dataset.path); return; }
   if (e.target.closest('#sidebar, #crumbs')) return;
-  const act = e.target.closest('#doc .viewer [data-action]');
+  // An archive's row opens its file or folder from anywhere on it, as its name does.
+  const arcRow = e.target.closest('#doc .viewer-archive tbody tr');
+  const act = e.target.closest('#doc .viewer [data-action]') || (arcRow && arcRow.querySelector('button.arc-entry, button.arc-dir'));
   if (act) { e.preventDefault(); if (editing && editing.whole) stopEditing(); viewerAction(act, e); return; }
   const fv = e.target.closest('#doc .ov-views button');
   if (fv) { e.preventDefault(); choose(viewKey(current), fv.dataset.folderView); return; }

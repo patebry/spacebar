@@ -689,10 +689,14 @@ def contents_search(page, check, out):
     check(h['mode'] == 'Contents' and h['pressed'] == 'true' and h['placeholder'] == 'Search contents' and 'search' not in types_of(r)
           and h['width'] == names_width,
           'contents: the toggle switches to Contents, says so, searches nothing while the field is empty, and the field keeps its width', json.dumps(h))
+    list_h = lambda: page.js("return document.getElementById('side-list').clientHeight")
+    empty_h = list_h()
     typed('q')
     h = page.js(HITS)
-    check(h['status'] == 'Type 2 or more characters' and any(x[0] == 'src' for x in h['rows']),
-          'contents: one character keeps the tree and asks for more', json.dumps(h))
+    hint = page.js("const e = document.getElementById('side-hint'), q = document.getElementById('side-q').getBoundingClientRect(), r = e.getBoundingClientRect(); "
+                   "return [e.hidden ? null : e.textContent, r.top >= q.top - 1 && r.bottom <= q.bottom + 1 && r.right <= q.right]")
+    check(h['status'] == '' and hint == ['Type 2+ characters', True] and list_h() == empty_h and any(x[0] == 'src' for x in h['rows']),
+          'contents: one character keeps the tree, asks for more inside the field, and the list keeps its height', json.dumps([h, hint, empty_h, list_h()]))
 
     # A keystroke cancels the search before it: the old one reports nothing more once the next is sent.
     r1 = typed('qu')

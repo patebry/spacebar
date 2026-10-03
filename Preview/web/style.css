@@ -278,7 +278,11 @@
   /* A click lights the row clicked at once, as the keys do, and the file on screen gives up its highlight. */
   #side-list.clicked a.row.cursor { background: var(--row-sel); transition: none; }
   #side-list.clicked a.row.active:not(.cursor, :hover) { background: transparent; }
-  #side-filter { padding: 0 8px 6px; display: flex; gap: 4px; align-items: center; }
+  #side-filter { padding: 0 8px 6px; display: flex; position: relative; gap: 4px; align-items: center; }
+  /* Contents with one character typed: the ask for another sits in the field, so the list below keeps its height. */
+  #side-hint { position: absolute; right: 64px; top: 0; height: calc(100% - 6px); display: flex; align-items: center; pointer-events: none;
+    font-size: 11px; color: var(--muted); white-space: nowrap; }
+  #side-hint[hidden] { display: none; }
   #side-menu { flex: none; width: 24px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; cursor: default;
     color: var(--muted); background: transparent; }
   #side-menu:hover, #side-menu[aria-expanded=true] { color: var(--fg); background: color-mix(in srgb, var(--fg) 7%, transparent); }
@@ -325,7 +329,7 @@
     font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* The search's progress wraps in a narrow sidebar rather than lose its counts. */
   #side-more { padding: 4px 16px 14px; font-size: 11.5px; line-height: 1.35; color: var(--muted); overflow-wrap: anywhere; }
-  /* Searching contents, it keeps two lines' room from the first character typed, so the list's bottom edge holds as the status comes and goes. */
+  /* Searching contents, it keeps two lines' room while a search is on, so the list's bottom edge holds as the status comes and goes. */
   #side-more.reserve { min-height: calc(2.7em + 18px); }
   #side-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background .12s; }
   #side-resize:hover::after, :root.sb-resizing #side-resize::after { background: color-mix(in srgb, var(--accent) 60%, transparent); }

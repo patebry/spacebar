@@ -4451,8 +4451,11 @@ function renderSidebar() {
   // The room revealRow added below the last row is for those rows only.
   if (list.style.paddingBottom && rows.length !== sideRows.length) { const keep = list.scrollTop; list.style.paddingBottom = ''; list.scrollTop = keep; }
   sideRows = rows;
-  const searching = sideMode === 'contents' && !!sideQuery;
+  const searching = sideMode === 'contents' && sideQuery.length >= SEARCH_MIN;
   const status = searching ? searchStatus() : '';
+  const hint = $('side-hint');
+  hint.hidden = !(sideMode === 'contents' && sideQuery && !searching);
+  hint.textContent = hint.hidden ? '' : `Type ${SEARCH_MIN}+ characters`;
   const more = $('side-more');
   more.hidden = !status && (!(top && top.more) || !!sideQuery) && !searching;
   more.classList.toggle('reserve', searching);

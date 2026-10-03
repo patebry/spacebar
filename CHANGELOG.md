@@ -64,6 +64,7 @@ Each release's notes on GitHub also list its commits. This file keeps what chang
 - **PDFs** show their page and page count ("41 / 228"); a click goes to a page. ⌘F finds in a PDF or RTF document with the
   same find bar as text, Page Up and Page Down move through it, and ⌘C copies the text selected in it.
 - **⌘+ ⌘− ⌘0 zoom** a PDF, an RTF document or an HTML file.
+- **A pinch and a two-finger double tap zoom an image in the Space panel**, as they already did in Quick Look.
 - The kind line gives a video's size and length, an audio file's title, artist and length, and an SVG's own size.
 
 ### Sidebar, folders and archives

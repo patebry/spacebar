@@ -2649,15 +2649,17 @@ function notebookView(nb) {
   const lang = [meta.kernelspec && meta.kernelspec.language, meta.language_info && meta.language_info.name]
     .find((l) => typeof l === 'string' && window.hljs && hljs.getLanguage(l)) || null;
   const cells = nb.cells.slice(0, NB_CELLS);
-  for (const c of cells) {
+  for (const [i, c] of cells.entries()) {
     if (!isBranch(c)) continue;
     const src = nbText(c.source);
     if (c.cell_type === 'markdown') {
       const md = el('div', 'nb-cell nb-md');
+      md.dataset.ptr = `/cells/${i}`;
       md.append(nbMarkdown(src));
       box.append(md);
     } else if (c.cell_type === 'code') {
       const cell = el('div', 'nb-cell nb-code');
+      cell.dataset.ptr = `/cells/${i}`;
       const n = Number.isInteger(c.execution_count) ? String(c.execution_count) : ' ';
       cell.append(el('div', 'nb-prompt', `[${n}]:`), codeBlock(src, lang));
       const outs = Array.isArray(c.outputs) ? c.outputs : [];
@@ -2665,6 +2667,7 @@ function notebookView(nb) {
       box.append(cell);
     } else {
       const raw = el('div', 'nb-cell nb-raw');
+      raw.dataset.ptr = `/cells/${i}`;
       raw.append(el('pre', 'nb-out', src));
       box.append(raw);
     }
@@ -5181,15 +5184,34 @@ function syncTools(p) {
   syncRaw(p);
 }
 
+/** Where the last switch of Raw landed, and the place it left: switched back with nothing scrolled since, the view returns
+ *  there exactly, not to a place mapped twice. */
+let rawBack = null;
+const jsonBox = () => $('doc').querySelector('.json-tree');
+/** The JSON tree when it scrolls in its own box (a short window); else the page scrolls it. */
+const jsonScroller = () => { const t = jsonBox(); return t && t.scrollHeight > t.clientHeight + 1 ? t : null; };
 $('raw').addEventListener('click', () => {
   const k = rawKind(current);
   if (!k) return;
   if (editing) stopEditing();
-  const y = window.scrollY, from = isMarkdown(current) ? rawFrom() : null;
+  const y = window.scrollY, box = jsonBox(), boxTop = box ? box.scrollTop : 0, file = `${current.path}\n${k}`;
+  const back = rawBack && rawBack.file === file && rawBack.raw === rawOn(current) && rawBack.y === y && rawBack.boxTop === boxTop ? rawBack : null;
+  if (!readAnchor) takeAnchor();
+  const place = anchorPlace();
+  const from = back ? null : isMarkdown(current) ? rawFrom() : k === 'json' || k === 'notebook' ? jsonFrom() : null;
   if (rawKinds.has(k)) rawKinds.delete(k); else rawKinds.add(k);
   draw();
-  window.scrollTo(0, y);
-  if (!(from && rawLand(from))) takeAnchor();
+  if (back) {
+    window.scrollTo(0, back.left.y);
+    const b = jsonBox();
+    if (b) b.scrollTop = back.left.boxTop;
+    if (!holdPlace(back.left.place)) takeAnchor();
+  } else {
+    window.scrollTo(0, y);
+    if (!(from && (isMarkdown(current) ? rawLand(from) : jsonLand(from)))) takeAnchor();
+  }
+  const b = jsonBox();
+  rawBack = { file, raw: rawOn(current), y: window.scrollY, boxTop: b ? b.scrollTop : 0, left: { y, boxTop, place } };
   syncRaw(current);
 });
 
@@ -5214,6 +5236,89 @@ function rawFrom() {
   const f = a.node ? textBefore(a.el, a.node, a.o).length / Math.max(1, a.el.textContent.length) : 0;
   const from = lineOffset(text, s), to = lineOffset(text, e);
   return { want, at: from + Math.round(f * ((to < 0 ? text.length : to) - from)) };
+}
+/** Source lines of a JSON text's values by JSON pointer: the line a member's key, or an item, starts on. A scan of the text
+ *  as jsonLoose reads it (comments, trailing commas); made once per text. */
+let jsonLinesMemo = { text: null, at: null };
+function jsonLines(t) {
+  if (jsonLinesMemo.text === t) return jsonLinesMemo.at;
+  const at = new Map(), stack = [];
+  let line = 0, want = true, key = null, keyLine = 0;
+  const put = () => {
+    const c = stack[stack.length - 1], ptr = !c ? '' : c.arr ? `${c.ptr}/${c.n}` : `${c.ptr}/${ptrKey(key)}`;
+    if (!at.has(ptr)) at.set(ptr, c && !c.arr ? keyLine : line);
+    want = false;
+    return ptr;
+  };
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (ch === '\n') line++;
+    else if (ch === '/' && (t[i + 1] === '/' || t[i + 1] === '*')) {
+      const j = t[i + 1] === '/' ? t.indexOf('\n', i) : t.indexOf('*/', i + 2);
+      const end = j < 0 ? t.length : t[i + 1] === '/' ? j - 1 : j + 1;
+      for (let x = i; x <= end && x < t.length; x++) if (t[x] === '\n') line++;
+      i = end;
+    } else if (ch === '"') {
+      let j = i + 1;
+      while (j < t.length && t[j] !== '"' && t[j] !== '\n') j += t[j] === '\\' ? 2 : 1;
+      const c = stack[stack.length - 1];
+      if (c && !c.arr && !want) {
+        try { key = JSON.parse(t.slice(i, j + 1)); } catch (e) { key = t.slice(i + 1, j); }
+        keyLine = line;
+      } else put();
+      i = j;
+    } else if (ch === ':') want = true;
+    else if (ch === ',') { const c = stack[stack.length - 1]; if (c && c.arr) { c.n++; want = true; } else want = false; }
+    else if (ch === '{' || ch === '[') { const ptr = put(); stack.push({ arr: ch === '[', ptr, n: 0 }); want = ch === '['; }
+    else if (ch === '}' || ch === ']') { stack.pop(); want = false; }
+    else if (want && !/\s/.test(ch)) { put(); while (i + 1 < t.length && !/[\s,\]}\/]/.test(t[i + 1])) i++; }
+  }
+  jsonLinesMemo = { text: t, at };
+  return at;
+}
+/** The drawn rows of a JSON tree, or a notebook's cells, with their source lines, in document order. */
+function jsonParts() {
+  const lines = jsonLines(current.text);
+  return [...$('doc').querySelectorAll('.json-tree > .jt-row[data-ptr], .notebook > .nb-cell[data-ptr]')]
+    .map((e) => [e, lines.get(e.dataset.ptr)]).filter(([, l]) => l !== undefined);
+}
+/** The line at the top of a JSON file's tree, notebook or Raw view, as a source line and where it is drawn. The tree scrolls in
+ *  its own box: its top row is the one at the top of that box. */
+function jsonFrom() {
+  if (rawOn(current)) { const r = rawFrom(); return r && r.line !== undefined ? { want: r.want, line: r.line } : null; }
+  const parts = jsonParts(), box = jsonScroller(), top = box ? Math.max(box.getBoundingClientRect().top, barHeight()) : barHeight();
+  for (let i = 0; i < parts.length; i++) {
+    const [e, l] = parts[i], b = e.getBoundingClientRect();
+    if (b.bottom <= top) continue;
+    // Into a cell, the share of it above the top, as the same share of its lines.
+    const f = box ? 0 : Math.max(0, Math.min(1, (top - b.top) / Math.max(1, b.height)));
+    const next = i + 1 < parts.length ? parts[i + 1][1] : lineCount(current.text);
+    return { want: b.top + f * b.height, line: l + Math.floor(f * Math.max(0, next - l)) };
+  }
+  return null;
+}
+/** Draws the place jsonFrom took in the other view where it was: the source line in Raw, else the last row or cell starting
+ *  at or before it (the first of those on one line). */
+function jsonLand(r) {
+  if (rawOn(current)) {
+    const code = $('doc').querySelector('pre.code'), s = code ? lineOffset(current.text, r.line) : -1, at = s < 0 ? null : textAt(code, s);
+    const top = at ? charTop(at.node, at.o) : null;
+    if (top === null) return false;
+    anchorScroll(top - r.want);
+    anchorAt(at);
+    return true;
+  }
+  const parts = jsonParts();
+  let k = -1;
+  for (let i = 0; i < parts.length; i++) if (parts[i][1] <= r.line && (k < 0 || parts[i][1] > parts[k][1])) k = i;
+  if (k < 0) return false;
+  const [e, l] = parts[k], b = e.getBoundingClientRect(), box = jsonScroller();
+  if (box) { box.scrollTop += b.top - Math.max(r.want, box.getBoundingClientRect().top); return true; }
+  const next = k + 1 < parts.length ? parts[k + 1][1] : lineCount(current.text);
+  const f = next > l ? Math.min(1, (r.line - l) / (next - l)) : 0;
+  anchorScroll(b.top + f * b.height - r.want);
+  takeAnchor();
+  return true;
 }
 /** Draws the place rawFrom took in the other view where it was. */
 function rawLand(r) {

@@ -313,19 +313,39 @@ scan and the overview share one scan (3 deep, 5,000 entries, 250 ms), and the li
 
 ## Release signing
 
-Releases are signed with a self-signed certificate, "spacebar Release", rather than ad-hoc.
+From v0.3 releases are signed with spacebar's Apple Developer ID, notarized and stapled. v0.1.1 to v0.2.2 were signed with a
+self-signed certificate, "spacebar Release", and v0.1.0 ad-hoc. Local builds keep a self-signed identity (`.sign-id`).
 
 - An ad-hoc signature's designated requirement is its cdhash, so every build has a different signer as far as macOS is
   concerned. The sandbox container finding above means each update would then stop at the `secinitd` data-sharing prompt.
 - A certificate gives a designated requirement that names the certificate instead:
   `identifier "md.spacebar" and certificate leaf = H"<certificate SHA-1>"`. Two builds of different code signed with it have
-  different cdhashes and the same requirement (checked with `codesign -d -r-` on two local builds).
-- It is self-signed because there is no Apple Developer ID behind the project. Gatekeeper does not trust it, and it is not
-  meant to: the installer downloads with curl, which sets no quarantine flag. It only keeps the signer the same across releases.
-  The move from the ad-hoc v0.1.0 to it changes the signer once, so that one update may prompt.
-- The release workflow imports it from the `SPACEBAR_SIGNING_P12` and `SPACEBAR_SIGNING_PASSWORD` secrets into a temporary
-  keychain. Without them, as in a fork, it builds ad-hoc and warns. Each `spacebar.zip` also has a GitHub build provenance
-  attestation (`gh attestation verify spacebar.zip -R patebry/spacebar`).
+  different cdhashes and the same requirement (checked with `codesign -d -r-` on two local builds). A Developer ID's names
+  Apple's anchor and the Team ID (`anchor apple generic and identifier "md.spacebar" and ... certificate leaf[subject.OU] =
+  <Team ID>`), so it also outlives a renewed certificate.
+- "spacebar Release" was self-signed because there was no Developer ID. Gatekeeper did not trust it, and it was not meant to:
+  the installer downloads with curl, which sets no quarantine flag. It kept the signer the same across releases. The move
+  from it to the Developer ID changes the signer once, as the move from the ad-hoc v0.1.0 did, so the first update from 0.2
+  may prompt (not seen yet: there is no Developer ID build to update to).
+- Every executable is signed under the hardened runtime: the helper admits only peers that are, and notarization requires it
+  of all of them. None needs an entitlement for it. WebKit runs pages in its own processes, so nothing in spacebar's needs
+  JIT memory, and every library they load is Apple's, which library validation allows. `test/hardened/run.sh` signs the
+  extension's code with the built extension's entitlements, the sandbox and the runtime, and shows Markdown, JSON, a zip
+  (listed by the writer, also under the runtime), a PDF (in the page's PDF view; PDFKit reads it) and an image; `test/signing/run.sh` lists every Mach-O in a build
+  with its flags and entitlements. Quick Look itself cannot be asked to run a local build without registering it.
+- Notarization also needs a secure timestamp on every signature. `TIMESTAMP=1` asks Apple's timestamp server, and is the
+  default for a Developer ID identity; a local build with a self-signed one signs offline (`--timestamp=none`).
+- spacebar has no app group, keychain group, provisioning profile or launch constraint of its own, so a Team ID changes
+  none: macOS 15's rule that a group ID carry the Team ID does not apply. The helper's link pins the peer's leaf certificate,
+  read at run time from its own signature, so it holds for any identity that signs the whole build.
+- The release workflow imports the identity from the `SPACEBAR_SIGNING_P12` and `SPACEBAR_SIGNING_PASSWORD` secrets into a
+  temporary keychain and signs with the one identity it holds. From v0.3 that must be a Developer ID Application identity,
+  and `SPACEBAR_NOTARY_KEY`, `SPACEBAR_NOTARY_KEY_ID` and `SPACEBAR_NOTARY_ISSUER` (an App Store Connect API key) must be
+  set, or the release fails before the tests. It notarizes the zip, staples the app, zips it again, makes `spacebar.dmg`
+  from the stapled app (`scripts/dmg.sh`: the app and a link to /Applications), and signs, notarizes and staples that.
+  Before v0.3 it builds the zip alone, as before; without the secrets, as in a fork, ad-hoc with a warning. Each
+  `spacebar.zip` (and `spacebar.dmg`) has a GitHub build provenance attestation
+  (`gh attestation verify spacebar.zip -R patebry/spacebar`).
 
 ## Space helper
 
@@ -359,8 +379,8 @@ get a keylogger) and hosting the Quick Look extension remotely (no public API). 
   drop without the router, and it, `test/sidebar.py` and `test/viewerlatency/run.sh` send pinches, two-finger taps, scrolls
   and double-clicks through NSApp.sendEvent to a window that is never key.
 
-**Why the helper stays down after an update, and what brings it back.** The helper is signed without a Team ID (self-signed
-for development and for releases until there is a Developer ID). Background Task Management then ignores the plist's bundle
+**Why the helper stays down after an update, and what brings it back.** The helper is signed without a Team ID (self-signed,
+as every local build is; releases have one from v0.3). Background Task Management then ignores the plist's bundle
 identifiers ("Bundle identifiers from launchd plist ignored because the executable doesn't have a Team ID") and pins the
 agent's launch constraint (LWCR) to the helper's code, and it keeps that item across unregister and register: each
 `registerLaunchItem` logs "found existing item" with the old UUID. A new build has a new code hash (every change of source or
@@ -387,7 +407,8 @@ viewer:
 
 A different label or path per build would start a fresh item each time, but it would leave one Login Items entry per update
 and move the helper's Mach name, so it was not tried. A Developer ID build should let the item use bundle identifiers and
-keep one constraint across updates; that is untested until there is one. install.sh (and so the one-click update) starts
+keep one constraint across updates; that is untested until there is one. `--reregister` needs no change for it: it returns
+as soon as the helper answers, so with a Team ID it should finish at its first attempt. install.sh (and so the one-click update) starts
 `--reregister` in the background whenever the agent is loaded, and it retries with backoff for up to 10 minutes. The settings
 app runs it too, at launch and after three polls in a row without an answer while the helper should be running.
 

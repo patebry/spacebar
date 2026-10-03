@@ -177,6 +177,11 @@ App bundles and other packages, the top of a volume and system folders (`/System
 `~/Library`) keep Quick Look's usual preview. Click the folder's name at the top of the sidebar to see its overview again.
 Folder previews are on by default; `"folderMode": false` in settings.json turns them off.
 
+The sidebar lists a folder as Finder does: by name, folders among the files, unless Finder's own **Keep folders on top**
+(Finder › Settings › Advanced) is on, and hidden files while Finder shows them (⇧⌘.). The sidebar's sort menu can sort by date
+modified instead and keep folders first whatever Finder does; `"folderReadmeFirst": true` in settings.json puts a README
+at the top.
+
 While the sidebar shows, it takes the arrow keys as soon as the preview opens, so they move through spacebar's list rather
 than Finder's selection: ↑ and ↓ move through the files and open each one in spacebar (a CSV or an image too, which Quick
 Look would otherwise show in its own previewer), → and ← open and close folders, Home and End jump to the ends and Return
@@ -195,7 +200,7 @@ In a vault (a folder with `.obsidian` in it), and in any other folder:
   deep.
 - `> [!note] Title` callouts (note, tip, warning, danger, example, quote and the rest) are drawn as boxes, and `#tags` as pills.
 - A note you press Space on inside a vault shows the whole vault in the sidebar, so its links reach every note.
-- `.obsidian` is hidden, like every hidden file, unless you turn hidden files on.
+- `.obsidian` is hidden, like every hidden file, unless Finder shows hidden files or you turn them on in Settings › Advanced.
 
 [spacebar.patebryant.com](https://spacebar.patebryant.com)
 
@@ -222,8 +227,8 @@ preview and checking off tasks; hidden files in the sidebar; a custom theme and 
 **Reset to Defaults…**, which puts every key back, including the ones below, and leaves **Use spacebar for every file** as it is.
 
 Everything else is a key in `~/Library/Application Support/spacebar/settings.json`, which takes effect as soon as it is saved.
-spacebar keeps the file's `"version"` up to date; in a file you write yourself or link from elsewhere, set `"version": 4`, or
-an older version's defaults are applied to it (`stats` is read as off):
+spacebar keeps the file's `"version"` up to date; in a file you write yourself or link from elsewhere, set `"version": 5`, or
+an older version's defaults are applied to it (`stats` and `folderReadmeFirst` are read as off):
 
 | Key | Default | Values |
 |---|---|---|
@@ -239,7 +244,8 @@ an older version's defaults are applied to it (`stats` is read as off):
 | `math`, `mermaid` | `true` | |
 | `mdLinks` | `"preview"` | `"editor"` opens Markdown links in your editor |
 | `folderMode` | `true` | folder previews |
-| `folderReadmeFirst` | `true` | |
+| `foldersFirst` | `"finder"` (Finder's own setting) | `"always"`, `"never"`; also in the sidebar's sort menu |
+| `folderReadmeFirst` | `false` | a README at the top of the sidebar |
 | `sidebarKeys` | `true` | the sidebar takes the arrow keys as a preview opens |
 
 ## Install

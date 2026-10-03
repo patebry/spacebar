@@ -148,6 +148,12 @@ let probe = WKUserScript(source: """
 
 var settingsDict = Settings().dictionary
 
+/// As the extension's SettingsStore.listing: the settings with Finder's preferences (SPACEBAR_FINDER_PLIST here, else none).
+func listOptions() -> FolderListing.Options {
+    let s = Settings(dictionary: settingsDict)
+    return FolderListing.Options(sort: s.folderSort, foldersFirst: s.foldersFirst, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles, finder: FinderPrefs.read())
+}
+
 func load(_ patch: [String: Any]) -> Bool {
     settingsDict = Settings().dictionary.merging(patch) { _, new in new }
     gate.update(remoteImages: Settings(dictionary: settingsDict).remoteImages)
@@ -235,8 +241,7 @@ func renderOverview(_ r: FolderScan.Result, reason: String) {
 
 /// As the extension: one folder of the tree, listed with the settings and sent with sb.setFiles.
 func sendFolder(_ dir: String) {
-    let s = Settings(dictionary: settingsDict)
-    let l = FolderListing.list(dir, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles, pinned: currentFile)
+    let l = FolderListing.list(dir, root: root, options: listOptions(), pinned: currentFile)
     listings[dir] = l
     for f in l.folders { knownDirs.insert(f.path) }
     var p = l.payload(root: root)
@@ -274,7 +279,7 @@ func renderFile(_ file: String, listFirst: Bool = true) {
         let text = payload["text"] as! String
         currentBody = (text, false)
         if text.contains("[[") {
-            if linkIndex?.root != root { linkIndex = LinkIndex.build(root: root, showHidden: Settings(dictionary: settingsDict).showHiddenFiles) }
+            if linkIndex?.root != root { linkIndex = LinkIndex.build(root: root, showHidden: listOptions().showHidden) }
             let r = linkIndex!.payload(text: text, current: url.path)
             offered.formUnion(r.paths)
             payload["links"] = r.links
@@ -336,10 +341,10 @@ func startFolder(_ dir: String) -> String {
     offered = []
     linkIndex = nil
     scheme.fileRoot = root
-    let s = Settings(dictionary: settingsDict)
-    let l = FolderListing.list(root, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles)
+    let o = listOptions()
+    let l = FolderListing.list(root, root: root, options: o)
     if let first = FolderListing.firstDocument(l) { renderFile(first.path); return "file:" + first.path }
-    let r = FolderScan.scan(root, showHidden: s.showHiddenFiles)
+    let r = FolderScan.scan(root, showHidden: o.showHidden)
     if let md = r.bestMarkdown { offered.insert(md.path); renderFile(md.path); return "file:" + md.path }
     sendFolder(root)
     renderOverview(r, reason: "open")
@@ -410,7 +415,7 @@ rec.onMessage = { type, body in
     case "pdfRect":
         if currentKind == .pdf { pdfPane?.place(message: body, in: web) }
     case "overview":
-        DispatchQueue.main.async { renderOverview(FolderScan.scan(root, showHidden: Settings(dictionary: settingsDict).showHiddenFiles), reason: "overview") }
+        DispatchQueue.main.async { renderOverview(FolderScan.scan(root, showHidden: listOptions().showHidden), reason: "overview") }
     case "copy":
         // As the extension, with the clipboard left alone: what it would copy is recorded as "_copied".
         let selection = body["text"] as? String

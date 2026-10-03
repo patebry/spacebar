@@ -311,8 +311,10 @@ struct GestureRoute {
     /// event waits on the helper.
     static func tapOn(open: Bool, pinching: Bool) -> Bool { open || pinching }
 
+    /// Type 30 is also the window server's Dock control event, which carries the system's swipes (Spaces, Mission Control,
+    /// Launchpad, App Exposé) as subtype 23; only one marked as a zoom is a pinch.
     static func zooms(_ g: GestureEvent) -> Bool {
-        g.type == 30 || g.type == 32 || (g.type == 29 && (g.subtype == 8 || g.subtype == 22))
+        g.type == 32 || ((g.type == 29 || g.type == 30) && g.subtype == 8) || (g.type == 29 && g.subtype == 22)
     }
 
     static func smart(_ g: GestureEvent) -> Bool { g.type == 32 || (g.type == 29 && g.subtype == 22) }

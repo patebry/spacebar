@@ -442,6 +442,15 @@ check("gesture: an event without phases, inside the bounds: sent", once(zoom(0, 
 for (sub, n) in [(Int64(6), "scroll"), (5, "rotate"), (16, "swipe"), (0, "unknown")] {
     check("gesture: a \(n) gesture (subtype \(sub)) over the panel passes", once(zoom(2, subtype: sub)) == .pass)
 }
+for (sub, n) in [(Int64(23), "Dock swipe (Spaces, Mission Control, Launchpad)"), (0, "unmarked")] {
+    check("gesture: a \(n) control event (type 30, subtype \(sub)) over the panel passes",
+          [1, 2, 4, 0].allSatisfy { once(zoom($0, type: 30, subtype: sub)) == .pass })
+}
+do {
+    var r = GestureRoute()
+    _ = r.go(zoom(1))
+    check("a Dock swipe during a pinch taken by the panel passes", r.go(zoom(2, type: 30, subtype: 23)) == .pass && r.pinch != nil)
+}
 for t in [Int64(22), 31, 18, 19, 20] { check("gesture: event type \(t) over the panel passes", once(zoom(2, type: t)) == .pass) }
 do {
     var r = GestureRoute()

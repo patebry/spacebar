@@ -3,7 +3,10 @@
 being read through a reflow and through each frame of the sidebar's animation, the folder grid's place after Back, rows and the
 edit caret clear of the toolbar row and the line numbers, the TOC's own scroll, the boxes' scroll through a redraw of the same
 file, an info card under a late thumbnail, the line being read as KaTeX draws late, and the TOC's
-column and scroll between notes with and without one. This WebKit has no layout-shift entries, so positions are read before and after
+column and scroll between notes with and without one. Also the line at the top of every view of text (wrapped code and text, a
+notebook, Raw Markdown, a long paragraph) through a reflow, a setting's redraw, a change on disk and Raw turned on and off; the
+caret of a Markdown block being typed into; the folder grid's selected tile through a change of width; the windowed lists and a
+fitted image's zoom label through a resize; and Raw Markdown's column. This WebKit has no layout-shift entries, so positions are read before and after
 each action, and per frame where the change animates."""
 import base64, json, os, shutil, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -58,11 +61,11 @@ def reading_position(page, check, out):
     # Per frame, after the page's own resize handling and before paint (an observer made after the page's runs after it).
     at30()
     page.js(f"""const h = {HEAD30}, s = document.getElementById('sidebar'), W = window.__frames = [];
-      new ResizeObserver(() => W.push([Math.round(s.getBoundingClientRect().width), Math.round(h.getBoundingClientRect().top)]))
+      (window.__ro = new ResizeObserver(() => W.push([Math.round(s.getBoundingClientRect().width), Math.round(h.getBoundingClientRect().top)])))
         .observe(document.getElementById('doc'));
       document.getElementById('side-toggle').click(); return 1;""")
     page.cmd('@wait:0.6')
-    f = page.js('return window.__frames')
+    f = page.js('window.__ro.disconnect(); return window.__frames')
     tops = [t for _, t in f]
     widths = {w for w, _ in f}
     check(len(widths) >= 4 and f[0][0] - f[-1][0] >= 150 and max(tops) - min(tops) <= 2,
@@ -273,14 +276,14 @@ def math_and_toc(page, check, out):
       tocTop: document.getElementById('toc').scrollTop }};""")
     # Per frame, after the page's own resize handling and before paint (an observer made after the page's runs after it).
     page.js(f"""const h = {H}, W = window.__mt = [];
-      new ResizeObserver(() => W.push(Math.round(h.getBoundingClientRect().top))).observe(document.getElementById('doc'));
+      (window.__ro = new ResizeObserver(() => W.push(Math.round(h.getBoundingClientRect().top)))).observe(document.getElementById('doc'));
       window.__releaseKatex(); return 1;""")
     page.cmd('@wait:1.2')
     after = page.js(f"""const t = document.getElementById('toc'), a = t.querySelector('a.active'), r = a && a.getBoundingClientRect(), tr = t.getBoundingClientRect();
       return {{ top: Math.round({H}.getBoundingClientRect().top), y: Math.round(scrollY), h: document.scrollingElement.scrollHeight,
       holders: document.querySelectorAll('#doc span.tex:empty').length, drawn: document.querySelectorAll('#doc .katex').length,
       tocTop: t.scrollTop, active: a && a.textContent, activeVisible: !!r && r.top >= Math.max(tr.top, 40) && r.bottom <= tr.bottom }};""")
-    tops = page.js('return window.__mt')
+    tops = page.js('window.__ro.disconnect(); return window.__mt')
     check(gated == 'gated' and before['holders'] > 100 and before['drawn'] == 0 and after['holders'] == 0 and after['h'] - before['h'] > 200
           and abs(after['top'] - before['top']) <= 2 and max(tops) - min(tops) <= 2
           and after['active'] and after['active'].startswith('Section 2') and after['activeVisible'],
@@ -315,6 +318,311 @@ def math_and_toc(page, check, out):
     page.cmd('@size:1100x760')
 
 
+# The character at the start of the line at the top of the page, right of a code view's line numbers, as a text offset in #doc;
+# WHERE finds it again (by that offset once a redraw replaced its node) and reports its top.
+MARK = """const bar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bar-h')) || 40, d = document.getElementById('doc');
+  const pre = d.querySelector('.code-view > pre.code'), g = pre && pre.parentElement.querySelector('.gutter');
+  const x = pre ? Math.max(pre.parentElement.getBoundingClientRect().left, pre.getBoundingClientRect().left + parseFloat(getComputedStyle(pre).paddingLeft),
+    g && g.offsetWidth ? g.getBoundingClientRect().right : 0) + 6 : d.getBoundingClientRect().left + parseFloat(getComputedStyle(d).paddingLeft) + 6;
+  const r = document.caretRangeFromPoint(x, bar + 10); if (!r || r.startContainer.nodeType !== 3) return null;
+  const all = document.createRange(); all.selectNodeContents(d); all.setEnd(r.startContainer, r.startOffset);
+  window.__off = all.toString().length; window.__node = r.startContainer; window.__o = r.startOffset;
+  const k = document.createRange(); k.setStart(r.startContainer, r.startOffset); k.setEnd(r.startContainer, Math.min(r.startContainer.length, r.startOffset + 1));
+  return { off: window.__off, top: Math.round(k.getClientRects()[0].top), y: Math.round(scrollY), ch: r.startContainer.data.slice(r.startOffset, r.startOffset + 12) };"""
+WHERE = """if (!window.__node || !window.__node.isConnected) {
+    const w = document.createTreeWalker(document.getElementById('doc'), NodeFilter.SHOW_TEXT); let n = 0, node;
+    while ((node = w.nextNode())) { if (n + node.length > window.__off) { window.__node = node; window.__o = window.__off - n; break; } n += node.length; } }
+  const k = document.createRange(); k.setStart(window.__node, window.__o); k.setEnd(window.__node, Math.min(window.__node.length, window.__o + 1));
+  return { top: Math.round(k.getClientRects()[0].top), y: Math.round(scrollY), ch: window.__node.data.slice(window.__o, window.__o + 12) };"""
+
+
+def reflow_every_view(page, check, out):
+    """N2, N16: wrapped code and text, a notebook, Raw Markdown and a long paragraph of Markdown keep the line at the top through the
+    sidebar, the text size, the panel's width and the wrap setting."""
+    long_line = lambda i: f'line {i}: ' + ' '.join(f'word{k}' for k in range(60))
+    files = {
+        'wrapped.ts': ('\n'.join(f'const v{i} = "{long_line(i)}";' for i in range(400)) + '\n', {'wrapCode': True}),
+        'wrapped.txt': ('\n'.join(long_line(i) for i in range(400)) + '\n', {'wrapText': True}),
+        'nb.ipynb': (json.dumps({'nbformat': 4, 'nbformat_minor': 5, 'metadata': {}, 'cells': [
+            {'cell_type': 'markdown', 'metadata': {}, 'source': [f'## Cell {i}\n', 'Words that wrap at every width of the column. ' * 12]} for i in range(80)]}), {}),
+        'note.md': (''.join(f'## Section {i}\n\n' + 'Words that wrap at every width of the column. ' * 25 + '\n\n' for i in range(60)), {}),
+    }
+    for n, (t, _) in files.items():
+        open(os.path.join(out, n), 'w').write(t)
+    page.cmd('@size:1100x760')
+    page.cmd('@root:' + out)
+    actions = [('sidebar hidden', {'sidebarCollapsed': True}, {'sidebarCollapsed': False}),
+               ('text size 19', {'fontSize': 19}, {'fontSize': 15}),
+               ('panel 1100 to 820', '@size:820x760', '@size:1100x760')]
+    act = lambda a: page.cmd(a if isinstance(a, str) else '@apply:' + json.dumps(a))
+
+    def run(acts, at=0.5):
+        res = {}
+        for label, do, undo in acts:
+            page.cmd(f'@eval:window.scrollTo(0, document.scrollingElement.scrollHeight * {at}); 0')
+            page.cmd('@wait:0.3')
+            b = page.js(MARK)
+            act(do)
+            page.cmd('@wait:0.6')
+            a = page.js(WHERE)
+            res[label] = (a['top'] - b['top']) if a and b and a['ch'] == b['ch'] else [b, a]
+            act(undo)
+            page.cmd('@wait:0.4')
+        return res
+
+    moved = {}
+    for n, (_, s) in files.items():
+        page.apply(**{'wrapCode': False, 'wrapText': False, **s})
+        page.render(os.path.join(out, n))
+        page.cmd('@wait:0.4')
+        acts = actions + ([('wrap off (a redraw)', {'wrapCode': False, 'wrapText': False}, s)] if s else [])
+        # In the note, the line at the top is inside a long paragraph (N16).
+        moved[n] = run(acts, 0.5 if n != 'note.md' else 0.503)
+    page.apply(wrapCode=False, wrapText=False, wrapMarkdown=True)
+    page.render(os.path.join(out, 'note.md'))
+    page.cmd('@wait:0.3')
+    page.cmd("@eval:document.getElementById('raw').click(); 0")
+    page.cmd('@wait:0.3')
+    moved['note.md, Raw'] = run(actions)
+    page.cmd("@eval:document.getElementById('raw').click(); 0")
+    check(all(isinstance(d, int) and abs(d) <= 2 for r in moved.values() for d in r.values()),
+          'reading position: wrapped code and text, a notebook, Raw Markdown and a long paragraph keep the line at the top through '
+          'the sidebar, the text size, the panel and the wrap setting', json.dumps(moved))
+
+    # Per frame, after the page's own resize handling and before paint.
+    page.apply(wrapCode=True)
+    page.render(os.path.join(out, 'wrapped.ts'))
+    page.cmd('@wait:0.4')
+    page.cmd('@eval:window.scrollTo(0, document.scrollingElement.scrollHeight * 0.5); 0')
+    page.cmd('@wait:0.3')
+    b = page.js(MARK)
+    page.js("""const k = document.createRange(), s = document.getElementById('sidebar'), W = window.__frames = [];
+      (window.__ro = new ResizeObserver(() => { k.setStart(window.__node, window.__o); k.setEnd(window.__node, window.__o + 1);
+        W.push([Math.round(s.getBoundingClientRect().width), Math.round(k.getClientRects()[0].top)]); })).observe(document.getElementById('doc'));
+      document.getElementById('side-toggle').click(); return 1;""")
+    page.cmd('@wait:0.6')
+    f = page.js('window.__ro.disconnect(); return window.__frames')
+    tops = [t for _, t in f]
+    check(b and len({w for w, _ in f}) >= 4 and f[0][0] - f[-1][0] >= 150 and max(tops) - min(tops) <= 2 and abs(tops[-1] - b['top']) <= 2,
+          'reading position: wrapped code holds its line on every frame of the sidebar closing', json.dumps([b and b['top'], f]))
+    page.cmd("@eval:document.getElementById('side-toggle').click(); 0")
+    page.cmd('@wait:0.5')
+    page.apply(wrapCode=False)
+
+
+def redraw_keeps_line(page, check, out):
+    """N10, N11: the front-matter setting and a change on disk above the line being read keep that line, in Markdown and in code."""
+    fm = os.path.join(out, 'fm.md')
+    open(fm, 'w').write('---\ntitle: A note\ntags: [a, b, c]\nauthor: someone\n---\n'
+                        + ''.join(f'## Section {i}\n\n' + 'Words that wrap at every width of the column. ' * 4 + '\n\n' for i in range(80)))
+    H = "[...document.querySelectorAll('#doc h2')].find((x) => x.textContent === 'Section 40')"
+    page.cmd('@size:1100x760')
+    page.cmd('@root:' + out)
+    page.apply(frontMatter='table')
+    page.render(fm)
+    page.cmd('@wait:0.4')
+    top = lambda: page.js(f'return Math.round({H}.getBoundingClientRect().top)')
+
+    def at40():
+        page.cmd(f"@eval:{H}.scrollIntoView({{ block: 'start' }}); 0")
+        page.cmd('@wait:0.3')
+        return top()
+
+    moved = {}
+    for label, to in [('front matter table to hide', 'hide'), ('hide to raw', 'raw'), ('raw to table', 'table')]:
+        b = at40()
+        page.apply(frontMatter=to)
+        page.cmd('@wait:0.4')
+        moved[label] = top() - b
+    page.apply(frontMatter='hide')
+    for label, edit in [('5 lines inserted near the top on disk', lambda t: t.replace('## Section 1\n', '## Section 1\n\nInserted.\n\nAnother.\n\nThird.\n\n', 1)),
+                        ('a paragraph appended on disk', lambda t: t + '\n\nAppended paragraph.\n')]:
+        b = at40()
+        text = page.js('return current.text')
+        page.cmd('@eval:sb.render({ ...current, text: ' + json.dumps(edit(text)) + ' }); 0')
+        page.cmd('@wait:0.4')
+        moved[label] = top() - b
+    page.apply(frontMatter='table')
+    ts = os.path.join(out, 'grow.ts')
+    open(ts, 'w').write(''.join(f'const v{i} = {i};\n' for i in range(800)))
+    page.render(ts)
+    page.cmd('@wait:0.4')
+    page.cmd('@eval:window.scrollTo(0, 6000); 0')
+    page.cmd('@wait:0.3')
+    LINE = """const code = document.querySelector('#doc pre.code'), t = code.textContent, n = NTH;
+      let at = 0; for (let k = 0; k < n; k++) at = t.indexOf('\\n', at) + 1;
+      const w = document.createTreeWalker(code, NodeFilter.SHOW_TEXT); let c = 0, node;
+      while ((node = w.nextNode()) && c + node.length <= at) c += node.length;
+      const k = document.createRange(); k.setStart(node, at - c); k.setEnd(node, at - c + 1); return Math.round(k.getClientRects()[0].top);"""
+    b = page.js(MARK)
+    line = page.js('const code = document.querySelector("#doc pre.code"), r = document.createRange(); r.selectNodeContents(code); '
+                   'r.setEnd(window.__node, window.__o); return r.toString().split("\\n").length - 1;')
+    page.cmd('@eval:sb.render({ ...current, text: "// header line\\n".repeat(25) + current.text }); 0')
+    page.cmd('@wait:0.3')
+    a = page.js(LINE.replace('NTH', str(line + 25)))
+    moved['25 lines added at the top of code on disk'] = a - b['top'] if b and line > 100 else [b, line]
+    check(all(isinstance(d, int) and abs(d) <= 2 for d in moved.values()),
+          'reading position: the front-matter setting and a change on disk above the line being read keep that line', json.dumps(moved))
+
+
+def markdown_caret(page, check, out):
+    """N1: Return pressed in a Markdown block near the window's bottom keeps the caret above the bottom edge."""
+    md = os.path.join(out, 'paras.md')
+    open(md, 'w').write(''.join(f'Paragraph {i} with some words in it.\n\n' for i in range(80)))
+    page.cmd('@size:1100x760')
+    page.cmd('@root:' + out)
+    page.render(md)
+    page.cmd('@wait:0.4')
+    page.cmd("@eval:const p = [...document.querySelectorAll('#doc > p')][20]; window.scrollBy(0, p.getBoundingClientRect().bottom - (innerHeight - 40)); 0")
+    page.cmd('@wait:0.3')
+    click(page, '#doc > p:nth-of-type(21)')
+    page.cmd('@wait:0.3')
+    st = page.js('return editing && { start: editing.start, lines: editing.lines, text: editing.text, ver: docVer, seq: editing.seq }')
+    CARET = """const c = document.querySelector('#doc .md-editing .caret'), r = c && c.getBoundingClientRect();
+      return r && [Math.round(r.bottom), r.bottom <= innerHeight - 6, Math.round(scrollY)];"""
+    seen = []
+    if st:
+        text, ver, lines = st['text'], st['ver'], st['lines']
+        for i in range(8):
+            nt = text + '\n' + f'new line {i}'
+            u = {'seq': st['seq'], 'at': st['start'], 'old': lines, 'text': nt, 'ver': ver + 1, 'selStart': len(nt), 'selLen': 0, 'keyTime': 0}
+            page.cmd('@eval:sb.editUpdate(' + json.dumps(u) + '); 0')
+            page.cmd('@wait:0.1')
+            text, ver, lines = nt, ver + 1, len(nt.split('\n'))
+            seen.append(page.js(CARET))
+        page.cmd('@eval:sb.editEnd({}); 0')
+    check(len(seen) == 8 and all(c and c[1] for c in seen), 'editing: Return in a Markdown block near the bottom keeps the caret on screen',
+          json.dumps(seen))
+
+
+def grid_width(page, check, out):
+    """N3: the folder grid keeps its selected tile where it was when the sidebar or the panel changes its width."""
+    photos = os.path.join(out, 'photos')
+    os.makedirs(photos)
+    for i in range(300):
+        shutil.copy(os.path.join(ROOT, 'test', 'fixtures', 'img.png'), os.path.join(photos, f'p{i:03d}.png'))
+    page.cmd('@size:1100x760')
+    page.cmd('@root:')
+    page.cmd('@folder:' + photos)
+    page.cmd('@wait:0.8')
+    SEL = """const s = document.querySelector('#doc .ov-grid a.gt.sel'), r = s && s.getBoundingClientRect();
+      return { sel: s && s.dataset.path.split('/').pop(), top: r && Math.round(r.top), cols: grid.cols, rowH: grid.rowH };"""
+    for _ in range(15):
+        page.cmd("@eval:gridKey('ArrowDown'); 0")
+    put = "@eval:{ const s = document.querySelector('#doc .ov-grid a.gt.sel'); window.scrollBy(0, s.getBoundingClientRect().top - 250); } 0"
+    page.cmd(put)
+    page.cmd('@wait:0.3')
+    res = {}
+    for label, do, undo in [('sidebar hidden', '@apply:{"sidebarCollapsed": true}', '@apply:{"sidebarCollapsed": false}'),
+                            ('panel 1100 to 760', '@size:760x760', '@size:1100x760'),
+                            ('panel 1100 to 1400', '@size:1400x760', '@size:1100x760')]:
+        b = page.js(SEL)
+        page.cmd(do)
+        page.cmd('@wait:0.6')
+        a = page.js(SEL)
+        res[label] = [b, a]
+        page.cmd(undo)
+        page.cmd('@wait:0.6')
+        page.cmd(put)
+        page.cmd('@wait:0.3')
+    check(all(a['sel'] == b['sel'] and a['top'] is not None and a['cols'] != b['cols'] and abs(a['top'] - b['top']) <= a['rowH'] / 2
+              for b, a in res.values()), 'folder grid: the selected tile stays in place when the width changes the columns', json.dumps(res))
+    page.cmd('@root:')
+
+
+def windows_on_resize(page, check, out):
+    """N5: the windowed CSV table and the sidebar's list draw the rows a taller panel shows, with no scroll."""
+    for i in range(1500):
+        open(os.path.join(out, f'n{i:04d}.txt'), 'w').write('x\n')
+    csv = os.path.join(out, 'aaa-rows.csv')
+    open(csv, 'w').write('id,name,value\n' + ''.join(f'{i},name {i},{i * 3}\n' for i in range(20000)))
+    page.cmd('@size:1100x500')
+    page.cmd('@root:' + out)
+    page.render(csv)
+    page.cmd('@wait:0.6')
+    GEO = """const s = document.querySelector('#doc .csv-scroll'), sr = s.getBoundingClientRect(), rows = [...s.querySelectorAll('tbody tr:not(.pad)')];
+      const last = rows[rows.length - 1].getBoundingClientRect(), l = document.getElementById('side-list'), lr = l.getBoundingClientRect();
+      const srows = [...l.querySelectorAll('a.row')], sl = srows[srows.length - 1].getBoundingClientRect();
+      return { csvBlank: Math.max(0, Math.round(Math.min(sr.bottom, innerHeight) - last.bottom)), sideBlank: Math.max(0, Math.round(lr.bottom - sl.bottom)) };"""
+    page.cmd("@eval:document.querySelector('#doc .csv-scroll').scrollTop = 200000; document.getElementById('side-list').scrollTop = 12000; 0")
+    page.cmd('@wait:0.4')
+    before = page.js(GEO)
+    page.cmd('@size:1100x1400')
+    page.cmd('@wait:0.6')
+    after = page.js(GEO)
+    check(before == {'csvBlank': 0, 'sideBlank': 0} and after == before,
+          'windowed lists: the CSV table and the sidebar draw the rows a taller panel shows', json.dumps([before, after]))
+    page.cmd('@size:1100x760')
+    page.cmd('@root:')
+
+
+def raw_toggle(page, check, out):
+    """N6, N14: Raw on a long note shows the source of the section being read, Raw off returns to it with the code block's and
+    the table's sideways scroll, and Raw's source column is as wide as any code view's (no TOC column kept for it)."""
+    md = '# Doc\n\n```js\nconst long = "' + 'y' * 600 + '";\n```\n\n| ' + ' | '.join(f'col {i} ' + 'w' * 30 for i in range(12)) + ' |\n|' + '---|' * 12 + \
+         '\n| ' + ' | '.join('v' for _ in range(12)) + ' |\n\n' + ''.join(f'## Section {i}\n\n- item one\n- item two\n- item three\n\n> a quote\n\nShort line.\n\n' for i in range(60))
+    note = os.path.join(out, 'note.md')
+    open(note, 'w').write(md)
+    want = md.split('\n').index('## Section 30') + 1
+    page.cmd('@size:1100x760')
+    page.cmd('@root:' + out)
+    page.render(note)
+    page.cmd('@wait:0.4')
+    H = "[...document.querySelectorAll('#doc h2')].find((x) => x.textContent === 'Section 30')"
+    page.cmd(f"@eval:{H}.scrollIntoView({{ block: 'start' }}); document.querySelector('#doc pre:not(.mermaid)').scrollLeft = 900; document.querySelector('#doc > table').scrollLeft = 300; 0")
+    page.cmd('@wait:0.3')
+    before = page.js(f'return Math.round({H}.getBoundingClientRect().top)')
+    page.cmd("@eval:document.getElementById('raw').click(); 0")
+    page.cmd('@wait:0.3')
+    TOPLINE = """const cv = document.querySelector('#doc .code-view'), code = cv.querySelector('pre.code'), bar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bar-h'));
+      const r = document.caretRangeFromPoint(code.getBoundingClientRect().left + 30, bar + 12), pre = document.createRange();
+      pre.selectNodeContents(code); pre.setEnd(r.startContainer, r.startOffset); return pre.toString().split('\\n').length;"""
+    raw = page.js(TOPLINE)
+    page.cmd("@eval:document.getElementById('raw').click(); 0")
+    page.cmd('@wait:0.3')
+    back = page.js(f"return [Math.round({H}.getBoundingClientRect().top), document.querySelector('#doc pre:not(.mermaid)').scrollLeft, document.querySelector('#doc > table').scrollLeft]")
+    check(abs(raw - want) <= 2 and abs(back[0] - before) <= 2 and back[1:] == [900, 300],
+          'Raw: on shows the source of the section being read; off returns to it with the boxes\' sideways scroll',
+          json.dumps({'source line': want, 'raw top line': raw, 'heading before': before, 'raw off [heading, code block, table]': back}))
+
+    W = """const c = document.querySelector('#doc .code-view').getBoundingClientRect(); return [Math.round(c.left), Math.round(c.width)];"""
+    ts = os.path.join(out, 'code.ts')
+    open(ts, 'w').write(''.join(f'const v{i} = "' + 'w ' * 200 + '";\n' for i in range(20)))
+    page.cmd('@size:1300x760')
+    page.render(note)
+    page.cmd('@wait:0.3')
+    page.cmd("@eval:document.getElementById('raw').click(); 0")
+    page.cmd('@wait:0.3')
+    rawcol = page.js(W)
+    page.cmd("@eval:document.getElementById('raw').click(); 0")
+    page.render(ts)
+    page.cmd('@wait:0.3')
+    code = page.js(W)
+    check(rawcol == code, "Raw: Markdown's source is drawn as wide as any code view, with no empty TOC column", json.dumps({'raw': rawcol, 'code': code}))
+    page.cmd('@size:1100x760')
+
+
+def zoom_label(page, check, out):
+    """N13: a fitted image's zoom label follows the stage when the sidebar hides or its width changes."""
+    img = os.path.join(out, 'wide.png')
+    open(img, 'wb').write(make_png(1600, 1000, (40, 120, 200)))
+    page.cmd('@size:1100x760')
+    page.cmd('@root:' + out)
+    page.render(img)
+    page.cmd('@wait:0.6')
+    Z = "const i = document.querySelector('#doc .img-stage img'); return [document.querySelector('#kind .img-zoom').textContent, Math.round(100 * i.getBoundingClientRect().width / i.naturalWidth) + '%'];"
+    res = {'fitted': page.js(Z)}
+    page.apply(sidebarCollapsed=True)
+    page.cmd('@wait:0.5')
+    res['sidebar hidden'] = page.js(Z)
+    page.apply(sidebarCollapsed=False, sidebarWidth=160)
+    page.cmd('@wait:0.5')
+    res['sidebar at 160'] = page.js(Z)
+    page.apply(sidebarWidth=240)
+    page.cmd('@wait:0.4')
+    check(all(a == b for a, b in res.values()) and res['fitted'] != res['sidebar hidden'],
+          "image: a fitted image's zoom label follows the sidebar's width", json.dumps(res))
+
 
 def main():
     results = []
@@ -325,7 +633,8 @@ def main():
 
     page = Page()
     try:
-        for i, part in enumerate([reading_position, grid_back, under_the_bar, toc_scroll, redraw_keeps_scroll, late_thumbnail, math_and_toc]):
+        for i, part in enumerate([reading_position, grid_back, under_the_bar, toc_scroll, redraw_keeps_scroll, late_thumbnail, math_and_toc,
+                                   reflow_every_view, redraw_keeps_line, markdown_caret, grid_width, windows_on_resize, raw_toggle, zoom_label]):
             out = os.path.join(page.out, f'part{i}')
             os.makedirs(out)
             part(page, check, out)

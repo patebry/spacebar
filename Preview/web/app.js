@@ -1477,6 +1477,14 @@ function holdAnchor() {
   anchorScroll(now - (a.top - (window.scrollY - a.y)));
   Object.assign(a, { top: anchorTop(a), y: window.scrollY });
 }
+/** Runs `redraw`, which draws the text of `boxes` again, unchanged, in `into`: the anchor in that text is kept on its character. */
+function keepAnchor(boxes, into, redraw) {
+  const a = readAnchor, k = a && a.node ? boxes.findIndex((b) => b.contains(a.node)) : -1;
+  const off = k < 0 ? -1 : boxes.slice(0, k).reduce((n, b) => n + b.textContent.length, 0) + textBefore(boxes[k], a.node, a.o).length;
+  redraw();
+  const at = off < 0 ? null : textAt(into, off);
+  if (at) Object.assign(a, { node: at.node, o: at.o });
+}
 /** Anchors on the character at `at`, just drawn where the reader was. */
 function anchorAt(at) {
   let el = at.node.parentElement;
@@ -2311,15 +2319,18 @@ function textParts(code, text, lang, sized) {
   code.classList.toggle('sized', blocks && sized);
   for (const p of parts) {
     p.node = el('span', blocks ? 'tpart' : '', p.text);
-    if (blocks && sized) {
-      const lines = p.text.split('\n');
-      if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
-      p.node.style.setProperty('--n', lines.length);
-      p.node.style.setProperty('--w', lines.reduce((w, l) => Math.max(w, l.length), 0));
-    }
+    if (blocks && sized) partSize(p.node, p.text);
     code.append(p.node);
   }
   return parts;
+}
+
+/** The size an unwrapped piece is skipped at off screen: its lines and its longest line. */
+function partSize(node, text) {
+  const lines = text.split('\n');
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+  node.style.setProperty('--n', lines.length);
+  node.style.setProperty('--w', lines.reduce((w, l) => Math.max(w, l.length), 0));
 }
 
 /** Highlights the pieces a few ms at a time between tasks, the ones on screen first. A piece is highlighted from the
@@ -2331,9 +2342,13 @@ function highlightParts(pre, code, parts) {
   const put = (from, to) => {
     const src = parts.slice(from, to + 1).map((p) => p.text).join('');
     const res = hljs.highlight(src, { language: parts[from].lang, ignoreIllegals: true });
-    const node = parts[from].node;
-    node.replaceChildren(DOMPurify.sanitize(res.value, { ALLOWED_TAGS: ['span'], ALLOWED_ATTR: ['class'], RETURN_DOM_FRAGMENT: true }));
-    for (let i = from + 1; i <= to; i++) if (parts[i].node !== node) parts[i].node.remove();
+    const node = parts[from].node, was = [...new Set(parts.slice(from, to + 1).map((p) => p.node))];
+    keepAnchor(was, node, () => {
+      node.replaceChildren(DOMPurify.sanitize(res.value, { ALLOWED_TAGS: ['span'], ALLOWED_ATTR: ['class'], RETURN_DOM_FRAGMENT: true }));
+      for (const n of was) if (n !== node) n.remove();
+    });
+    // A run of pieces is now one block, skipped off screen at the size of all its lines.
+    if (was.length > 1 && code.classList.contains('sized')) partSize(node, src);
     for (let i = from; i <= to; i++) Object.assign(parts[i], { node, lit: true, root: true });
     parts[to].root = !res._top || !res._top.parent;
   };

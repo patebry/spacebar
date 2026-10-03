@@ -6,7 +6,9 @@ file, an info card under a late thumbnail, the line being read as KaTeX draws la
 column and scroll between notes with and without one. Also the line at the top of every view of text (wrapped code and text, a
 notebook, Raw Markdown, a long paragraph) through a reflow, a setting's redraw, a change on disk and Raw turned on and off; the
 caret of a Markdown block being typed into; the folder grid's selected tile through a change of width; the windowed lists and a
-fitted image's zoom label through a resize; and Raw Markdown's column. This WebKit has no layout-shift entries, so positions are read before and after
+fitted image's zoom label through a resize; and Raw Markdown's column. Across the anchor and the chrome's work: the line
+being read as a long file's highlight pieces land (and through the sidebar while they land), through a long note's held
+column width, after a change on disk is highlighted again, and after Raw is turned on. This WebKit has no layout-shift entries, so positions are read before and after
 each action, and per frame where the change animates."""
 import base64, json, os, shutil, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -624,6 +626,201 @@ def zoom_label(page, check, out):
           "image: a fitted image's zoom label follows the sidebar's width", json.dumps(res))
 
 
+# The character at the start of the line at the top, as an offset in the code view's text (or #doc's), held by that offset when a
+# highlight piece landing replaces its node. FOLLOW samples its top on every frame after the page's own correction (an observer
+# made after the page's, ticked each frame so frames where nothing resizes are sampled too), with the pieces still plain and
+# whether the column's width is held. STOP ends it and returns the samples.
+MARK_BOX = """const bar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bar-h')) || 40, d = document.getElementById('doc');
+  const pre = d.querySelector('.code-view > pre.code'), g = pre && pre.parentElement.querySelector('.gutter'), box = pre || d;
+  const x = pre ? Math.max(pre.parentElement.getBoundingClientRect().left, pre.getBoundingClientRect().left + parseFloat(getComputedStyle(pre).paddingLeft),
+    g && g.offsetWidth ? g.getBoundingClientRect().right : 0) + 6 : d.getBoundingClientRect().left + parseFloat(getComputedStyle(d).paddingLeft) + 6;
+  let r = null;  // the first row down with text: a blank line has none
+  for (let y = bar + 10; y < bar + 80 && !(r && r.startContainer.nodeType === 3 && box.contains(r.startContainer)); y += 4) r = document.caretRangeFromPoint(x, y);
+  if (!r || r.startContainer.nodeType !== 3 || !box.contains(r.startContainer)) return null;
+  const all = document.createRange(); all.selectNodeContents(box); all.setEnd(r.startContainer, r.startOffset);
+  const before = all.toString();
+  window.__box = pre ? '#doc .code-view > pre.code' : '#doc'; window.__off = before.length; window.__node = r.startContainer; window.__o = r.startOffset;
+  window.__at = () => { if (!window.__node || !window.__node.isConnected) {
+      const w = document.createTreeWalker(document.querySelector(window.__box), NodeFilter.SHOW_TEXT); let n = 0, node;
+      while ((node = w.nextNode())) { if (n + node.length > window.__off) { window.__node = node; window.__o = window.__off - n; break; } n += node.length; } }
+    const k = document.createRange(); k.setStart(window.__node, window.__o); k.setEnd(window.__node, Math.min(window.__node.length, window.__o + 1));
+    return Math.round(k.getClientRects()[0].top); };
+  window.__plain = () => { const c = document.querySelector('#doc pre.code > code.parts');
+    return c ? [...c.children].filter((n) => n.classList.contains('tpart') && n.childNodes.length === 1 && n.firstChild.nodeType === 3).length : -1; };
+  return { off: window.__off, top: window.__at(), line: pre ? before.split('\\n').length - 1 : -1, plain: window.__plain(), y: Math.round(scrollY) };"""
+FOLLOW = """const tick = document.createElement('div'), S = window.__samples = []; let on = true, n = 0;
+  tick.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;pointer-events:none;visibility:hidden';
+  document.body.append(tick);
+  window.__ro = new ResizeObserver(() => S.push([window.__at(), window.__plain(), document.getElementById('doc').style.width ? 1 : 0]));
+  window.__ro.observe(tick); window.__ro.observe(document.getElementById('doc'));
+  const f = () => { if (!on) return; tick.style.width = (1 + (++n % 2)) + 'px'; requestAnimationFrame(f); };
+  requestAnimationFrame(f);
+  window.__stop = () => { on = false; window.__ro.disconnect(); tick.remove(); return S; };"""
+STOP = 'return window.__stop()'
+LANDED = 'return window.__plain()'
+# MARK_BOX's result kept as `m`, so more can run in the same task before it is returned.
+MARK_M = MARK_BOX.replace('return {', 'const m = {', 1) + ';'
+
+
+def wait_landed(page, limit=40):
+    """Waits for every highlight piece to land (0), or the code to have no pieces (-1)."""
+    for _ in range(limit):
+        if page.js(LANDED) <= 0:
+            return
+        page.cmd('@wait:0.1')
+
+
+def held(b, frames, final, tol=2):
+    tops = [t for t, _, _ in frames]
+    return bool(b) and len(frames) >= 3 and max(tops) - min(tops) <= tol and abs(tops[0] - b['top']) <= tol and abs(final - b['top']) <= tol
+
+
+def summary(b, frames, final):
+    tops = [t for t, _, _ in frames]
+    return {'mark': b, 'frames': len(frames), 'top range': [min(tops), max(tops)] if tops else None, 'final': final,
+            'plain pieces first/last': [frames[0][1], frames[-1][1]] if frames else None, 'width held frames': sum(w for _, _, w in frames)}
+
+
+def long_ts(n, wide=False):
+    """TypeScript with a block comment that runs across highlight pieces every 300 lines."""
+    out = []
+    for i in range(n):
+        if i % 300 == 150:
+            out.append('/* a comment that runs over\n' + ''.join(f'   comment line {k} of block {i}\n' for k in range(120)) + '*/')
+        out.append(f'export const value{i} = compute("{"wide words " * 30 if wide else "s"}", {i}) + other{i % 7};  // note {i}')
+    return '\n'.join(out) + '\n'
+
+
+def anchor_vs_highlight(page, check, out):
+    """Cross: the reading anchor and chunked highlighting. A long code file read at its middle keeps the character at the top
+    still on every frame while its pieces land, unwrapped (off-screen pieces skipped at their size) and wrapped; and wrapped code
+    keeps it through the sidebar closing while pieces are still landing."""
+    plain = os.path.join(out, 'long.ts')
+    open(plain, 'w').write(long_ts(4200))
+    wrapped = os.path.join(out, 'wide.ts')
+    open(wrapped, 'w').write(long_ts(1100, wide=True))
+    page.cmd('@size:1100x760')
+    page.cmd('@root:' + out)
+    res, ok = {}, True
+    for label, path, wrap, toggle in [('unwrapped', plain, False, False), ('wrapped', wrapped, True, False),
+                                      ('wrapped, sidebar closing while pieces land', wrapped, True, True)]:
+        page.apply(wrapCode=wrap, sidebarCollapsed=False)
+        page.render(path)
+        b = page.js('window.scrollTo(0, document.scrollingElement.scrollHeight * 0.5); ' + MARK_M + FOLLOW
+                    + (" document.getElementById('side-toggle').click();" if toggle else '') + ' return m;')
+        page.cmd('@wait:0.8')
+        wait_landed(page)
+        page.cmd('@wait:0.2')
+        f = page.js(STOP)
+        final = page.js('return window.__at()')
+        res[label] = summary(b, f, final)
+        ok = ok and held(b, f, final) and b['plain'] > 0 and f[-1][1] == 0
+        if toggle:
+            page.apply(sidebarCollapsed=False)
+            page.cmd('@wait:0.5')
+    page.apply(wrapCode=False)
+    check(ok, 'cross anchor x highlighting: long code read at its middle holds the character at the top on every frame as its pieces '
+          'land, unwrapped and wrapped, and through the sidebar closing while they land', json.dumps(res))
+
+
+def anchor_vs_width_hold(page, check, out):
+    """Cross: the reading anchor and N17. A note over 100 KB has its column's width held while the sidebar slides and released at
+    the end; the line being read (inside a long paragraph) stays put on every frame, and after the release."""
+    md = os.path.join(out, 'big.md')
+    open(md, 'w').write(''.join(f'## Section {i}\n\n' + 'Words that wrap at every width of the column, and then some more. ' * 30 + '\n\n'
+                                for i in range(80)))
+    page.cmd('@size:1100x760')
+    page.cmd('@root:' + out)
+    page.apply(sidebarCollapsed=False)
+    page.render(md)
+    page.cmd('@wait:0.5')
+    res, ok = {}, True
+    for label in ['sidebar closing', 'sidebar opening']:
+        page.cmd('@eval:window.scrollTo(0, document.scrollingElement.scrollHeight * 0.503); 0')
+        page.cmd('@wait:0.3')
+        b = page.js(MARK_BOX)
+        page.js(FOLLOW + " document.getElementById('side-toggle').click(); return 1;")
+        page.cmd('@wait:1.0')
+        f = page.js(STOP)
+        final = page.js('return window.__at()')
+        released = page.js("return !document.getElementById('doc').style.width")
+        res[label] = {**summary(b, f, final), 'released': released}
+        ok = ok and held(b, f, final) and any(w for _, _, w in f) and released and not f[-1][2]
+    page.apply(sidebarCollapsed=False)
+    page.cmd('@wait:0.4')
+    check(ok, 'cross anchor x N17 width hold: a note over 100 KB keeps the line being read on every frame of the sidebar sliding, '
+          'with the width held, and after it is released', json.dumps(res))
+
+
+def reload_vs_highlight(page, check, out):
+    """Cross: live-reload line mapping and chunked highlighting. 25 lines added above the line being read in long code (wrapped and
+    unwrapped) keep that line where it was, on every frame, once the new text's pieces have landed."""
+    page.cmd('@size:1100x760')
+    page.cmd('@root:' + out)
+    res, ok = {}, True
+    for label, name, text, wrap in [('unwrapped', 'reload.ts', long_ts(4200), False), ('wrapped', 'reload-wide.ts', long_ts(1100, wide=True), True)]:
+        path = os.path.join(out, name)
+        open(path, 'w').write(text)
+        page.apply(wrapCode=wrap)
+        page.render(path)
+        page.cmd('@eval:window.scrollTo(0, document.scrollingElement.scrollHeight * 0.5); 0')
+        page.cmd('@wait:0.3')
+        wait_landed(page)
+        page.cmd('@wait:0.2')
+        b = page.js(MARK_BOX)
+        add = '// header line\n' * 25
+        p0 = page.js('sb.render({ ...current, text: ' + json.dumps(add) + ' + current.text }); window.__off += ' + str(len(add))
+                     + '; window.__node = null; const p = window.__plain(); ' + FOLLOW + ' return p;')
+        page.cmd('@wait:0.8')
+        wait_landed(page)
+        page.cmd('@wait:0.2')
+        f = page.js(STOP)
+        final = page.js('return window.__at()')
+        res[label] = {**summary(b, f, final), 'plain right after reload': p0}
+        ok = ok and held(b, f, final) and b['line'] > 100 and p0 > 0 and f[-1][1] == 0
+    page.apply(wrapCode=False)
+    check(ok, 'cross live reload x highlighting: lines added above the line being read keep it still once the re-highlighting lands',
+          json.dumps(res))
+
+
+def raw_vs_highlight(page, check, out):
+    """Cross: Raw's line mapping and chunked highlighting. Raw on a long note lands on the source line of the section being read,
+    and that line does not move as the source's pieces land, wrapped and unwrapped."""
+    md = ''.join(f'## Section {i}\n\n- item one\n- item **two**\n\n> a quote\n\nA paragraph with `code` and a [link](https://example.com).\n\n'
+                 + 'More words in this section. ' * 20 + '\n\n' for i in range(400))
+    note = os.path.join(out, 'rawlong.md')
+    open(note, 'w').write(md)
+    want = md.split('\n').index('## Section 200') + 1
+    H = "[...document.querySelectorAll('#doc h2')].find((x) => x.textContent === 'Section 200')"
+    TOPLINE = """const code = document.querySelector('#doc .code-view pre.code'), bar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bar-h'));
+      const r = document.caretRangeFromPoint(code.getBoundingClientRect().left + 30, bar + 12), pre = document.createRange();
+      pre.selectNodeContents(code); pre.setEnd(r.startContainer, r.startOffset); return pre.toString().split('\\n').length;"""
+    page.cmd('@size:1100x760')
+    page.cmd('@root:' + out)
+    res, ok = {}, True
+    for label, wrap in [('wrapped', True), ('unwrapped', False)]:
+        page.apply(wrapMarkdown=wrap)
+        page.render(note)
+        page.cmd('@wait:0.4')
+        page.cmd(f"@eval:{H}.scrollIntoView({{ block: 'start' }}); 0")
+        page.cmd('@wait:0.3')
+        b = page.js("document.getElementById('raw').click(); " + MARK_M + FOLLOW + ' return m;')
+        line = page.js(TOPLINE)
+        page.cmd('@wait:0.8')
+        wait_landed(page)
+        page.cmd('@wait:0.2')
+        f = page.js(STOP)
+        final = page.js('return window.__at()')
+        after = page.js(TOPLINE)
+        res[label] = {**summary(b, f, final), 'source line': want, 'top line on Raw': line, 'top line once landed': after}
+        ok = ok and held(b, f, final) and b['plain'] > 0 and f[-1][1] == 0 and abs(line - want) <= 2 and after == line
+        page.cmd("@eval:document.getElementById('raw').click(); 0")
+        page.cmd('@wait:0.3')
+    page.apply(wrapMarkdown=True)
+    check(ok, 'cross Raw x highlighting: Raw on a long note lands on the source line being read and holds it as the pieces land',
+          json.dumps(res))
+
+
 def main():
     results = []
 
@@ -634,7 +831,8 @@ def main():
     page = Page()
     try:
         for i, part in enumerate([reading_position, grid_back, under_the_bar, toc_scroll, redraw_keeps_scroll, late_thumbnail, math_and_toc,
-                                   reflow_every_view, redraw_keeps_line, markdown_caret, grid_width, windows_on_resize, raw_toggle, zoom_label]):
+                                   reflow_every_view, redraw_keeps_line, markdown_caret, grid_width, windows_on_resize, raw_toggle, zoom_label,
+                                   anchor_vs_highlight, anchor_vs_width_hold, reload_vs_highlight, raw_vs_highlight]):
             out = os.path.join(page.out, f'part{i}')
             os.makedirs(out)
             part(page, check, out)

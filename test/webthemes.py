@@ -767,10 +767,12 @@ def main():
             page.cmd('@wait:0.3')
             bars[name] = page.js(BAR)
             page.cmd(f'@shot:{SHOTS}/minimal-chrome-{name}.png')
-        check(all(b['shown'] and 'kind' in b['shown'] and not b['hidden'] and set(b['gaps']) <= {6} and b['kindBlur']
-                  and b['kindBg'] not in ('rgba(0, 0, 0, 0)', 'transparent') for b in bars.values())
-              and 'raw' not in bars['code']['shown'] and 'find-btn' in bars['code']['shown'] and 'aa' not in bars['image']['shown'],
-              'minimal chrome: a hidden Raw, Find or Aa leaves no gap among the floating buttons, and the kind sits on their material', json.dumps(bars))
+        slots = ['raw', 'find-btn', 'aa', 'edit']
+        check(all(b['shown'] and 'kind' in b['shown'] and 'kind' not in b['hidden'] and [x for x in b['shown'] if x in slots] == slots
+                  and set(b['gaps']) <= {6} and b['kindBlur'] and b['kindBg'] not in ('rgba(0, 0, 0, 0)', 'transparent') for b in bars.values())
+              and bars['code']['hidden'] == ['raw', 'edit'] and bars['image']['hidden'] == slots,
+              'minimal chrome: a hidden Raw, Find, Aa or Open keeps its slot, unseen, so the floating buttons never move; the kind sits on their material',
+              json.dumps(bars))
         page.apply(minimalChrome=False)
         check(page.js("return getComputedStyle(document.getElementById('frame')).display") == 'block', 'minimal chrome switches off live')
         page.cmd('@load:{}')

@@ -35,6 +35,7 @@
     d.font = pick(p.bodyFont, ['system', 'serif', 'rounded', 'mono'], 'system');
     d.mono = pick(p.monoFont, ['system', 'menlo', 'monaco', 'courier'], 'system');
     d.width = pick(p.width, Object.keys(MEASURE), 'medium');
+    d.toc = pick(p.toc, ['auto', 'on', 'off'], 'auto');
     d.editing = p.inlineEditing === false ? 'off' : 'on';
     d.remoteImages = p.remoteImages === true ? 'on' : 'off';
     d.sidebar = p.sidebarCollapsed === true ? 'collapsed' : 'open';

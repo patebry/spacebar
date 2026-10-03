@@ -312,6 +312,11 @@ func renderFile(_ file: String, listFirst: Bool = true) {
         if currentText, LinkPolicy.editorRefusal(url) == nil { payload["canOpen"] = true }
         currentCanOpen = payload["canOpen"] as? Bool == true
         currentBody = currentText ? (payload["text"] as? String).map { ($0, payload["truncated"] as? Bool == true) } : nil
+        // As the extension: an image's size from its header.
+        if payload["view"] as? String == "image", let s = ImagePane.pixelSize(url) {
+            payload["width"] = Int(s.width)
+            payload["height"] = Int(s.height)
+        }
         // As the extension's show(): a PDF PDFKit cannot open gets the info card with a note; any other view closes the pane.
         var doc: PDFDocument?
         if payload["view"] as? String == "pdf" {

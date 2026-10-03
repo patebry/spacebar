@@ -60,6 +60,9 @@
   section.footnotes ol { padding-left: 1.4em; }
   a.footnote-backref { text-decoration: none !important; font-family: var(--font-body); }
   #doc [id] { scroll-margin-top: calc(var(--bar-h) + 16px); }
+  /* A formula while KaTeX loads (app.js loadKatex): a quiet mark in the line, and a display formula's own line. */
+  #doc span.tex:empty::before { content: "…"; color: var(--muted); }
+  #doc span.tex[data-display="1"]:empty { display: block; margin: 1em 0; text-align: center; }
 
   /* A code fence's language and Copy button, in its top right corner; the button shows on hover. */
   #doc .blk { position: relative; }
@@ -269,6 +272,9 @@
   #side-list.keyed a.row:not(.cursor, :active) { background: transparent; }
   #side-list.keyed a.row.cursor { background: var(--row-sel); }
   #side-list.keyed.lost a.row.active { background: var(--row-sel); }
+  /* A click lights the row clicked at once, as the keys do, and the file on screen gives up its highlight. */
+  #side-list.clicked a.row.cursor { background: var(--row-sel); transition: none; }
+  #side-list.clicked a.row.active:not(.cursor, :hover) { background: transparent; }
   #side-filter { padding: 0 8px 6px; display: flex; gap: 4px; align-items: center; }
   #side-menu { flex: none; width: 24px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; cursor: default;
     color: var(--muted); background: transparent; }
@@ -316,6 +322,8 @@
     font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* The search's progress wraps in a narrow sidebar rather than lose its counts. */
   #side-more { padding: 4px 16px 14px; font-size: 11.5px; line-height: 1.35; color: var(--muted); overflow-wrap: anywhere; }
+  /* Searching contents, it keeps two lines' room from the start, so the list's bottom edge holds as the status comes and goes. */
+  #side-more.reserve { min-height: calc(2.7em + 18px); }
   #side-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background .12s; }
   #side-resize:hover::after, :root.sb-resizing #side-resize::after { background: color-mix(in srgb, var(--accent) 60%, transparent); }
   @media (prefers-reduced-motion: reduce) {
@@ -552,8 +560,8 @@
   /* The file's kind and size (an image's zoom too): quiet text, cut before it crowds the path. */
   #kind { display: flex; gap: 6px; min-width: 0; max-width: 34vw; white-space: nowrap; }
   #kind .kind-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-  #kind .img-zoom { flex: none; font-variant-numeric: tabular-nums; }
-  #kind .img-zoom:empty { display: none; }
+  /* As wide as "800%" while it counts, and before the first count arrives. */
+  #kind .img-zoom { flex: none; min-width: 5ch; font-variant-numeric: tabular-nums; }
   #kind .pdf-page { flex: none; font: inherit; font-variant-numeric: tabular-nums; color: inherit; height: 20px; margin: -2px 0; padding: 0 6px;
     border: 0; border-radius: 5px; background: none; cursor: default; }
   #kind .pdf-page:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 8%, transparent); }
@@ -652,10 +660,14 @@
   #toolbar > button, #side-toggle { transition: background-color .12s, transform .08s; }
   #toolbar > button:active, #side-toggle:active { transform: scale(.96); }
 
-  /* Icon buttons: raw text and find, each shown only where it applies. Floating over the page a hidden one leaves no gap; in
-     the toolbar row a hidden .tb-slot keeps its place (below). */
+  /* Icon buttons: raw text and find, each shown only where it applies. A hidden .tb-slot (Raw, Find, Aa, Open) keeps its place,
+     in the toolbar row and floating over the page alike, so nothing moves from file to file; hidden, it takes no click. An update
+     where Aa is hidden (so are Raw and Find) takes their slots. */
   #toolbar > .tb-ic { width: 28px; padding: 0; display: inline-grid; place-items: center; }
-  #toolbar > .tb-slot[hidden] { display: none; }
+  #toolbar > .tb-slot[hidden] { visibility: hidden; }
+  #toolbar > .tb-ic[hidden] { display: inline-grid; }
+  #toolbar > :is(#aa, #edit)[hidden] { display: inline-block; }
+  #toolbar:has(> #upd:not([hidden])) > :is(#raw, #find-btn, #aa)[hidden] { display: none; }
   #toolbar > #edit { min-width: 60px; box-sizing: border-box; }
   /* Open With: a chevron beside Open, and a menu of apps under it drawn as a native one. */
   #toolbar > #open-with { width: 18px; margin-left: -3px; }
@@ -710,16 +722,17 @@
   #find-q::-webkit-search-cancel-button { display: none; -webkit-appearance: none; }
   #find[data-none] #find-q { box-shadow: 0 0 0 2px rgba(255, 59, 48, .35); }
   #find[data-none] :is(#find-prev, #find-next) { opacity: .35; }
-  #find-count { min-width: 64px; padding: 0 6px; text-align: right; font-size: 11px; color: var(--ui-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
-  #find-count:empty { min-width: 0; padding: 0; }
+  /* As wide as "1 of 10,000+" when empty too, so the field being typed in never moves. */
+  #find-count { min-width: 13ch; padding: 0 6px; text-align: right; font-size: 11px; color: var(--ui-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   #find button { width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; color: inherit; background: none; cursor: default; }
   #find button:hover { background: var(--ui-hover); }
   ::highlight(sb-find) { background-color: rgba(255, 214, 10, .45); color: inherit; }
   ::highlight(sb-find-cur) { background-color: #ff9f0a; color: #000; }
 
   /* ---------- the toolbar row (not Minimal chrome): quiet buttons on the chrome, in the theme's own colours ---------- */
-  @media (max-width: 479px) { #edit[data-kind=file] { display: none; } }
-  :root[data-chrome=minimal] #edit[data-kind=file] { display: none; }
+  /* There the viewer's own button opens a file that is not Markdown; the toolbar keeps Open's slot, empty. */
+  @media (max-width: 479px) { #edit[data-kind=file] { visibility: hidden; } }
+  :root[data-chrome=minimal] #edit[data-kind=file] { visibility: hidden; }
   @media (min-width: 480px) {
     :root:not([data-chrome=minimal]) #toolbar { color: var(--muted); gap: 4px; }
     :root:not([data-chrome=minimal]) #toolbar > :is(#status, #selpos, #kind, #stats) { height: auto; padding: 0; background: none; box-shadow: none;
@@ -727,12 +740,7 @@
     :root:not([data-chrome=minimal]) #toolbar > #kind:not(:empty) + #stats:not(:empty)::before { content: "· "; }
     :root:not([data-chrome=minimal]) #toolbar > #selpos:not(:empty) + #kind:not(:empty)::before { content: "·"; margin-right: -2px; }
     :root:not([data-chrome=minimal]) #toolbar > #edit-pill { padding: 0 4px 0 0; background: none; box-shadow: none; }
-    /* A hidden .tb-slot (Raw, Find, Aa, Open) keeps its place, and Open is as wide as Reveal, so nothing in the row moves from
-       file to file. An update where Aa is hidden (so are Raw and Find) fills exactly their three slots. */
-    :root:not([data-chrome=minimal]) #toolbar > .tb-slot[hidden] { visibility: hidden; }
-    :root:not([data-chrome=minimal]) #toolbar > .tb-ic[hidden] { display: inline-grid; }
-    :root:not([data-chrome=minimal]) #toolbar > :is(#aa, #edit)[hidden] { display: inline-block; }
-    :root:not([data-chrome=minimal]) #toolbar:has(> #upd:not([hidden])) > :is(#raw, #find-btn, #aa)[hidden] { display: none; }
+    /* An update where Aa is hidden (so are Raw and Find) fills exactly their three slots. */
     :root:not([data-chrome=minimal]) #toolbar:has(> #aa[hidden]) > #upd { width: calc(28px + 28px + 32px + 2 * 4px); box-sizing: border-box; justify-content: center; }
     :root:not([data-chrome=minimal]) :is(#toolbar > button, #side-toggle) { height: 26px; color: var(--fg); background: transparent; box-shadow: none;
       -webkit-backdrop-filter: none; backdrop-filter: none; }

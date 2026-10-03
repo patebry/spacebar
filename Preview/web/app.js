@@ -1590,15 +1590,17 @@ function updateStats() {
       { acceptNode: (n) => (n.parentElement && n.parentElement.closest(skip) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
     let text = '';
     while (walk.nextNode()) text += walk.currentNode.data + ' ';
-    const n = words ? [...words.segment(text)].filter((w) => w.isWordLike).length : (text.match(/\S+/g) || []).length;
-    s.textContent = n ? `${n.toLocaleString()} ${n === 1 ? 'word' : 'words'} · ${Math.max(1, Math.round(n / 230))} min read` : '';
+    show(words ? [...words.segment(text)].filter((w) => w.isWordLike).length : (text.match(/\S+/g) || []).length);
   };
-  // A short note is counted at once, so its first frame shows its own count; a long one later, and never another file's meanwhile.
-  if ((current.text || '').length <= STATS_NOW) count();
-  else {
-    if (!same) s.textContent = '';
-    statsTimer = setTimeout(count, 30);
-  }
+  const show = (n) => { s.textContent = n ? `${n.toLocaleString()} ${n === 1 ? 'word' : 'words'} · ${Math.max(1, Math.round(n / 230))} min read` : ''; };
+  // A short note is counted at once, so its first frame shows its own count. A long one shows the source's words at once and
+  // its count later, never another file's meanwhile; the room the first took is kept, so the kind beside it does not move.
+  if ((current.text || '').length <= STATS_NOW) { count(); return; }
+  show((current.text.match(/\S+/g) || []).length);
+  const inner = () => { const cs = getComputedStyle(s); return s.getBoundingClientRect().width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight); };
+  const held = inner();
+  s.style.minWidth = `${held}px`;
+  statsTimer = setTimeout(() => { s.style.removeProperty('min-width'); count(); s.style.minWidth = `${Math.max(held, inner())}px`; }, 30);
 }
 
 /** An editable file's line count keeps room for one more digit, as its gutter does, so typing past line 99 moves nothing beside it;

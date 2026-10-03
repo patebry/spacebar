@@ -659,6 +659,30 @@ def raw_toggle_json(page, check, out):
     check(page.js(TOP) == c, 'Raw: on and off again with no scroll between, the tree is where it was left', json.dumps([c, page.js(TOP)]))
 
 
+def long_note_stats(page, check, out):
+    """R8: a note over 50 KB shows its word count at once from its source, and the exact count when it lands takes no more room:
+    the kind beside it never moves."""
+    big, small = os.path.join(out, 'big.md'), os.path.join(out, 'small.md')
+    open(big, 'w').write(''.join(f'## S{i}\n\n' + 'word ' * 300 + '\n\n' for i in range(40)))
+    open(small, 'w').write('# Small\n\nA few words.\n')
+    page.cmd('@size:1100x760')
+    page.cmd('@root:' + out)
+    page.apply(stats=True)
+    page.render(small)
+    page.cmd('@wait:0.3')
+    page.js("""const W = window.__st = { f: [], stop: false };
+      const fr = () => { if (W.stop) return; W.f.push([document.getElementById('stats').textContent, Math.round(document.getElementById('kind').getBoundingClientRect().left)]);
+        requestAnimationFrame(fr); }; requestAnimationFrame(fr); return 1;""")
+    page.render(big)
+    page.cmd('@wait:0.4')
+    f = page.js("window.__st.stop = true; return window.__st.f")
+    big_frames = f[next((i for i, x in enumerate(f) if x[0] != f[0][0]), len(f)):]
+    lefts = sorted({x[1] for x in big_frames})
+    check(big_frames and all(x[0] for x in big_frames) and len(lefts) == 1 and big_frames[-1][0].startswith('12,000 words'),
+          'stats: a long note\'s count shows from its first frame, and the exact count moves nothing', json.dumps(sorted({tuple(x) for x in big_frames})))
+    page.apply(stats=False)
+
+
 def zoom_label(page, check, out):
     """N13: a fitted image's zoom label follows the stage when the sidebar hides or its width changes."""
     img = os.path.join(out, 'wide.png')
@@ -896,7 +920,7 @@ def main():
     page = Page()
     try:
         for i, part in enumerate([reading_position, grid_back, under_the_bar, toc_scroll, redraw_keeps_scroll, late_thumbnail, math_and_toc,
-                                   reflow_every_view, redraw_keeps_line, markdown_caret, grid_width, windows_on_resize, raw_toggle, raw_toggle_json, zoom_label,
+                                   reflow_every_view, redraw_keeps_line, markdown_caret, grid_width, windows_on_resize, raw_toggle, raw_toggle_json, long_note_stats, zoom_label,
                                    anchor_vs_highlight, anchor_vs_width_hold, reload_vs_highlight, raw_vs_highlight]):
             out = os.path.join(page.out, f'part{i}')
             os.makedirs(out)

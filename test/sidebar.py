@@ -394,7 +394,8 @@ def big_folder(page, check, T):
     check(b['cursor'] == 'wide.csv' and b['dom'] < 300, 'End reaches the last row, far below the rows drawn, and draws it', json.dumps(b))
     dispatch_key(page, 'Home')
     b = page.js(ROWS)
-    check(b['cursor'] == 'hostile' and b['top'] == 0, 'Home goes back to the first row', json.dumps(b))
+    check(b['cursor'] == page.js("return document.querySelector('#side-list a.row').textContent") == 'big.csv' and b['top'] == 0,
+          'Home goes back to the first row (a file, in Finder\'s order)', json.dumps(b))
     page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.value = 'm-4999'; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
     f = page.js("return [...document.querySelectorAll('#side-list a.row')].map((a) => a.textContent)")
     check(f == ['many', 'm-4999.txt'], 'the filter finds a file past the old cap of 500', json.dumps(f))
@@ -1226,7 +1227,8 @@ def keys_and_filter(page, check, T, st, types):
     check(k['taken'] and c['cursor'] == last and opened(k) == [T(last)], 'keys: End jumps to the last row and opens it', json.dumps([last, opened(k)]))
     k = key('Home')
     c = page.js(CURSOR)
-    check(k['taken'] and c['cursor'] == c['rows'][0][0] == 'hostile' and not opened(k), 'keys: Home jumps to the first row (a folder: nothing opens)', json.dumps(c['cursor']))
+    check(k['taken'] and c['cursor'] == c['rows'][0][0] == 'big.csv' and opened(k) == [T('big.csv')],
+          'keys: Home jumps to the first row and opens it (a file, in Finder\'s order)', json.dumps([c['cursor'], opened(k)]))
     top = page.js("return document.getElementById('side-list').scrollTop")
     key('End')
     bottom = page.js("""const l = document.getElementById('side-list'), r = l.querySelector('a.cursor').getBoundingClientRect(), b = l.getBoundingClientRect();
@@ -1473,7 +1475,11 @@ def list_session(page, check, T, types, opened):
     native('filterText', {'seq': seq, 'text': 'zzz'})
     check(cur()['q'] == '' and 'No matches' not in cur()['notes'], 'list session: text for it is ignored (it has no field)')
     native('filterKey', {'seq': seq, 'key': 'home'})
-    first = cur()['cursor']
+    # In Finder's order the first folder sits below a few files: ↓ steps to it (each step opens the file it lands on).
+    first = next(x[0] for x in cur()['rows'] if x[2] is not None)
+    for _ in range(12):
+        if cur()['cursor'] == first: break
+        native('filterKey', {'seq': seq, 'key': 'down'})
     k = native('filterKey', {'seq': seq, 'key': 'right'})
     expanded = [x for x in cur()['rows'] if x[0] == first]
     check(expanded and expanded[0][2] == 'true' and 'list' in k['types'], 'list session: → opens the folder under the cursor', json.dumps([first, expanded, k['types']]))
@@ -1502,10 +1508,16 @@ def list_session(page, check, T, types, opened):
     check(not k['types'] or 'open' not in k['types'], 'filter session: ← and → from the writer are not list keys while typing')
     native('filterEnd', {'seq': fseq})
 
+    # Left open by an earlier walk (expansion is remembered per root), the folder is closed first so the click opens it.
+    if [x for x in cur()['rows'] if x[0] == 'sub' and x[2] == 'true']:
+        page.cmd('@nativeclick:' + row(T('sub')))
+        page.cmd('@wait:0.3')
     r = page.cmd('@nativeclick:' + row(T('sub')))
     begins = msgs(r, 'filterBegin')
-    check(begins and islist(begins[0]) and 'list' in types(r) + types(page.cmd('@wait:0.3')),
-          'list session: a real click on a folder opens it and holds the keys too', json.dumps(types(r)))
+    page.cmd('@wait:0.3')
+    # Listed once already in this page, the folder opens from what the page kept, with no second "list" to native.
+    check(begins and islist(begins[0]) and [x for x in cur()['rows'] if x[0] == 'sub' and x[2] == 'true'],
+          'list session: a real click on a folder opens it and holds the keys too', json.dumps([types(r), [x for x in cur()['rows'] if x[0] == 'sub']]))
     seq = int(begins[0]['seq']) if begins else -1
     r = click(page, '#doc')
     check([int(m['seq']) for m in msgs(r, 'filterStop')] == [seq], 'list session: a click in the document ends it', json.dumps(types(r)))
@@ -1737,7 +1749,8 @@ def panel_host(check):
           return [r.dataset.host, getComputedStyle(r).getPropertyValue('--titlebar-inset').trim(), Math.round(t.left)];""")
         check(g[0] == 'panel' and g[1] == '76px' and g[2] >= 76, "panel: the host is set at document start, and the sidebar button clears the traffic lights", json.dumps(g))
         calm_header(page, check, 'panel')
-        page.render(T('README.md'))
+        # In Finder's order the rows run b.md, c.txt, README.md, sub: from b.md the next row is a file.
+        page.render(T('b.md'))
         page.cmd('@wait:0.3')
         r = page.cmd('@eval:sb.listKeysWanted(' + json.dumps({'root': root}) + '); 0')
         fb = msgs(r, 'filterBegin') + msgs(page.cmd('@wait:0.3'), 'filterBegin')
@@ -1748,7 +1761,7 @@ def panel_host(check):
         r = page.cmd('@eval:sb.filterKey(' + json.dumps({'seq': seq, 'key': 'down'}) + '); 0')
         w = page.cmd('@wait:0.4')
         opened = [m.get('path') for m in msgs(r, 'open') + msgs(w, 'open')]
-        check(opened == [T('b.md')], 'panel: a routed ↓ opens the next file in the sidebar', json.dumps(opened))
+        check(opened == [T('c.txt')], 'panel: a routed ↓ opens the next file in the sidebar', json.dumps(opened))
         page.cmd('@eval:sb.status(\'\'); sb.filterEnd({ seq: ' + str(seq) + ' }); sb.listEnded({ reason: "escape" }); 0')
         check('Press Space' not in status(), 'panel: never "Press Space again to close"', status())
         page.render(T('README.md'))
@@ -1972,7 +1985,7 @@ def main():
         page.apply(foldersFirst='finder', folderReadmeFirst=False)
         page.render(os.path.join(folder, 'b.md'))
         s = st()
-        check(s['names'][0] == 'sub' and '.secret.md' in s['names'] and 'a.md' in s['names'],
+        check(s['names'][0] == 'sub' and '.hidden.md' in s['names'] and 'a.md' in s['names'],
               'Finder keeps folders on top and shows hidden files: so does the sidebar, from Finder\'s plist', json.dumps(s['names']))
         click(page, '#side-menu')
         menu = page.js("return [...document.querySelectorAll('#side-pop button')].map((b) => b.getAttribute('aria-checked'))")
@@ -1980,12 +1993,12 @@ def main():
         click(page, '#side-menu')
         page.apply(foldersFirst='never', folderReadmeFirst=False)
         page.render(os.path.join(folder, 'b.md'))
-        check(st()['names'][0] != 'sub' and 'sub' in st()['names'] and '.secret.md' in st()['names'],
+        check(st()['names'][0] != 'sub' and 'sub' in st()['names'] and '.hidden.md' in st()['names'],
               'foldersFirst never overrides Finder\'s folders on top; hidden files still follow Finder', json.dumps(st()['names']))
         os.remove(page.finder_plist)
         page.apply(foldersFirst='finder', folderReadmeFirst=False)
         page.render(os.path.join(folder, 'b.md'))
-        check(st()['names'][0] == 'a.md' and '.secret.md' not in st()['names'], 'Finder\'s plist gone: back to Finder\'s defaults', json.dumps(st()['names']))
+        check(st()['names'][0] == 'a.md' and '.hidden.md' not in st()['names'], 'Finder\'s plist gone: back to Finder\'s defaults', json.dumps(st()['names']))
 
         # ---- the folder watch: a file added or removed shows up in the list without a re-render ----
         page.render(os.path.join(folder, 'b.md'))
@@ -2247,9 +2260,15 @@ def main():
         click(page, '#side-list a.row[data-path$="/many"]')
         page.cmd('@wait:0.4')
         big_folder(page, check, T)
-        click(page, '#side-list a.row[data-path$="/many"]')
+        # The big folder closed again (a blind click would reopen one the walk left closed), and the list back at its top: past
+        # 300 rows only those near the view are drawn, and in Finder's order the dot names sort first.
+        if ['many', 1, 'd', 'ic-folder', 'true'] in st()['rows']:
+            click(page, '#side-list a.row[data-path$="/many"]')
+            page.cmd('@wait:0.4')
         page.apply(showHiddenFiles=True)
         page.cmd('@relist')
+        page.cmd("@eval:(() => { const l = document.getElementById('side-list'); l.scrollTop = 0; l.dispatchEvent(new Event('scroll')); return 0; })()")
+        page.cmd('@wait:0.3')
         shown = [x[0] for x in st()['rows'] if x[1] == 1]
         dots = T('..%2F..%2Fetc%2Fpasswd.md')
         r = click(page, '#side-list a.row[data-path=' + json.dumps(dots) + ']')

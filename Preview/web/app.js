@@ -845,6 +845,11 @@ function editorHTML() {
 }
 
 const editorEl = () => document.querySelector('#doc > .md-editing');
+/** Keeps the caret of a block being typed into on screen, clear of the toolbar row and the bottom edge (scroll-padding). */
+function revealCaret() {
+  const c = editorEl() && editorEl().querySelector('.caret, .sel');
+  if (c) c.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
 
 /** Replaces the rendered blocks of the edited source range with the raw-source editor. */
 function spliceEditor(range) {
@@ -880,18 +885,22 @@ function blockRange(b) {
 let drawnMermaid = Promise.resolve();
 /** The boxes that may scroll on their own, in document order: a code view, a code block, a wide table, a JSON tree. */
 const ownScrollers = () => $('doc').querySelectorAll('.code-view, .json-tree, pre, :scope > table');
-let drawnDoc = '';
+let drawnDoc = '', drawnScroll = new Map();
 function draw() {
   if (editing && !editing.whole && rawOn(current)) { stopEditing(); return; }
   if (!gridWanted(current)) gridStop();
   clearKind();
-  // The same file drawn again (a change on disk, a setting) keeps each box's own scroll, and a zoomed image's pan.
-  const which = `${current.path}\n${current.entry ? current.entry.name : ''}`, same = which === drawnDoc;
-  const kept = same ? [...ownScrollers()].map((b) => [b.scrollLeft, b.scrollTop]) : [];
+  // The same file drawn again (a change on disk, a setting) keeps each box's own scroll, and a zoomed image's pan. Its Raw and
+  // rendered views each keep their own, so Raw turned off finds the code blocks and tables where they were.
+  const file = `${current.path}\n${current.entry ? current.entry.name : ''}`, which = `${file}\n${rawOn(current)}`, same = which === drawnDoc;
+  if (!drawnDoc.startsWith(file + '\n')) drawnScroll = new Map();
+  else drawnScroll.set(drawnDoc, [...ownScrollers()].map((b) => [b.scrollLeft, b.scrollTop]));
+  const kept = drawnScroll.get(which) || [];
   const stage = same && $('doc').querySelector('.img-stage');
   imgPan = stage ? [stage.scrollLeft, stage.scrollTop] : null;
   drawnDoc = which;
-  if (isMarkdown(current) && !rawOn(current)) anchorObserver.observe($('doc')); else anchorObserver.unobserve($('doc'));
+  if (isMarkdown(current) && rawOn(current)) root.dataset.raw = ''; else delete root.dataset.raw;
+  if (anchorOn()) anchorObserver.observe($('doc')); else anchorObserver.unobserve($('doc'));
   const restore = () => ownScrollers().forEach((b, i) => { if (kept[i]) [b.scrollLeft, b.scrollTop] = kept[i]; });
   if (!isMarkdown(current) || rawOn(current)) {
     $('doc').replaceChildren(viewNode(current));
@@ -1375,39 +1384,156 @@ window.addEventListener('scroll', () => {
 }, { passive: true });
 
 /* WebKit has no scroll anchoring: a reflow of the document (the sidebar animating open or shut, the text's width or size, the
-   window resized) would keep scrollY and lose the line being read. The block at the top of the page is held in place instead.
-   It is taken after every scroll and every correction, so a resize is measured against the layout last painted. */
+   window resized) would keep scrollY and lose the line being read. The line at the top of the page is held in place instead,
+   in every view of text: the top block, or the first character of the line when the block runs under the toolbar row. It is
+   taken after every scroll and its top kept after every correction, so a resize is measured against the layout last painted.
+   A redraw replaces the nodes, so across one it is carried as a place in the text: a Markdown block's source lines and an
+   offset in its text, a code view's line and column, or an offset in the document's text. */
 let readAnchor = null, anchorOwnY = -1, userScrollAt = 0;
+const ANCHOR_VIEWS = new Set(['markdown', 'code', 'text', 'json']);
+const anchorOn = () => ANCHOR_VIEWS.has(root.dataset.view) || (root.dataset.view === 'csv' && rawOn(current));
+const barHeight = () => parseFloat(getComputedStyle(root).getPropertyValue('--bar-h')) || 40;
+/** The top of the character at `o` in a text node, or null when it is not drawn (collapsed white space, a hidden copy). */
+function charTop(node, o) {
+  if (!node.isConnected || !node.length) return null;
+  const r = document.createRange(), at = Math.max(0, Math.min(o, node.length - 1));
+  r.setStart(node, at);
+  r.setEnd(node, at + 1);
+  const rs = r.getClientRects();
+  return rs.length ? rs[0].top : null;
+}
+/** The text node and offset `off` characters into `box`'s text. */
+function textAt(box, off) {
+  const w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+  let n = 0, last = null;
+  for (let t = w.nextNode(); t; t = w.nextNode()) {
+    if (n + t.length > off) return { node: t, o: off - n };
+    n += t.length;
+    last = t;
+  }
+  return last ? { node: last, o: last.length } : null;
+}
+function textBefore(box, node, o) {
+  const r = document.createRange();
+  r.selectNodeContents(box);
+  r.setEnd(node, o);
+  return r.toString();
+}
 function takeAnchor() {
   readAnchor = null;
-  if (root.dataset.view !== 'markdown' || window.scrollY <= 0) return;
-  const kids = $('doc').children, bar = parseFloat(getComputedStyle(root).getPropertyValue('--bar-h')) || 40;
+  if (!anchorOn() || window.scrollY <= 0) return;
+  const kids = $('doc').children, bar = barHeight();
   let lo = 0, hi = kids.length - 1;
   while (lo < hi) { const m = (lo + hi) >> 1; if (kids[m].getBoundingClientRect().bottom > bar) hi = m; else lo = m + 1; }
-  if (kids[lo]) readAnchor = { el: kids[lo], top: kids[lo].getBoundingClientRect().top, y: window.scrollY };
-}
-/** Where the anchor would be now had nothing reflowed: { i: its index in #doc, top }, or null. */
-function anchorWant() {
-  const a = readAnchor;
-  return a && a.el.isConnected ? { i: Array.prototype.indexOf.call($('doc').children, a.el), top: a.top - (window.scrollY - a.y) } : null;
-}
-function holdAnchor(want, el) {
-  if (want && el && root.dataset.view === 'markdown') {
-    const d = el.getBoundingClientRect().top - want.top;
-    if (Math.abs(d) >= 1) { window.scrollBy({ top: d, behavior: 'instant' }); anchorOwnY = window.scrollY; }
+  const blk = kids[lo];
+  if (!blk) return;
+  const b = blk.getBoundingClientRect();
+  readAnchor = { el: blk, top: b.top, y: window.scrollY };
+  // A block that starts on screen is held by its top; one that runs under the toolbar row by the first character of the line
+  // at the top: in a code view, right of its line numbers and its text's padding.
+  if (b.top >= bar) return;
+  const pre = blk.querySelector('.code-view > pre.code'), g = pre && pre.parentElement.querySelector(':scope > .gutter');
+  let x = b.left + 4;
+  if (pre) {
+    const pr = pre.getBoundingClientRect();
+    x = Math.max(pre.parentElement.getBoundingClientRect().left, pr.left + parseFloat(getComputedStyle(pre).paddingLeft), g && g.offsetWidth ? g.getBoundingClientRect().right : -Infinity) + 4;
   }
-  takeAnchor();
+  const y = Math.min(bar + 10, window.innerHeight - 1);
+  const r = document.caretRangeFromPoint(x, y), n = r && r.startContainer;
+  if (!n || n.nodeType !== Node.TEXT_NODE || !blk.contains(n) || (g && g.contains(n))) return;
+  const t = charTop(n, r.startOffset);
+  if (t !== null) Object.assign(readAnchor, { node: n, o: r.startOffset, top: t });
 }
-// Watched only while Markdown is shown: the folder grid sizes #doc from an observer of its own, deeper in the page.
+/** Where the anchor is drawn now, or null when a redraw took it away. */
+function anchorTop(a) {
+  if (a.node) return charTop(a.node, a.o);
+  return a.el.isConnected ? a.el.getBoundingClientRect().top : null;
+}
+/** Scrolls by `d` as the page's own correction, which the scroll listener does not take for the reader's. */
+function anchorScroll(d) {
+  if (Math.abs(d) < 1) return;
+  window.scrollBy({ top: d, behavior: 'instant' });
+  anchorOwnY = window.scrollY;
+}
+/** Puts the anchor back where it was. The same character is held until the reader scrolls: taking the one now at the top would
+ *  let the line read drift a row at each frame of a rewrap. */
+function holdAnchor() {
+  const a = readAnchor, now = a && anchorOn() ? anchorTop(a) : null;
+  if (now === null) { takeAnchor(); return; }
+  anchorScroll(now - (a.top - (window.scrollY - a.y)));
+  Object.assign(a, { top: anchorTop(a), y: window.scrollY });
+}
+/** Anchors on the character at `at`, just drawn where the reader was. */
+function anchorAt(at) {
+  let el = at.node.parentElement;
+  while (el && el.parentElement !== $('doc')) el = el.parentElement;
+  const top = charTop(at.node, at.o);
+  readAnchor = el && top !== null ? { el, node: at.node, o: at.o, top, y: window.scrollY } : null;
+  if (!readAnchor) takeAnchor();
+}
+/** The anchor as a place in the text that outlives a redraw, with where it should be drawn: { want, ... } or null. */
+function anchorPlace() {
+  const a = readAnchor;
+  if (!a || !a.el.isConnected || (a.node && !a.node.isConnected)) return null;
+  const want = a.top - (window.scrollY - a.y), i = Array.prototype.indexOf.call($('doc').children, a.el);
+  const code = a.node && a.node.parentElement.closest('#doc pre.code');
+  if (code) {
+    const t = textBefore(code, a.node, a.o), line = t.split('\n').length - 1;
+    return { want, line, col: t.length - t.lastIndexOf('\n') - 1 };
+  }
+  const box = a.el.dataset.src ? a.el : $('doc');
+  return { want, i, src: a.el.dataset.src, off: a.node ? textBefore(box, a.node, a.o).length : -1 };
+}
+/** Offset of line `l` (0-based) in `text`, or -1. */
+function lineOffset(text, l) {
+  let at = 0;
+  for (let k = 0; k < l; k++) { at = text.indexOf('\n', at) + 1; if (!at) return -1; }
+  return at;
+}
+/** Draws the place taken by anchorPlace where it was, after a redraw. `moved` maps a source line of the old text to the new
+ *  text's (null: the line was changed), for a change on disk. False when the place is not in the new drawing. */
+function holdPlace(pl, moved = null) {
+  if (!pl || !anchorOn()) return false;
+  const move = moved || ((l) => l);
+  let at = null, el = null;
+  if (pl.line !== undefined) {
+    const code = $('doc').querySelector('pre.code'), line = move(pl.line), text = code ? code.textContent : '';
+    // Lines of a file's text map across a change on disk; a formatted view's (XML, CSS) do not.
+    if (!code || line === null || (moved && text !== current.text)) return false;
+    const s = lineOffset(text, line);
+    if (s < 0) return false;
+    const e = text.indexOf('\n', s);
+    at = textAt(code, s + Math.min(pl.col, (e < 0 ? text.length : e) - s));
+  } else {
+    if (pl.src) {
+      const [s, e] = pl.src.split(',').map(Number), a = move(s), b = move(e - 1);
+      el = a === null || b === null ? null : $('doc').querySelector(`:scope > [data-src="${a},${b + 1}"]`);
+      if (!el) return false;
+    } else if (moved || !(el = $('doc').children[pl.i])) return false;
+    if (pl.off >= 0) at = textAt(pl.src ? el : $('doc'), pl.off);
+  }
+  const top = at ? charTop(at.node, at.o) : null;
+  if (top !== null) { anchorScroll(top - pl.want); anchorAt(at); } else if (el) { anchorScroll(el.getBoundingClientRect().top - pl.want); takeAnchor(); } else return false;
+  return true;
+}
+/** A map of the old text's lines to the new text's, past the lines they share at each end. */
+function lineMove(was, now) {
+  const A = was.split('\n'), B = now.split('\n');
+  let p = 0, s = 0;
+  while (p < A.length && p < B.length && A[p] === B[p]) p++;
+  while (s < A.length - p && s < B.length - p && A[A.length - 1 - s] === B[B.length - 1 - s]) s++;
+  return (l) => (l < p ? l : l >= A.length - s ? l + B.length - A.length : null);
+}
+// Watched only in the views of text: the folder grid sizes #doc from an observer of its own, deeper in the page.
 const anchorObserver = new ResizeObserver(() => {
-  // A reflow while the reader is scrolling is left to the scroll.
-  if (performance.now() - userScrollAt < 150) { takeAnchor(); return; }
-  holdAnchor(anchorWant(), readAnchor && readAnchor.el);
+  // A reflow while the reader is scrolling is left to the scroll, and a file being typed into moves with its caret.
+  if (performance.now() - userScrollAt < 150 || (editing && editing.whole)) { takeAnchor(); return; }
+  holdAnchor();
 });
 window.addEventListener('scroll', () => {
-  if (window.scrollY !== anchorOwnY) userScrollAt = performance.now();
+  // The page's own correction keeps its anchor; any other scroll takes the line now at the top.
+  if (window.scrollY !== anchorOwnY) { userScrollAt = performance.now(); takeAnchor(); }
   anchorOwnY = -1;
-  takeAnchor();
 }, { passive: true });
 
 let statsTimer = 0;
@@ -1496,6 +1622,9 @@ window.sb = {
     syncEditPill();
     docVer = p.ver ?? docVer;
     const y = samePath ? window.scrollY : p.reason === 'back' && p.path === current.path ? arcScroll : 0;
+    // A change on disk above the line being read moves that line by the lines it added or took away, not the page.
+    const place = samePath && typeof p.text === 'string' && typeof current.text === 'string' ? anchorPlace() : null;
+    const moved = place && p.text !== current.text ? lineMove(current.text, p.text) : null;
     if (!samePath) clearHint();
     // A re-render of the same file (a change on disk) keeps the app its Open button names; only a new file asks again.
     if (samePath && p.app === undefined && typeof current.app === 'string') p = { ...p, app: current.app, editor: current.editor };
@@ -1518,6 +1647,7 @@ window.sb = {
     showCrumbs(p);
     draw();
     window.scrollTo(0, y);
+    if (place) holdPlace(place, moved);
     if (typeof p.anchor === 'string' && p.anchor) scrollToHeading(p.anchor, false);
     if (findOnOpen) { const f = findOnOpen; findOnOpen = null; if (f.path === p.path) findFor(f.q); }
     const t1 = performance.now();
@@ -1539,10 +1669,10 @@ window.sb = {
     syncSideMenu();
     syncRaw(current);
     if (RENDER_KEYS.some((k) => prev[k] !== settings[k]) && current.path) {
-      const y = window.scrollY, want = anchorWant();
+      const y = window.scrollY, place = anchorPlace();
       draw();
       window.scrollTo(0, y);
-      holdAnchor(want, want && $('doc').children[want.i]);
+      if (!holdPlace(place)) takeAnchor();
     } else if (LOOK_KEYS.some((k) => prev[k] !== settings[k])) {
       runMermaid();
     }
@@ -1565,6 +1695,7 @@ window.sb = {
       Object.assign(editing, { lines: next.length, text: u.text, selStart: u.selStart, selLen: u.selLen });
       const el = editorEl();
       if (el) el.innerHTML = editorHTML();
+      revealCaret();
       requestAnimationFrame(() => post({ type: 'editPainted', keyTime: u.keyTime }));
     } else {
       if (retired && retired.seq === u.seq) retired.lines = next.length;
@@ -1599,6 +1730,7 @@ window.sb = {
     Object.assign(editing, { start: r.start, lines, text: r.text, selStart: r.caret, selLen: 0, tag: r.tag });
     retired = null;
     draw();
+    revealCaret();
   },
   editEnd(e) {
     if (!editing || (e && e.seq !== undefined && e.seq !== editing.seq)) return;
@@ -2596,6 +2728,7 @@ function csvView(p) {
   box.append(scroll);
   const drawRows = () => csvRows(m, scroll, tb, virtual);
   m.shown = { scroll, draw: drawRows };
+  if (virtual) { scroll.csvRows = drawRows; csvObserver.disconnect(); csvObserver.observe(scroll); }
   let queued = false, restoring = true;
   scroll.addEventListener('scroll', () => {
     if (restoring) return;
@@ -2653,6 +2786,9 @@ function csvColgroup(table, widths) {
   cg.replaceChildren(...widths.map((w) => { const col = document.createElement('col'); col.style.width = w + 'px'; return col; }));
   table.style.width = widths.reduce((a, b) => a + b, 0) + 'px';
 }
+
+// A taller table shows more rows, which no scroll asks for.
+const csvObserver = new ResizeObserver((es) => { for (const e of es) if (e.target.isConnected) e.target.csvRows(); });
 
 /** The table's rows: all of them, or with `virtual` those in the scroll box's view and a margin, between two spacer rows. */
 function csvRows(m, scroll, tb, virtual) {
@@ -2792,6 +2928,8 @@ function imageView(p) {
   stage.append(img);
   box.append(viewHead(p), stage);
   imageControls(stage, img, zoom);
+  stageObserver.disconnect();
+  stageObserver.observe(stage);
   return box;
 }
 
@@ -2929,10 +3067,14 @@ document.addEventListener('keydown', (e) => {
   if (!e.metaKey || e.altKey || e.ctrlKey) return;
   if (zoomImage(e.key === '=' ? '+' : e.key)) e.preventDefault();
 });
-window.addEventListener('resize', () => {
+const refit = () => {
   const stage = document.querySelector('#doc .img-stage'), img = stage && stage.querySelector('img');
   if (stage && img && img.naturalWidth) applyZoom(stage, img, zoomLabel(), imgScale);
-});
+};
+window.addEventListener('resize', refit);
+// The stage also narrows with the sidebar (shown, hidden, its edge dragged) when the window does not change.
+let stageW = 0;
+const stageObserver = new ResizeObserver((es) => { const w = es[es.length - 1].contentRect.width; if (w !== stageW) { stageW = w; refit(); } });
 
 // An archive's listing (sent by the extension from the writer's bsdtar) as a tree of folders and files, built from text nodes.
 const ARCHIVE_ALL_OPEN = 300;
@@ -3499,8 +3641,14 @@ function gridLayout() {
   if (!w) return;
   const cols = Math.max(1, Math.floor((w + GRID_GAP) / (GRID_MIN + GRID_GAP)));
   const tile = Math.floor((w - (cols - 1) * GRID_GAP) / cols);
+  // A new width moves every row: the tile last seen (the selected one when in view) is put back where it was.
+  const seen = grid.seen;
   if (cols !== grid.cols || tile !== grid.tile) { grid.cols = cols; grid.tile = tile; grid.rowH = tile + GRID_LABEL + GRID_GAP; grid.win = ''; }
   grid.box.style.height = `${Math.max(0, Math.ceil(grid.entries.length / cols) * grid.rowH - GRID_GAP)}px`;
+  if (seen && !gridRestore && window.scrollY > 0) {
+    const d = grid.box.getBoundingClientRect().top + Math.floor(seen.i / cols) * grid.rowH - seen.top;
+    if (Math.abs(d) >= 1) window.scrollBy({ top: d, behavior: 'instant' });
+  }
   // Back from a file opened here: the grid's scroll, which only its height allows, then its tile in view.
   if (gridRestore && gridRestore.root === grid.p.root && grid.entries.length) {
     window.scrollTo(0, gridRestore.y);
@@ -3517,6 +3665,9 @@ function gridWindow() {
   if (!gridShown() || !grid.box.clientWidth) return;
   const top = grid.box.getBoundingClientRect().top, rows = Math.ceil(grid.entries.length / grid.cols);
   const first = Math.max(0, Math.floor(-top / grid.rowH)), last = Math.min(rows - 1, Math.floor((window.innerHeight - top) / grid.rowH));
+  const sel = grid.tiles.get(gridCursor.get(tree.root)), si = sel ? sel.i : -1;
+  const i = si >= first * grid.cols && si < (last + 1) * grid.cols ? si : first * grid.cols;
+  grid.seen = { i, top: top + Math.floor(i / grid.cols) * grid.rowH };
   const a = Math.max(0, first - GRID_OVERSCAN) * grid.cols, b = Math.min(grid.entries.length, (Math.max(last, first) + GRID_OVERSCAN + 1) * grid.cols);
   const key = `${a},${b},${grid.tile}`;
   if (key === grid.win) return;
@@ -4011,6 +4162,8 @@ $('side-list').addEventListener('scroll', () => {
   sideScrollQueued = true;
   requestAnimationFrame(() => { sideScrollQueued = false; drawSideWindow(false); });
 }, { passive: true });
+// A taller list shows more rows, which no scroll asks for.
+new ResizeObserver(() => drawSideWindow(false)).observe($('side-list'));
 
 /** The note under a folder past the listing's cap: the rest are reached by the Names filter, which searches past it. */
 const moreNote = (n) => `${n.toLocaleString()} more not listed · Filter finds them`;
@@ -4837,12 +4990,56 @@ $('raw').addEventListener('click', () => {
   const k = rawKind(current);
   if (!k) return;
   if (editing) stopEditing();
+  const y = window.scrollY, from = isMarkdown(current) ? rawFrom() : null;
   if (rawKinds.has(k)) rawKinds.delete(k); else rawKinds.add(k);
-  const y = window.scrollY;
   draw();
   window.scrollTo(0, y);
+  if (!(from && rawLand(from))) takeAnchor();
   syncRaw(current);
 });
+
+/** The note's line at the top of the page, as the share of a source range [s, e) its anchor is through: Raw and rendered
+ *  Markdown are drawn at different heights, so scrollY alone lands on another section. */
+function rawFrom() {
+  takeAnchor();
+  const a = readAnchor, text = current.text;
+  if (!a) return null;
+  const code = a.node && a.node.parentElement.closest('#doc pre.code');
+  if (code) {
+    // From a blank line, the next line with text: a block starts there.
+    let at = textBefore(code, a.node, a.o).length;
+    const next = text.slice(at).search(/\S/);
+    if (next > 0 && text.slice(at, at + next).includes('\n')) at += next;
+    const c = textAt(code, at), top = c && charTop(c.node, c.o);
+    return { want: top === null ? a.top : top, line: text.slice(0, at).split('\n').length - 1, at };
+  }
+  const want = a.top;
+  if (!a.el.dataset.src) return null;
+  const [s, e] = a.el.dataset.src.split(',').map(Number);
+  const f = a.node ? textBefore(a.el, a.node, a.o).length / Math.max(1, a.el.textContent.length) : 0;
+  const from = lineOffset(text, s), to = lineOffset(text, e);
+  return { want, at: from + Math.round(f * ((to < 0 ? text.length : to) - from)) };
+}
+/** Draws the place rawFrom took in the other view where it was. */
+function rawLand(r) {
+  const text = current.text;
+  let at = null, blk = null;
+  if (r.line === undefined) {
+    const code = $('doc').querySelector('pre.code');
+    if (code) at = textAt(code, r.at);
+  } else {
+    const blocks = [...$('doc').children].filter((b) => b.dataset.src);
+    blk = blocks.find((b) => +b.dataset.src.split(',')[1] > r.line);
+    if (blk) {
+      const [s, e] = blk.dataset.src.split(',').map(Number), from = lineOffset(text, s), to = lineOffset(text, e);
+      const f = s > r.line ? 0 : (r.at - from) / Math.max(1, (to < 0 ? text.length : to) - from);
+      if (f > 0) at = textAt(blk, Math.round(Math.min(1, f) * blk.textContent.length));
+    }
+  }
+  const top = at ? charTop(at.node, at.o) : null;
+  if (top !== null) { anchorScroll(top - r.want); anchorAt(at); } else if (blk) { anchorScroll(blk.getBoundingClientRect().top - r.want); takeAnchor(); } else return false;
+  return true;
+}
 
 let prettyMemo = { p: null, kind: '', text: null };
 /** The formatted text of an XML file or a minified stylesheet, made once per payload; null when it cannot be made. */

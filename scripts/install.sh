@@ -2,6 +2,7 @@
 # spacebar installer: https://github.com/patebry/spacebar
 #
 #   curl -fsSL https://spacebar.patebryant.com/install.sh | sh
+#   curl -fsSL https://spacebar.patebryant.com/install.sh | sh -s -- --dry-run    (options go after sh -s --)
 #
 # What this does, in order:
 #   1. Checks for macOS 13 or later.
@@ -29,8 +30,6 @@ APP_NAME=spacebar.app
 APPEX_ID=md.spacebar.preview
 FOLDERS_ID=md.spacebar.preview.folders
 HELPER_LABEL=md.spacebar.helper
-# A stalled connection gives up instead of hanging the install.
-CURL_LIMITS="--connect-timeout 15 --max-time 600"
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 QL_SETTINGS='x-apple.systempreferences:com.apple.ExtensionsPreferences?extensionPointIdentifier=com.apple.quicklook.preview'
 
@@ -55,6 +54,8 @@ EOF
 }
 
 say() { printf '%s\n' "$*"; }
+# A stalled connection gives up instead of hanging the install.
+fetch() { curl --connect-timeout 15 --max-time 600 "$@"; }
 # quote <word>: the word, single-quoted only when a shell would need it.
 quote() {
   case $1 in
@@ -263,7 +264,7 @@ elif [ -n "$VERSION" ]; then
   BASE="https://github.com/$REPO/releases/download/$VERSION"
 else
   BASE="https://github.com/$REPO/releases/latest/download"
-  landed=$(curl -fsSIL $CURL_LIMITS -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null || true)
+  landed=$(fetch -fsSIL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null || true)
   case $landed in
     */releases/tag/?*) VERSION="${landed##*/releases/tag/} (latest)" ;;
     *) VERSION="(latest)" ;;
@@ -273,8 +274,8 @@ fi
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/spacebar-install.XXXXXX")
 
 say "Downloading spacebar $VERSION"
-curl -fSL $CURL_LIMITS --progress-bar -o "$TMP/spacebar.zip" "$BASE/spacebar.zip" || fail "download failed: $BASE/spacebar.zip"
-curl -fsSL $CURL_LIMITS -o "$TMP/spacebar.zip.sha256" "$BASE/spacebar.zip.sha256" || fail "download failed: $BASE/spacebar.zip.sha256"
+fetch -fSL --progress-bar -o "$TMP/spacebar.zip" "$BASE/spacebar.zip" || fail "download failed: $BASE/spacebar.zip"
+fetch -fsSL -o "$TMP/spacebar.zip.sha256" "$BASE/spacebar.zip.sha256" || fail "download failed: $BASE/spacebar.zip.sha256"
 
 expected=$(awk '{ print $1; exit }' "$TMP/spacebar.zip.sha256")
 actual=$(shasum -a 256 "$TMP/spacebar.zip" | awk '{ print $1 }')
@@ -427,7 +428,7 @@ say ""
 say "Next: select a file or folder in Finder and press Space. spacebar shows folders, Markdown, code, data and"
 say "archives; plain text, images, PDFs and media keep Apple's preview in Finder and open in spacebar's sidebar."
 say "Settings: open ~/Applications/spacebar.app"
-say "Uninstall: curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/uninstall.sh | sh"
+say "Uninstall: curl -fsSL https://spacebar.patebryant.com/uninstall.sh | sh"
 }
 
 main "$@"

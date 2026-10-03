@@ -256,6 +256,10 @@ curl -fsSL https://spacebar.patebryant.com/install.sh | sh
 
 Then select a file or folder in Finder and press Space.
 
+`curl -fsSL` fetches the script: `-f` stops on an HTTP error instead of passing an error page to the shell, `-s` hides the
+progress bar, `-S` still shows errors, and `-L` follows redirects. `sh` runs it: the script is plain POSIX `sh`, which every
+Mac has (`/bin/sh` is bash in POSIX mode), so it runs the same whatever your login shell is.
+
 <!-- gatekeeper: the release notes copy this paragraph (.github/workflows/release.yml) -->
 spacebar is **not notarized**: there is no Apple Developer ID behind it yet. Use the install command; a browser download
 of the zip will be blocked by Gatekeeper. Files that curl downloads are not quarantined, so Gatekeeper does not stop the app,
@@ -278,7 +282,13 @@ Read [`scripts/install.sh`](scripts/install.sh) before you run it. It:
    a syntax highlighter for code), with how many of spacebar's types each claims by kind, says how to turn them off, and warns
    if another copy of spacebar is in `/Applications`. It never turns off or deletes anything itself.
 
-`install.sh --help` lists its options, including `--dry-run`, which downloads and verifies but changes nothing.
+`install.sh --help` lists its options, including `--dry-run`, which downloads and verifies but changes nothing. Options go
+after `sh -s --`, and a variable goes before `sh`, not before `curl`:
+
+```sh
+curl -fsSL https://spacebar.patebryant.com/install.sh | sh -s -- --dry-run
+curl -fsSL https://spacebar.patebryant.com/install.sh | SPACEBAR_VERSION=v0.2.2 sh
+```
 
 ### Updates
 
@@ -301,7 +311,7 @@ gh attestation verify spacebar.zip -R patebry/spacebar
 ## Uninstall
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh
+curl -fsSL https://spacebar.patebryant.com/uninstall.sh | sh
 ```
 
 This stops the Space helper (its launchd agent, then the helper, the viewer and the viewer's writer), resets the
@@ -312,7 +322,7 @@ Quick Look extensions first. To also delete your settings and themes in `~/Libra
 helper's log in `~/Library/Logs`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh -s -- --purge
+curl -fsSL https://spacebar.patebryant.com/uninstall.sh | sh -s -- --purge
 ```
 
 macOS asks before one app deletes another's sandbox container, so the uninstaller lists the containers spacebar leaves in

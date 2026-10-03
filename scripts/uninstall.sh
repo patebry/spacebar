@@ -1,7 +1,8 @@
 #!/bin/sh
 # spacebar uninstaller: https://github.com/patebry/spacebar
 #
-#   curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh
+#   curl -fsSL https://spacebar.patebryant.com/uninstall.sh | sh
+#   curl -fsSL https://spacebar.patebryant.com/uninstall.sh | sh -s -- --purge    (options go after sh -s --)
 #
 # Stops the Space helper and quits its viewer, resets the permissions macOS keeps for them, quits
 # ~/Applications/spacebar.app, unregisters its Quick Look extensions, and deletes it. Settings in

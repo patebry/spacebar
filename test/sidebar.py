@@ -2796,6 +2796,45 @@ def sidebar_and_folders(page, check, out):
               f'grid: from a photo, {key or "the Back button"} goes back to the grid, the photo\'s tile selected', json.dumps([head, sel, [m.get('type') for m in k['messages']]]))
     page.cmd('@root:')
 
+def filter_order(check):
+    """The Names filter in the listing's own order: a match in a folder never opened (placed by the page from the names search)
+    sits where the tree puts it once that folder is listed, folders among the files as Finder sorts them, or first."""
+    page = Page()
+    try:
+        for first in ('finder', 'always'):
+            for n in ['x-notes.md', 'proj/a-plan.md', 'proj/b-plans/p.md', 'proj/c-plan.md', 'proj/d-planning/q.md', 'proj/e-plan.md']:
+                os.makedirs(os.path.dirname(os.path.join(page.out, first, n)), exist_ok=True)
+                open(os.path.join(page.out, first, n), 'w').write('# x\n')
+        names = "return sideRows.map((r) => r.e ? '  '.repeat(r.depth) + r.e.name : '[' + r.note + ']')"
+
+        def typed(q, wait):
+            page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.value = " + json.dumps(q)
+                     + "; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
+            page.cmd(f'@wait:{wait}')
+            return page.js(names)
+        page.cmd('@size:1100x760')
+        for first in ('finder', 'always'):
+            d = os.path.join(page.out, first)
+            page.apply(foldersFirst=first)
+            page.cmd('@root:' + d)
+            page.render(os.path.join(d, 'x-notes.md'))
+            page.cmd('@wait:0.4')
+            unlisted = typed('plan', 0.8)
+            typed('', 0.3)
+            page.cmd('@eval:toggleFolder(' + json.dumps(os.path.join(d, 'proj')) + '); 0')
+            page.cmd('@wait:0.4')
+            listed = typed('plan', 0.8)
+            typed('', 0.3)
+            page.cmd('@eval:toggleFolder(' + json.dumps(os.path.join(d, 'proj')) + '); 0')
+            mixed = ['proj', '  a-plan.md', '  b-plans', '    p.md', '  c-plan.md', '  d-planning', '    q.md', '  e-plan.md']
+            want = mixed if first == 'finder' else ['proj', '  b-plans', '    p.md', '  d-planning', '    q.md', '  a-plan.md', '  c-plan.md', '  e-plan.md']
+            check(unlisted == listed == want, f'names filter, folders {"mixed as Finder has them" if first == "finder" else "first"}: a folder never opened '
+                  'is ordered as the tree orders it once listed', json.dumps([unlisted, listed]))
+    finally:
+        page.close()
+        shutil.rmtree(page.out, ignore_errors=True)
+
+
 def drag_openwith_diff(check):
     """0.4: a file dragged out of the panel (only a listed row, an overview row or the file on screen, and only from a press still
     under way; never in Quick Look), the toolbar's Open With menu (the apps LinkPolicy.openWithApps offers, the default first;
@@ -4532,6 +4571,7 @@ def main():
         sandboxed(tree, check)
         sandboxed(tree, check, runtime=True)
         panel_host(check)
+        filter_order(check)
         drag_openwith_diff(check)
         release_interactions(check)
     finally:

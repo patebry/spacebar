@@ -4354,16 +4354,21 @@ function filteredRows() {
       for (let d = parentOf(h.path); d !== tree.root && inTree(d); d = parentOf(d)) put({ name: d.slice(d.lastIndexOf('/') + 1), path: d, dir: true, icon: 'folder', size: null, modified: null });
     }
   }
-  const order = (a, b) => (a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name, undefined, { numeric: true }));
+  // The listing's own order: by name, folders first only where Finder puts them there.
+  const first = settings.listsFoldersFirst === true;
+  const order = (a, b) => (first && a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name, undefined, { numeric: true }));
   const entries = (dir) => {
     const d = tree.dirs.get(dir), listed = d ? d.entries : [], extra = found.get(dir);
     if (!extra) return listed;
     const have = new Set(listed.map((e) => e.path));
     const add = [...extra.values()].filter((e) => !have.has(e.path)).sort(order);
     if (!add.length) return listed;
-    // Found folders after the listed folders, found files after the listed files.
-    const split = listed.findIndex((e) => !e.dir), at = split < 0 ? listed.length : split;
-    return [...listed.slice(0, at), ...add.filter((e) => e.dir), ...listed.slice(at), ...add.filter((e) => !e.dir)];
+    // A search result has no size or date: by another sort, what was found follows what is listed.
+    if ((settings.folderSort || 'name') !== 'name') return [...listed, ...add];
+    const out = [];
+    let i = 0, j = 0;
+    while (i < listed.length || j < add.length) out.push(j >= add.length || (i < listed.length && order(listed[i], add[j]) <= 0) ? listed[i++] : add[j++]);
+    return out;
   };
   let asks = 0;
   const find = (dir, depth) => {

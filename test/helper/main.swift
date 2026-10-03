@@ -178,6 +178,38 @@ do {
 }
 check("text session: only the viewer may claim one", Link.permits(.viewer, .textSession) && !Link.permits(.app, .textSession))
 
+// One of the page's popovers is open (a menu, the find bar): Esc goes to the viewer, which closes it; held, its repeats and key-up
+// are swallowed, as any key the helper took. Every other key routes as before, and a text session still passes Esc.
+let popped = PanelContext(open: true, finderPid: finder, viewerPid: viewer, popover: true)
+do {
+    var r = KeyRoute()
+    check("popover: Esc is sent to the viewer", r.route(key(KeyCode.escape), panel: popped) == .forward(HelperKeys.escape))
+    check("popover: its repeats are swallowed", r.route(key(KeyCode.escape, rep: true), panel: popped) == .swallow
+          && r.route(key(KeyCode.escape, rep: true), panel: popped) == .swallow)
+    check("popover: its key-up is swallowed", r.route(key(KeyCode.escape, down: false), panel: popped) == .swallow && r.held.isEmpty)
+    check("popover: Esc to the viewer's pid is sent too", routeOnce(key(KeyCode.escape, to: viewer), popped) == .forward(HelperKeys.escape))
+    check("popover closed meanwhile: a held Esc's repeat still never closes the panel", {
+        var k = KeyRoute(); _ = k.route(key(KeyCode.escape), panel: popped); return k.route(key(KeyCode.escape, rep: true), panel: open) == .swallow }())
+}
+check("popover: Space, ⌘W and ⌘. still close", routeOnce(key(KeyCode.space), popped) == .close
+      && routeOnce(key(13, "w", mods: .command), popped) == .close && routeOnce(key(47, ".", mods: .command), popped) == .close)
+check("popover: ↓ is still routed", routeOnce(key(KeyCode.down), popped) == .forward("down"))
+check("popover: ⇧Esc passes", routeOnce(key(KeyCode.escape, mods: .shift), popped) == .pass)
+check("popover: Esc to another pid passes", routeOnce(key(KeyCode.escape, to: writer), popped) == .pass)
+check("popover in a text session: Esc is the typing's", routeOnce(key(KeyCode.escape), PanelContext(open: true, finderPid: finder, viewerPid: viewer,
+      textSession: true, popover: true)) == .pass)
+check("popover with the panel closed: Esc passes", routeOnce(key(KeyCode.escape), PanelContext(open: false, finderPid: finder, viewerPid: viewer, popover: true)) == .pass)
+check("popover: the viewer accepts the name", HelperKeys.all.contains(HelperKeys.escape) && !HelperKeys.list.contains(HelperKeys.escape))
+check("popover: only the viewer may say one is open", Link.permits(.viewer, .popover) && !Link.permits(.app, .popover))
+do {
+    var p = TextSession()
+    check("popover: refused with no panel open or on its way", !p.set(true, panelOpen: false) && !p.active)
+    _ = p.set(true, panelOpen: true)
+    p.clear()
+    check("popover: forgotten when the panel closes, and Esc closes again",
+          routeOnce(key(KeyCode.escape), PanelContext(open: true, finderPid: finder, viewerPid: viewer, popover: p.active)) == .close)
+}
+
 // A whole edit as the tap sees it, the session as it really evolves: Space opens the panel, a click starts the edit and the viewer
 // reports the session, every key of the typing passes (down, repeat and up), Esc ends the edit and the viewer reports it over,
 // then Return goes to the sidebar again and Space closes. Return is one of the keys the helper routes, so each press is checked.

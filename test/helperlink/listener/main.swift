@@ -11,6 +11,7 @@ final class Stub: NSObject, SpacebarHelperProtocol {
     func panelMoved(x: Double, y: Double, width: Double, height: Double, windowNumber: Int) {}
     func declined(_ requestID: Int) {}
     func textSession(_ active: Bool, reply: @escaping (Bool) -> Void) { reply(Link.permits(role, .textSession)) }
+    func popover(_ open: Bool) {}
     func status(reply: @escaping (Data) -> Void) {
         let s = HelperStatus(pid: getpid(), version: role == .viewer ? "viewer" : "app", enabled: true, trusted: false, tap: false, viewer: false, binary: "")
         reply(Link.permits(role, .status) ? (try! JSONEncoder().encode(s)) : Data())

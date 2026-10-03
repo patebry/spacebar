@@ -5098,6 +5098,7 @@ Object.assign(window.sb, {
   hostKey(m) {
     const key = m && m.key;
     if (HOST !== 'panel' || typeof key !== 'string') return false;
+    if (key === 'escape') return closePopover();
     if (LIST_COMMANDS.has(key)) return hostCommand(key);
     if (Object.hasOwn(HOST_ZOOM, key)) return zoomImage(HOST_ZOOM[key]);
     if (Object.hasOwn(FILTER_KEYS, key) && gridTakesKeys() && gridKey(FILTER_KEYS[key])) return true;
@@ -6108,6 +6109,26 @@ document.addEventListener('click', (e) => {
   e.stopPropagation();
 }, true);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !owPop.hidden) { showOpenWith(false); e.preventDefault(); } });
+
+// ---------- Esc in the Space panel: the helper closes the panel with it unless the page says one of these is open ----------
+
+const POPOVERS = [owPop, sidePop, pop, findBar];
+/** Closes the topmost open popover (Open With, the sort menu, Aa, then the find bar); false when none was open. */
+function closePopover() {
+  if (!owPop.hidden) showOpenWith(false);
+  else if (!sidePop.hidden) showSideMenu(false);
+  else if (!pop.hidden) showPopover(false);
+  else if (findOpen()) closeFind();
+  else return false;
+  return true;
+}
+if (HOST === 'panel') {
+  let said = null;
+  const say = () => { const open = POPOVERS.some((p) => !p.hidden); if (open !== said) { said = open; post({ type: 'popover', open }); } };
+  const watch = new MutationObserver(say);
+  for (const p of POPOVERS) watch.observe(p, { attributes: true, attributeFilter: ['hidden'] });
+  say();
+}
 
 // ---------- dragging a file out of the Space panel: the page names the row, and the viewer starts a native file drag ----------
 

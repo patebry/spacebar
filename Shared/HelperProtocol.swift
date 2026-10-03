@@ -29,6 +29,9 @@ enum HelperIDs {
     /// one holds it the helper passes every key. Replies whether the helper holds what was said: a session starts only while the
     /// panel is open or on its way.
     func textSession(_ active: Bool, reply: @escaping (Bool) -> Void)
+    /// Viewer: one of the page's popovers (a menu, the find bar) opened or every one closed. While one is open the helper sends
+    /// Esc to the viewer to close it, instead of closing the panel.
+    func popover(_ open: Bool)
     /// Settings app: `HelperStatus` as JSON.
     func status(reply: @escaping (Data) -> Void)
     /// Settings app: asks macOS to show the Accessibility prompt; replies whether the helper is trusted now.
@@ -113,7 +116,9 @@ extension HelperState {
 enum HelperKeys {
     static let list: Set<String> = ["up", "down", "left", "right", "home", "end", "pageup", "pagedown", "return", "back"]
     static let commands: Set<String> = ["open", "find", "filter", "copy", "zoomIn", "zoomOut", "zoomReset"]
-    static let all = list.union(commands)
+    /// Esc while one of the page's popovers is open: it closes that, not the panel.
+    static let escape = "escape"
+    static let all = list.union(commands).union([escape])
 }
 
 struct HelperMods: OptionSet {

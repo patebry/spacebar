@@ -31,6 +31,10 @@ final class Endpoint: NSObject, SpacebarHelperProtocol {
         guard Link.permits(role, .textSession), let conn else { return reply(false) }
         DispatchQueue.main.async { reply(Helper.shared.textSession(active, from: conn)) }
     }
+    func popover(_ open: Bool) {
+        guard Link.permits(role, .popover), let conn else { return }
+        DispatchQueue.main.async { Helper.shared.popover(open, from: conn) }
+    }
     func status(reply: @escaping (Data) -> Void) {
         guard Link.permits(role, .status) else { return reply(Data()) }
         DispatchQueue.main.async { reply((try? JSONEncoder().encode(Helper.shared.status())) ?? Data()) }
@@ -82,6 +86,8 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private var followPending = false
     private var finderTextFocus = false
     private var text = TextSession()
+    /// One of the page's popovers is open, as the viewer said; held under a text session's rules, so it ends with the panel.
+    private var pagePopover = TextSession()
     /// The viewer's panel, as it reported it; checked on screen before its keys are taken, and again every 2 s.
     private var panelWindow = 0
     /// Checks in a row that found the panel's window off screen; one can be a frame the window server had not drawn yet.
@@ -191,6 +197,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         panelOpen = false
         suspendedAt = nil
         text.clear()
+        pagePopover.clear()
         gesturesOff()
     }
 
@@ -202,6 +209,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         panelOpen = false
         suspendedAt = nil
         text.clear()
+        pagePopover.clear()
         gesturesOff()
         if let p = pending { fail(p.id, "viewer gone") }
         // A viewer that keeps dying is relaunched less and less often.
@@ -244,6 +252,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
             gesturesOff()
             suspendedAt = nil
             text.clear()
+            pagePopover.clear()
             if Decision.closeEndsPending(pendingID: pending?.id, requestID: requestID) { pending = nil }
             return
         }
@@ -289,6 +298,11 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         let held = text.set(active, panelOpen: panelOpen || pending != nil)
         log.info("text session \(self.text.active ? "on" : "off", privacy: .public)\(held ? "" : " (refused: no panel)", privacy: .public)")
         return held
+    }
+
+    func popover(_ open: Bool, from c: NSXPCConnection) {
+        guard c === viewer else { return }
+        _ = pagePopover.set(open, panelOpen: panelOpen || pending != nil)
     }
 
     // MARK: Tap
@@ -393,7 +407,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
             finderTextFocus = Self.textFocus(finderPid)
         }
         let ctx = PanelContext(open: panelOpen || pending != nil, finderPid: finderPid, viewerPid: viewerPid, sidebarKeys: settings.sidebarKeys,
-                               textFocus: finderTextFocus, textSession: text.active)
+                               textFocus: finderTextFocus, textSession: text.active, popover: pagePopover.active)
         switch route.route(e, panel: ctx) {
         case .pass: return pass
         case .swallow: return nil
@@ -501,6 +515,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         viewerProxy()?.suspend()
         panelOpen = false
         text.clear()
+        pagePopover.clear()
         gesturesOff()
         panelWindow = 0
         offscreenMisses = 0
@@ -524,7 +539,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private func fail(_ id: Int, _ why: String) {
         guard let p = pending, p.id == id else { return }
         pending = nil
-        if !panelOpen { text.clear() }
+        if !panelOpen { text.clear(); pagePopover.clear() }
         log.info("show \(id) failed: \(why, privacy: .public)")
         if id == restoring {
             viewerProxy()?.close()
@@ -543,6 +558,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         pending = nil
         suspendedAt = nil
         text.clear()
+        pagePopover.clear()
         guard panelOpen || viewer != nil else { return }
         viewerProxy()?.close()
         panelOpen = false

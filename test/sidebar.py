@@ -2418,6 +2418,18 @@ def panel_host(check):
         check(tip == 'Open in your editor (⌘O)', 'panel: the Open tooltip gives ⌘O, which the panel takes', tip)
         page.cmd("@eval:getSelection().removeAllRanges(); 0")
         page.cmd("@eval:document.getElementById('find-close').click(); 0")
+        # Esc: the helper sends it here while the page says a popover is open, and closes the panel with it otherwise.
+        said = lambda *rs: [str(m.get('open')).lower() in ('1', 'true') for r in rs for m in msgs(r, 'popover')]
+        page.cmd('@wait:0.1')
+        for sel, name in [('#aa', 'the Aa popover'), ('#side-menu', 'the sort menu'), ('#find-btn', 'the find bar')]:
+            r = page.cmd(f"@eval:document.querySelector('{sel}').click(); 0")
+            up = said(r, page.cmd('@wait:0.1'))
+            r = page.cmd("@eval:sb.hostKey({ key: 'escape' })")
+            down = said(r, page.cmd('@wait:0.1'))
+            gone = page.js("return ['aa-pop', 'side-pop', 'ow-pop', 'find'].every((id) => document.getElementById(id).hidden)")
+            check(up == [True] and r['result'] in (True, 'true', 1) and down == [False] and gone,
+                  f'panel: {name} opening tells the panel, and Esc sent back closes it', json.dumps([up, r['result'], down, gone]))
+        check(page.js("return sb.hostKey({ key: 'escape' })") is False, 'panel: Esc with no popover open is left to the panel, which closes')
         panel_grid(page, check, page.out)
     finally:
         page.close()

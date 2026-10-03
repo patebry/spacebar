@@ -180,6 +180,8 @@ struct PanelContext: Equatable {
     var textFocus = false
     /// The viewer's writer panel holds the keyboard for an edit, the filter or the find field (`TextSession`).
     var textSession = false
+    /// One of the page's popovers is open (`popover` from the viewer): Esc closes it instead of the panel.
+    var popover = false
 }
 
 /// The viewer's word that its writer's key panel holds the keyboard. Only the panel it is open for, or on its way, can have one,
@@ -232,12 +234,15 @@ struct KeyRoute {
         // the keys while Finder stays frontmost.
         guard panel.open else { return Decision.wantsSpace(e) && e.targetPid == panel.finderPid && e.targetPid > 0 ? .space : .pass }
         guard mine, !(panel.textFocus && e.targetPid == panel.finderPid) else { return .pass }
-        if Self.closes(e) { held.insert(e.code); return .close }
+        if Self.closes(e) {
+            held.insert(e.code)
+            return panel.popover && e.code == KeyCode.escape ? .forward(HelperKeys.escape) : .close
+        }
         if let name = Self.forwarded(e, sidebarKeys: panel.sidebarKeys) { held.insert(e.code); return .forward(name) }
         return .pass
     }
 
-    /// Space, Esc, ⌘W and ⌘. close the panel in one press.
+    /// Space, Esc, ⌘W and ⌘. close the panel in one press; Esc closes a popover of the page first, while one is open.
     static func closes(_ e: KeyEvent) -> Bool {
         if e.mods.isEmpty { return (e.code == KeyCode.space && !e.isRepeat) || e.code == KeyCode.escape }
         return e.mods == .command && !e.isRepeat && (e.chars == "w" || e.chars == ".")

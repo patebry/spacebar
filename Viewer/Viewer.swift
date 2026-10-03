@@ -125,6 +125,8 @@ final class PanelController: PreviewController {
 
     override func handle(_ type: String, _ body: [String: Any]) {
         switch type {
+        case "popover":
+            Viewer.shared.tellPopover(PageMessage(body: body).bool("open") == true)
         case "dragZone":
             (view.window as? ViewerPanel)?.dragZone = PageMessage(body: body).bool("on") == true
         case "dragOut":
@@ -169,6 +171,8 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
     private var idle: DispatchWorkItem?
     /// The writer's key panel holds the keyboard; the helper is told, so it passes the typing's keys.
     private(set) var textSession = false
+    /// One of the page's popovers is open, as the page last said; the helper is told, so Esc closes it rather than the panel.
+    private var popover = false
 
     override init() {
         panel = ViewerPanel(contentRect: NSRect(x: 0, y: 0, width: 900, height: 640),
@@ -245,6 +249,13 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
         helper()?.textSession(held) { ok in
             if !ok { vlog.error("helper refused text session \(held)") }
         }
+    }
+
+    /// The helper forgets the popover whenever the panel closes; `announce` tells it again for a panel that shows one.
+    func tellPopover(_ open: Bool) {
+        guard open != popover else { return }
+        popover = open
+        helper()?.popover(open)
     }
 
     // MARK: SpacebarViewerProtocol
@@ -365,6 +376,7 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.open, self.request == id else { return }
             self.helper()?.panelState(true, requestID: id, windowNumber: self.panel.windowNumber)
+            if self.popover { self.helper()?.popover(true) }
         }
     }
 
@@ -435,6 +447,8 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
         web.evaluateJavaScript("sb.hostKey && sb.hostKey(\(arg))") { r, _ in
             guard (r as? Bool) != true else { return }
             switch name {
+            // No popover was open after all (the page's word was stale): Esc closes the panel, as it does otherwise.
+            case HelperKeys.escape: self.hide(tell: true)
             case "zoomIn": web.pageZoom = min(web.pageZoom * 1.1, 3)
             case "zoomOut": web.pageZoom = max(web.pageZoom / 1.1, 0.5)
             case "zoomReset": web.pageZoom = 1

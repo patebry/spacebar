@@ -97,10 +97,19 @@ def highlight_slices(page, check, out):
 # Frame gaps from the next frame on, for `n` frames.
 GAPS = """window.__gaps = []; let last = 0, n = 0; const f = (t) => { if (last) window.__gaps.push(Math.round(t - last)); last = t; if (++n < NFR) requestAnimationFrame(f); };
   requestAnimationFrame(f); return 1;"""
-# The block at the top of the page and its top.
-TOPBLOCK = """const bar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bar-h')) || 40;
-  const b = [...document.getElementById('doc').children].find((k) => k.getBoundingClientRect().bottom > bar + 1);
-  return [[...document.getElementById('doc').children].indexOf(b), Math.round(b.getBoundingClientRect().top)];"""
+# The block at the top of the page and its top, and the character starting the line at the top (by its offset in #doc) and its top:
+# a block running under the toolbar row is held by that line, so the block's own top moves as the lines above it rewrap.
+TOPBLOCK = """const bar = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--bar-h')) || 40, d = document.getElementById('doc');
+  const b = [...d.children].find((k) => k.getBoundingClientRect().bottom > bar + 1);
+  const top = (o) => { const w = document.createTreeWalker(d, NodeFilter.SHOW_TEXT); let n = 0, t;
+    while ((t = w.nextNode()) && n + t.length <= o) n += t.length;
+    const k = document.createRange(); k.setStart(t, o - n); k.setEnd(t, o - n + 1); return k.getClientRects()[0].top; };
+  if (window.__topOff === undefined) {
+    const r = document.caretRangeFromPoint(d.getBoundingClientRect().left + parseFloat(getComputedStyle(d).paddingLeft) + 6, bar + 10), all = document.createRange();
+    all.selectNodeContents(d); all.setEnd(r.startContainer, r.startOffset); window.__topOff = all.toString().length;
+    // A wrap space at the end of the line above, given for a line starting with an element, is not the line at the top.
+    if (/\\s/.test(d.textContent[window.__topOff]) && top(window.__topOff + 1) > top(window.__topOff) + 1) window.__topOff++; }
+  return [[...d.children].indexOf(b), Math.round(b.getBoundingClientRect().top), Math.round(top(window.__topOff))];"""
 
 
 def large_note(page, check, out):
@@ -117,13 +126,17 @@ def large_note(page, check, out):
     page.cmd('@wait:0.3')
     res = {}
     for label in ('sidebar hidden', 'sidebar shown'):
+        # A scroll, so the page takes the line now at the top as the one being read.
+        page.cmd('@eval:delete window.__topOff; window.scrollBy(0, 1); 0')
+        page.cmd('@wait:0.3')
         before = page.js(TOPBLOCK)
         page.js("document.getElementById('side-toggle').click(); " + GAPS.replace('NFR', '24'))
         page.cmd('@wait:0.7')
-        res[label] = {'frame gaps ms': page.js('return window.__gaps'), 'top block [index, top]': [before, page.js(TOPBLOCK)]}
-    ok = all(sum(g > 34 for g in v['frame gaps ms']) <= 1 and max(v['frame gaps ms']) < 80 and v['top block [index, top]'][0] == v['top block [index, top]'][1]
+        res[label] = {'frame gaps ms': page.js('return window.__gaps'), 'top block [index, top, top line]': [before, page.js(TOPBLOCK)]}
+    still = lambda b, a: b[0] == a[0] and abs(b[2] - a[2]) <= 2
+    ok = all(sum(g > 34 for g in v['frame gaps ms']) <= 1 and max(v['frame gaps ms']) < 80 and still(*v['top block [index, top, top line]'])
              for v in res.values())
-    check(ok, 'N17: a 500 KB note follows the sidebar\'s animation with at most one frame over 34 ms (the one reflow, under 80) each way, and the block '
+    check(ok, 'N17: a 500 KB note follows the sidebar\'s animation with at most one frame over 34 ms (the one reflow, under 80) each way, and the line '
           'being read keeps its place', json.dumps(res))
     page.cmd('@root:')
 

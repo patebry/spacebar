@@ -1453,10 +1453,21 @@ function takeAnchor() {
     x = Math.max(pre.parentElement.getBoundingClientRect().left, pr.left + parseFloat(getComputedStyle(pre).paddingLeft), g && g.offsetWidth ? g.getBoundingClientRect().right : -Infinity) + 4;
   }
   const y = Math.min(bar + 10, window.innerHeight - 1);
-  const r = document.caretRangeFromPoint(x, y), n = r && r.startContainer;
+  const r = document.caretRangeFromPoint(x, y);
+  let n = r && r.startContainer, o = r ? r.startOffset : 0;
   if (!n || n.nodeType !== Node.TEXT_NODE || !blk.contains(n) || (g && g.contains(n))) return;
-  const t = charTop(n, r.startOffset);
-  if (t !== null) Object.assign(readAnchor, { node: n, o: r.startOffset, top: t });
+  // At the start of a line, WebKit may give the space the line above wrapped at (when this line starts with bold or a link),
+  // which moves with that line: the character held is the next one, drawn on this line.
+  const w = document.createTreeWalker(blk, NodeFilter.SHOW_TEXT);
+  w.currentNode = n;
+  const after = (m, k) => { if (k + 1 < m.length) return [m, k + 1]; let nx = w.nextNode(); while (nx && !nx.length) nx = w.nextNode(); return nx ? [nx, 0] : null; };
+  if (o >= n.length) { const nx = after(n, n.length); if (!nx) return; [n, o] = nx; }
+  if (/\s/.test(n.data[o])) {
+    const nx = after(n, o), t0 = charTop(n, o), t1 = nx && charTop(nx[0], nx[1]);
+    if (t0 !== null && t1 !== null && t1 > t0 + 1) [n, o] = nx;
+  }
+  const t = charTop(n, o);
+  if (t !== null) Object.assign(readAnchor, { node: n, o, top: t });
 }
 /** Where the anchor is drawn now, or null when a redraw took it away. */
 function anchorTop(a) {

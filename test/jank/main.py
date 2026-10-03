@@ -638,15 +638,20 @@ MARK_BOX = """const bar = parseFloat(getComputedStyle(document.documentElement).
   for (let y = bar + 10; y < bar + 80 && !(r && r.startContainer.nodeType === 3 && box.contains(r.startContainer)); y += 4) r = document.caretRangeFromPoint(x, y);
   if (!r || r.startContainer.nodeType !== 3 || !box.contains(r.startContainer)) return null;
   const all = document.createRange(); all.selectNodeContents(box); all.setEnd(r.startContainer, r.startOffset);
-  const before = all.toString();
-  window.__box = pre ? '#doc .code-view > pre.code' : '#doc'; window.__off = before.length; window.__node = r.startContainer; window.__o = r.startOffset;
+  let before = all.toString();
+  // A wrap space at the end of the line above, given for a line starting with an element, is not the line at the top.
+  const tops = (o) => { const w = document.createTreeWalker(box, NodeFilter.SHOW_TEXT); let n = 0, t;
+    while ((t = w.nextNode()) && n + t.length <= o) n += t.length; if (!t) return null;
+    const k = document.createRange(); k.setStart(t, o - n); k.setEnd(t, o - n + 1); return k.getClientRects()[0].top; };
+  if (/\s/.test(box.textContent[before.length] || '') && tops(before.length + 1) > tops(before.length) + 1) before = box.textContent.slice(0, before.length + 1);
+  window.__node = null;
+  window.__box = pre ? '#doc .code-view > pre.code' : '#doc'; window.__off = before.length;
   window.__at = () => { if (!window.__node || !window.__node.isConnected) {
       const w = document.createTreeWalker(document.querySelector(window.__box), NodeFilter.SHOW_TEXT); let n = 0, node;
       while ((node = w.nextNode())) { if (n + node.length > window.__off) { window.__node = node; window.__o = window.__off - n; break; } n += node.length; } }
     const k = document.createRange(); k.setStart(window.__node, window.__o); k.setEnd(window.__node, Math.min(window.__node.length, window.__o + 1));
     return Math.round(k.getClientRects()[0].top); };
-  window.__plain = () => { const c = document.querySelector('#doc pre.code > code.parts');
-    return c ? [...c.children].filter((n) => n.classList.contains('tpart') && n.childNodes.length === 1 && n.firstChild.nodeType === 3).length : -1; };
+  window.__plain = () => { PLAIN };
   return { off: window.__off, top: window.__at(), line: pre ? before.split('\\n').length - 1 : -1, plain: window.__plain(), y: Math.round(scrollY) };"""
 FOLLOW = """const tick = document.createElement('div'), S = window.__samples = []; let on = true, n = 0;
   tick.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;pointer-events:none;visibility:hidden';
@@ -657,7 +662,11 @@ FOLLOW = """const tick = document.createElement('div'), S = window.__samples = [
   requestAnimationFrame(f);
   window.__stop = () => { on = false; window.__ro.disconnect(); tick.remove(); return S; };"""
 STOP = 'return window.__stop()'
-LANDED = 'return window.__plain()'
+# The highlight pieces still plain, or -1 when the code has no pieces.
+PLAIN = """const c = document.querySelector('#doc pre.code > code.parts');
+    return c ? [...c.children].filter((n) => n.classList.contains('tpart') && n.childNodes.length === 1 && n.firstChild.nodeType === 3).length : -1;"""
+MARK_BOX = MARK_BOX.replace('PLAIN', PLAIN)
+LANDED = PLAIN
 # MARK_BOX's result kept as `m`, so more can run in the same task before it is returned.
 MARK_M = MARK_BOX.replace('return {', 'const m = {', 1) + ';'
 
@@ -727,7 +736,8 @@ def anchor_vs_width_hold(page, check, out):
     """Cross: the reading anchor and N17. A note over 100 KB has its column's width held while the sidebar slides and released at
     the end; the line being read (inside a long paragraph) stays put on every frame, and after the release."""
     md = os.path.join(out, 'big.md')
-    open(md, 'w').write(''.join(f'## Section {i}\n\n' + 'Words that wrap at every width of the column, and then some more. ' * 30 + '\n\n'
+    # Lines that start with bold, code or a link: the place WebKit gives at such a line's start is the line above's wrap space.
+    open(md, 'w').write(''.join(f'## Section {i}\n\n' + 'Words with **bold** and `code` and a [link](x.md) that wrap. ' * 30 + '\n\n'
                                 for i in range(80)))
     page.cmd('@size:1100x760')
     page.cmd('@root:' + out)
@@ -735,8 +745,8 @@ def anchor_vs_width_hold(page, check, out):
     page.render(md)
     page.cmd('@wait:0.5')
     res, ok = {}, True
-    for label in ['sidebar closing', 'sidebar opening']:
-        page.cmd('@eval:window.scrollTo(0, document.scrollingElement.scrollHeight * 0.503); 0')
+    for label in ['sidebar closing', 'sidebar opening', 'closing again', 'opening again']:
+        page.cmd('@eval:window.scrollTo(0, document.scrollingElement.scrollHeight * 0.503 + %d); 0' % len(res))
         page.cmd('@wait:0.3')
         b = page.js(MARK_BOX)
         page.js(FOLLOW + " document.getElementById('side-toggle').click(); return 1;")

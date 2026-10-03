@@ -84,7 +84,7 @@ Waits for the Developer ID: the first release with the Space helper is notarized
   files, a custom theme and custom.css, and the settings file with Reset to Defaults.
 - Body font and page width (both still in the Aa button), code font, line height, code highlighting, Minimal chrome,
   table of contents, front matter, word count, math, Mermaid, Markdown links, README first, folder previews and the
-  sidebar's arrow keys left the window. Each keeps its saved value (word count excepted, above) and is still a key in settings.json (the README lists
+  sidebar's arrow keys left the window. Each keeps its saved value (word count and README first excepted, above) and is still a key in settings.json (the README lists
   them); Reset to Defaults puts them back too, and turns folder previews back on in System Settings.
 - The Quick Look extension's state and other apps' Quick Look extensions that claim spacebar's types show at the top of
   Settings only while something is wrong, with Open Quick Look Extensions or a Turn Off button.

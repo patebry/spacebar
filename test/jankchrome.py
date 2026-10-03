@@ -308,10 +308,14 @@ def search_status(page, check, out):
     page.cmd('@wait:0.3')
     G = """const l = document.getElementById('side-list').getBoundingClientRect(), m = document.getElementById('side-more');
       return [Math.round(l.top), Math.round(l.height), m.hidden ? null : m.textContent];"""
+    empty = {'names': page.js(G)}
     page.cmd("@eval:setSideMode('contents'); 0")
     page.cmd('@wait:0.2')
+    empty['contents'] = page.js(G)
+    page.cmd("@eval:filterField.value = 'a'; setSideQuery('a'); 0")
+    page.cmd('@wait:0.2')
     sample(page, {'list': '#side-list'}, "document.getElementById('side-more').textContent")
-    seen = {'contents, empty': page.js(G)}
+    seen = {'1 char': page.js(G)}
     page.cmd("@eval:filterField.value = 'al'; setSideQuery('al'); 0")
     seen['2 chars'] = page.js(G)
     page.cmd("@eval:filterField.value = 'alp'; setSideQuery('alp'); hits = { ...hits, done: false, total: 56789, searched: 1234, version: hits.version + 1 }; renderSidebar(); 0")
@@ -327,6 +331,8 @@ def search_status(page, check, out):
     texts = {f['extra'] for f in fr}
     check(len({v[2] for v in seen.values()}) >= 3 and len({tuple(v[:2]) for v in seen.values()}) == 1 and still(spread(fr, 'list', (2, 3))) and len(texts) >= 3,
           'jank J15: the Contents search\'s status line keeps the list\'s size, every frame, as it appears, wraps and changes', json.dumps(seen))
+    check(empty['contents'] == empty['names'] and empty['names'][2] is None,
+          'jank J15: with the field empty, Contents leaves the list the size it is in Names: no room is kept for a status yet', json.dumps(empty))
     page.cmd('@root:')
 
 

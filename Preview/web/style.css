@@ -325,7 +325,7 @@
     font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   /* The search's progress wraps in a narrow sidebar rather than lose its counts. */
   #side-more { padding: 4px 16px 14px; font-size: 11.5px; line-height: 1.35; color: var(--muted); overflow-wrap: anywhere; }
-  /* Searching contents, it keeps two lines' room from the start, so the list's bottom edge holds as the status comes and goes. */
+  /* Searching contents, it keeps two lines' room from the first character typed, so the list's bottom edge holds as the status comes and goes. */
   #side-more.reserve { min-height: calc(2.7em + 18px); }
   #side-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background .12s; }
   #side-resize:hover::after, :root.sb-resizing #side-resize::after { background: color-mix(in srgb, var(--accent) 60%, transparent); }

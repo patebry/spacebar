@@ -858,6 +858,63 @@ def contents_search(page, check, out):
     click(page, '#side-mode [data-mode=names]')
     page.apply(sidebarWidth=240)
 
+def mode_keeps_list(page, check, out):
+    """With the field empty, Names and Contents list the same thing: switching either way, before typing or after clearing,
+    leaves the rows, the rows in view, the scroll, the expanded folders, the cursor and the keys as they were."""
+    d = os.path.join(out, 'modes')
+    os.makedirs(os.path.join(d, 'docs'))
+    for i in range(40):
+        open(os.path.join(d, f'note{i:02d}.md'), 'w').write(f'# Note {i}\n')
+    open(os.path.join(d, 'docs', 'guide.md'), 'w').write('# Guide\n')
+    open(os.path.join(d, 'zz.md'), 'w').write('# Last\n')
+    LIST = """const l = document.getElementById('side-list'), t = l.getBoundingClientRect(), m = document.getElementById('side-more');
+      const rows = [...l.querySelectorAll('a.row, .row-note')];
+      const seen = rows.filter((a) => { const b = a.getBoundingClientRect(); return b.bottom > t.top + 1 && b.top < t.bottom - 1; });
+      return { rows: rows.map((a) => [a.textContent, a.getAttribute('aria-expanded')]), seen: seen.map((a) => a.textContent), height: l.clientHeight,
+        top: l.scrollTop, cursor: (l.querySelector('a.cursor') || {}).textContent || null, active: (l.querySelector('a.active') || {}).textContent || null,
+        more: m.hidden ? null : m.textContent };"""
+    typed = lambda q: page.cmd("@eval:(() => { const q = document.getElementById('side-q'); q.value = " + json.dumps(q)
+                               + "; q.dispatchEvent(new Event('input', { bubbles: true })); return 0; })()")
+    opened = lambda r: [m.get('path') for m in r['messages'] if m.get('type') == 'open']
+    page.cmd('@size:1000x500')
+    page.cmd('@root:' + d)
+    page.render(os.path.join(d, 'docs', 'guide.md'))
+    page.cmd('@wait:0.3')
+    page.render(os.path.join(d, 'zz.md'))
+    page.cmd('@wait:0.4')
+    names = page.js(LIST)
+    click(page, '#side-mode [data-mode=contents]')
+    contents = page.js(LIST)
+    click(page, '#side-mode [data-mode=names]')
+    back = page.js(LIST)
+    check(names['seen'][-1] == 'zz.md' and ['docs', 'true'] in names['rows'] and names == contents == back,
+          'modes: with the field empty, Contents lists what Names lists, the same rows in view, scroll, open folders and cursor, and back again',
+          json.dumps([names, contents, back]))
+    for first, then in (('names', 'contents'), ('contents', 'names')):
+        click(page, f'#side-mode [data-mode={first}]')
+        typed('note1')
+        page.cmd('@wait:0.4')
+        typed('')
+        page.cmd('@wait:0.3')
+        cleared = page.js(LIST)
+        click(page, f'#side-mode [data-mode={then}]')
+        switched = page.js(LIST)
+        check(cleared == switched == names, f'modes: typed in {first} and cleared, the list is the tree again, and {then} leaves it as it is',
+              json.dumps([cleared, switched]))
+    keys = {}
+    for mode in ('names', 'contents'):
+        click(page, f'#side-mode [data-mode={mode}]')
+        up = dispatch_key(page, 'ArrowUp')
+        at = page.js(LIST)['cursor']
+        down = dispatch_key(page, 'ArrowDown')
+        keys[mode] = [opened(up), at, opened(down), page.js(LIST)['cursor']]
+    check(keys['names'] == keys['contents'] and keys['names'][1] == 'note39.md' and keys['names'][3] == 'zz.md',
+          'modes: with the field empty, the arrows move through the tree the same in Contents as in Names', json.dumps(keys))
+    click(page, '#side-mode [data-mode=names]')
+    page.cmd('@size:1100x760')
+    page.cmd('@root:')
+
+
 def make_viewers(out):
     """Files for the viewers: a large and a small image, CSVs with other delimiters and past the row cap, nested and large JSON, a
     notebook, and one file of each kind with an icon of its own."""
@@ -4439,6 +4496,7 @@ def main():
         one_selection(page, check, page.out)
         steady_list(page, check, page.out)
         contents_search(page, check, page.out)
+        mode_keeps_list(page, check, page.out)
         archive_entries(page, check, page.out)
         sidebar_and_folders(page, check, page.out)
 

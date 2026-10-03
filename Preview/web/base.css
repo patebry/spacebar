@@ -26,7 +26,8 @@
     --side-w: clamp(160px, var(--side-saved, 240px), max(160px, min(480px, 45vw)));
     --frame-left: var(--side-w); --frame-inset: 0px;
   }
-  :root[data-sidebar=collapsed] { --frame-left: var(--gap); --frame-inset: var(--gap); }
+  /* Set on the boxes that use them, not the root: a change of the root's inherited values restyles every element of a long note. */
+  :root[data-sidebar=collapsed] :is(#frame, #crumbs, #doc .pdf-area), :root[data-sidebar=collapsed] #main::before { --frame-left: var(--gap); --frame-inset: var(--gap); }
   :root[data-font=serif] { --font-body: ui-serif, "New York", Charter, Georgia, serif; }
   :root[data-font=rounded] { --font-body: ui-rounded, "SF Pro Rounded", -apple-system, sans-serif; }
   :root[data-font=mono] { --font-body: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace; }

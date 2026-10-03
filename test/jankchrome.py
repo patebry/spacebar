@@ -7,7 +7,10 @@ A click lights the row it opens at once; the Markdown column keeps its place and
 contents; the toolbar's buttons keep their slots in Minimal chrome and in a narrow panel; the kind line, the image zoom and the
 PDF page counter keep their widths as they fill in and count; the find field stays put as the count appears; the edit gutter keeps
 its width past line 99; the overview's rows survive a listing; cut-off text has a tooltip; and the Contents search's status line
-never resizes the list. Also runs sidebar.py's steady_chrome and steady_list, which these changes touch."""
+never resizes the list. Through an edit the kind line and the code stay put and the line count stays live; a new file never shows
+the last one's stats; the TOC's entries survive a redraw; an archive entry's counter and a media file's late info keep the kind
+line's place; and diagrams stay drawn through a redraw after the column's width changed. Also runs sidebar.py's steady_chrome and
+steady_list, which these changes touch."""
 import json, os, shutil, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webthemes import Page, click
@@ -445,6 +448,188 @@ def sidebar_holds(page, check, out):
     page.cmd('@root:')
 
 
+def edit_chrome(page, check, out):
+    """N7: the toolbar row through an edit of a code file: read, edit, type past line 99, end, Undo arrives, edit again, end."""
+    d = os.path.join(out, 'editchrome')
+    os.makedirs(d)
+    f = os.path.join(d, 'n98.ts')
+    open(f, 'w').write(''.join(f'let a{i} = {i};\n' for i in range(1, 99)))
+    page.cmd('@root:' + d)
+    page.apply(stats=True)
+    page.render(f)
+    page.cmd('@wait:0.4')
+    STATE = """const R = (id) => { const e = document.getElementById(id), r = e.getBoundingClientRect(); return getComputedStyle(e).display === 'none' ? null : Math.round(r.left); };
+      const w = document.createTreeWalker(document.querySelector('#doc pre.code code') || document.querySelector('#doc pre.code'), NodeFilter.SHOW_TEXT); let t = w.nextNode();
+      while (t && !t.data.length) t = w.nextNode(); const rg = document.createRange(); rg.setStart(t, 0); rg.setEnd(t, 1);
+      return [R('kind'), Math.round(rg.getBoundingClientRect().left), document.getElementById('stats').textContent, R('undo') !== null,
+        +document.querySelector('#doc .gutter').dataset.n];"""
+    seq = {'read': page.js(STATE)}
+    click(page, '#doc pre.code')
+    page.cmd('@wait:0.3')
+    seq['editing'] = page.js(STATE)
+    n = page.js('return editing.text.length')
+    page.cmd('@eval:sb.textUpdate({ seq: editing.seq, from: ' + str(n) + ', to: ' + str(n) + ', insert: "x\\ny\\nz\\n", selStart: ' + str(n + 6) + ', selLen: 0, keyTime: 0 }); 0')
+    page.cmd('@wait:0.2')
+    seq['typed to 101 lines'] = page.js(STATE)
+    page.cmd('@eval:sb.editEnd({}); 0')
+    page.cmd('@wait:0.2')
+    seq['ended'] = page.js(STATE)
+    page.cmd('@eval:sb.undoState({ undo: true, redo: false }); 0')
+    page.cmd('@wait:0.1')
+    seq['undo available'] = page.js(STATE)
+    click(page, '#doc pre.code')
+    page.cmd('@wait:0.3')
+    seq['editing again'] = page.js(STATE)
+    page.cmd('@eval:sb.editEnd({}); 0')
+    page.cmd('@wait:0.2')
+    seq['ended again'] = page.js(STATE)
+    page.cmd('@eval:sb.undoState({ undo: false, redo: false }); 0')
+    page.apply(stats=False)
+    v = list(seq.values())
+    check(len({s[0] for s in v}) == 1 and len({s[1] for s in v}) == 1 and seq['undo available'][3] and not seq['editing again'][3]
+          and [s[2] for s in v] == ['98 lines'] * 2 + ['101 lines'] * 5,
+          'jank N7: through an edit, Undo coming and going and typing past line 99, the kind text and the code never move; the line count stays live',
+          json.dumps({k: dict(zip(['kind left', 'first char left', 'stats', 'undo shown', 'gutter lines'], s)) for k, s in seq.items()}))
+    page.cmd('@root:')
+
+
+def stats_switch(page, check, out):
+    """N9: the reading stats never show the previous file's count beside the new file's kind; a short note's first frame is final."""
+    d = os.path.join(out, 'statsswitch')
+    os.makedirs(d)
+    files = {'big.md': ''.join(f'## S{i}\n\n' + 'word ' * 300 + '\n\n' for i in range(40)), 'small.md': '# Small\n\nA few words.\n',
+             'code.ts': ''.join(f'const v{i} = {i};\n' for i in range(12345))}
+    for n, t in files.items():
+        open(os.path.join(d, n), 'w').write(t)
+    page.cmd('@root:' + d)
+    page.apply(stats=True)
+    ST = "[document.getElementById('stats').textContent, (document.querySelector('#kind .kind-text') || {}).textContent || '', Math.round(document.getElementById('kind').getBoundingClientRect().left)]"
+    res = {}
+    for a, b in [('big.md', 'small.md'), ('code.ts', 'small.md'), ('small.md', 'big.md')]:
+        page.render(os.path.join(d, b))
+        page.cmd('@wait:0.3')
+        page.cmd('@eval:window.__b = current; 0')
+        page.render(os.path.join(d, a))
+        page.cmd('@wait:0.4')
+        old = page.js('return ' + ST)
+        sample(page, {}, ST)
+        now = page.js('sb.render(window.__b); return ' + ST)
+        page.cmd('@wait:0.4')
+        fr = [now] + [f['extra'] for f in sampled(page)]
+        new = [x for x in fr if x[1] != old[1]]
+        res[f'{a} -> {b}'] = {'before': old, 'frames [stats, kind, kind left]': [list(x) for x in dict.fromkeys(tuple(x) for x in fr)]}
+        ok_old = all(x[0] != old[0] or x[0] == '' for x in new)
+        ok_small = b != 'small.md' or len({tuple(x) for x in new}) == 1
+        res[f'{a} -> {b}']['ok'] = [ok_old, ok_small]
+    page.apply(stats=False)
+    check(all(all(v['ok']) for v in res.values()), 'jank N9: a new file never shows the last file\'s stats; a short note\'s first frame has its own count, so its kind does not move after',
+          json.dumps(res))
+    page.cmd('@root:')
+
+
+def toc_kept(page, check, out):
+    """N12: the TOC's entries survive a live reload and a setting's redraw; a renamed or added heading changes only its entry."""
+    d = os.path.join(out, 'tockept')
+    os.makedirs(d)
+    f = os.path.join(d, 'toc.md')
+    open(f, 'w').write(''.join(f'## Heading {i}\n\n' + 'text ' * 100 + '\n\n' for i in range(30)))
+    page.cmd('@size:1300x760')
+    page.cmd('@root:' + d)
+    page.render(f)
+    page.cmd('@wait:0.4')
+    MARK = "@eval:document.querySelectorAll('#toc a').forEach((a) => { a.__mark = 1; }); 0"
+    KEPT = "const a = [...document.querySelectorAll('#toc a')]; return [a.length, a.filter((x) => x.__mark).length, a[3].textContent, a.map((x) => x.dataset.toc).join() === a.map((x, i) => i).join()]"
+    page.cmd(MARK)
+    page.cmd('@eval:sb.render({ ...current, text: current.text + "\\n" }); 0')
+    page.cmd('@wait:0.3')
+    reload = page.js(KEPT)
+    page.cmd(MARK)
+    page.apply(math=False)
+    page.cmd('@wait:0.3')
+    setting = page.js(KEPT)
+    page.apply(math=True)
+    page.cmd(MARK)
+    page.cmd('@eval:sb.render({ ...current, text: current.text.replace("## Heading 3\\n", "## Renamed\\n") + "\\n## Heading 30\\n\\nmore\\n" }); 0')
+    page.cmd('@wait:0.3')
+    renamed = page.js(KEPT)
+    page.cmd('@size:1100x760')
+    check(reload == [30, 30, 'Heading 3', True] and setting == [30, 30, 'Heading 3', True] and renamed == [31, 30, 'Renamed', True],
+          'jank N12: the TOC keeps its entries through a live reload and a setting (no hover flicker); a renamed heading changes in place and a new one is added',
+          json.dumps({'reload [entries, kept, 4th, indices]': reload, 'setting': setting, 'renamed + added': renamed}))
+    page.cmd('@root:')
+
+
+def kind_counters(page, check, out):
+    """N15: an archive entry's "N of M" and a media file's late info keep the kind line's left edge."""
+    import wave, zipfile
+    d = os.path.join(out, 'counters')
+    os.makedirs(d)
+    z = os.path.join(d, 'twelve.zip')
+    with zipfile.ZipFile(z, 'w') as zz:
+        for i in range(12):
+            zz.writestr(f'f{i:02d}.txt', f'file {i:02d}\n')
+    with wave.open(os.path.join(d, 'song.wav'), 'wb') as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(8000), w.writeframes(b'\0\0' * 8000)
+    page.cmd('@size:1300x760')
+    page.cmd('@root:' + d)
+    K = "const k = document.getElementById('kind'); return [k.textContent, Math.round(k.getBoundingClientRect().left), k.title];"
+    page.render(z)
+    page.cmd('@wait:0.8')
+    entries = []
+    for key in ('f07.txt', 'f08.txt', 'f09.txt', 'f11.txt'):
+        page.cmd("@eval:(() => { const r = [...document.querySelectorAll('#doc tr.arc-file')].find((t) => t.dataset.key === " + json.dumps(key)
+                 + "); openEntry(r.querySelector('.arc-entry').dataset.entry, r.dataset.key); })(); 0")
+        page.cmd('@wait:0.6')
+        entries.append(page.js(K))
+        page.cmd('@eval:archiveBack(); 0')
+        page.cmd('@wait:0.6')
+    page.render(os.path.join(d, 'song.wav'))
+    page.cmd('@wait:0.5')
+    media = {'before': page.js(K)}
+    for text in ('0:01', '1920 × 1080 · 1:02:03'):
+        page.cmd('@eval:sb.mediaInfo({ path: current.path, text: ' + json.dumps(text) + ' }); 0')
+        media[text] = page.js(K)
+    page.cmd('@size:1100x760')
+    check(len({e[1] for e in entries}) == 1 and [e[0].endswith(f' of 12') for e in entries] == [True] * 4 and '10 of 12' in entries[2][2]
+          and len({m[1] for m in media.values()}) == 1 and '1:02:03' in media['1920 × 1080 · 1:02:03'][2],
+          'jank N15: stepping an archive\'s files ("8 of 12" to "12 of 12") and a media file\'s length arriving late keep the kind line\'s left edge; its tooltip says all of it',
+          json.dumps({'entries [text, left, title]': entries, 'media': media}))
+    page.cmd('@root:')
+
+
+def mermaid_width(page, check, out):
+    """N8: diagrams drawn before the column's width changed stay up through the next redraw; no fade, no blank frame."""
+    d = os.path.join(out, 'mmwidth')
+    os.makedirs(d)
+    dia = '```mermaid\ngraph TD\n  A[Start] --> B{Is it?}\n  B -->|Yes| C[OK]\n  C --> D[Rethink]\n  D --> B\n  B ---->|No| E[End]\n```\n\n'
+    f = os.path.join(d, 'dia.md')
+    open(f, 'w').write('# Diagrams\n\n' + ''.join(f'## D{i}\n\n' + dia + 'Text after the diagram.\n\n' for i in range(4)))
+    page.cmd('@root:' + d)
+    page.apply(mermaid=True)
+    page.render(f)
+    page.cmd('@wait:2.0')
+    S = """[...document.querySelectorAll('#doc pre.mermaid')].map((n) => [!!n.querySelector('svg'), n.classList.contains('mm-wait'),
+      n.querySelector('svg') ? +getComputedStyle(n.querySelector('svg')).opacity * +getComputedStyle(n).opacity : 0])
+      .reduce((a, x) => [a[0] + x[0], a[1] + x[1], Math.min(a[2], x[2])], [0, 0, 1])"""
+    res = {}
+    for label, act, undo in [('sidebar hidden', {'sidebarCollapsed': True}, {'sidebarCollapsed': False}), ('wide', {'width': 'wide'}, {'width': 'medium'})]:
+        page.apply(**act)
+        page.cmd('@wait:0.6')
+        sample(page, {}, S)
+        now = page.js('sb.render({ ...current, text: current.text + "\\n" }); return ' + S)
+        page.cmd('@wait:2.0')
+        fr = [now] + [f['extra'] for f in sampled(page)]
+        res[label] = {'[drawn, placeholders, least opacity] seen': sorted({tuple(x) for x in fr}),
+                      'redrawn at the new width': page.js("return document.querySelectorAll('#doc pre.mermaid.mm-stale').length === 0")}
+        page.apply(**undo)
+        page.cmd('@wait:0.6')
+    page.apply(mermaid=False)
+    check(all(v['[drawn, placeholders, least opacity] seen'] == [(4, 0, 1)] and v['redrawn at the new width'] for v in res.values()),
+          'jank N8: after the column\'s width changed, a redraw keeps every diagram drawn on every frame (no blank, no fade) and redraws it at the new width',
+          json.dumps(res))
+    page.cmd('@root:')
+
+
 def main():
     results = []
 
@@ -456,7 +641,8 @@ def main():
     try:
         lazy_math(page, check, page.out)
         page.cmd('@size:1100x760')
-        for fn in (sidebar_holds, click_lights_row, toc_column, kind_line, find_field, edit_gutter, overview_rows, tooltips, search_status):
+        for fn in (sidebar_holds, click_lights_row, toc_column, kind_line, find_field, edit_gutter, overview_rows, tooltips, search_status,
+                   edit_chrome, stats_switch, toc_kept, kind_counters, mermaid_width):
             fn(page, check, page.out)
         SB.steady_chrome(page, check, os.path.join(page.out, 'sc'))
         SB.steady_list(page, check, os.path.join(page.out, 'sl'))

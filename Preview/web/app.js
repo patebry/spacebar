@@ -750,12 +750,17 @@ function mermaidStage() {
 function mountMermaid(frag, heights) {
   const nodes = [...frag.querySelectorAll('pre.mermaid')];
   if (!nodes.length) return;
-  const key = mermaidKey(mermaidConfig(), mermaidBlocked(), docWidth());
+  const cfg = mermaidConfig(), blocked = mermaidBlocked(), key = mermaidKey(cfg, blocked, docWidth());
+  // The same diagram drawn at another width (the column changed since) stays up while it is drawn again at this one.
+  const loose = mermaidKey(cfg, blocked, '');
   nodes.forEach((n, i) => {
     const src = n.textContent;
     mermaidSrc.set(n, src);
     const hit = mermaidCache.get(key + '\n' + src);
     if (hit) { n.innerHTML = reId(hit); return; }
+    let near = null;
+    for (const [k, v] of mermaidCache) if (k.startsWith(loose) && k.endsWith('\n' + src) && /^\d+$/.test(k.slice(loose.length, -src.length - 1))) near = v;
+    if (near) { n.innerHTML = reId(near); n.classList.add('mm-stale'); return; }
     n.textContent = '';
     n.classList.add('mm-wait');
     n.style.setProperty('--mm-h', Math.max(MERMAID_MIN_H, Math.round(heights[i] || 0)) + 'px');
@@ -767,7 +772,7 @@ function mountMermaid(frag, heights) {
 function runMermaid(redraw = true) {
   const job = mermaidQueue.then(async () => {
     const nodes = [...document.querySelectorAll('#doc pre.mermaid')].filter((n) => mermaidSrc.has(n));
-    const todo = redraw ? nodes : nodes.filter((n) => n.classList.contains('mm-wait'));
+    const todo = redraw ? nodes : nodes.filter((n) => n.matches('.mm-wait, .mm-stale'));
     if (!todo.length || !settings.mermaid) return;
     const done = new Map();
     try {
@@ -805,7 +810,7 @@ function runMermaid(redraw = true) {
     for (const [n, svg] of done) {
       if (!n.isConnected) continue;
       const fresh = n.classList.contains('mm-wait');
-      n.classList.remove('mm-wait');
+      n.classList.remove('mm-wait', 'mm-stale');
       n.style.removeProperty('--mm-h');
       if (svg === null) {
         // Not a diagram mermaid can draw: its source, marked as such and with mermaid's reason, is the honest thing to show.
@@ -928,7 +933,7 @@ function draw() {
   syncPdf();
   findAfterDraw();
   if (!pop.hidden) syncPopover();
-  if (settings.mermaid && document.querySelector('#doc pre.mermaid.mm-wait')) drawnMermaid = runMermaid(false);
+  if (settings.mermaid && document.querySelector('#doc pre.mermaid:is(.mm-wait, .mm-stale)')) drawnMermaid = runMermaid(false);
 }
 
 /** Rendered text of a range, without KaTeX's hidden MathML copy of each formula. */
@@ -1180,6 +1185,7 @@ function paintTextEditor(scroll = false, change = null) {
   const gutter = pre.parentElement.querySelector('.gutter');
   const n = Math.max(1, lineCount(text) + (text.endsWith('\n') && selStart + selLen >= text.length ? 1 : 0));
   if (gutter && +gutter.dataset.n !== n) { gutter.dataset.n = n; gutter.textContent = Array.from({ length: n }, (_, i) => i + 1).join('\n'); }
+  if (settings.stats) $('stats').textContent = linesStat(lineCount(text));
   if (scroll) {
     const c = code.querySelector('.caret, .sel');
     // The line numbers are sticky over the text's left edge: the caret is revealed beside them, not under them.
@@ -1342,13 +1348,21 @@ function buildToc() {
   tocTargets = show ? hs : [];
   if (!show) { nav.hidden = true; nav.replaceChildren(); return; }
   const top = Math.min(...hs.map((h) => +h.tagName[1]));
-  nav.replaceChildren(el('div', 'toc-title', 'Contents'), ...hs.map((h, i) => {
-    const a = el('a', 'l' + (+h.tagName[1] - top + 1), headingText(h));
-    a.href = '#';
-    a.dataset.toc = i;
-    a.title = a.textContent;
-    return a;
-  }));
+  // The entries already there are kept and only changed where they differ: one taken out and put back loses its hover until
+  // the pointer moves, which showed as a flicker under a still pointer on every save and setting.
+  if (!nav.querySelector(':scope > .toc-title')) nav.replaceChildren(el('div', 'toc-title', 'Contents'));
+  const old = [...nav.querySelectorAll(':scope > a')];
+  if (tocPath !== `${current.path}\n${current.entry ? current.entry.name : ''}`) old.forEach((a) => a.classList.remove('active'));
+  hs.forEach((h, i) => {
+    const level = 'l' + (+h.tagName[1] - top + 1), text = headingText(h);
+    let a = old[i];
+    if (!a) { a = el('a'); a.href = '#'; nav.append(a); }
+    if (!a.classList.contains(level)) { const on = a.classList.contains('active'); a.className = level; a.classList.toggle('active', on); }
+    if (a.textContent !== text) a.textContent = text;
+    if (a.title !== text) a.title = text;
+    if (a.dataset.toc !== String(i)) a.dataset.toc = i;
+  });
+  old.slice(hs.length).forEach((a) => a.remove());
   nav.hidden = false;
   requestAnimationFrame(spy);
 }
@@ -1536,25 +1550,48 @@ window.addEventListener('scroll', () => {
   anchorOwnY = -1;
 }, { passive: true });
 
-let statsTimer = 0;
+let statsTimer = 0, statsFor = '';
+const STATS_NOW = 50000; // characters of a note counted at once
+const linesStat = (n) => (n ? `${n.toLocaleString()} ${n === 1 ? 'line' : 'lines'}` : '');
 function updateStats() {
   clearTimeout(statsTimer);
-  if (!settings.stats) { $('stats').textContent = ''; return; }
+  const s = $('stats'), which = `${current.path}\n${current.entry ? current.entry.name : ''}`, same = which === statsFor;
+  statsFor = which;
+  if (!settings.stats) { s.textContent = ''; s.style.removeProperty('min-width'); return; }
   if (!isMarkdown(current) || rawOn(current)) {
     const code = $('doc').querySelector(':scope > .viewer > .code-view pre.code');
-    const n = code ? lineCount(code.textContent) : 0;
-    $('stats').textContent = n ? `${n.toLocaleString()} ${n === 1 ? 'line' : 'lines'}` : '';
+    s.textContent = linesStat(code ? lineCount(code.textContent) : 0);
+    holdStats(same, !!(code && code.matches('[data-file-text]')));
     return;
   }
-  statsTimer = setTimeout(() => {
+  s.style.removeProperty('min-width');
+  const count = () => {
     const skip = '.katex-mathml, pre.mermaid, .frontmatter, .frontmatter-raw, svg, .wl-embed-body, .fence-bar, .footnotes';
     const walk = document.createTreeWalker($('doc'), NodeFilter.SHOW_TEXT,
       { acceptNode: (n) => (n.parentElement && n.parentElement.closest(skip) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
     let text = '';
     while (walk.nextNode()) text += walk.currentNode.data + ' ';
-    const n = words ? [...words.segment(text)].filter((s) => s.isWordLike).length : (text.match(/\S+/g) || []).length;
-    $('stats').textContent = n ? `${n.toLocaleString()} ${n === 1 ? 'word' : 'words'} · ${Math.max(1, Math.round(n / 230))} min read` : '';
-  }, 30);
+    const n = words ? [...words.segment(text)].filter((w) => w.isWordLike).length : (text.match(/\S+/g) || []).length;
+    s.textContent = n ? `${n.toLocaleString()} ${n === 1 ? 'word' : 'words'} · ${Math.max(1, Math.round(n / 230))} min read` : '';
+  };
+  // A short note is counted at once, so its first frame shows its own count; a long one later, and never another file's meanwhile.
+  if ((current.text || '').length <= STATS_NOW) count();
+  else {
+    if (!same) s.textContent = '';
+    statsTimer = setTimeout(count, 30);
+  }
+}
+
+/** An editable file's line count keeps room for one more digit, as its gutter does, so typing past line 99 moves nothing beside it;
+ *  the same file drawn again (the edit ended) keeps the room it had. */
+function holdStats(same, editable) {
+  const s = $('stats');
+  if (!editable || !s.textContent) { s.style.removeProperty('min-width'); return; }
+  const inner = () => { const cs = getComputedStyle(s); return s.getBoundingClientRect().width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight); };
+  const had = same && s.style.minWidth ? inner() : 0;
+  s.style.removeProperty('min-width');
+  const w = inner();
+  s.style.minWidth = had ? `${Math.max(had, w)}px` : `calc(${w}px + 1ch)`;
 }
 
 function decorate() {
@@ -1806,8 +1843,8 @@ window.sb = {
   mediaInfo(m) {
     if (!m || m.path !== current.path || !['video', 'audio'].includes(current.view) || typeof m.text !== 'string') return;
     current.media = m.text.slice(0, 300);
-    const t = document.querySelector('#kind .kind-text');
-    if (t) t.textContent = [current.kindName, current.media, fmtSize(current.size)].filter(Boolean).join(' · ');
+    const t = document.querySelector('#kind .kind-media');
+    if (t) t.textContent = current.media;
   },
   /** How many matches the extension found in the PDF or RTF document on screen; it shows the first. */
   nativeFound(m) {
@@ -2104,11 +2141,14 @@ function viewHead(p, ...extra) {
 /** The file's kind and size (and whatever `more` adds) as quiet text in the toolbar. With `zoom`, the span an image's zoom is
  *  written to follows it; returned with the text's own span. In the Space panel the kind drags the file out, and says so. */
 function setKind(p, more = [], zoom = false, label = kindLabel(p)) {
-  const text = el('span', 'kind-text', [label, ...more, entryPosition(p)].filter(Boolean).join(' · '));
+  const text = el('span', 'kind-text', [label, ...more].filter(Boolean).join(' · '));
+  // An archive entry's "N of M" is as wide as its widest count, so stepping through the files moves nothing.
+  const pos = entryPosition(p), at = pos ? el('span', 'kind-pos', pos) : null;
+  if (at) at.style.minWidth = `${2 * arcFiles.length.toLocaleString().length + 5}ch`;
   const z = zoom ? el('span', 'img-zoom') : null;
   const k = $('kind');
   const drag = HOST === 'panel' && !!p.path && !p.entry && !['overview', 'loading'].includes(p.view);
-  k.replaceChildren(...[drag ? icon(isMarkdown(p) ? 'markdown' : p.icon, 14) : null, text, z].filter(Boolean));
+  k.replaceChildren(...[drag ? icon(isMarkdown(p) ? 'markdown' : p.icon, 14) : null, text, at, z].filter(Boolean));
   k.classList.toggle('drag', drag);
   syncKindTitle();
   return { text, zoom: z };
@@ -2117,8 +2157,8 @@ function setKind(p, more = [], zoom = false, label = kindLabel(p)) {
 /** The kind line's tooltip: its text in full, which the toolbar may cut, kept as the text fills in (an image's size, a media
  *  file's length). */
 function syncKindTitle() {
-  const k = $('kind'), t = k.querySelector('.kind-text');
-  const tip = [t ? t.textContent : '', k.classList.contains('drag') ? 'Drag to copy the file' : ''].filter(Boolean).join('\n');
+  const k = $('kind'), t = [...k.querySelectorAll('.kind-text, .kind-pos, .kind-media')].map((n) => n.textContent).filter(Boolean).join(' · ');
+  const tip = [t, k.classList.contains('drag') ? 'Drag to copy the file' : ''].filter(Boolean).join('\n');
   if (tip) k.title = tip; else k.removeAttribute('title');
 }
 new MutationObserver(syncKindTitle).observe($('kind'), { childList: true, characterData: true, subtree: true });
@@ -2195,6 +2235,7 @@ const wrapKey = (p) => (isMarkdown(p) ? 'wrapMarkdown' : p.view === 'text' ? 'wr
 const wrapOn = (p) => settings[wrapKey(p)] === true;
 const isLog = (p) => p.view === 'text' && /\.(log|out|err)$/i.test(p.name || '');
 
+let gutterHeld = { key: '', ch: 0 }; // the editable file whose gutter is drawn, and its width in digits
 /** Source with line numbers; highlighted by the bundled highlight.js when the language is known and the text is not huge.
  *  `file`: the text is the editable file's own, which a click edits. `wrap`: long lines wrap, and the line numbers, which would
  *  no longer match the rows, go. `log`: error and warning lines are tinted and timestamps dimmed. */
@@ -2203,29 +2244,125 @@ function codeBlock(text, lang, file = false, { wrap: wrapped = false, log = fals
   const n = Math.max(1, lineCount(text));
   const gutter = el('pre', 'gutter', Array.from({ length: n }, (_, i) => i + 1).join('\n'));
   gutter.dataset.n = n;
-  // A file's text may be edited: room for one more digit, so typing past line 99 or 999 moves no character.
-  if (file) gutter.style.minWidth = `${String(n).length + 1}ch`;
+  // A file's text may be edited: room for one more digit, so typing past line 99 or 999 moves no character. The same file
+  // drawn again (the edit ended) keeps the room it had while it fits.
+  if (file) {
+    const key = `${current.path}\n${current.entry ? current.entry.name : ''}`, digits = String(n).length;
+    const ch = gutterHeld.key === key ? Math.max(gutterHeld.ch, digits) : digits + 1;
+    gutterHeld = { key, ch };
+    gutter.style.minWidth = `${ch}ch`;
+  }
   wrap.append(gutter);
   const pre = el('pre', 'code');
   if (file) pre.dataset.fileText = '';
   const code = el('code', 'hljs');
-  const highlight = () => {
-    code.replaceChildren(highlighted(text, lang));
-    // The matches drawn in the plain text are on nodes just replaced.
-    if (code.isConnected) findAfterDraw();
-  };
+  const lit = lang && window.hljs && hljs.getLanguage(lang) && text.length <= HIGHLIGHT_MAX;
   // Plain text goes in as many text nodes, a few thousand characters each at line ends: WebKit measures a range in one of them
   // (find's matches) in time that grows with the node.
-  if (log && !lang) logText(code, text); else plainText(code, text);
-  if (lang && window.hljs && hljs.getLanguage(lang) && text.length <= HIGHLIGHT_MAX) {
+  if (lit && text.length > HIGHLIGHT_NOW) {
+    // A long file is painted plain first, then highlighted piece by piece between frames: in one go it held the page for
+    // most of a second.
+    const parts = textParts(code, text, lang, !wrapped);
+    afterPaint(() => highlightParts(pre, code, parts));
+  } else if (log && !lang) logText(code, text); else plainText(code, text);
+  if (lit) {
     pre.dataset.lang = lang;
-    // A long file is painted plain first: highlighting it would hold the first paint.
-    if (text.length <= HIGHLIGHT_NOW) highlight();
-    else afterPaint(() => { if (code.isConnected && !pre.classList.contains('text-editing')) highlight(); });
+    if (text.length <= HIGHLIGHT_NOW) code.replaceChildren(highlighted(text, lang));
   }
   pre.append(code);
   wrap.append(pre);
   return wrap;
+}
+
+const HIGHLIGHT_PART = 2048;  // characters of a piece highlighted on its own
+const HIGHLIGHT_TASK = 5;     // ms of highlighting per task
+const HIGHLIGHT_RUN = 6;      // pieces a token may span before it is cut
+
+/** The text as one block per piece, cut at a blank line where there is one near, else at a line end: a piece's colour
+ *  landing then lays out that piece alone, not the whole file. Markdown's front matter is a piece of its own, highlighted as
+ *  YAML (or INI). `sized`: the lines do not wrap. */
+function textParts(code, text, lang, sized) {
+  const fm = lang === 'markdown' ? frontMatter(text) : null;
+  let fmEnd = 0;
+  if (fm) {
+    const lines = text.split('\n', fm.lines.length + 3), count = fm.lines.length + 2;
+    fmEnd = Math.min(text.length, lines.slice(0, count).join('\n').length + (lines.length > count ? 1 : 0));
+  }
+  const parts = [];
+  for (let at = 0; at < text.length;) {
+    let end;
+    if (at < fmEnd) end = fmEnd;
+    else {
+      const blank = text.indexOf('\n\n', at + HIGHLIGHT_PART);
+      if (blank >= 0 && blank < at + 2 * HIGHLIGHT_PART) end = blank + 2;
+      else {
+        const nl = text.indexOf('\n', at + HIGHLIGHT_PART);
+        end = nl >= 0 && nl < at + 4 * HIGHLIGHT_PART ? nl + 1 : Math.min(text.length, at + 4 * HIGHLIGHT_PART);
+        if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) end++;
+      }
+    }
+    parts.push({ text: text.slice(at, end), lang: at < fmEnd ? (fm.toml ? 'ini' : 'yaml') : lang, lit: false, root: true });
+    at = end;
+  }
+  // A piece cut inside a line (a line longer than a few pieces) cannot be a block of its own.
+  const blocks = parts.every((p, i) => i === parts.length - 1 || p.text.endsWith('\n'));
+  code.classList.toggle('parts', blocks);
+  // Unwrapped, a piece's size is known from its text: those off screen are skipped by layout and paint at that size.
+  code.classList.toggle('sized', blocks && sized);
+  for (const p of parts) {
+    p.node = el('span', blocks ? 'tpart' : '', p.text);
+    if (blocks && sized) {
+      const lines = p.text.split('\n');
+      if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop();
+      p.node.style.setProperty('--n', lines.length);
+      p.node.style.setProperty('--w', lines.reduce((w, l) => Math.max(w, l.length), 0));
+    }
+    code.append(p.node);
+  }
+  return parts;
+}
+
+/** Highlights the pieces a few ms at a time between tasks, the ones on screen first. A piece is highlighted from the
+ *  language's top level, which is right when the piece before it ended there; when it did not (a comment or string runs on),
+ *  the run is highlighted again as one, up to HIGHLIGHT_RUN pieces. The text is the same, so nothing moves as colour lands. */
+function highlightParts(pre, code, parts) {
+  const live = () => code.isConnected && !pre.classList.contains('text-editing');
+  if (!live()) return;
+  const put = (from, to) => {
+    const src = parts.slice(from, to + 1).map((p) => p.text).join('');
+    const res = hljs.highlight(src, { language: parts[from].lang, ignoreIllegals: true });
+    const node = parts[from].node;
+    node.replaceChildren(DOMPurify.sanitize(res.value, { ALLOWED_TAGS: ['span'], ALLOWED_ATTR: ['class'], RETURN_DOM_FRAGMENT: true }));
+    for (let i = from + 1; i <= to; i++) if (parts[i].node !== node) parts[i].node.remove();
+    for (let i = from; i <= to; i++) Object.assign(parts[i], { node, lit: true, root: true });
+    parts[to].root = !res._top || !res._top.parent;
+  };
+  // The piece at the top of the window and the two after it go first.
+  const order = [];
+  if (code.classList.contains('parts')) {
+    const bar = parseFloat(getComputedStyle(root).getPropertyValue('--bar-h')) || 40;
+    let lo = 0, hi = parts.length - 1;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (parts[m].node.getBoundingClientRect().bottom > bar) hi = m; else lo = m + 1; }
+    if (parts[lo].node.getBoundingClientRect().top < innerHeight) for (let i = lo; i < Math.min(parts.length, lo + 3); i++) order.push(i);
+  }
+  let next = 0, run = 0;
+  const step = () => {
+    if (!live()) return;
+    const t0 = performance.now();
+    while (performance.now() - t0 < HIGHLIGHT_TASK) {
+      if (order.length) { const i = order.shift(); if (!parts[i].lit) put(i, i); continue; }
+      if (next >= parts.length) { findAfterDraw(); return; }
+      const prev = next > 0 ? parts[next - 1] : null;
+      if (prev && !prev.root && parts[next].lang === prev.lang && next - run < HIGHLIGHT_RUN) put(run, next);
+      else {
+        run = next;
+        if (!parts[next].lit) put(next, next);
+      }
+      next++;
+    }
+    setTimeout(step, 0);
+  };
+  step();
 }
 
 function plainText(code, text) {
@@ -2915,7 +3052,7 @@ function imageView(p) {
   img.alt = p.name;
   img.draggable = false;
   img.addEventListener('load', () => {
-    meta.textContent = [p.kindName, dims(img.naturalWidth, img.naturalHeight), fmtSize(p.size), entryPosition(p)].filter(Boolean).join(' · ');
+    meta.textContent = [p.kindName, dims(img.naturalWidth, img.naturalHeight), fmtSize(p.size)].filter(Boolean).join(' · ');
     applyZoom(stage, img, vector ? null : zoom, imgScale);
     if (pan) [stage.scrollLeft, stage.scrollTop] = pan;
   });
@@ -3383,7 +3520,9 @@ function pdfView(p) {
   const box = el('div', `viewer viewer-pdf${p.view === 'audio' ? ' viewer-audio' : ''}${p.view === 'bitmap' ? ' viewer-image' : ''}`);
   // The extension's image view reports its zoom (sb.imageZoom) into the toolbar, as the page's own image viewer does.
   const dims = p.view === 'bitmap' && Number.isInteger(p.width) && Number.isInteger(p.height) ? `${p.width} × ${p.height}` : '';
-  setKind(p, [dims, typeof p.media === 'string' ? p.media : '', fmtSize(p.size)], p.view === 'bitmap');
+  setKind(p, [dims, fmtSize(p.size)], p.view === 'bitmap');
+  // A video's or audio file's length and size arrive after it is drawn, into room kept for them.
+  if (['video', 'audio'].includes(p.view)) $('kind').append(el('span', 'kind-media', typeof p.media === 'string' ? p.media : ''));
   if (p.view === 'pdf' && Number.isInteger(p.pages) && p.pages > 0) {
     const b = el('button', 'pdf-page', `${(+p.page || 1).toLocaleString()} / ${p.pages.toLocaleString()}`);
     b.type = 'button';
@@ -4408,6 +4547,33 @@ function peek(open) {
   root.classList.toggle('sb-peek', open);
   syncToggle();
   syncPdf();
+}
+
+// A long note's column keeps one width while the sidebar slides, the narrower of where it starts and ends: it is laid out
+// again once (at the start, or at the end), not on every frame of the animation, which a note of a few hundred KB cannot keep up with.
+const PIN_TEXT = 100000;
+let pinTimer = 0;
+function unpinColumn() {
+  clearTimeout(pinTimer);
+  $('doc').style.removeProperty('width');
+}
+$('sidebar').addEventListener('transitionrun', (e) => {
+  const side = $('sidebar'), doc = $('doc');
+  if (e.target !== side || e.propertyName !== 'width' || root.dataset.view !== 'markdown' || (current.text || '').length < PIN_TEXT) return;
+  const t = side.getAnimations().find((a) => a.transitionProperty === 'width'), kf = t && t.effect.getKeyframes();
+  const to = kf && kf.length > 1 ? parseFloat(kf[kf.length - 1].width) : NaN;
+  if (!Number.isFinite(to)) return;
+  const cs = getComputedStyle(doc), pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+  const content = cs.boxSizing !== 'border-box';
+  const cap = cs.maxWidth === 'none' ? Infinity : parseFloat(cs.maxWidth) + (content ? pad : 0);
+  const now = doc.getBoundingClientRect().width;
+  const end = Math.min(cap, $('main').getBoundingClientRect().width + side.getBoundingClientRect().width - to);
+  doc.style.width = `${Math.min(now, end) - (content ? pad : 0)}px`;
+  clearTimeout(pinTimer);
+  pinTimer = setTimeout(unpinColumn, 600);
+});
+for (const type of ['transitionend', 'transitioncancel']) {
+  $('sidebar').addEventListener(type, (e) => { if (e.target === $('sidebar') && e.propertyName === 'width') unpinColumn(); });
 }
 
 $('side-toggle').addEventListener('click', () => {

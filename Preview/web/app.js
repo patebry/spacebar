@@ -5090,6 +5090,8 @@ Object.assign(window.sb, {
     if (find && m.reason === 'escape') closeFind();
   },
 });
+let arcPress = null;
+document.addEventListener('pointerdown', (e) => { arcPress = [e.clientX, e.clientY]; }, true);
 document.addEventListener('click', (e) => {
   if (!filterSession) return;
   // The archive's own session stays through clicks in the listing, on a file of it and on Back; the grid's through clicks on it.
@@ -6061,8 +6063,9 @@ document.addEventListener('click', (e) => {
   const crumb = e.target.closest('#crumbs button.crumb[data-path]');
   if (crumb) { e.preventDefault(); crumbGo(crumb.dataset.path); return; }
   if (e.target.closest('#sidebar, #crumbs')) return;
-  // An archive's row opens its file or folder from anywhere on it, as its name does.
-  const arcRow = e.target.closest('#doc .viewer-archive tbody tr');
+  // An archive's row opens its file or folder from anywhere on it, as its name does; a press that moved (a drag, a selection)
+  // opens nothing.
+  const arcRow = !arcPress || Math.hypot(e.clientX - arcPress[0], e.clientY - arcPress[1]) < 4 ? e.target.closest('#doc .viewer-archive tbody tr') : null;
   const act = e.target.closest('#doc .viewer [data-action]') || (arcRow && arcRow.querySelector('button.arc-entry, button.arc-dir'));
   if (act) { e.preventDefault(); if (editing && editing.whole) stopEditing(); viewerAction(act, e); return; }
   const fv = e.target.closest('#doc .ov-views button');

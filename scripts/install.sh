@@ -5,12 +5,13 @@
 #   curl -fsSL https://spacebar.patebryant.com/install.sh | sh -s -- --dry-run    (options go after sh -s --)
 #
 # What this does, in order:
-#   1. Checks for macOS 13 or later.
+#   1. Checks for macOS 13 or later, and picks the folder: ~/Applications, unless spacebar is only in /Applications (dragged
+#      there from spacebar.dmg), whose copy is then updated in place. It stops if this account cannot change that copy.
 #   2. Downloads spacebar.zip and spacebar.zip.sha256 from the latest GitHub release (or SPACEBAR_VERSION) with curl
 #      into a temporary folder, and stops unless the SHA-256 matches. It makes no GitHub API calls, so it is never
 #      rate-limited.
-#   3. Unzips the new spacebar.app and copies it into ~/Applications as .spacebar.app.new (no sudo).
-#   4. If ~/Applications/spacebar.app exists: quits that copy and unregisters its Quick Look extensions, renames it to
+#   3. Unzips the new spacebar.app and copies it into that folder as .spacebar.app.new (no sudo).
+#   4. If spacebar.app exists there: quits that copy and unregisters its Quick Look extensions, renames it to
 #      .spacebar.app.old, quits its extensions still running, renames the new copy into its place, quits the Space
 #      helper's viewer, then deletes .spacebar.app.old. If the new copy cannot be moved in, the old one is put back.
 #      Nothing outside those three exact paths is removed (and, when spacebar's Update button started this run, the
@@ -35,7 +36,7 @@ QL_SETTINGS='x-apple.systempreferences:com.apple.ExtensionsPreferences?extension
 
 usage() {
   cat <<'EOF'
-Install spacebar into ~/Applications. Press Space. See everything: Quick Look for folders, documents, code and data.
+Install spacebar into ~/Applications, or update the copy in /Applications. Press Space. See everything: Quick Look for folders, documents, code and data.
 
 usage: install.sh [--version vX.Y.Z] [--dry-run] [--no-register] [--no-prompt] [--help]
 
@@ -176,6 +177,17 @@ start_reregister() {
   nohup "$1/Contents/MacOS/Spacebar" --reregister >>"$2" 2>&1 </dev/null &
 }
 
+# replaceable <folder>: whether this account can do the swap there: write the folder, and every folder inside each copy it
+# would rename or delete (one dragged in by another account is that account's).
+replaceable() {
+  [ -d "$1" ] && [ -w "$1" ] || return 1
+  for b in "$1/$APP_NAME" "$1/.$APP_NAME.new" "$1/.$APP_NAME.old"; do
+    [ -e "$b" ] || continue
+    [ -z "$(find "$b" -type d 2>&1 | while IFS= read -r d; do [ -d "$d" ] && [ -w "$d" ] || { printf x; break; }; done)" ] || return 1
+  done
+  return 0
+}
+
 # Re-registers a copy that was unregistered for a swap that did not happen.
 reregister() {
   [ "$SKIP_REGISTER" = 1 ] && return 0
@@ -242,18 +254,30 @@ done
 os=$(sw_vers -productVersion)
 [ "${os%%.*}" -ge 13 ] || { echo "error: spacebar needs macOS 13 or later (this Mac has $os)." >&2; exit 1; }
 
+# Overridable only so the choice between the two can be tested without touching /Applications.
+SYSTEM_APPS=${SPACEBAR_SYSTEM_APPLICATIONS:-/Applications}
+# ~/Applications, unless spacebar is only in /Applications (a swap cut short counts as a copy where it was cut).
 DEST_DIR="$HOME/Applications"
+if [ ! -e "$DEST_DIR/$APP_NAME" ] && [ ! -e "$DEST_DIR/.$APP_NAME.old" ] &&
+  { [ -e "$SYSTEM_APPS/$APP_NAME" ] || [ -e "$SYSTEM_APPS/.$APP_NAME.old" ]; }; then
+  DEST_DIR=$SYSTEM_APPS
+fi
 DEST="$DEST_DIR/$APP_NAME"
 NEW="$DEST_DIR/.$APP_NAME.new"
 OLD="$DEST_DIR/.$APP_NAME.old"
-# Where a second, unmanaged copy would sit. Overridable only so the warning can be tested without touching /Applications.
-SYSTEM_APPS=${SPACEBAR_SYSTEM_APPLICATIONS:-/Applications}
 TMP=""
 MADE_NEW=0
 SWAPPING=0
 UNREGISTERED=0
 trap cleanup EXIT
 trap 'exit 130' INT TERM
+
+# Not a second copy in ~/Applications instead: Quick Look could go on using this one, which nobody here could then change.
+if [ "$DEST_DIR" = "$SYSTEM_APPS" ] && ! replaceable "$DEST_DIR"; then
+  fail "spacebar is in $DEST, which this account cannot change. Nothing was installed. Ask an administrator to update it
+(open spacebar.dmg and drag spacebar to Applications, or run this command as them), or to delete it, so that this command
+installs spacebar in ~/Applications instead."
+fi
 
 # 2. Resolve the release and download it. github.com/<repo>/releases/latest/download/<asset> redirects to the newest
 # release's asset without the rate-limited API. The tag shown comes from where /releases/latest redirects.
@@ -321,7 +345,7 @@ else
   MADE_NEW=1
   ditto "$TMP/unpacked/$APP_NAME" "$NEW" || fail "could not copy the app into $DEST_DIR. Nothing was installed."
 
-  # 4. Swap it in at exactly ~/Applications/spacebar.app: old copy aside, new copy in, then the old copy deleted.
+  # 4. Swap it in at exactly $DEST: old copy aside, new copy in, then the old copy deleted.
   if [ -e "$DEST" ]; then
     say "Replacing $DEST"
     if [ "$SKIP_REGISTER" != 1 ]; then
@@ -335,7 +359,8 @@ else
     SWAPPING=1
     if ! mv "$DEST" "$OLD"; then
       SWAPPING=0
-      fail "could not move the previous copy aside; it is still installed at $DEST."
+      fail "could not move the previous copy aside; it is still installed at $DEST. If macOS said your terminal was prevented
+from modifying apps, allow it in System Settings > Privacy & Security > App Management, or use Update in spacebar's preview."
     fi
     # Quick Look extensions (and their writers) still running the old code would keep serving it from a deleted bundle.
     if [ "$SKIP_REGISTER" != 1 ]; then
@@ -404,7 +429,7 @@ if [ "$DRY_RUN" = 1 ]; then
 else
   say "Installed spacebar $VERSION to $DEST"
 fi
-if [ -e "$SYSTEM_APPS/$APP_NAME" ]; then
+if [ "$DEST_DIR" != "$SYSTEM_APPS" ] && [ -e "$SYSTEM_APPS/$APP_NAME" ]; then
   say ""
   say "warning: there is another copy at $SYSTEM_APPS/$APP_NAME. Both copies claim the same files, so Quick Look"
   say "may use either one. This installer manages only $DEST and has left the other copy alone;"
@@ -427,7 +452,7 @@ fi
 say ""
 say "Next: select a file or folder in Finder and press Space. spacebar shows folders, Markdown, code, data and"
 say "archives; plain text, images, PDFs and media keep Apple's preview in Finder and open in spacebar's sidebar."
-say "Settings: open ~/Applications/spacebar.app"
+say "Settings: open $(quote "$DEST")"
 say "Uninstall: curl -fsSL https://spacebar.patebryant.com/uninstall.sh | sh"
 }
 

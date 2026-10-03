@@ -1,8 +1,9 @@
 // Checks Shared/Updates.swift: version parsing and comparison, the release response, the cache and the last run's status, what
 // the popover offers, the detached run (against a stub), scripts/install.sh's exit record in a dry run that fails its
 // download from a missing file:// URL, the order its quit_extensions and quit_viewer stop stand-in processes in, and its dry run
-// through registration with the Space helper's agent loaded or not. Build and run with test/updates/run.sh. Touches no network
-// and installs nothing.
+// through registration with the Space helper's agent loaded or not, and which copy it updates (~/Applications's, or one only in
+// /Applications, or none it cannot change), against scratch folders. Build and run with test/updates/run.sh. Touches no
+// network and installs nothing.
 import Foundation
 
 var failures = 0
@@ -355,12 +356,73 @@ do {
             .map { over.1[$0.upperBound...].contains("--reregister") } == true)
     check("install.sh dry run: --no-register touches neither", {
         let r = sh("sh scripts/install.sh --dry-run --no-prompt --no-register", env: ["HOME": home.path, "PATH": "\(stubs.path):/usr/bin:/bin:/usr/sbin:/sbin",
-                                                                               "TMPDIR": dir.path + "/", "SPACEBAR_RELEASE_URL": "file://\(rel.path)", "STUB_AGENT": "1"])
+                                                                               "TMPDIR": dir.path + "/", "SPACEBAR_RELEASE_URL": "file://\(rel.path)", "STUB_AGENT": "1",
+                                                                               "SPACEBAR_SYSTEM_APPLICATIONS": dir.appendingPathComponent("none").path])
         return r.0 == 0 && !r.1.contains("--reregister") && !r.1.contains("viewer")
     }())
     check("install.sh dry run: nothing written to the scratch home", !fm.fileExists(atPath: home.appendingPathComponent("Library").path)
           && fm.fileExists(atPath: dest.path) && ((try? fm.contentsOfDirectory(atPath: home.appendingPathComponent("Applications").path)) ?? []) == ["spacebar.app"])
+
+    // Which copy it updates, against a scratch home and a scratch /Applications: ~/Applications's when there is one, else the
+    // one a disk image put in /Applications, and nothing at all when this account cannot change that one.
+    let h2 = dir.appendingPathComponent("pickhome", isDirectory: true), sys = dir.appendingPathComponent("pickapps", isDirectory: true)
+    let mine = h2.appendingPathComponent("Applications/spacebar.app").path, theirs = sys.appendingPathComponent("spacebar.app").path
+    func pick(_ extra: [String] = []) -> (Int32, String) {
+        sh((["sh scripts/install.sh --dry-run --no-prompt"] + extra).joined(separator: " "),
+           env: ["HOME": h2.path, "PATH": "\(stubs.path):/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": dir.path + "/",
+                 "SPACEBAR_RELEASE_URL": "file://\(rel.path)", "STUB_AGENT": "1", "SPACEBAR_SYSTEM_APPLICATIONS": sys.path])
+    }
+    func tree(_ u: URL) -> [String] { ((fm.enumerator(atPath: u.path)?.allObjects as? [String]) ?? []).sorted() }
+    func bundle(_ path: String) { try! fm.createDirectory(atPath: path + "/Contents/PlugIns/SpacebarPreview.appex", withIntermediateDirectories: true) }
+    try! fm.createDirectory(at: sys, withIntermediateDirectories: true)
+    try! fm.createDirectory(at: h2, withIntermediateDirectories: true)
+
+    bundle(mine)
+    var r = pick()
+    check("install.sh picks ~/Applications when only it has a copy", r.0 == 0 && r.1.contains("Would replace \(mine)\n")
+          && r.1.contains("would copy spacebar.app to \(h2.path)/Applications/.spacebar.app.new") && !r.1.contains(sys.path))
+
+    try! fm.removeItem(atPath: h2.appendingPathComponent("Applications").path)
+    bundle(theirs)
+    let before = (tree(h2), tree(sys))
+    r = pick()
+    check("install.sh updates the copy in /Applications in place when it is the only one", r.0 == 0 && r.1.contains("Would replace \(theirs)\n")
+          && r.1.contains("would copy spacebar.app to \(sys.path)/.spacebar.app.new")
+          && r.1.contains("would move \(theirs) to \(sys.path)/.spacebar.app.old, move \(sys.path)/.spacebar.app.new to \(theirs)")
+          && r.1.contains("would run: pluginkit -r \(theirs)/Contents/PlugIns/SpacebarPreview.appex") && r.1.contains("lsregister -f -R \(theirs)\n")
+          && r.1.contains("would run in the background: \(theirs)/Contents/MacOS/Spacebar --reregister") && !r.1.contains(h2.path + "/Applications")
+          && !r.1.contains("warning:"))
+    check("install.sh names that copy for Settings", r.1.contains("Settings: open \(theirs)\n"))
+
+    bundle(mine)
+    r = pick()
+    check("install.sh keeps to ~/Applications with a copy in both, and warns about the other", r.0 == 0 && r.1.contains("Would replace \(mine)\n")
+          && !r.1.contains("Would replace \(theirs)") && r.1.contains("warning: there is another copy at \(theirs)."))
+    try! fm.removeItem(atPath: h2.appendingPathComponent("Applications").path)
+
+    try! fm.moveItem(atPath: theirs, toPath: sys.appendingPathComponent(".spacebar.app.old").path)
+    r = pick()
+    check("install.sh would put back a copy in /Applications that a cut-short swap left aside", r.0 == 0
+          && r.1.contains("would move \(sys.path)/.spacebar.app.old back to \(theirs)"))
+    try! fm.moveItem(atPath: sys.appendingPathComponent(".spacebar.app.old").path, toPath: theirs)
+
+    chmod(sys.path, 0o555)
+    r = pick()
+    check("install.sh stops before downloading when this account cannot change /Applications", r.0 == 1
+          && r.1.contains("spacebar is in \(theirs), which this account cannot change. Nothing was installed.") && !r.1.contains("Downloading")
+          && !r.1.contains("would "))
+    chmod(sys.path, 0o755)
+    let inner = theirs + "/Contents/PlugIns"
+    chmod(inner, 0o555)
+    r = pick()
+    check("install.sh stops when a folder inside that copy is not this account's to change", r.0 == 1 && r.1.contains("which this account cannot change"))
+    r = pick(["--no-register"])
+    check("install.sh --no-register stops there too", r.0 == 1 && r.1.contains("which this account cannot change"))
+    chmod(inner, 0o755)
+    check("install.sh dry runs change nothing in either folder", tree(h2) == before.0 && tree(sys) == before.1
+          && !fm.fileExists(atPath: h2.appendingPathComponent("Applications").path))
 }
+
 close(leaked)
 
 // Every private copy goes once its shell is reaped, and a run that never started leaves none.

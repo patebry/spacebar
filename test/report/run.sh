@@ -1,6 +1,7 @@
 #!/bin/bash
 # Builds and runs the Report a Problem checks, then checks the bundled uninstaller without running it: its syntax, and a
-# --dry-run against a scratch HOME that lists only what it would remove (no network, nothing opened, nothing deleted).
+# --dry-run against a scratch HOME and /Applications that lists only what it would remove (no network, nothing opened,
+# nothing deleted).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 out=$(mktemp -d)
@@ -15,6 +16,10 @@ app="$home/Applications/spacebar.app"
 support="$home/Library/Application Support/spacebar"
 mkdir -p "$app/Contents/PlugIns/SpacebarPreview.appex" "$support" "$home/Documents"
 touch "$home/Documents/keep.md"
+# A scratch /Applications too, so the real one is never looked at.
+sys="$out/apps"
+mkdir -p "$sys"
+export SPACEBAR_SYSTEM_APPLICATIONS="$sys"
 dry() { HOME="$home" sh scripts/uninstall.sh --dry-run "$@" </dev/null 2>&1; }
 removed() { dry "$@" | sed -n 's/^would run: rm -rf //p'; }
 
@@ -72,4 +77,29 @@ HOME="$home" TMPDIR="$tmpd/" sh "$tmpd/spacebar-update-kept/uninstall.sh" --dry-
 check "started from the settings window, it removes its own private copy" test ! -e "$tmpd/spacebar-update-self"
 check "without the marker its folder stays" test -e "$tmpd/spacebar-update-kept/uninstall.sh"
 check "a dry run changes nothing" test -d "$app" -a -d "$support" -a -f "$home/Documents/keep.md" -a -d "$home/Library/Containers/md.spacebar.viewer"
+
+# A copy dragged into /Applications from spacebar.dmg goes the same way, after ~/Applications's when both are there; one this
+# account cannot delete is left, named, and the run fails.
+theirs="$sys/spacebar.app"
+mkdir -p "$theirs/Contents/PlugIns/SpacebarPreview.appex"
+check "both copies are removed, ~/Applications's first" test "$(removed)" = "$(printf '%s\n%s' "$app" "$theirs")"
+check "each one's extensions are unregistered" sh -c "d=\$(HOME='$home' sh scripts/uninstall.sh --dry-run </dev/null 2>&1); for a in '$app' '$theirs'; do printf '%s\n' \"\$d\" | grep -qx \"would run: pluginkit -r \$a/Contents/PlugIns/SpacebarPreview.appex\" || exit 1; done"
+quits_both() {
+  local d; d=$(dry)
+  for c in "$app" "$theirs"; do
+    grep -qxF "would run: pkill -f $(esc "$c/Contents/Helpers/spacebar Helper.app")" <<<"$d" || return 1
+    grep -qxF "would run: pkill -f $(esc "$c/Contents/Helpers/spacebar Viewer.app")Contents/XPCServices/" <<<"$d" || return 1
+  done
+}
+check "each one's helper and viewer are quit" quits_both
+check "the helper's agent and permissions are reset once" test "$(dry | grep -c -e 'launchctl bootout' -e 'tccutil')" = 3
+rm -rf "$home/Applications"
+check "a copy only in /Applications is removed" test "$(removed)" = "$theirs"
+chmod 555 "$sys"
+check "one this account cannot delete is left and named, and the run fails" sh -c "out=\$(HOME='$home' sh scripts/uninstall.sh --dry-run </dev/null 2>&1); code=\$?; [ \$code = 1 ] && printf '%s\n' \"\$out\" | grep -qx 'Left $theirs: this account cannot delete it. An administrator can move it to the Trash.' && ! printf '%s\n' \"\$out\" | grep -q -e 'rm -rf' -e 'pluginkit -r'"
+chmod 755 "$sys"
+chmod 555 "$theirs/Contents"
+check "and so is one with a folder inside it this account cannot change" sh -c "HOME='$home' sh scripts/uninstall.sh --dry-run </dev/null 2>&1 | grep -q '^Left $theirs:'"
+chmod 755 "$theirs/Contents"
+check "with neither, it says where it looked" grep -qx "spacebar is not installed at $home/Applications/spacebar.app or $sys/spacebar.app" <<<"$(rm -rf "$theirs"; dry)"
 exit $fail

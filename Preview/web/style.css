@@ -59,7 +59,7 @@
   section.footnotes { font-size: .875em; color: var(--muted); }
   section.footnotes ol { padding-left: 1.4em; }
   a.footnote-backref { text-decoration: none !important; font-family: var(--font-body); }
-  #doc [id] { scroll-margin-top: calc(var(--bar-h) + 16px); }
+  #doc [id] { scroll-margin-top: var(--anchor-mt, calc(var(--bar-h) + 16px)); }
   /* A formula while KaTeX loads (app.js loadKatex): a quiet mark in the line, and a display formula's own line. */
   #doc span.tex:empty::before { content: "…"; color: var(--muted); }
   #doc span.tex[data-display="1"]:empty { display: block; margin: 1em 0; text-align: center; }
@@ -493,8 +493,11 @@
   @keyframes sb-fade { from { opacity: 0; } }
   @media (prefers-reduced-motion: reduce) { #doc .viewer-loading .spinner { animation: none; } }
   #doc .info-card { display: grid; justify-items: center; text-align: center; gap: 4px; padding: 48px 0 24px; }
+  /* The thumbnail can arrive seconds after the card: the icon holds the thumbnail's box, so nothing below it moves. */
+  #doc .info-card { --info-pic: max(64px, min(160px, 25vh)); }
   #doc .info-card .ic { width: 64px; height: 64px; stroke-width: .7; margin-bottom: 8px; }
-  #doc .info-thumb { display: block; max-width: min(320px, 100%); max-height: min(320px, 40vh); object-fit: contain; margin-bottom: 8px; }
+  #doc .info-card > .ic:first-child { margin: calc((var(--info-pic) - 64px) / 2) 0 calc((var(--info-pic) - 64px) / 2 + 8px); }
+  #doc .info-thumb { display: block; height: var(--info-pic); max-width: min(320px, 100%); object-fit: scale-down; margin-bottom: 8px; }
   #doc .info-name { font-weight: 600; font-size: 1.15em; overflow-wrap: anywhere; }
   #doc .info-kind { color: var(--muted); }
   #doc .info-card dl { display: grid; grid-template-columns: auto auto; gap: 4px 12px; margin: 16px 0; font-size: 13px; text-align: left; }

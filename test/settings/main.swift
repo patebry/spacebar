@@ -81,7 +81,7 @@ check("panel allow-list drops userTheme/editor/customCSS/editing/rawHTML/remoteI
       afterPanel.userTheme == nil && afterPanel.editorBundleID == nil && afterPanel.customCSS && afterPanel.inlineEditing
       && afterPanel.rawHTML == "sanitized" && !afterPanel.remoteImages)
 check("panel keys are cosmetic only", Settings.panelKeys.isSubset(of: ["theme", "appearance", "fontSize", "width", "bodyFont", "lineHeight", "sidebarCollapsed", "sidebarWidth", "folderSort",
-                                                                     "folderViewMedia", "folderViewOther", "rawMarkdown", "rawJSON", "rawNotebook", "rawCSV", "rawXML", "rawCSS",
+                                                                     "foldersFirst", "folderViewMedia", "folderViewOther", "rawMarkdown", "rawJSON", "rawNotebook", "rawCSV", "rawXML", "rawCSS",
                                                                      "wrapText", "wrapMarkdown", "wrapCode", "editHintShown"]))
 check("folder views: grid for folders of pictures and list for the rest by default, grid or list only, from the panel",
       Settings().folderViewMedia == "grid" && Settings().folderViewOther == "list"
@@ -97,6 +97,10 @@ check("raw views: off by default, bools only, panel keys", Settings.rawKeys.allS
 })
 check("folderSort: a panel key, name or modified only", Settings.panelPatch("folderSort", "modified").map { obj(String(data: $0, encoding: .utf8)!)["folderSort"] as? String } == "modified"
       && [NSNumber(value: 1), "size", NSNull(), ["name"]].allSatisfy { Settings.panelPatch("folderSort", $0) == nil })
+check("foldersFirst: a panel key; finder, always or never only", Settings.panelPatch("foldersFirst", "always").map { obj(String(data: $0, encoding: .utf8)!)["foldersFirst"] as? String } == "always"
+      && Settings(dictionary: ["foldersFirst": "never"]).foldersFirst == "never" && Settings(dictionary: ["foldersFirst": "sometimes"]).foldersFirst == "finder"
+      && decode(#"{"foldersFirst":true}"#)?.foldersFirst == "finder"
+      && [NSNumber(value: 1), true, "yes", NSNull(), ["always"]].allSatisfy { Settings.panelPatch("foldersFirst", $0) == nil })
 check("welcomeShown: off by default, a bool only, not a panel key, kept by the file", !Settings().welcomeShown && Settings(dictionary: ["welcomeShown": true]).welcomeShown
       && [1, "true", NSNull()].allSatisfy { !Settings(dictionary: ["welcomeShown": $0]).welcomeShown } && decode(#"{"welcomeShown":true}"#)?.welcomeShown == true
       && Settings.allKeys.contains("welcomeShown") && Settings.panelPatch("welcomeShown", true) == nil)
@@ -262,6 +266,42 @@ let hidden = FolderListing.list(ld.path, sort: "name", readmeFirst: true, showHi
 check("tree: showHidden lists dot files, flagged files and hidden folders", [".hidden.md", ".hiddendir", "flagged.md"].allSatisfy(names(hidden).contains)
       && !names(hidden).contains("pipe.md") && !names(hidden).contains("outside-link.md"))
 check("tree: README not first when that is off", names(FolderListing.list(ld.path, sort: "name", readmeFirst: false))[4] == "a.markdown")
+// Finder's order: folders among the files, by name; README first then goes to the very top.
+let finderSorted = { (l: FolderListing.Listing) in names(l) == names(l).sorted { $0.localizedStandardCompare($1) == .orderedAscending } }
+let mixed = FolderListing.list(ld.path, sort: "name", readmeFirst: false, foldersFirst: false)
+check("tree: Finder's order mixes folders and files by name", finderSorted(mixed) && mixed.entries.count == byName.entries.count
+      && names(mixed).firstIndex(of: "alpha")! > names(mixed).firstIndex(of: "a.markdown")! && names(mixed).firstIndex(of: "Zeta")! > names(mixed).firstIndex(of: "Tool.app")!)
+let mixedReadme = FolderListing.list(ld.path, sort: "name", readmeFirst: true, foldersFirst: false)
+check("tree: README first in Finder's order goes to the very top", names(mixedReadme).first == "README.md" && Array(names(mixedReadme).dropFirst()) == names(mixed).filter { $0 != "README.md" })
+try! fm.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -100)], ofItemAtPath: ld.appendingPathComponent("Zeta").path)
+let byDateMixed = FolderListing.list(ld.path, sort: "modified", readmeFirst: false, foldersFirst: false).entries
+check("tree: by date in Finder's order, folders among the files", zip(byDateMixed, byDateMixed.dropFirst()).allSatisfy { $0.modified >= $1.modified }
+      && Array(byDateMixed.map(\.name).suffix(2)) == ["Zeta", "dangling.md"])
+let finderOn = FinderPrefs.Values(foldersFirst: true, showHidden: true)
+check("options: as in Finder, folders first follows its setting only when sorting by name; hidden files follow it too",
+      FolderListing.Options(sort: "name", foldersFirst: "finder", readmeFirst: false, showHidden: false, finder: finderOn) == FolderListing.Options(sort: "name", foldersFirst: true, showHidden: true)
+      && !FolderListing.Options(sort: "modified", foldersFirst: "finder", readmeFirst: false, showHidden: false, finder: finderOn).foldersFirst
+      && FolderListing.Options(sort: "name", foldersFirst: "finder", readmeFirst: true, showHidden: false, finder: FinderPrefs.Values()) == FolderListing.Options(sort: "name", readmeFirst: true)
+      && FolderListing.Options(sort: "modified", foldersFirst: "always", readmeFirst: false, showHidden: false, finder: FinderPrefs.Values()).foldersFirst
+      && !FolderListing.Options(sort: "name", foldersFirst: "never", readmeFirst: false, showHidden: false, finder: finderOn).foldersFirst
+      && FolderListing.Options(sort: "name", foldersFirst: "never", readmeFirst: false, showHidden: true, finder: FinderPrefs.Values()).showHidden)
+check("finder prefs: a boolean, a number or a string as defaults(1) advice wrote them; off when missing",
+      FinderPrefs.parse(["_FXSortFoldersFirst": true, "AppleShowAllFiles": 1]) == finderOn && FinderPrefs.parse(["_FXSortFoldersFirst": "YES", "AppleShowAllFiles": "true"]) == finderOn
+      && FinderPrefs.parse(["_FXSortFoldersFirst": false, "AppleShowAllFiles": "NO"]) == FinderPrefs.Values() && FinderPrefs.parse([:]) == FinderPrefs.Values()
+      && FinderPrefs.parse(["AppleShowAllFiles": 0]) == FinderPrefs.Values())
+let finderPlist = dir.appendingPathComponent("finder.plist")
+try! PropertyListSerialization.data(fromPropertyList: ["_FXSortFoldersFirst": true, "AppleShowAllFiles": "1"], format: .binary, options: 0).write(to: finderPlist)
+check("finder prefs: read from a plist file; none under SPACEBAR_SUPPORT_DIR; a missing or broken file reads as defaults",
+      FinderPrefs.read(at: finderPlist.path) == finderOn && FinderPrefs.path == nil && FinderPrefs.read() == FinderPrefs.Values()
+      && FinderPrefs.read(at: finderPlist.path + ".nope") == FinderPrefs.Values()
+      && { try! Data("junk".utf8).write(to: finderPlist); return FinderPrefs.read(at: finderPlist.path) == FinderPrefs.Values() }())
+try! PropertyListSerialization.data(fromPropertyList: ["_FXSortFoldersFirst": "true"], format: .xml, options: 0).write(to: finderPlist)
+setenv("SPACEBAR_FINDER_PLIST", finderPlist.path, 1)
+let named = FinderPrefs.path == finderPlist.path && FinderPrefs.read() == FinderPrefs.Values(foldersFirst: true, showHidden: false)
+setenv("SPACEBAR_FINDER_PLIST", "", 1)
+let emptied = FinderPrefs.path == nil && FinderPrefs.read() == FinderPrefs.Values()
+unsetenv("SPACEBAR_FINDER_PLIST")
+check("finder prefs: SPACEBAR_FINDER_PLIST names the file to read, empty names none", named && emptied && FinderPrefs.path == nil)
 let byDate = FolderListing.list(ld.path, sort: "modified", readmeFirst: true).files.map(\.name)
 check("tree: files by date modified, newest first, README still first", Array(byDate.prefix(5)) == ["README.md", "Tool.app", "notes.txt", "photo.png", "paper.pdf"])
 let sub = FolderListing.list(ld.path + "/alpha", root: ld.path, sort: "name", readmeFirst: true)
@@ -629,13 +669,13 @@ withExtendedLifetime(watch) {}
 let migDir = FileManager.default.temporaryDirectory.appendingPathComponent("spacebar-migrate-\(UUID().uuidString)")
 try! FileManager.default.createDirectory(at: migDir, withIntermediateDirectories: true)
 let migFile = migDir.appendingPathComponent("settings.json")
-check("defaults: folder previews on, reading stats off, version 4", Settings().folderMode && !Settings().stats && Settings().version == 4)
+check("defaults: folder previews on, reading stats off, README first off, version 5", Settings().folderMode && !Settings().stats && !Settings().folderReadmeFirst && Settings().version == 5)
 try! Data(#"{"version": 1, "folderMode": false, "theme": "nord"}"#.utf8).write(to: migFile)
 check("a version-1 file reads as folder previews on", SettingsFile.load(at: migFile).folderMode)
 SettingsFile.migrate(at: migFile)
 let migrated = (try! JSONSerialization.jsonObject(with: Data(contentsOf: migFile))) as! [String: Any]
-check("migrate turns folder previews on once and writes version 4, keeping other keys",
-      migrated["folderMode"] as? Bool == true && (migrated["version"] as? NSNumber)?.intValue == 4 && migrated["theme"] as? String == "nord")
+check("migrate turns folder previews on once and writes version 5, keeping other keys",
+      migrated["folderMode"] as? Bool == true && (migrated["version"] as? NSNumber)?.intValue == 5 && migrated["theme"] as? String == "nord")
 _ = SettingsFile.update(["folderMode": false], at: migFile)
 SettingsFile.migrate(at: migFile)
 check("turned off after the migration stays off", SettingsFile.load(at: migFile).folderMode == false)
@@ -652,11 +692,27 @@ check("a version-2 file without the key reads with reading stats off", SettingsF
 try! Data(#"{"version": 3, "stats": true, "theme": "nord", "futureKey": 7}"#.utf8).write(to: migFile)
 SettingsFile.migrate(at: migFile)
 let v4 = (try! JSONSerialization.jsonObject(with: Data(contentsOf: migFile))) as! [String: Any]
-check("migrate writes reading stats off and version 4, keeping other keys",
-      v4["stats"] as? Bool == false && (v4["version"] as? NSNumber)?.intValue == 4 && v4["theme"] as? String == "nord" && v4["futureKey"] as? Int == 7)
+check("migrate writes reading stats off and version 5, keeping other keys",
+      v4["stats"] as? Bool == false && (v4["version"] as? NSNumber)?.intValue == 5 && v4["theme"] as? String == "nord" && v4["futureKey"] as? Int == 7)
 _ = SettingsFile.update(["stats": true], at: migFile)
 SettingsFile.migrate(at: migFile)
 check("turned on in settings.json after the migration stays on", SettingsFile.load(at: migFile).stats)
+// Version 5: README first off by default, so the sidebar lists a folder as Finder does; a file from before reads, and is
+// rewritten, with it off. A version-4 file's reading stats are its own by then and stay.
+check("defaults: folders first as in Finder", Settings().foldersFirst == "finder")
+for v in 1...4 {
+    try! Data(#"{"version": \#(v), "folderReadmeFirst": true, "theme": "nord"}"#.utf8).write(to: migFile)
+    check("a version-\(v) file with README first on reads with it off", SettingsFile.load(at: migFile).folderReadmeFirst == false)
+}
+try! Data(#"{"version": 4, "folderReadmeFirst": true, "stats": true, "theme": "nord"}"#.utf8).write(to: migFile)
+check("a version-4 file's reading stats on reads on", SettingsFile.load(at: migFile).stats)
+SettingsFile.migrate(at: migFile)
+let v5 = (try! JSONSerialization.jsonObject(with: Data(contentsOf: migFile))) as! [String: Any]
+check("migrate writes README first off and version 5, keeping a version-4 file's reading stats and other keys",
+      v5["folderReadmeFirst"] as? Bool == false && (v5["version"] as? NSNumber)?.intValue == 5 && v5["stats"] as? Bool == true && v5["theme"] as? String == "nord")
+_ = SettingsFile.update(["folderReadmeFirst": true], at: migFile)
+SettingsFile.migrate(at: migFile)
+check("README first turned on in settings.json after the migration stays on", SettingsFile.load(at: migFile).folderReadmeFirst)
 try! Data(#"{"version": 3, "stats": true}"#.utf8).write(to: migFile)
 _ = SettingsFile.update(["stats": true], at: migFile)
 check("an old file's on in the same write as the migration is kept", SettingsFile.load(at: migFile).stats)

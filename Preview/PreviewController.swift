@@ -381,7 +381,7 @@ class PreviewController: NSViewController {
     private var listGens: [String: Int] = [:]
     /// Folder mode's first open: run by whichever listing lands first, since a newer one (a .DS_Store write) supersedes older ones.
     private var onListed: ((FolderListing.Listing) -> Void)?
-    private var listedWith: (sort: String, readmeFirst: Bool, hidden: Bool)?
+    private var listedWith: FolderListing.Options?
     /// The root and every folder expanded in the sidebar, each re-listed when it changes.
     private var dirWatches: [String: FolderWatch] = [:]
     private static let maxWatches = 64
@@ -921,7 +921,7 @@ class PreviewController: NSViewController {
         if scanning { rescan = opening || rescan == true; return }
         scanning = true
         scanGen += 1
-        let gen = scanGen, root = rootDir, hidden = SettingsStore.shared.settings.showHiddenFiles
+        let gen = scanGen, root = rootDir, hidden = SettingsStore.shared.listing.showHidden
         DispatchQueue.global(qos: .userInitiated).async {
             let r = FolderScan.scan(root, showHidden: hidden)
             DispatchQueue.main.async { [weak self] in
@@ -1001,10 +1001,12 @@ class PreviewController: NSViewController {
         onDecline(why)
     }
 
+    /// Also Finder's preferences: the store reloads on either, and the sidebar follows a ⌘⇧. or a "Keep folders on top" in Finder.
     fileprivate func settingsChanged(_ s: Settings) {
         if !s.inlineEditing, edit != nil { stopEdit(notifyWriter: true) }
-        if let w = listedWith, w.hidden != s.showHiddenFiles { indexStale = true }
-        if let w = listedWith, w != (s.folderSort, s.folderReadmeFirst, s.showHiddenFiles) {
+        let o = SettingsStore.shared.listing
+        if let w = listedWith, w.showHidden != o.showHidden { indexStale = true }
+        if let w = listedWith, w != o {
             for dir in Set(listings.keys).union(dirWatches.keys) { refreshListing(dir) }
         }
     }
@@ -1043,10 +1045,10 @@ class PreviewController: NSViewController {
         let gen = (listGens[dir] ?? 0) + 1
         listGens[dir] = gen
         if let then { onListed = then }
-        let root = rootDir, s = SettingsStore.shared.settings, pinned = fileURL?.path, only = selection
-        listedWith = (s.folderSort, s.folderReadmeFirst, s.showHiddenFiles)
+        let root = rootDir, o = SettingsStore.shared.listing, pinned = fileURL?.path, only = selection
+        listedWith = o
         DispatchQueue.global(qos: .userInitiated).async {
-            var l = FolderListing.list(dir, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles, pinned: pinned)
+            var l = FolderListing.list(dir, root: root, options: o, pinned: pinned)
             if let only { l = FolderListing.only(l, selection: only) }
             DispatchQueue.main.async { [weak self] in
                 guard let self, gen == self.listGens[dir], root == self.rootDir else { return }
@@ -1401,7 +1403,7 @@ class PreviewController: NSViewController {
     /// and realpaths every target and reads embedded notes, which may be in iCloud and not downloaded. A render uses the last
     /// result for this file (exact while its set of targets is unchanged); a new result that differs renders the file again.
     private func addLinks(_ payload: inout [String: Any], text: String, path: String) {
-        let hidden = SettingsStore.shared.settings.showHiddenFiles
+        let hidden = SettingsStore.shared.listing.showHidden
         let idx = Self.linkIndex.flatMap { $0.root == rootDir ? $0 : nil }
         if idx == nil || indexStale || Date().timeIntervalSince(idx!.built) > 30 { buildIndex(hidden: hidden) }
         let targets = linkTargets(text)
@@ -1969,7 +1971,7 @@ class PreviewController: NSViewController {
             var st = stat()
             guard FolderListing.isPlainPath(target.path, under: rootDir), FolderListing.isInside(target.path, root: rootDir),
                   stat(target.path, &st) == 0, st.st_mode & S_IFMT == S_IFREG,
-                  SettingsStore.shared.settings.showHiddenFiles || !Self.hiddenStep(target.path, under: rootDir) else {
+                  SettingsStore.shared.listing.showHidden || !Self.hiddenStep(target.path, under: rootDir) else {
                 return refuse("html link", "not a file the sidebar would list")
             }
             return open(target, anchor: nil)

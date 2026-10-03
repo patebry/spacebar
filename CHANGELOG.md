@@ -171,6 +171,10 @@ Waits for the Developer ID: the first release with the Space helper is notarized
 
 ### Sidebar and settings
 
+- **The sidebar lists a folder as Finder does**: by name, folders among the files unless Finder's own Keep folders on top
+  is on, and hidden files while Finder shows them (⇧⌘.); a change in Finder shows in an open preview. The sort menu gains
+  Folders First for either way whatever Finder does (`foldersFirst` in settings.json). README first is off by default and a
+  settings file from before is read with it off; `"folderReadmeFirst": true` brings it back.
 - Big folders stay fast (the sidebar draws only the rows in view), and it takes the arrow keys as soon as the preview opens.
 - The toolbar holds still while the arrows move from file to file: its buttons keep their places, Open is one word with the
   app in its tooltip, and a button with a key gives it in its tooltip.
@@ -189,7 +193,7 @@ Waits for the Developer ID: the first release with the Space helper is notarized
   files, a custom theme and custom.css, and the settings file with Reset to Defaults.
 - Body font and page width (both still in the Aa button), code font, line height, code highlighting, Minimal chrome,
   table of contents, front matter, word count, math, Mermaid, Markdown links, README first, folder previews and the
-  sidebar's arrow keys left the window. Each keeps its saved value (word count excepted, above) and is still a key in settings.json (the README lists
+  sidebar's arrow keys left the window. Each keeps its saved value (word count and README first excepted, above) and is still a key in settings.json (the README lists
   them); Reset to Defaults puts them back too, and turns folder previews back on in System Settings.
 - The Quick Look extension's state and other apps' Quick Look extensions that claim spacebar's types show at the top of
   Settings only while something is wrong, with Open Quick Look Extensions or a Turn Off button.

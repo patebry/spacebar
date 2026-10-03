@@ -108,7 +108,9 @@ Nine features reach further than a rendered page, and are in scope:
   table at most 16 MB and 2 million entries; nothing is mounted or run.
 - **The one-click update** runs the app's own copy of `scripts/install.sh`, sealed by the app's signature, detached from Quick
   Look with only `HOME`, `PATH`, `TMPDIR` and a status path in its environment. It installs only a version newer than the
-  running one, only into `~/Applications/spacebar.app`, and only after the downloaded zip's SHA-256 matches the release's.
+  running one, only into the copy it runs from and only when that is the one the installer picks (`~/Applications/spacebar.app`,
+  or `/Applications/spacebar.app` when that is the only one) and this account can change it, and only after the downloaded
+  zip's SHA-256 matches the release's.
   The version check reads just the version number of GitHub's latest release, at most once a day. The uninstaller, started
   from Settings, quits the extensions' helpers before it deletes anything and does not start while an update runs.
 - **Copy** puts plain text on the clipboard through the writer; the sandboxed extension never touches the pasteboard. The
@@ -205,8 +207,8 @@ helper sees nothing and Space reaches Finder's own Quick Look. Settings shows "S
 - A compromised viewer has what the Quick Look extension has, plus a process that runs for as long as the helper is on (a
   fresh one every 30 minutes the panel stays closed).
 - The signing key now also gates Accessibility: whoever holds it can build a viewer the helper trusts, and a helper that
-  inherits the Accessibility grant. It lives only in CI secrets. Until the Developer ID release, the certificate is
-  self-signed, so macOS pins the helper's launch constraint to its code hash rather than to a Team ID.
+  inherits the Accessibility grant. It lives only in CI secrets. From v0.3 it is spacebar's Developer ID, so macOS can tie
+  the helper's launch constraint to the Team ID; a self-signed local build has none, and macOS pins it to the code hash.
 - A file swapped between the viewer's type check and Quick Look's read may reach Apple's generator for a type spacebar claims.
   It is still parsed by Apple's generator, out of process, and shown in the sandboxed viewer.
 

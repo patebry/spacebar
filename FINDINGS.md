@@ -283,7 +283,8 @@ The threat is a downloaded Markdown file, and whatever sits beside it, driving t
    A binary property list is converted to XML only under a node count and an estimate of the XML's size, so a small file
    naming one large blob many times is refused before it is written out.
 12. **Updates:** `installUpdate` refuses a version that is not newer than the running one or not a plain version, or when
-   checks are off, and runs only from `~/Applications/spacebar.app`. The script it runs is the app's own `install.sh`, copied
+   checks are off, and runs only from the copy install.sh would replace (`~/Applications/spacebar.app`, or
+   `/Applications/spacebar.app` when that is the only one) when this account can write it. The script it runs is the app's own `install.sh`, copied
    to a private folder first so replacing the app cannot cut it off mid-read, with only `HOME`, `PATH`, `TMPDIR` and the status
    path in its environment and no inherited descriptors. The installer verifies the release's SHA-256 before it replaces
    anything.
@@ -342,19 +343,79 @@ and keeps them in memory (48 MB or 4,000, least recently used first; all dropped
 
 ## Release signing
 
-Releases are signed with a self-signed certificate, "spacebar Release", rather than ad-hoc.
+From v0.3 releases are signed with spacebar's Apple Developer ID, notarized and stapled. v0.1.1 to v0.2.2 were signed with a
+self-signed certificate, "spacebar Release", and v0.1.0 ad-hoc. Local builds keep a self-signed identity (`.sign-id`).
 
 - An ad-hoc signature's designated requirement is its cdhash, so every build has a different signer as far as macOS is
   concerned. The sandbox container finding above means each update would then stop at the `secinitd` data-sharing prompt.
 - A certificate gives a designated requirement that names the certificate instead:
   `identifier "md.spacebar" and certificate leaf = H"<certificate SHA-1>"`. Two builds of different code signed with it have
-  different cdhashes and the same requirement (checked with `codesign -d -r-` on two local builds).
-- It is self-signed because there is no Apple Developer ID behind the project. Gatekeeper does not trust it, and it is not
-  meant to: the installer downloads with curl, which sets no quarantine flag. It only keeps the signer the same across releases.
-  The move from the ad-hoc v0.1.0 to it changes the signer once, so that one update may prompt.
-- The release workflow imports it from the `SPACEBAR_SIGNING_P12` and `SPACEBAR_SIGNING_PASSWORD` secrets into a temporary
-  keychain. Without them, as in a fork, it builds ad-hoc and warns. Each `spacebar.zip` also has a GitHub build provenance
-  attestation (`gh attestation verify spacebar.zip -R patebry/spacebar`).
+  different cdhashes and the same requirement (checked with `codesign -d -r-` on two local builds). A Developer ID's names
+  Apple's anchor and the Team ID (`anchor apple generic and identifier "md.spacebar" and ... certificate leaf[subject.OU] =
+  <Team ID>`), so it also outlives a renewed certificate.
+- "spacebar Release" was self-signed because there was no Developer ID. Gatekeeper did not trust it, and it was not meant to:
+  the installer downloads with curl, which sets no quarantine flag. It kept the signer the same across releases. The move
+  from it to the Developer ID changes the signer once, as the move from the ad-hoc v0.1.0 did, so the first update from 0.2
+  may prompt (not seen yet: there is no Developer ID build to update to).
+- Every executable is signed under the hardened runtime: the helper admits only peers that are, and notarization requires it
+  of all of them. None needs an entitlement for it. WebKit runs pages in its own processes, so nothing in spacebar's needs
+  JIT memory, and every library they load is Apple's, which library validation allows. `test/hardened/run.sh` signs the
+  extension's code with the built extension's entitlements, the sandbox and the runtime, and shows Markdown, JSON, a zip
+  (listed by the writer, also under the runtime), a PDF (in the page's PDF view; PDFKit reads it) and an image; `test/signing/run.sh` lists every Mach-O in a build
+  with its flags and entitlements. Quick Look itself cannot be asked to run a local build without registering it.
+- Notarization also needs a secure timestamp on every signature. `TIMESTAMP=1` asks Apple's timestamp server, and is the
+  default for a Developer ID identity; a local build with a self-signed one signs offline (`--timestamp=none`).
+- spacebar has no app group, keychain group, provisioning profile or launch constraint of its own, so a Team ID changes
+  none: macOS 15's rule that a group ID carry the Team ID does not apply. The helper's link pins the peer's leaf certificate,
+  read at run time from its own signature, so it holds for any identity that signs the whole build.
+- The release workflow imports the identity from the `SPACEBAR_SIGNING_P12` and `SPACEBAR_SIGNING_PASSWORD` secrets into a
+  temporary keychain and signs with the one identity it holds. From v0.3 that must be a Developer ID Application identity,
+  and `SPACEBAR_NOTARY_KEY`, `SPACEBAR_NOTARY_KEY_ID` and `SPACEBAR_NOTARY_ISSUER` must be set, or the release fails before
+  the tests. They are a Team API key from App Store Connect (Users and Access, Integrations): its .p8, key ID and issuer ID.
+  An Individual key has no issuer ID and is not supported. It notarizes the zip, staples the app, zips it again, makes
+  `spacebar.dmg` from the stapled app (`scripts/dmg.sh`: the app and a link to /Applications), and signs, notarizes and staples that.
+  Before v0.3 it builds the zip alone, as before; without the secrets, as in a fork, ad-hoc with a warning. Each
+  `spacebar.zip` (and `spacebar.dmg`) has a GitHub build provenance attestation
+  (`gh attestation verify spacebar.zip -R patebry/spacebar`).
+
+## Install
+
+spacebar is installed in `~/Applications` by the install command, or in `/Applications` by dragging it there from
+`spacebar.dmg`. There is one managed copy: `~/Applications/spacebar.app` when it is there, else
+`/Applications/spacebar.app`; with neither, the one whose swap was cut short (its `.spacebar.app.old`). A stale `.old` in
+`~/Applications` does not hide a copy in `/Applications`: install.sh updates that copy and names the `.old`. install.sh
+updates the managed copy in place with the same checksum, exact paths and rollback; the Update button runs only from it;
+the uninstaller removes either or both. With a copy in both, install.sh keeps to `~/Applications` and warns about the
+other, as before. Both scripts refuse to run as root: `sudo` can keep the user's HOME, which would leave a root-owned copy
+there, registered with root's Launch Services and pluginkit.
+
+- **A standard account cannot change `/Applications`** (`root:admin`, `drwxrwxr-x`), and a copy an administrator dragged
+  there is owned by them with folders mode 755, so even another administrator cannot delete what is inside it. install.sh
+  checks the folder and every folder inside the copy before it downloads, and stops with nothing changed rather than
+  install a second copy in `~/Applications`: that one and the old one would claim the same bundle IDs and file types, Quick
+  Look could go on using the old one, and nobody on that account could update or remove it. The uninstaller leaves such a
+  copy, names it, and exits 1; the preview does not offer Update for it, and Uninstall in Settings says why it cannot. The
+  app checks the same folders the scripts do (`Updates.canChange`). A link where a copy should be is never treated as one:
+  install.sh stops, and the uninstaller deletes only the link.
+- **Launching an app registers its extensions, but turns them neither on nor off.** Measured on macOS 15.4.1 with a probe
+  app of unique bundle IDs (self-signed, a sandboxed Quick Look preview extension) in a scratch folder: `pluginkit -mAv`
+  listed nothing after the bundle was made, and listed the extension within 2 s of `open`, with a blank mark (neither `+`
+  nor `-`). The probe was unregistered and deleted afterwards. A copy made by Finder from a disk image was not measured.
+  So at each launch the managed copy (not a link) adds an extension pluginkit does not list at its path, and turns it on (`pluginkit
+  -e use`) while no listed version of it has a mark, the folder one only while folder previews are on. `pluginkit -e`
+  acts on the bundle ID, not a path, so a `+` or `-` on any copy's line counts as the user's choice and is left alone. A
+  second copy does nothing. The list comes from `pluginkit -mADv`: without `-D`, a copy of the same version at another
+  path is not listed (here three registered copies of 0.1.0 showed as one, each with the same mark).
+- **App Management** (macOS 13) refuses changes to a notarized app's bundle by a process of another Team ID unless the user
+  allows it, wherever the app is (lapcatsoftware.com/articles/AppManagement.html), so it is not new with `/Applications`:
+  from v0.3 a release is notarized, and the install command run from a terminal without App Management may be refused when
+  it moves the old copy aside. install.sh then stops with the old copy in place and re-registered, and says where to allow
+  it; the uninstaller, refused at `rm`, names the copy, goes on to the other and exits 1. Not observed here: the terminal used for this work has App Management (and Full Disk Access) granted, and local
+  builds are self-signed and not notarized, which App Management does not protect. The Update button runs install.sh from
+  the writer inside the same Developer ID-signed app, which App Management should allow as the same Team ID; that is
+  untested until a notarized release updates to a later one.
+- **The Space helper** is registered by the app through SMAppService for its own bundle, so an update in place keeps its
+  path and nothing about the helper changes. Two copies would each register the same label; that is left as before.
 
 ## Space helper
 
@@ -396,8 +457,8 @@ get a keylogger) and hosting the Quick Look extension remotely (no public API). 
   each opening, counted by event type and subtype; whether the window server marks a gesture with the window under the
   pointer (else the panel's bounds, as the viewer last reported them, decide where a pinch begins) is not yet checked live.
 
-**Why the helper stays down after an update, and what brings it back.** The helper is signed without a Team ID (self-signed
-for development and for releases until there is a Developer ID). Background Task Management then ignores the plist's bundle
+**Why the helper stays down after an update, and what brings it back.** The helper is signed without a Team ID (self-signed,
+as every local build is; releases have one from v0.3). Background Task Management then ignores the plist's bundle
 identifiers ("Bundle identifiers from launchd plist ignored because the executable doesn't have a Team ID") and pins the
 agent's launch constraint (LWCR) to the helper's code, and it keeps that item across unregister and register: each
 `registerLaunchItem` logs "found existing item" with the old UUID. A new build has a new code hash (every change of source or
@@ -424,7 +485,8 @@ viewer:
 
 A different label or path per build would start a fresh item each time, but it would leave one Login Items entry per update
 and move the helper's Mach name, so it was not tried. A Developer ID build should let the item use bundle identifiers and
-keep one constraint across updates; that is untested until there is one. install.sh (and so the one-click update) starts
+keep one constraint across updates; that is untested until there is one. `--reregister` needs no change for it: it returns
+as soon as the helper answers, so with a Team ID it should finish at its first attempt. install.sh (and so the one-click update) starts
 `--reregister` in the background whenever the agent is loaded, and it retries with backoff for up to 10 minutes. The settings
 app runs it too, at launch and after three polls in a row without an answer while the helper should be running.
 

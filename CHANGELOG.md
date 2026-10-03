@@ -160,8 +160,8 @@ Waits for the Developer ID: the first release with the Space helper is notarized
 ### Viewers
 
 - HEIC, AVIF, TIFF, camera RAW, PSD, OpenEXR, TGA, JPEG 2000 and icons are decoded natively, with fit, zoom and pan.
-- Images zoom as in Preview, in Quick Look and in the Space panel: pinch about the pointer, two fingers to pan, double-click
-  or a two-finger double tap for fit and actual size, ⌘+ ⌘− ⌘0. A single click no longer zooms.
+- Images zoom as in Preview: two fingers to pan, double-click for fit and actual size, ⌘+ ⌘− ⌘0, and in Quick Look a
+  pinch about the pointer and a two-finger double tap. A single click no longer zooms.
 - Office, iWork, fonts, 3D, certificates, calendars and e-books show Apple's own preview inside the panel; files declared as
   text (`.strings`, `.pbxproj`, playlists, crash reports) stay in spacebar's text view.
 - `.dmg` files are claimed; their card shows the format and whether the image is encrypted, without mounting it.
@@ -199,3 +199,12 @@ Waits for the Developer ID: the first release with the Space helper is notarized
 - The Quick Look extension's state and other apps' Quick Look extensions that claim spacebar's types show at the top of
   Settings only while something is wrong, with Open Quick Look Extensions or a Turn Off button.
 - A welcome window on first launch, and a new app icon.
+
+### Signing
+
+- Signed with spacebar's Apple Developer ID and notarized by Apple, so a copy downloaded in a browser opens as any
+  notarized app does. Each release also has a `spacebar.dmg` beside the zip.
+- spacebar can live in /Applications, dragged there from the `.dmg`. When it is the only copy, its first launch turns its
+  Quick Look extensions on, and Update and Uninstall work on it, as long as this account can change it.
+- 0.2 was signed with a self-signed certificate, so on the first update from it macOS may ask once about spacebar's data;
+  allow it.

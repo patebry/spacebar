@@ -1,24 +1,36 @@
 import AppKit
 
 /// Uninstall from the settings window: the app's own copy of scripts/uninstall.sh, started detached like the one-click update,
-/// then the app quits (the script quits it anyway). The script removes only ~/Applications/spacebar.app, its Quick Look
-/// registrations and the Space helper's agent and permissions, and with --purge the settings folder and the helper's log.
+/// then the app quits (the script quits it anyway). The script removes only ~/Applications/spacebar.app and
+/// /Applications/spacebar.app, their Quick Look registrations and the Space helper's agent and permissions, and with --purge
+/// the settings folder and the helper's log.
 enum Uninstall {
     static var home: URL { URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true) }
-    static var installed: URL { home.appendingPathComponent("Applications/spacebar.app") }
+    /// The copies (or links) there are, split into those the script removes and those it leaves (this account cannot delete
+    /// them). It walks their folders, so it is worked out once as the dialog opens.
+    static func copies() -> (removed: [String], left: [String]) {
+        let there = Updates.installPlaces(home: home.path).filter(Updates.isThere)
+        return (there.filter(Updates.canRemove), there.filter { !Updates.canRemove($0) })
+    }
+    static func shown(_ path: String) -> String { path.hasPrefix(home.path + "/") ? "~" + path.dropFirst(home.path.count) : path }
     static var log: URL { home.appendingPathComponent("Library/Logs/spacebar-uninstall.log") }
     static var updateLog: URL { home.appendingPathComponent("Library/Logs/spacebar-update.log") }
 
-    /// Whether this app is the copy the script removes; from anywhere else (a development build) it would remove another copy.
+    /// Whether this app is a copy the script removes; from anywhere else (a development build) it would remove another copy.
     static var isInstalledCopy: Bool {
-        Bundle.main.bundleURL.resolvingSymlinksInPath().path == installed.resolvingSymlinksInPath().path
+        let app = Bundle.main.bundleURL.resolvingSymlinksInPath().path
+        return Updates.installPlaces(home: home.path).contains { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path == app }
     }
 
     static func arguments(purge: Bool) -> [String] { purge ? ["--purge"] : [] }
 
     /// Starts the script and quits, or says why it did not start.
     static func run(purge: Bool) -> String? {
-        guard isInstalledCopy else { return "This copy of spacebar isn't the one in ~/Applications, so there is nothing to uninstall from here." }
+        guard isInstalledCopy else { return "This copy of spacebar isn't in ~/Applications or /Applications, so there is nothing to uninstall from here." }
+        // The script removes what it can and leaves the rest, which the dialog names; with nothing to remove it would only quit.
+        guard !copies().removed.isEmpty else {
+            return "This account can't delete \(shown(Bundle.main.bundleURL.path)). An administrator can move it to the Trash."
+        }
         guard let script = Bundle.main.url(forResource: "uninstall", withExtension: "sh") else { return "The uninstaller is missing from this copy of spacebar." }
         // The installer would put back what the uninstaller removes, or find its app gone mid-swap.
         guard !Updates.isRunning(log: updateLog) else { return "An update is running. Try again once it has finished." }

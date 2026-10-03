@@ -1,10 +1,12 @@
 #!/bin/sh
 # spacebar uninstaller: https://github.com/patebry/spacebar
 #
-#   curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh
+#   curl -fsSL https://spacebar.patebryant.com/uninstall.sh | sh
+#   curl -fsSL https://spacebar.patebryant.com/uninstall.sh | sh -s -- --purge    (options go after sh -s --)
 #
 # Stops the Space helper and quits its viewer, resets the permissions macOS keeps for them, quits
-# ~/Applications/spacebar.app, unregisters its Quick Look extensions, and deletes it. Settings in
+# ~/Applications/spacebar.app and /Applications/spacebar.app, whichever are there, unregisters their Quick Look extensions,
+# and deletes them. A copy this account cannot delete is left in place, and named. Settings in
 # ~/Library/Application Support/spacebar and the helper's log are kept unless you pass --purge; sandbox containers are
 # listed, not deleted. Safe to run more
 # than once.
@@ -17,7 +19,7 @@ LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchSe
 
 usage() {
   cat <<'EOF'
-Remove spacebar from ~/Applications.
+Remove spacebar from ~/Applications and /Applications.
 
 usage: uninstall.sh [--purge] [--dry-run] [--no-register] [--help]
 
@@ -69,6 +71,12 @@ quit_viewer() {
   pkill -f "$viewer" || true
 }
 
+# removable <bundle path>: whether this account can delete it: its folder, and every folder inside it, writable.
+removable() {
+  [ -w "${1%/*}" ] || return 1
+  [ -z "$(find "$1" -type d 2>&1 | while IFS= read -r d; do [ -d "$d" ] && [ -w "$d" ] || { printf x; break; }; done)" ]
+}
+
 # Started from the settings window (SPACEBAR_UNINSTALL_SELF=1): removes the private copy this script runs from, but only a
 # spacebar-update-* folder directly in $TMPDIR, where the app puts it.
 remove_self() {
@@ -101,23 +109,56 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-DEST="$HOME/Applications/$APP_NAME"
+# Root's HOME may be kept by sudo: launchctl, tccutil and pluginkit would act on root's, not the user's.
+[ "$(id -u)" != 0 ] || { echo "error: run this as yourself, without sudo: it removes spacebar for your account." >&2; exit 1; }
+
 SUPPORT="$HOME/Library/Application Support/spacebar"
 LEGACY_SUPPORT="$HOME/Library/Application Support/spacebar.md"
+# Overridable only so a copy there can be tested without touching /Applications.
+SYSTEM_APPS=${SPACEBAR_SYSTEM_APPLICATIONS:-/Applications}
+
+# The copies there are, ~/Applications's first, and links (a dangling one included). With none, a helper still running
+# from ~/Applications is quit all the same.
+set --
+for c in "$HOME/Applications/$APP_NAME" "$SYSTEM_APPS/$APP_NAME"; do
+  if [ -e "$c" ] || [ -L "$c" ]; then set -- "$@" "$c"; fi
+done
+FOUND=$#
+[ "$FOUND" -gt 0 ] || set -- "$HOME/Applications/$APP_NAME"
+LEFT=0
 
 # The Space helper first, so nothing starts the viewer again: its launchd agent out, the viewer quit, then what macOS keeps
 # for them, the helper's Accessibility grant and every permission of the viewer's. Its Login Item entry goes when the app
 # does; the Background Task Management database is never reset.
 if [ "$SKIP_REGISTER" != 1 ]; then
   run_quiet launchctl bootout "gui/$(id -u)/$HELPER_LABEL" || true
-  # A helper still running from the bundle (its job gone, launchd not yet done with it) goes too.
-  run_quiet pkill -f "$(path_regex "$DEST/Contents/Helpers/spacebar Helper.app")" || true
-  quit_viewer "$DEST"
+  for DEST in "$@"; do
+    # A helper still running from the bundle (its job gone, launchd not yet done with it) goes too.
+    run_quiet pkill -f "$(path_regex "$DEST/Contents/Helpers/spacebar Helper.app")" || true
+    quit_viewer "$DEST"
+  done
   run_quiet tccutil reset Accessibility "$HELPER_LABEL" || true
   run_quiet tccutil reset All "$VIEWER_ID" || true
 fi
 
-if [ -e "$DEST" ]; then
+[ "$FOUND" -gt 0 ] || say "spacebar is not installed at $HOME/Applications/$APP_NAME or $SYSTEM_APPS/$APP_NAME"
+for DEST in "$@"; do
+  [ -e "$DEST" ] || [ -L "$DEST" ] || continue
+  # Only the link goes: the copy it points to is not one of these two, or is removed as itself.
+  if [ -L "$DEST" ]; then
+    if run rm -f "$DEST"; then
+      [ "$DRY_RUN" = 1 ] || say "Removed the link $DEST"
+    else
+      say "Left the link $DEST: this account cannot delete it."
+      LEFT=1
+    fi
+    continue
+  fi
+  if ! removable "$DEST"; then
+    say "Left $DEST: this account cannot delete it. An administrator can move it to the Trash."
+    LEFT=1
+    continue
+  fi
   if [ "$SKIP_REGISTER" != 1 ]; then
     if [ "$DRY_RUN" = 1 ]; then say "would quit the Quick Look extensions running from $DEST, their writers first"; else quit_extensions "$DEST"; fi
     run pkill -f "$(path_regex "$DEST")Contents/MacOS/" || true
@@ -126,15 +167,18 @@ if [ -e "$DEST" ]; then
     done
     run "$LSREGISTER" -u "$DEST" || true
   fi
-  run rm -rf "$DEST"
+  if ! run rm -rf "$DEST"; then
+    say "Could not delete $DEST. If macOS said your terminal was prevented from modifying apps, allow it in System"
+    say "Settings > Privacy & Security > App Management, then run this again."
+    LEFT=1
+    continue
+  fi
   if [ "$SKIP_REGISTER" != 1 ]; then
     run_quiet qlmanage -r || true
     run_quiet qlmanage -r cache || true
   fi
   [ "$DRY_RUN" = 1 ] || say "Removed $DEST"
-else
-  say "spacebar is not installed at $DEST"
-fi
+done
 
 if [ "$PURGE" = 1 ]; then
   for dir in "$SUPPORT" "$LEGACY_SUPPORT" "$HOME/Library/Logs/spacebar-helper.log" "$HOME/Library/Logs/spacebar-helper.lock"; do
@@ -152,6 +196,7 @@ if [ "$PURGE" = 1 ]; then
 elif [ -e "$SUPPORT" ]; then
   say "Kept your settings in $SUPPORT (pass --purge to delete them)."
 fi
+[ "$LEFT" = 0 ] || exit 1
 }
 
 main "$@"

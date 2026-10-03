@@ -2,14 +2,17 @@
 # spacebar installer: https://github.com/patebry/spacebar
 #
 #   curl -fsSL https://spacebar.patebryant.com/install.sh | sh
+#   curl -fsSL https://spacebar.patebryant.com/install.sh | sh -s -- --dry-run    (options go after sh -s --)
 #
 # What this does, in order:
-#   1. Checks for macOS 13 or later.
+#   1. Refuses to run as root, checks for macOS 13 or later, and picks the folder: ~/Applications, unless spacebar is only
+#      in /Applications (dragged there from spacebar.dmg), whose copy is then updated in place. It stops if this account
+#      cannot change a copy there, or at a link where a copy or its .new or .old would be.
 #   2. Downloads spacebar.zip and spacebar.zip.sha256 from the latest GitHub release (or SPACEBAR_VERSION) with curl
 #      into a temporary folder, and stops unless the SHA-256 matches. It makes no GitHub API calls, so it is never
 #      rate-limited.
-#   3. Unzips the new spacebar.app and copies it into ~/Applications as .spacebar.app.new (no sudo).
-#   4. If ~/Applications/spacebar.app exists: quits that copy and unregisters its Quick Look extensions, renames it to
+#   3. Unzips the new spacebar.app and copies it into that folder as .spacebar.app.new (no sudo).
+#   4. If spacebar.app exists there: quits that copy and unregisters its Quick Look extensions, renames it to
 #      .spacebar.app.old, quits its extensions still running, renames the new copy into its place, quits the Space
 #      helper's viewer, then deletes .spacebar.app.old. If the new copy cannot be moved in, the old one is put back.
 #      Nothing outside those three exact paths is removed (and, when spacebar's Update button started this run, the
@@ -29,14 +32,12 @@ APP_NAME=spacebar.app
 APPEX_ID=md.spacebar.preview
 FOLDERS_ID=md.spacebar.preview.folders
 HELPER_LABEL=md.spacebar.helper
-# A stalled connection gives up instead of hanging the install.
-CURL_LIMITS="--connect-timeout 15 --max-time 600"
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 QL_SETTINGS='x-apple.systempreferences:com.apple.ExtensionsPreferences?extensionPointIdentifier=com.apple.quicklook.preview'
 
 usage() {
   cat <<'EOF'
-Install spacebar into ~/Applications. Press Space. See everything: Quick Look for folders, documents, code and data.
+Install spacebar into ~/Applications, or update the copy in /Applications. Press Space. See everything: Quick Look for folders, documents, code and data.
 
 usage: install.sh [--version vX.Y.Z] [--dry-run] [--no-register] [--no-prompt] [--help]
 
@@ -55,6 +56,8 @@ EOF
 }
 
 say() { printf '%s\n' "$*"; }
+# A stalled connection gives up instead of hanging the install.
+fetch() { curl --connect-timeout 15 --max-time 600 "$@"; }
 # quote <word>: the word, single-quoted only when a shell would need it.
 quote() {
   case $1 in
@@ -175,6 +178,20 @@ start_reregister() {
   nohup "$1/Contents/MacOS/Spacebar" --reregister >>"$2" 2>&1 </dev/null &
 }
 
+# there <path>: something is at it, a link included.
+there() { [ -e "$1" ] || [ -L "$1" ]; }
+
+# replaceable <folder>: whether this account can do the swap there: write the folder, and every folder inside each copy it
+# would rename or delete (one dragged in by another account is that account's).
+replaceable() {
+  [ -d "$1" ] && [ -w "$1" ] || return 1
+  for b in "$1/$APP_NAME" "$1/.$APP_NAME.new" "$1/.$APP_NAME.old"; do
+    [ -e "$b" ] || continue
+    [ -z "$(find "$b" -type d 2>&1 | while IFS= read -r d; do [ -d "$d" ] && [ -w "$d" ] || { printf x; break; }; done)" ] || return 1
+  done
+  return 0
+}
+
 # Re-registers a copy that was unregistered for a swap that did not happen.
 reregister() {
   [ "$SKIP_REGISTER" = 1 ] && return 0
@@ -236,23 +253,44 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+# Root's HOME may be kept by sudo: the copy would be root's, and Launch Services and pluginkit root's, not the user's.
+[ "$(id -u)" != 0 ] || { echo "error: run this as yourself, without sudo: it installs spacebar for your account only." >&2; exit 1; }
+
 # 1. macOS 13 or later.
 [ "$(uname -s)" = Darwin ] || { echo "error: spacebar is a macOS app." >&2; exit 1; }
 os=$(sw_vers -productVersion)
 [ "${os%%.*}" -ge 13 ] || { echo "error: spacebar needs macOS 13 or later (this Mac has $os)." >&2; exit 1; }
 
+# Overridable only so the choice between the two can be tested without touching /Applications.
+SYSTEM_APPS=${SPACEBAR_SYSTEM_APPLICATIONS:-/Applications}
+# The copy in ~/Applications, else the one in /Applications; with neither, the folder where a swap was cut short (its .old),
+# else ~/Applications. A link counts as there: it is refused below. Updates.managedCopy picks the same.
 DEST_DIR="$HOME/Applications"
+if ! there "$DEST_DIR/$APP_NAME" && { there "$SYSTEM_APPS/$APP_NAME" || { ! there "$DEST_DIR/.$APP_NAME.old" && there "$SYSTEM_APPS/.$APP_NAME.old"; }; }; then
+  DEST_DIR=$SYSTEM_APPS
+fi
 DEST="$DEST_DIR/$APP_NAME"
 NEW="$DEST_DIR/.$APP_NAME.new"
 OLD="$DEST_DIR/.$APP_NAME.old"
-# Where a second, unmanaged copy would sit. Overridable only so the warning can be tested without touching /Applications.
-SYSTEM_APPS=${SPACEBAR_SYSTEM_APPLICATIONS:-/Applications}
 TMP=""
 MADE_NEW=0
 SWAPPING=0
 UNREGISTERED=0
 trap cleanup EXIT
 trap 'exit 130' INT TERM
+
+# A link would be moved aside and replaced, and the copy it points to left as it was: a second copy.
+for p in "$DEST" "$NEW" "$OLD"; do
+  [ ! -L "$p" ] || fail "$p is a link, not a copy of spacebar. Nothing was installed. Delete the link and run this again."
+done
+# Not a second copy in ~/Applications instead: Quick Look could go on using this one, which nobody here could then change.
+if [ "$DEST_DIR" = "$SYSTEM_APPS" ] && ! replaceable "$DEST_DIR"; then
+  where=$DEST
+  [ -e "$where" ] || where=$OLD
+  fail "spacebar is in $where, which this account cannot change. Nothing was installed. Ask an administrator to update it
+(open spacebar.dmg and drag spacebar to Applications, or run this command signed in as that administrator), or to delete
+it, so that this command installs spacebar in ~/Applications instead."
+fi
 
 # 2. Resolve the release and download it. github.com/<repo>/releases/latest/download/<asset> redirects to the newest
 # release's asset without the rate-limited API. The tag shown comes from where /releases/latest redirects.
@@ -263,7 +301,7 @@ elif [ -n "$VERSION" ]; then
   BASE="https://github.com/$REPO/releases/download/$VERSION"
 else
   BASE="https://github.com/$REPO/releases/latest/download"
-  landed=$(curl -fsSIL $CURL_LIMITS -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null || true)
+  landed=$(fetch -fsSIL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null || true)
   case $landed in
     */releases/tag/?*) VERSION="${landed##*/releases/tag/} (latest)" ;;
     *) VERSION="(latest)" ;;
@@ -273,8 +311,8 @@ fi
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/spacebar-install.XXXXXX")
 
 say "Downloading spacebar $VERSION"
-curl -fSL $CURL_LIMITS --progress-bar -o "$TMP/spacebar.zip" "$BASE/spacebar.zip" || fail "download failed: $BASE/spacebar.zip"
-curl -fsSL $CURL_LIMITS -o "$TMP/spacebar.zip.sha256" "$BASE/spacebar.zip.sha256" || fail "download failed: $BASE/spacebar.zip.sha256"
+fetch -fSL --progress-bar -o "$TMP/spacebar.zip" "$BASE/spacebar.zip" || fail "download failed: $BASE/spacebar.zip"
+fetch -fsSL -o "$TMP/spacebar.zip.sha256" "$BASE/spacebar.zip.sha256" || fail "download failed: $BASE/spacebar.zip.sha256"
 
 expected=$(awk '{ print $1; exit }' "$TMP/spacebar.zip.sha256")
 actual=$(shasum -a 256 "$TMP/spacebar.zip" | awk '{ print $1 }')
@@ -320,7 +358,7 @@ else
   MADE_NEW=1
   ditto "$TMP/unpacked/$APP_NAME" "$NEW" || fail "could not copy the app into $DEST_DIR. Nothing was installed."
 
-  # 4. Swap it in at exactly ~/Applications/spacebar.app: old copy aside, new copy in, then the old copy deleted.
+  # 4. Swap it in at exactly $DEST: old copy aside, new copy in, then the old copy deleted.
   if [ -e "$DEST" ]; then
     say "Replacing $DEST"
     if [ "$SKIP_REGISTER" != 1 ]; then
@@ -334,7 +372,8 @@ else
     SWAPPING=1
     if ! mv "$DEST" "$OLD"; then
       SWAPPING=0
-      fail "could not move the previous copy aside; it is still installed at $DEST."
+      fail "could not move the previous copy aside; it is still installed at $DEST. If macOS said your terminal was prevented
+from modifying apps, allow it in System Settings > Privacy & Security > App Management, or use Update in spacebar's preview."
     fi
     # Quick Look extensions (and their writers) still running the old code would keep serving it from a deleted bundle.
     if [ "$SKIP_REGISTER" != 1 ]; then
@@ -403,11 +442,16 @@ if [ "$DRY_RUN" = 1 ]; then
 else
   say "Installed spacebar $VERSION to $DEST"
 fi
-if [ -e "$SYSTEM_APPS/$APP_NAME" ]; then
+if [ "$DEST_DIR" != "$SYSTEM_APPS" ] && [ -e "$SYSTEM_APPS/$APP_NAME" ]; then
   say ""
   say "warning: there is another copy at $SYSTEM_APPS/$APP_NAME. Both copies claim the same files, so Quick Look"
   say "may use either one. This installer manages only $DEST and has left the other copy alone;"
   say "delete it yourself if you do not need it."
+fi
+if [ "$DEST_DIR" = "$SYSTEM_APPS" ] && there "$HOME/Applications/.$APP_NAME.old"; then
+  say ""
+  say "note: $HOME/Applications/.$APP_NAME.old is left from an install there that was cut short. This installer updates"
+  say "$DEST while that copy is there; delete the old one yourself if you do not need it."
 fi
 if [ -n "$rivals" ]; then
   say ""
@@ -426,8 +470,8 @@ fi
 say ""
 say "Next: select a file or folder in Finder and press Space. spacebar shows folders, Markdown, code, data and"
 say "archives; plain text, images, PDFs and media keep Apple's preview in Finder and open in spacebar's sidebar."
-say "Settings: open ~/Applications/spacebar.app"
-say "Uninstall: curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/uninstall.sh | sh"
+say "Settings: open $(quote "$DEST")"
+say "Uninstall: curl -fsSL https://spacebar.patebryant.com/uninstall.sh | sh"
 }
 
 main "$@"

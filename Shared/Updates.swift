@@ -157,6 +157,71 @@ enum Updates {
 
     static func installerArguments(_ version: String) -> [String] { ["--version", "v\(version)", "--no-prompt"] }
 
+    static let systemApplications = "/Applications"
+
+    /// The copies uninstall.sh removes, and the only places a copy updates or registers itself from.
+    static func installPlaces(home: String, system: String = systemApplications) -> [String] {
+        [home + "/Applications/spacebar.app", system + "/spacebar.app"]
+    }
+
+    /// Whether something is at `path`, a link included (dangling or not).
+    static func isThere(_ path: String) -> Bool {
+        var st = stat()
+        return lstat(path, &st) == 0
+    }
+
+    static func isLink(_ path: String) -> Bool {
+        var st = stat()
+        return lstat(path, &st) == 0 && st.st_mode & S_IFMT == S_IFLNK
+    }
+
+    /// The copy install.sh updates, as it picks it: ~/Applications/spacebar.app, else /Applications/spacebar.app (dragged
+    /// there from spacebar.dmg); with neither, the one whose swap was cut short (its .old is there), ~/Applications's first;
+    /// nil when there is none of these. A link counts as there (both refuse it later).
+    static func managedCopy(home: String, system: String = systemApplications, exists: (String) -> Bool = isThere) -> String? {
+        let places = installPlaces(home: home, system: system)
+        return places.first(where: exists) ?? places.first { exists(($0 as NSString).deletingLastPathComponent + "/.spacebar.app.old") }
+    }
+
+    /// Whether this account can rename or delete `path`, and make a sibling of it: its folder writable and, when it is there,
+    /// every folder inside it, as install.sh's `replaceable` and uninstall.sh's `removable` check. A link is never counted:
+    /// the scripts would move or delete the link and leave the copy it points to.
+    static func canChange(_ path: String) -> Bool {
+        guard access((path as NSString).deletingLastPathComponent, W_OK) == 0 else { return false }
+        var st = stat()
+        guard lstat(path, &st) == 0 else { return errno == ENOENT }
+        guard st.st_mode & S_IFMT == S_IFDIR, access(path, W_OK) == 0 else { return false }
+        var ok = true
+        let all = FileManager.default.enumerator(at: URL(fileURLWithPath: path), includingPropertiesForKeys: [.isDirectoryKey], options: [],
+                                                 errorHandler: { _, _ in ok = false; return false })
+        while ok, let u = all?.nextObject() as? URL {
+            if (try? u.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true, access(u.path, W_OK) != 0 { ok = false }
+        }
+        return ok && all != nil
+    }
+
+    /// Whether uninstall.sh would remove `path`: a link it deletes as a link, so only its folder must be writable.
+    static func canRemove(_ path: String) -> Bool {
+        isLink(path) ? access((path as NSString).deletingLastPathComponent, W_OK) == 0 : canChange(path)
+    }
+
+    /// Whether install.sh would update `copy` for this account: it, and the .new and .old it puts beside it, changeable.
+    static func canUpdate(_ copy: String) -> Bool {
+        let dir = (copy as NSString).deletingLastPathComponent
+        return FileManager.default.fileExists(atPath: copy) && [copy, dir + "/.spacebar.app.new", dir + "/.spacebar.app.old"].allSatisfy(canChange)
+    }
+
+    /// What `pluginkit -mADv -i <id>` lists, one registered copy a line (-D includes copies of one version at other paths):
+    /// the mark that leads it ("+" turned on, "-" turned off, " " never chosen either way) and its path, the line's last
+    /// tab-separated field.
+    static func elections(pluginkit output: String) -> [(mark: Character, path: String)] {
+        output.split(separator: "\n").compactMap { line in
+            let f = line.split(separator: "\t")
+            guard f.count >= 2, let mark = line.first, let path = f.last, path.hasPrefix("/") else { return nil }
+            return (mark, String(path))
+        }
+    }
+
     struct SpawnError: Error, Equatable { let message: String }
 
     /// What runDetached runs, for its messages.

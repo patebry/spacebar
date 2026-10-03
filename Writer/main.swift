@@ -240,8 +240,10 @@ final class Writer: NSObject, SpacebarWriterProtocol {
     func updateOffer(reply: @escaping (Data?) -> Void) {
         guard SettingsFile.load().checkUpdates, updatesAllowed else { return reply(nil) }
         let answer = { (latest: String?) in
+            // Where this copy is matters only for a newer release, and finding out walks the bundle's folders.
+            let newer = latest.map { Updates.isNewer($0, than: self.currentVersion) } ?? false
             reply(Updates.offer(current: self.currentVersion, latest: latest, started: Updates.readCache()?.started, finished: Updates.readStatus(),
-                                place: self.misplaced(), running: Updates.isRunning(log: self.updateLog)).json)
+                                place: newer ? self.misplaced() : nil, running: Updates.isRunning(log: self.updateLog)).json)
         }
         let cached = Updates.readCache()
         if let c = cached, (0..<Updates.interval).contains(Date().timeIntervalSince1970 - c.checked) { return answer(c.latest) }
@@ -288,8 +290,8 @@ final class Writer: NSObject, SpacebarWriterProtocol {
             return reply(why)
         }
         guard let app = containingApp() else { return reply("the spacebar app was not found") }
-        // The installer only ever replaces ~/Applications/spacebar.app; from anywhere else it would add a second copy.
-        guard misplaced() == nil else { return reply("spacebar is not in ~/Applications") }
+        // The installer replaces only the copy it picks (Updates.managedCopy); from anywhere else it would add a second one.
+        guard misplaced() == nil else { return reply("this copy of spacebar is not one the installer can update") }
         let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         let env = ["HOME": home.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": NSTemporaryDirectory(),
                    "SPACEBAR_UPDATE_STATUS": Updates.statusURL.path]
@@ -324,11 +326,13 @@ final class Writer: NSObject, SpacebarWriterProtocol {
                        testFlag: FileManager.default.fileExists(atPath: Updates.testFlagURL.path))
     }
 
-    /// Where this copy of spacebar is, for the popover, when it is not ~/Applications/spacebar.app; nil when it is.
+    /// Where this copy of spacebar is, for the popover, when it is not the copy install.sh updates or this account cannot
+    /// replace it; nil when it is that copy.
     private func misplaced() -> String? {
         let home = NSHomeDirectory()
         guard let app = containingApp()?.resolvingSymlinksInPath().path else { return "an unknown folder" }
-        if app == URL(fileURLWithPath: home).appendingPathComponent("Applications/spacebar.app").resolvingSymlinksInPath().path { return nil }
+        if let managed = Updates.managedCopy(home: home), app == URL(fileURLWithPath: managed).resolvingSymlinksInPath().path,
+           Updates.canUpdate(managed) { return nil }
         return app.hasPrefix(home + "/") ? "~" + app.dropFirst(home.count) : app
     }
 

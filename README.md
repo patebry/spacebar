@@ -13,8 +13,8 @@ not an IDE.
 - **Find, copy, edit, privately.** ⌘F, Copy and Raw; a click edits text, code and data in place. Sandboxed, no telemetry, MIT.
 
 <!-- dmg: the release does not upload spacebar.dmg yet; this link works once it does -->
-**[Download spacebar.dmg](https://github.com/patebry/spacebar/releases/latest/download/spacebar.dmg)**, or paste this in
-Terminal:
+**[Download spacebar.dmg](https://github.com/patebry/spacebar/releases/latest/download/spacebar.dmg)**, open it, drag
+spacebar to Applications and open it once. Or paste this in Terminal:
 
 ```sh
 curl -fsSL https://spacebar.patebryant.com/install.sh | sh
@@ -44,7 +44,7 @@ Space on in Finder:
 | File | Shown as |
 |---|---|
 | Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`, `.mkdn`) | rendered, with inline editing and task toggles; Raw shows its source, read only |
-| Images (`.png`, `.jpg`, `.gif`, `.webp`, `.bmp`, `.ico`, `.svg`) | fitted to the panel, its dimensions and zoom in the toolbar; a double-click or a two-finger double tap toggles fitted and actual size, a pinch zooms about the pointer, two fingers or a drag move it, ⌘+ ⌘− ⌘0 zoom and fit; SVG as an image only |
+| Images (`.png`, `.jpg`, `.gif`, `.webp`, `.bmp`, `.ico`, `.svg`) | fitted to the panel, its dimensions and zoom in the toolbar; a double-click (or, in Quick Look, a two-finger double tap) toggles fitted and actual size, a pinch zooms about the pointer in Quick Look, two fingers or a drag move it, ⌘+ ⌘− ⌘0 zoom and fit; SVG as an image only |
 | HEIC, AVIF, TIFF, camera RAW (`.dng`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.orf`, `.raf`, `.rw2`), Photoshop (`.psd`), OpenEXR, TGA, JPEG 2000, icons (`.icns`) | decoded by macOS's own ImageIO and drawn natively in the panel, turned as the camera recorded it, with the same fit, zoom and pan |
 | PDF | drawn natively by PDFKit in the panel, fitted to its width, pages in one scroll |
 | HTML (`.html`, `.htm`) | rendered in its own web view: with its scripts and web content unless it was marked as downloaded, with neither when it was (see below) |
@@ -294,15 +294,24 @@ an older version's defaults are applied to it (`stats` and `folderReadmeFirst` a
 
 ## Install
 
-<!-- dmg: set the .dmg's install steps here once the release uploads it -->
 Download [`spacebar.dmg`](https://github.com/patebry/spacebar/releases/latest/download/spacebar.dmg) from the latest release,
-or run the install command:
+open it, drag spacebar to Applications, and open spacebar once from there. Unless spacebar is also in `~/Applications`,
+that first launch turns its Quick Look extensions on (or leaves them as you last set them). Or run the install command,
+which installs into `~/Applications` and needs no administrator password:
 
 ```sh
 curl -fsSL https://spacebar.patebryant.com/install.sh | sh
 ```
 
 Then select a file or folder in Finder and press Space.
+
+Either way there is one copy, and the install command, the **Update** button and the uninstaller all work on it:
+`~/Applications/spacebar.app`, or `/Applications/spacebar.app` when that is the only one. An account that cannot change the
+copy in `/Applications` (one an administrator put there, seen from a standard account) is told so, and nothing is changed.
+
+`curl -fsSL` fetches the script: `-f` stops on an HTTP error instead of passing an error page to the shell, `-s` hides the
+progress bar, `-S` still shows errors, and `-L` follows redirects. `sh` runs it: the script is plain POSIX `sh`, which every
+Mac has (`/bin/sh` is bash in POSIX mode), so it runs the same whatever your login shell is.
 
 <!-- gatekeeper: the release notes copy this paragraph (.github/workflows/release.yml); it is the one place that says how a release is signed for Gatekeeper -->
 spacebar is **notarized**: from v0.3 every release is signed with an Apple Developer ID, checked by Apple's notary service
@@ -311,11 +320,13 @@ install command checks the release's SHA-256 before it changes anything.
 <!-- /gatekeeper -->
 Read [`scripts/install.sh`](scripts/install.sh) before you run it. It:
 
-1. checks for macOS 13 or later;
+1. refuses to run as root (no `sudo`), checks for macOS 13 or later, and picks the copy to update:
+   `~/Applications/spacebar.app`, or `/Applications/spacebar.app` when that is the only one. It stops here if this account
+   cannot change a copy in `/Applications`, or if the copy, or a `.spacebar.app.new` or `.old` beside it, is a link;
 2. downloads `spacebar.zip` and `spacebar.zip.sha256` from the latest release (or `SPACEBAR_VERSION=vX.Y.Z`) through
    `github.com/patebry/spacebar/releases/latest/download/`, with no GitHub API calls, and stops unless the SHA-256 matches;
-3. copies the new app into `~/Applications` beside the old one (no `sudo`);
-4. if `~/Applications/spacebar.app` exists, quits it and its Quick Look extensions (the helpers that save edits first, so a
+3. copies the new app beside that copy, or into `~/Applications` for a first install (no `sudo`);
+4. if there is a copy, quits it and its Quick Look extensions (the helpers that save edits first, so a
    save in flight finishes), unregisters them, moves it aside, moves the new copy into its place, quits the Space helper's
    viewer the same way, and only then deletes the old one (it is put back if the move fails). Nothing else is deleted;
 5. registers it with `lsregister` and `pluginkit`, turns the preview on, turns folder previews on unless you turned them off,
@@ -324,9 +335,15 @@ Read [`scripts/install.sh`](scripts/install.sh) before you run it. It:
    `~/Library/Logs/spacebar-helper.log`. Opening spacebar's settings does the same when the helper is not answering;
 6. lists other Quick Look extensions that are turned on and claim file types spacebar previews (QLMarkdown for Markdown,
    a syntax highlighter for code), with how many of spacebar's types each claims by kind, says how to turn them off, and warns
-   if another copy of spacebar is in `/Applications`. It never turns off or deletes anything itself.
+   if there is a second copy of spacebar in `/Applications`. It never turns off or deletes anything itself.
 
-`install.sh --help` lists its options, including `--dry-run`, which downloads and verifies but changes nothing.
+`install.sh --help` lists its options, including `--dry-run`, which downloads and verifies but changes nothing. Options go
+after `sh -s --`, and a variable goes before `sh`, not before `curl`:
+
+```sh
+curl -fsSL https://spacebar.patebryant.com/install.sh | sh -s -- --dry-run
+curl -fsSL https://spacebar.patebryant.com/install.sh | SPACEBAR_VERSION=vX.Y.Z sh
+```
 
 ### Updates
 
@@ -336,11 +353,11 @@ Once a day spacebar asks GitHub for the latest release's version number, and not
 the installer replaces the extension; press Space again after. An edit in progress is saved first, and no edit, task
 toggle or sidebar filter starts while the update runs. The installer's output goes to `~/Library/Logs/spacebar-update.log`.
 
-The release zip is built by [GitHub Actions](.github/workflows/release.yml) from the tagged commit. Releases after v0.1.0
-are signed with a self-signed "spacebar Release" certificate, so every release has the same signer and an update does not
-make macOS ask again about the extension's data ([why](FINDINGS.md#release-signing)). v0.1.0 was ad-hoc signed, so the first
-update from it may show one prompt. Those releases also carry a build provenance attestation, which the
-[GitHub CLI](https://cli.github.com) checks:
+The release zip is built by [GitHub Actions](.github/workflows/release.yml) from the tagged commit. From v0.3 releases are
+signed with spacebar's Apple Developer ID, so every release has the same signer and an update does not make macOS ask again
+about the extension's data ([why](FINDINGS.md#release-signing)). v0.1.1 to v0.2.2 were signed with a self-signed "spacebar
+Release" certificate and v0.1.0 ad-hoc, so the first update from one of them may show one prompt. Releases after v0.1.0 also
+carry a build provenance attestation, which the [GitHub CLI](https://cli.github.com) checks:
 
 ```sh
 gh attestation verify spacebar.zip -R patebry/spacebar
@@ -349,18 +366,19 @@ gh attestation verify spacebar.zip -R patebry/spacebar
 ## Uninstall
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh
+curl -fsSL https://spacebar.patebryant.com/uninstall.sh | sh
 ```
 
 This stops the Space helper (its launchd agent, then the helper, the viewer and the viewer's writer), resets the
 Accessibility permission the helper had and every permission the viewer had, unregisters spacebar's Quick Look extensions and
-deletes `~/Applications/spacebar.app`, which takes its Login Items entry with it. **Uninstall spacebar…** in Settings runs the same
+deletes `~/Applications/spacebar.app` and `/Applications/spacebar.app`, whichever are there, which takes its Login Items
+entry with it. A copy this account cannot delete is left in place, and named. **Uninstall spacebar…** in Settings runs the same
 script from inside the app (not while an update runs), after removing the helper from Login Items. Both quit spacebar's
 Quick Look extensions first. To also delete your settings and themes in `~/Library/Application Support/spacebar` and the
 helper's log in `~/Library/Logs`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/patebry/spacebar/main/scripts/uninstall.sh | sh -s -- --purge
+curl -fsSL https://spacebar.patebryant.com/uninstall.sh | sh -s -- --purge
 ```
 
 macOS asks before one app deletes another's sandbox container, so the uninstaller lists the containers spacebar leaves in

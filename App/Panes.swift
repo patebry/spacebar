@@ -63,6 +63,7 @@ struct SettingsPane: View {
     @State private var confirming: RivalExtension?
     @State private var confirmReset = false
     @State private var confirmUninstall = false
+    @State private var uninstallCopies: (removed: [String], left: [String]) = ([], [])
     @State private var purge = false
     @State private var uninstallError: String?
     @StateObject private var updates = UpdateCheck()
@@ -213,7 +214,7 @@ struct SettingsPane: View {
     private var extensionNote: String? {
         switch system.preview {
         case .disabled: return "spacebar is turned off in Quick Look, so Space shows Apple's preview. Turn it on in the Quick Look section of Extensions."
-        case .missing: return "spacebar's Quick Look extension isn't registered. Open spacebar from ~/Applications, or install it again."
+        case .missing: return "spacebar's Quick Look extension isn't registered. Open spacebar from your Applications folder, or install it again."
         case .enabled, .checking: return nil
         }
     }
@@ -323,7 +324,7 @@ struct SettingsPane: View {
             HStack {
                 Button("Report a Problem…") { NSWorkspace.shared.open(ProblemReport.url(ProblemReport.current(), log: ProblemReport.readLog())) }
                 Spacer()
-                Button("Uninstall spacebar…") { purge = false; uninstallError = nil; confirmUninstall = true }
+                Button("Uninstall spacebar…") { purge = false; uninstallError = nil; uninstallCopies = Uninstall.copies(); confirmUninstall = true }
             }
         } header: {
             Text("About")
@@ -459,7 +460,7 @@ struct SettingsPane: View {
             Text("Uninstall spacebar?").font(.headline)
             Text("spacebar quits, and these are removed:")
             VStack(alignment: .leading, spacing: 4) {
-                Text("• ~/Applications/spacebar.app")
+                ForEach(uninstallCopies.removed, id: \.self) { Text("• \(Uninstall.shown($0))") }
                 Text("• its Quick Look extensions, unregistered from macOS")
                 Text("• its Space helper, and the Accessibility permission you gave it")
             }
@@ -471,8 +472,12 @@ struct SettingsPane: View {
             .toggleStyle(.checkbox)
             Text("Nothing else is touched: your files, and the spacebar Sample Folder in your home folder, stay where they are. What the uninstaller did is written to ~/Library/Logs/spacebar-uninstall.log.")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            ForEach(uninstallCopies.left, id: \.self) {
+                Text("\(Uninstall.shown($0)) stays: this account can't delete it.")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
             if !Uninstall.isInstalledCopy {
-                Text("This copy of spacebar isn't the one in ~/Applications, so it can't uninstall it.")
+                Text("This copy of spacebar isn't in ~/Applications or /Applications, so it can't uninstall it.")
                     .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             if let uninstallError {

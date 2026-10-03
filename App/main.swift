@@ -36,6 +36,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         store.start()
+        // Queued before the settings window's first refresh, which then shows the extensions registered.
+        system.registerIfNew()
         system.checkHelperAtLaunch()
         var tab = pendingTab ?? ProcessInfo.processInfo.environment["SPACEBAR_INITIAL_TAB"].flatMap { SettingsTab(rawValue: $0.lowercased()) }
         for arg in CommandLine.arguments.dropFirst() {

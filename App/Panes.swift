@@ -505,7 +505,7 @@ enum HelperCopy {
     /// The name System Settings lists the helper under in Accessibility: the bundle's file name, not its display name.
     static let accessibilityName = "spacebar Helper"
     static let privacy = "The Space helper uses Accessibility, listed there as \(accessibilityName), to notice when you press Space in Finder and read which file is selected. It never reads what you type anywhere else. Turning it off removes spacebar from Login Items; Quick Look then previews as before."
-    static let unavailable = "This copy of spacebar has no Space helper it can run: it needs the signed copy that install.sh puts in ~/Applications."
+    static let unavailable = "This copy of spacebar has no Space helper it can run: it needs a signed copy installed with spacebar.dmg or the install command."
     static let securityURL = URL(string: "https://github.com/patebry/spacebar/blob/main/SECURITY.md#the-space-helper")!
 
     /// `owner`: the app holding secure input, when it could be found.

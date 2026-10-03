@@ -341,9 +341,10 @@ self-signed certificate, "spacebar Release", and v0.1.0 ad-hoc. Local builds kee
   read at run time from its own signature, so it holds for any identity that signs the whole build.
 - The release workflow imports the identity from the `SPACEBAR_SIGNING_P12` and `SPACEBAR_SIGNING_PASSWORD` secrets into a
   temporary keychain and signs with the one identity it holds. From v0.3 that must be a Developer ID Application identity,
-  and `SPACEBAR_NOTARY_KEY`, `SPACEBAR_NOTARY_KEY_ID` and `SPACEBAR_NOTARY_ISSUER` (an App Store Connect API key) must be
-  set, or the release fails before the tests. It notarizes the zip, staples the app, zips it again, makes `spacebar.dmg`
-  from the stapled app (`scripts/dmg.sh`: the app and a link to /Applications), and signs, notarizes and staples that.
+  and `SPACEBAR_NOTARY_KEY`, `SPACEBAR_NOTARY_KEY_ID` and `SPACEBAR_NOTARY_ISSUER` must be set, or the release fails before
+  the tests. They are a Team API key from App Store Connect (Users and Access, Integrations): its .p8, key ID and issuer ID.
+  An Individual key has no issuer ID and is not supported. It notarizes the zip, staples the app, zips it again, makes
+  `spacebar.dmg` from the stapled app (`scripts/dmg.sh`: the app and a link to /Applications), and signs, notarizes and staples that.
   Before v0.3 it builds the zip alone, as before; without the secrets, as in a fork, ad-hoc with a warning. Each
   `spacebar.zip` (and `spacebar.dmg`) has a GitHub build provenance attestation
   (`gh attestation verify spacebar.zip -R patebry/spacebar`).

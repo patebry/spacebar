@@ -735,7 +735,7 @@ if only == nil || only!.contains(where: { "md raw: a block edit retiring while R
     if (js("!!editing") as? Bool) == true { escape() }
     closeHost()
 }
-if only == nil || only!.contains(where: { "md raw: a whole edit retiring while a block edit begins causes no duplication".contains($0) }) {
+if only == nil || only!.contains(where: { "md raw: a whole edit retiring while a block edit begins is refused, or lands cleanly".contains($0) }) {
     caseN += 1
     let dir = docs.appendingPathComponent("c\(caseN)")
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -745,21 +745,29 @@ if only == nil || only!.contains(where: { "md raw: a whole edit retiring while a
     raw()
     let c0 = click(code, at: "start")
     if c0["editing"] as? Bool != true {
-        check("md raw: a whole edit retiring while a block edit begins causes no duplication", false, "whole edit did not start: \(c0)")
+        check("md raw: a whole edit retiring while a block edit begins is refused, or lands cleanly", false, "whole edit did not start: \(c0)")
     } else {
-        keys([t("Z")])
-        // Raw off ends the whole edit; unlike beginTextEdit, beginEdit has no "retired is empty" guard, so the block click
-        // below reliably succeeds while the old whole session's confirmation is still in flight.
+        keys([t("X\n")])
+        let wholeResult = md("X\nPara\n\nNext\n")
+        // Raw off ends the whole edit, retiring it; beginEdit now refuses a block click while a whole session is still
+        // retiring (this review's fix), so the click below either starts nothing or starts only once it has drained. The
+        // click's own `editing` is read optimistically by the page before native answers, so the true outcome is read fresh,
+        // after a short settle, rather than off what click() returned.
         _ = js("document.getElementById('raw').click(); 0")
-        let c1 = click("#doc > p", at: "start")
-        if c1["editing"] as? Bool == true { keys([t("Q")]) }
-        if (js("!!editing") as? Bool) == true { escape() }
+        _ = click("#doc > p:nth-of-type(2)", at: "start")
         spin(0.5)
-        let got = (try? Data(contentsOf: url)) ?? Data()
-        let text = String(data: got, encoding: .utf8) ?? "<\(got.count) bytes>"
-        // Whichever session's save lands last, the file must not gain a second copy of either paragraph.
-        let noDup = text.components(separatedBy: "Next").count == 2 && text.components(separatedBy: "Para").count == 2
-        check("md raw: a whole edit retiring while a block edit begins causes no duplication", noDup, "file is \(show(text))")
+        let landed = (js("!!editing") as? Bool) == true
+        if landed { keys([t("!")]) }
+        if (js("!!editing") as? Bool) == true { escape() }
+        let want = landed ? md("X\nPara\n\n!Next\n") : wholeResult
+        let got = settled(url, want, timeout: 4)
+        check("md raw: a whole edit retiring while a block edit begins is refused, or lands cleanly", got == want,
+              "landed=\(landed) file is \(show(String(data: got, encoding: .utf8) ?? "<\(got.count) bytes>")), want \(show(String(data: want, encoding: .utf8) ?? "?"))")
+        if got == want {
+            let after = settled(url, want, timeout: 1.5)
+            check("md raw: a whole edit retiring while a block edit begins: the file stays so", after == want,
+                  show(String(data: after, encoding: .utf8) ?? "?"))
+        }
     }
     closeHost()
 }

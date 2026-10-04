@@ -570,7 +570,7 @@ class PreviewController: NSViewController {
             // A writer that never reports an edit's end (hung, not crashed) must not keep the panel on this document.
             log.error("switch: writer did not end the edit within 2s")
             self.retired = []
-            self.wholeIds.removeAll()
+            self.wholeIds = self.wholeIds.filter { $0 == self.edit?.id }
             self.runPending()
         }
     }
@@ -1401,7 +1401,7 @@ class PreviewController: NSViewController {
         // up to maxTextBytes and a text that round-trips as is (not one a leading BOM would make mismatch what it reads fresh
         // from disk): past either, the writer would refuse and leave the tooltip's promise broken. A block click (editBlock)
         // takes neither path, so it stays available either way.
-        payload["editable"] = EditableText.allowed(path: path) && text.utf8.count <= FileTypes.maxTextBytes && text.first != "\u{FEFF}"
+        payload["editable"] = EditableText.allowed(path: path) && onDisk(text).utf8.count <= FileTypes.maxTextBytes && text.first != "\u{FEFF}"
         if let keyTime { payload["keyTime"] = keyTime }
         if host.remoteImages.allowedPath == path { payload[RemoteImageGate.payloadKey] = true }
         payload["ver"] = docVersion
@@ -2911,6 +2911,9 @@ class PreviewController: NSViewController {
             if let f = previousFilter, !self.heldLocally(f) { self.endKeys(f) }
             self.js("sb.editEnd", ["seq": seq])
         }
+        // A whole session's late flush replaces the whole text, not a line range: a block begun while one is still retiring
+        // would splice against a docText that flush is about to replace out from under it.
+        guard !retired.contains(where: { wholeIds.contains($0.id) }) else { return fail("the last edit is still landing") }
         guard let text = docText, let start = m.int("start"), let end = m.int("end"), let block = m.string("text"),
               let caret = m.int("caret"), start < end, caret <= (block as NSString).length else { return fail("bad request or no document") }
         let lines = text.components(separatedBy: "\n")

@@ -318,7 +318,7 @@ def search_status(page, check, out):
     page.cmd("@eval:filterField.value = 'al'; setSideQuery('al'); 0")
     sample(page, {'list': '#side-list'}, "document.getElementById('side-more').textContent")
     seen = {'2 chars': page.js(G)}
-    page.cmd("@eval:filterField.value = 'alp'; setSideQuery('alp'); hits = { ...hits, done: false, total: 56789, searched: 1234, version: hits.version + 1 }; renderSidebar(); 0")
+    page.cmd("@eval:filterField.value = 'alp'; setSideQuery('alp'); searchSeq++; hits = { ...hits, seq: searchSeq, done: false, total: 56789, searched: 1234, version: hits.version + 1 }; renderSidebar(); 0")
     seen['searching'] = page.js(G)
     page.cmd("@eval:hits = { ...hits, done: true, list: hits.list.length ? hits.list : [{ path: current.path, name: 'note-00.txt', icon: 'text', count: 1, line: 1, snippet: 'alpha' }], version: hits.version + 1 }; renderSidebar(); 0")
     seen['found'] = page.js(G)

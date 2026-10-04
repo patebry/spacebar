@@ -4,12 +4,13 @@ import UniformTypeIdentifiers
 /// What a file is, from its name alone: the sidebar's icon, how the panel previews it, and the content type the `file` host
 /// serves it as. Nothing here reads the file; a file of an unknown kind is sniffed as text or not when it is opened.
 enum FileKind: String {
-    case folder, markdown, image, pdf, html, video, audio, code, json, csv, text, archive, app, other
+    case folder, markdown, image, pdf, html, video, audio, code, json, csv, text, rtf, archive, app, other
 
-    /// One of the sidebar's nine icons.
+    /// One of the nine icons the folder overview counts by.
     var icon: String {
         switch self {
         case .json, .csv: return "data"
+        case .rtf: return "text"
         case .html: return "code"
         case .video, .audio: return "media"
         case .app, .archive: return "other"
@@ -21,15 +22,27 @@ enum FileKind: String {
 enum FileTypes {
     static let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "mkdn"]
     static let htmlExtensions: Set<String> = ["html", "htm"]
-    /// Played by AVFoundation. WebM, Ogg and Matroska are not: AVFoundation cannot open them.
-    static let videoExtensions: Set<String> = ["mp4", "m4v", "mov"]
-    static let audioExtensions: Set<String> = ["mp3", "m4a", "aac", "wav", "aif", "aiff", "flac", "caf"]
-    /// Rendered as `<img>` only. SVG is here: as an image it runs no script.
-    static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "avif", "bmp", "tif", "tiff", "ico", "svg"]
+    /// Played by AVFoundation (test/mediapane plays each). WebM, Ogg, Opus and Matroska are not: AVFoundation cannot open them.
+    static let videoExtensions: Set<String> = ["mp4", "m4v", "mov", "3gp", "mpg", "mpeg", "m2v"]
+    static let audioExtensions: Set<String> = ["mp3", "m4a", "m4b", "aac", "wav", "aif", "aiff", "flac", "caf", "amr"]
+    /// Media AVFoundation cannot play, by the name its info card gives it where macOS declares no type.
+    static let unplayableMedia: [String: String] = ["webm": "WebM video", "mkv": "Matroska video", "mka": "Matroska audio", "ogg": "Ogg audio",
+                                                    "oga": "Ogg audio", "ogv": "Ogg video", "opus": "Opus audio", "avi": "AVI movie",
+                                                    "wmv": "Windows Media video", "wma": "Windows Media audio", "flv": "Flash video"]
+    /// Images. SVG is here: as an image (`<img>`) it runs no script.
+    static let imageExtensions = Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "svg"]).union(nativeImageExtensions)
+    /// Images the panel decodes with ImageIO (Preview/ImagePane.swift) rather than as `<img>`: WebKit's decoding of these is
+    /// missing (RAW, PSD, EXR, TGA, JPEG 2000, ICNS) or unreliable (HEIC, AVIF and TIFF, above all on macOS 13).
+    static let nativeImageExtensions: Set<String> = ["heic", "heif", "avif", "tif", "tiff", "dng", "cr2", "cr3", "nef", "arw", "orf", "raf", "rw2",
+                                                     "psd", "exr", "tga", "jp2", "icns"]
     static let jsonExtensions: Set<String> = ["json", "geojson", "jsonc", "json5", "webmanifest", "har", "ipynb"]
     static let csvExtensions: Set<String> = ["csv", "tsv"]
+    /// Drawn natively from AppKit's RTF reader. `.rtfd` is a package (a folder) or, flattened, a single file.
+    static let richTextExtensions: Set<String> = ["rtf", "rtfd"]
     /// Listed by the writer with bsdtar. A lone compressed file (notes.txt.gz) is shown as the one file it holds.
     static let archiveExtensions: Set<String> = ["zip", "tar", "gz", "gzip", "tgz", "bz2", "bz", "tbz", "tbz2", "xz", "txz", "7z", "rar", "zst", "tzst"]
+    /// Text read from its end when it is too large to read whole (FileView).
+    static let logExtensions: Set<String> = ["log", "out", "err"]
     static let textExtensions: Set<String> = ["txt", "text", "log", "out", "err", "rst", "adoc", "asciidoc", "org", "tex", "bib", "srt", "vtt", "nfo",
                                               "diz", "cfg", "conf", "properties", "lock", "sum", "mod", "example", "sample", "gitignore",
                                               "gitattributes", "gitmodules", "dockerignore", "editorconfig", "npmrc", "nvmrc", "env", "csr", "pem"]
@@ -45,12 +58,13 @@ enum FileTypes {
         "xhtml": "xml", "xml": "xml", "plist": "xml", "xsd": "xml", "xsl": "xml", "vue": "xml", "svelte": "xml", "yaml": "yaml",
         "yml": "yaml", "toml": "ini", "ini": "ini", "sql": "sql", "php": "php", "php3": "php", "php4": "php", "ph3": "php", "ph4": "php", "phtml": "php", "pl": "perl", "pm": "perl", "lua": "lua", "r": "r",
         "graphql": "graphql", "gql": "graphql", "diff": "diff", "patch": "diff", "mk": "makefile", "mak": "makefile", "make": "makefile", "gmk": "makefile", "gradle": "java", "groovy": "java",
-        "vb": "vbnet", "wat": "wasm", "dart": nil, "scala": nil, "ex": nil, "exs": nil, "erl": nil, "hs": nil, "clj": nil, "ml": nil,
-        "zig": nil, "nim": nil, "proto": nil, "tf": nil, "hcl": nil, "cmake": nil, "bat": nil, "ps1": nil, "applescript": nil, "dockerfile": nil,
+        "vb": "vbnet", "wat": "wasm", "dart": nil, "scala": "scala", "sc": "scala", "ex": nil, "exs": nil, "erl": nil, "hs": nil, "clj": nil, "ml": nil,
+        "zig": nil, "nim": nil, "proto": nil, "tf": "hcl", "tfvars": "hcl", "hcl": "hcl", "cmake": nil, "bat": nil, "ps1": nil, "applescript": nil,
+        "dockerfile": "dockerfile",
     ]
     /// Files known by their whole name (lowercased), with their language.
     static let codeNames: [String: String?] = [
-        "dockerfile": nil, "containerfile": nil, "makefile": "makefile", "gnumakefile": "makefile", "gemfile": "ruby", "rakefile": "ruby",
+        "dockerfile": "dockerfile", "containerfile": "dockerfile", "nginx.conf": "nginx", "makefile": "makefile", "gnumakefile": "makefile", "gemfile": "ruby", "rakefile": "ruby",
         "podfile": "ruby", "brewfile": "ruby", "vagrantfile": "ruby", "fastfile": "ruby", "procfile": nil, "jenkinsfile": nil,
         "justfile": nil, ".bashrc": "bash", ".zshrc": "bash", ".profile": "bash", ".bash_profile": "bash", ".zprofile": "bash",
     ]
@@ -58,6 +72,82 @@ enum FileTypes {
                                          "notice", "readme", "todo", "version", "codeowners", ".env.example", "env.example"]
     static let appExtensions: Set<String> = ["app", "pkg", "mpkg", "dmg", "exe", "msi", "dylib", "so", "o", "a", "bin", "workflow",
                                              "shortcut", "prefpane", "appex", "kext", "framework", "bundle", "plugin", "qlgenerator", "saver"]
+    /// Kinds shown as `.other` that still get an icon of their own in the sidebar and on the info card.
+    static let glyphExtensions: [String: Set<String>] = [
+        "font": ["ttf", "otf", "woff", "woff2", "ttc", "dfont", "fon", "pfb"],
+        "doc": ["doc", "docx", "pages", "rtf", "rtfd", "odt", "wpd", "epub"],
+        "sheet": ["xls", "xlsx", "xlsm", "numbers", "ods"],
+        "slides": ["ppt", "pptx", "key", "odp"],
+        "model": ["obj", "stl", "usdz", "usd", "usda", "usdc", "fbx", "glb", "gltf", "3ds", "dae", "blend", "ply", "reality", "3mf"],
+        "video": ["webm", "mkv", "avi", "ogv", "wmv", "flv"],
+        "audio": ["ogg", "oga", "opus", "wma", "mid", "midi", "ape", "alac"],
+    ]
+
+    /// The sidebar's and info card's icon: finer than `FileKind.icon`, from the kind and then the extension.
+    static func glyph(name: String, kind: FileKind) -> String {
+        switch kind {
+        case .folder, .markdown, .image, .pdf, .code, .text, .archive, .app, .video, .audio: return kind.rawValue
+        case .html: return "code"
+        case .rtf: return "doc"
+        case .json, .csv: return "data"
+        default:
+            let ext = (name as NSString).pathExtension.lowercased()
+            return glyphExtensions.first { $0.value.contains(ext) }?.key ?? "other"
+        }
+    }
+
+    /// Shown by Apple's own Quick Look in a QLPreviewView over the panel (Preview/QLFallbackPane.swift): a file of no kind of
+    /// spacebar's own whose declared type Quick Look may have a generator for (Office, iWork, fonts, 3D, certificates, calendars,
+    /// e-books). QLPreviewView hands a file to whichever extension Quick Look would pick, spacebar included, so a type spacebar
+    /// claims, or one that conforms to a type it claims, is never shown this way (test/qlpane checks every claim). Nor is a folder,
+    /// a package (bar iWork's documents), an app, an archive or a disk image, anything spacebar shows itself, web content or mail
+    /// (Apple's previews of those load what they link to), or a vCard: its preview reads Contacts in this process.
+    static func appleQuickLookType(_ path: String) -> String? {
+        var st = stat()
+        guard stat(path, &st) == 0, let claims = quickLookClaims,
+              let t = try? URL(fileURLWithPath: path).resourceValues(forKeys: [.contentTypeKey]).contentType else { return nil }
+        let isDir = st.st_mode & S_IFMT == S_IFDIR
+        guard kind(name: (path as NSString).lastPathComponent, isDirectory: isDir, isPackage: isDir, executable: st.st_mode & 0o111 != 0) == .other
+        else { return nil }
+        return quickLookEligible(t, claims: claims) ? t.identifier : nil
+    }
+
+    /// iWork's package documents: the one kind of package Quick Look is asked to show.
+    static let quickLookPackages: Set<String> = ["com.apple.iwork.pages.pages", "com.apple.iwork.numbers.numbers", "com.apple.iwork.keynote.key"]
+    static let quickLookRefused: [UTType] = [.folder, .directory, .package, .bundle, .application, .executable, .archive, .zip, .diskImage,
+                                             .plainText, .sourceCode, .script, .json, .xml, .html, .propertyList, .image, .audiovisualContent,
+                                             .pdf, .rtf, .rtfd, .flatRTFD, .webArchive, .emailMessage, .vCard, .symbolicLink, .aliasFile]
+        + ["com.apple.mail.email", "com.apple.mail.emlx", "com.apple.log"].compactMap { UTType($0) }
+
+    static func quickLookEligible(_ t: UTType, claims: Set<String>) -> Bool {
+        guard t.isDeclared, !t.isDynamic, !claims.contains(t.identifier) else { return false }
+        // Folders are refused below, iWork's packages aside; everything is data.
+        let claimed = claims.compactMap { [UTType.data, .folder, .directory].map(\.identifier).contains($0) ? nil : UTType($0) }
+        if claimed.contains(where: { t.conforms(to: $0) }) { return false }
+        if quickLookPackages.contains(t.identifier) { return true }
+        // Text stays on spacebar's text view (.strings, .pbxproj, playlists, crash reports), bar the text formats Apple draws.
+        if t.conforms(to: .text), !quickLookDrawnText.contains(t.identifier) { return false }
+        return !quickLookRefused.contains { t.conforms(to: $0) }
+    }
+    /// Declared as text, but Apple's preview draws them: a calendar's events and a Wavefront model.
+    static let quickLookDrawnText: Set<String> = ["com.apple.ical.ics", "public.geometry-definition-format"]
+
+    /// Every type spacebar's preview extension claims (scripts/quicklook-types.txt, which build.sh copies into each bundle that
+    /// shows files), and the folder and routing types. Nil when the list is missing: then nothing is handed to Quick Look.
+    static var quickLookClaims: Set<String>? = Bundle.main.url(forResource: "quicklook-types", withExtension: "txt")
+        .flatMap { try? String(contentsOf: $0, encoding: .utf8) }.map(claims)
+
+    /// The types a quicklook-types.txt claims: each `claim`, `md.spacebar.type.<first extension>` for each `declare`, and
+    /// md.spacebar.qlmanage, public.folder and public.directory.
+    static func claims(_ text: String) -> Set<String> {
+        var out: Set<String> = ["md.spacebar.qlmanage", "public.folder", "public.directory"]
+        for line in text.split(separator: "\n") {
+            let f = line.split(separator: " ", omittingEmptySubsequences: true)
+            if f.count > 1, f[0] == "claim" { out.insert(String(f[1])) }
+            if f.count > 1, f[0] == "declare", let ext = f[1].split(separator: ",").first { out.insert("md.spacebar.type." + ext) }
+        }
+        return out
+    }
 
     /// The explicit map behind every `file` URL; anything missing is application/octet-stream, which the `file` host never serves.
     static let contentTypes: [String: String] = [
@@ -71,6 +161,8 @@ enum FileTypes {
     static let maxFileBytes: Int64 = 512 << 20
     /// Text and code past this show their first 2 MB, with a note.
     static let maxTextBytes = 2 << 20
+    /// A CSV or TSV is read this far for its table (50,000 typical rows), and JSON for its tree. Editing stays within maxTextBytes.
+    static let maxTableBytes = 16 << 20
 
     /// The `file` URL of an absolute path, as the page loads it; `version` busts the cache after a change on disk.
     static func fileURL(_ path: String, version: String? = nil) -> URL? {
@@ -90,11 +182,13 @@ enum FileTypes {
     static func kind(name: String, isDirectory: Bool = false, isPackage: Bool = false, executable: Bool = false) -> FileKind {
         let ext = (name as NSString).pathExtension.lowercased()
         if isDirectory && !isPackage { return .folder }
+        if isDirectory && ext == "rtfd" { return .rtf }
         if isDirectory { return ext == "app" || appExtensions.contains(ext) ? .app : .other }
         let lower = name.lowercased()
         if markdownExtensions.contains(ext) { return .markdown }
         if imageExtensions.contains(ext) { return .image }
         if ext == "pdf" { return .pdf }
+        if richTextExtensions.contains(ext) { return .rtf }
         if htmlExtensions.contains(ext) { return .html }
         if videoExtensions.contains(ext) { return .video }
         if audioExtensions.contains(ext) { return .audio }
@@ -112,7 +206,7 @@ enum FileTypes {
     static func language(name: String) -> String? {
         let lower = name.lowercased()
         if let l = codeNames[lower] { return l }
-        if lower.hasPrefix("dockerfile.") || lower.hasSuffix(".dockerfile") { return nil }
+        if lower.hasPrefix("dockerfile.") || lower.hasSuffix(".dockerfile") { return "dockerfile" }
         if let l = codeLanguages[(lower as NSString).pathExtension] { return l }
         return nil
     }
@@ -144,6 +238,288 @@ enum FileTypes {
     static func isDataless(_ path: String) -> Bool {
         var st = stat()
         return stat(path, &st) == 0 && st.st_flags & 0x4000_0000 != 0
+    }
+}
+
+/// Reads text that may not be UTF-8: a byte order mark first (UTF-8, UTF-16 or UTF-32, either byte order), then UTF-16 without
+/// one when every other byte is zero, then UTF-8 (a few stray invalid bytes among real multibyte text allowed, each shown as
+/// U+FFFD), then the legacy encoding Foundation's detector names from a short list (Windows-1252, Mac Roman, Shift JIS, EUC-JP,
+/// GB 18030, EUC-KR, Big5, Windows-1251, KOI8-R), else Windows-1252 or Latin-1. The legacy encoding is chosen, and the
+/// plausibility check made, on the first 64 KB; the whole is then decoded once. Binary is never text: a NUL in anything but
+/// UTF-16 or UTF-32, or control characters in more than 2 in 100 of the first characters, and it is refused. `truncated`: the
+/// data is the start of a longer file (its first 2 MB), so a code unit or character cut at the end is dropped.
+enum TextDecoding {
+    struct Decoded: Equatable {
+        let text: String
+        /// Shown beside the file's kind when it is not UTF-8.
+        let name: String
+        /// What the text goes back to disk as (EditableText.Source): the encoding and the byte order mark it was read with.
+        var encoding: String.Encoding = .utf8
+        var bom = Data()
+        var isUTF8: Bool { name == "UTF-8" }
+
+        static func == (a: Decoded, b: Decoded) -> Bool { a.text == b.text && a.name == b.name }
+    }
+
+    private static func cf(_ e: CFStringEncodings) -> String.Encoding {
+        String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(e.rawValue)))
+    }
+    static let legacy: [String.Encoding] = [.windowsCP1252, .macOSRoman, .shiftJIS, .japaneseEUC, cf(.GB_18030_2000), cf(.EUC_KR), cf(.big5),
+                                            .windowsCP1251, cf(.KOI8_R)]
+    private static let singleByte: Set<String.Encoding> = [.windowsCP1252, .macOSRoman, .windowsCP1251, cf(.KOI8_R), .isoLatin1]
+    private static let names: [String.Encoding: String] = [
+        .windowsCP1252: "Windows-1252", .macOSRoman: "Mac Roman", .shiftJIS: "Shift JIS", .japaneseEUC: "EUC-JP", cf(.GB_18030_2000): "GB 18030",
+        cf(.EUC_KR): "EUC-KR", cf(.big5): "Big5", .windowsCP1251: "Windows-1251", cf(.KOI8_R): "KOI8-R", .isoLatin1: "ISO Latin 1",
+    ]
+    /// How much of the text the legacy detector and the plausibility check look at.
+    static let sampleBytes = 64 << 10
+
+    /// `s` in native UTF-8 storage, which a render copies its bytes out of at once (PageBody). makeContiguousUTF8 goes through a
+    /// bridged NSString a character at a time (0.3 s for 16 MB of Windows-1252); this is one transcoding and one validation.
+    static func nativeUTF8(_ s: String) -> String {
+        s.utf8.withContiguousStorageIfAvailable { _ in s } ?? String(decoding: Data(s.utf8), as: UTF8.self)
+    }
+
+    static func decode(_ data: Data, truncated: Bool = false) -> Decoded? {
+        let d = Data(data)
+        if d.starts(with: [0xEF, 0xBB, 0xBF]) {
+            return utf8(d.dropFirst(3)).flatMap { plausible($0) ? Decoded(text: $0, name: "UTF-8", bom: d.prefix(3)) : nil }
+        }
+        if d.starts(with: [0xFF, 0xFE, 0, 0]) { return wide(d.dropFirst(4), unit: 4, .utf32LittleEndian, "UTF-32 LE", bom: d.prefix(4)) }
+        if d.starts(with: [0, 0, 0xFE, 0xFF]) { return wide(d.dropFirst(4), unit: 4, .utf32BigEndian, "UTF-32 BE", bom: d.prefix(4)) }
+        if d.starts(with: [0xFF, 0xFE]) { return wide(d.dropFirst(2), unit: 2, .utf16LittleEndian, "UTF-16 LE", bom: d.prefix(2)) }
+        if d.starts(with: [0xFE, 0xFF]) { return wide(d.dropFirst(2), unit: 2, .utf16BigEndian, "UTF-16 BE", bom: d.prefix(2)) }
+        if let e = bomlessUTF16(d) { return wide(d, unit: 2, e, e == .utf16LittleEndian ? "UTF-16 LE" : "UTF-16 BE") }
+        if d.contains(0) { return nil }
+        if let s = utf8(d) ?? mostlyUTF8(d) { return plausible(s) ? Decoded(text: s, name: "UTF-8") : nil }
+        return eightBit(d, truncated: truncated)
+    }
+
+    /// UTF-8, allowing a character cut at the end.
+    private static func utf8(_ d: Data) -> String? {
+        for cut in 0...3 where d.count >= cut {
+            if let s = String(data: d.dropLast(cut), encoding: .utf8) { return s }
+        }
+        return nil
+    }
+
+    /// UTF-8 with a few invalid bytes (a log with one stray byte), each read as U+FFFD, when the rest has real multibyte
+    /// characters: at most 1 in 1,000 characters replaced, or at least 4 valid multibyte characters for every replacement. Legacy
+    /// text has almost no valid multibyte sequences and many invalid bytes, so it never passes.
+    private static func mostlyUTF8(_ d: Data) -> String? {
+        let s = String(decoding: d, as: UTF8.self)
+        var n = 0, bad = 0, multi = 0
+        for u in s.unicodeScalars {
+            n += 1
+            if u == "\u{FFFD}" { bad += 1 } else if u.value > 0x7F { multi += 1 }
+        }
+        return multi > 0 && (bad * 1000 <= n || bad * 4 <= multi) ? s : nil
+    }
+
+    /// UTF-16 or UTF-32: whole code units only, a surrogate pair cut at the end dropped, and no NUL or run of controls.
+    private static func wide(_ body: Data, unit: Int, _ e: String.Encoding, _ name: String, bom: Data = Data()) -> Decoded? {
+        var d = Data(body.prefix(body.count - body.count % unit))
+        if unit == 2, d.count >= 2 {
+            let last = e == .utf16LittleEndian ? UInt16(d[d.count - 2]) | UInt16(d[d.count - 1]) << 8 : UInt16(d[d.count - 2]) << 8 | UInt16(d[d.count - 1])
+            if (0xD800...0xDBFF).contains(last) { d.removeLast(2) }
+        }
+        guard let s = String(data: d, encoding: e), !s.unicodeScalars.contains("\u{0}"), plausible(s) else { return nil }
+        return Decoded(text: s, name: name, encoding: e, bom: Data(bom))
+    }
+
+    /// UTF-16 with no byte order mark, as Windows tools write it: in the first 4 KB, zero in at least 40 in 100 of one lane of
+    /// bytes and in almost none of the other.
+    private static func bomlessUTF16(_ d: Data) -> String.Encoding? {
+        let head = d.prefix(4096)
+        guard head.count >= 16 else { return nil }
+        var even = 0, odd = 0
+        for (i, b) in head.enumerated() where b == 0 { if i % 2 == 0 { even += 1 } else { odd += 1 } }
+        let half = head.count / 2
+        if odd * 10 >= half * 4 && even * 50 <= half { return .utf16LittleEndian }
+        if even * 10 >= half * 4 && odd * 50 <= half { return .utf16BigEndian }
+        return nil
+    }
+
+    /// A legacy encoding: chosen on the first 64 KB, cut after its last line break (a line feed is never part of a multibyte
+    /// character in these encodings), then the whole decoded once.
+    private static func eightBit(_ d: Data, truncated: Bool) -> Decoded? {
+        var head = d.prefix(sampleBytes)
+        if head.count < d.count, let nl = head.lastIndex(of: 0x0A), nl - head.startIndex >= sampleBytes / 2 { head = head[...nl] }
+        // Only a sample that ends where the file was cut may end inside a character.
+        let cut = truncated && head.count == d.count
+        guard let e = detect(Data(head), cut: cut) else { return nil }
+        var text: String?
+        for drop in 0...(truncated ? 3 : 0) where d.count > drop {
+            if let s = String(data: d.dropLast(drop), encoding: e) { text = s; break }
+        }
+        if let text { return Decoded(text: text, name: names[e] ?? "\(e)", encoding: e) }
+        // Past the sample the bytes do not fit the encoding after all: Latin-1 reads any byte.
+        guard let s = String(data: d, encoding: .isoLatin1), plausible(s) else { return nil }
+        return Decoded(text: s, name: names[.isoLatin1]!, encoding: .isoLatin1)
+    }
+
+    /// The encoding the detector names for `head`, when that reads as text. With `cut`, up to 3 bytes at the end may belong to a
+    /// character cut in two: a multibyte encoding found with them dropped is preferred to a single-byte one found without.
+    private static func detect(_ head: Data, cut: Bool) -> String.Encoding? {
+        var single: String.Encoding?
+        for drop in 0...(cut ? 3 : 0) where head.count > drop {
+            var converted: NSString?
+            var lossy: ObjCBool = false
+            let raw = NSString.stringEncoding(for: head.dropLast(drop), encodingOptions: [.suggestedEncodingsKey: legacy.map { NSNumber(value: $0.rawValue) },
+                                                                                        .useOnlySuggestedEncodingsKey: true, .allowLossyKey: false],
+                                              convertedString: &converted, usedLossyConversion: &lossy)
+            guard raw != 0, let s = converted as String?, !lossy.boolValue, plausible(s) else { continue }
+            let e = String.Encoding(rawValue: raw)
+            if !singleByte.contains(e) { return e }
+            if single == nil { single = e }
+        }
+        if let single { return single }
+        if let s = String(data: head, encoding: .windowsCP1252) { return plausible(s) ? .windowsCP1252 : nil }
+        if let s = String(data: head, encoding: .isoLatin1) { return plausible(s) ? .isoLatin1 : nil }
+        return nil
+    }
+
+    /// Text has few control characters: tab, line breaks, form feed and escape (a log's colours) aside, at most 2 in 100 of the
+    /// first 64 K characters.
+    static func plausible(_ s: String) -> Bool {
+        var n = 0, bad = 0
+        for u in s.unicodeScalars.prefix(sampleBytes) {
+            n += 1
+            if (u.value < 0x20 && ![0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x1B].contains(u.value)) || u.value == 0x7F || (0x80..<0xA0).contains(u.value) { bad += 1 }
+        }
+        return bad * 50 <= n
+    }
+}
+
+/// Which files spacebar edits in place and how their text goes back to disk. Markdown is edited block by block; code, JSON,
+/// CSV, text and dotfile config (`.env`, `.gitignore`) as a whole. The writer applies `writeRefusal` to every write.
+enum EditableText {
+    static let maxMarkdownBytes = 64 << 20
+
+    /// Markdown, the code, JSON, CSV and text kinds, and dotfile config: a name that is a dot and no extension, or `.env.<name>`.
+    /// Files that often hold secrets are edited like any other: an edit is written back to the same file and is never handed to
+    /// another app (LinkPolicy still keeps them from being opened elsewhere).
+    static func allowed(name: String) -> Bool {
+        switch FileTypes.kind(name: name) {
+        case .markdown, .code, .json, .csv, .text: return true
+        case .other:
+            let lower = name.lowercased()
+            return lower.count > 1 && lower.hasPrefix(".") && ((lower as NSString).pathExtension.isEmpty || lower.hasPrefix(".env."))
+        default: return false
+        }
+    }
+
+    static func isMarkdown(_ name: String) -> Bool { FileTypes.markdownExtensions.contains((name as NSString).pathExtension.lowercased()) }
+
+    /// Whether the file at `path` may be edited by its names: the named path and the file it resolves to are both of an allowed
+    /// name, and unless both are Markdown they have the same extension (the same name, for a name without one), so a
+    /// `notes.txt` that links to `~/.zshrc` is not editable.
+    static func allowed(path: String) -> Bool {
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+        let a = URL(fileURLWithPath: path).lastPathComponent, b = resolved.lastPathComponent
+        guard allowed(name: a), allowed(name: b), !runsCode(resolved) else { return false }
+        if isMarkdown(a), isMarkdown(b) { return true }
+        let ea = (a as NSString).pathExtension.lowercased(), eb = (b as NSString).pathExtension.lowercased()
+        return ea.isEmpty || eb.isEmpty ? a.lowercased() == b.lowercased() : ea == eb
+    }
+
+    /// Files the shell, git or launchd run or read as commands on their own: a paste into one (the extension can fill the
+    /// pasteboard) would run later, so they are never edited, whatever else allows them.
+    static let runsCodeNames: Set<String> = [".zshrc", ".zshenv", ".zprofile", ".zlogin", ".zlogout", ".bashrc", ".bash_profile", ".bash_login",
+                                             ".bash_logout", ".profile", ".kshrc", ".cshrc", ".tcshrc", ".inputrc", ".gitconfig", ".npmrc", ".yarnrc"]
+    static func runsCode(_ resolved: URL) -> Bool {
+        let name = resolved.lastPathComponent.lowercased(), ext = resolved.pathExtension.lowercased()
+        let parts = resolved.pathComponents.map { $0.lowercased() }
+        return runsCodeNames.contains(name) || ["command", "tool"].contains(ext) || parts.contains("launchagents") || parts.contains("launchdaemons")
+            || zip(parts, parts.dropFirst()).contains { $0 == ".git" && $1 == "hooks" }
+    }
+
+    /// Why the writer refuses to write `data` over `base` at `path`, or nil. The path must be `allowed`, and the file it resolves
+    /// to an existing regular file. Markdown is bounded at 64 MB. Anything else at the 2 MB spacebar reads of it, on disk and in
+    /// both buffers (so a buffer that is the start of a longer file is never saved), what is on disk must read as text
+    /// (TextDecoding, a heuristic: no NUL and few control characters in its first 64 K characters), and neither may be a binary
+    /// property list. What may be written into such a file is checked by the writer against what was typed (TypedTexts).
+    static func writeRefusal(path: String, data: Data, base: Data) -> String? {
+        guard path.hasPrefix("/") else { return "not an absolute path" }
+        guard allowed(path: path) else { return "not a file spacebar edits" }
+        let named = URL(fileURLWithPath: path), resolved = named.resolvingSymlinksInPath()
+        var st = stat()
+        guard stat(resolved.path, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return "not an existing regular file" }
+        if isMarkdown(named.lastPathComponent), isMarkdown(resolved.lastPathComponent) {
+            return data.count <= maxMarkdownBytes && base.count <= maxMarkdownBytes ? nil : "larger than 64 MB"
+        }
+        guard st.st_size <= FileTypes.maxTextBytes, data.count <= FileTypes.maxTextBytes, base.count <= FileTypes.maxTextBytes else {
+            return "larger than 2 MB"
+        }
+        let plist = Data("bplist".utf8)
+        guard !data.starts(with: plist), !base.starts(with: plist) else { return "a binary property list" }
+        guard base.isEmpty || TextDecoding.decode(base) != nil else { return "not text" }
+        return nil
+    }
+
+    /// How a text file's bytes become the text that is edited, and back: its encoding and byte order mark, and CRLF when every
+    /// line ends in one (the text is edited with LF). Only a file whose bytes come back exactly from its text is editable, so
+    /// nothing is converted behind the user's back: not a file with bytes read as U+FFFD, nor one cut at 2 MB.
+    struct Source: Equatable {
+        let encoding: String.Encoding
+        let bom: Data
+        let crlf: Bool
+        /// Named in a refusal: "UTF-8", "Windows-1252"…
+        let name: String
+
+        /// The file's bytes for `text`, or nil when a character in it has no form in the file's encoding.
+        func bytes(_ text: String) -> Data? {
+            (crlf ? text.replacingOccurrences(of: "\n", with: "\r\n") : text).data(using: encoding, allowLossyConversion: false).map { bom + $0 }
+        }
+
+        /// The first character of `text` the encoding cannot hold, for the refusal.
+        func unencodable(_ text: String) -> Character? {
+            text.first { String($0).data(using: encoding, allowLossyConversion: false) == nil }
+        }
+    }
+
+    /// What changed from `old` to `new`, in UTF-16 offsets as the page counts them: [from, to) of `old` became `insert`; nil when
+    /// nothing did. Never between the halves of a surrogate pair, so `insert` is whole characters.
+    static func change(from old: String, to new: String) -> (from: Int, to: Int, insert: String)? {
+        let a = Array(old.utf16), b = Array(new.utf16)
+        var from = 0
+        while from < a.count, from < b.count, a[from] == b[from] { from += 1 }
+        if from == a.count, from == b.count { return nil }
+        var tail = 0
+        while tail < a.count - from, tail < b.count - from, a[a.count - 1 - tail] == b[b.count - 1 - tail] { tail += 1 }
+        if from > 0, UTF16.isLeadSurrogate(a[from - 1]) { from -= 1 }
+        if tail > 0, UTF16.isTrailSurrogate(a[a.count - tail]) { tail -= 1 }
+        return (from, a.count - tail, String(decoding: b[from..<(b.count - tail)], as: UTF16.self))
+    }
+
+    struct Opened {
+        let source: Source
+        /// The text as edited: LF line breaks when the file's are all CRLF.
+        let text: String
+        let bytes: Data
+    }
+
+    /// The editable form of the file at `path` as it is on disk now, or nil: the writer's own read when an edit starts.
+    static func read(path: String) -> Opened? {
+        guard allowed(path: path) else { return nil }
+        let fd = Darwin.open(URL(fileURLWithPath: path).resolvingSymlinksInPath().path, O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG, st.st_size <= FileTypes.maxTextBytes,
+              let data = try? h.read(upToCount: FileTypes.maxTextBytes + 1) ?? Data(), data.count == st.st_size else { return nil }
+        let decoded = data.isEmpty ? TextDecoding.Decoded(text: "", name: "UTF-8") : TextDecoding.decode(data)
+        return decoded.flatMap { open(data, decoded: $0) }
+    }
+
+    /// The editable form of a whole file's `bytes`, read as `decoded`; nil when they would not come back byte for byte.
+    static func open(_ bytes: Data, decoded: TextDecoding.Decoded) -> Opened? {
+        let raw = decoded.text
+        let crlf = raw.contains("\r\n") && !raw.replacingOccurrences(of: "\r\n", with: "").utf8.contains(10)
+        let source = Source(encoding: decoded.encoding, bom: Data(decoded.bom), crlf: crlf, name: decoded.name)
+        let text = crlf ? raw.replacingOccurrences(of: "\r\n", with: "\n") : raw
+        guard source.bytes(text) == bytes else { return nil }
+        return Opened(source: source, text: text, bytes: bytes)
     }
 }
 
@@ -194,13 +570,21 @@ final class FileLoader {
     }
 }
 
-/// What the page is sent to show a file: `view` says how (markdown, image, pdf, html, video, audio, code, json, csv, text or info),
-/// and nothing in it is ever rendered as HTML. A PDF, an HTML file and media are drawn natively; the page only reserves their place.
+/// What the page is sent to show a file: `view` says how (markdown, image, pdf, html, video, audio, quicklook, code, json, csv, text
+/// or info), and nothing in it is ever rendered as HTML. A PDF, an HTML file, media and Apple's previews are drawn natively; the page
+/// only reserves their place.
 enum FileView {
     /// What every render names: the file, its folder as the page's base URL, and the sidebar's root.
     static func base(path: String, root: String, reason: String) -> [String: Any] {
-        ["path": path, "base": FileTypes.fileURL((path as NSString).deletingLastPathComponent + "/")!.absoluteString,
-         "name": (path as NSString).lastPathComponent, "reason": reason, "root": root, "rootName": (root as NSString).lastPathComponent]
+        let dir = (path as NSString).deletingLastPathComponent
+        return ["path": path, "base": FileTypes.fileURL(dir + "/")!.absoluteString, "folder": tildePath(dir),
+                "name": (path as NSString).lastPathComponent, "reason": reason, "root": root, "rootName": (root as NSString).lastPathComponent]
+    }
+
+    /// `path` with the user's home as `~`: the real home, since inside the sandbox NSHomeDirectory() is the container.
+    static func tildePath(_ path: String, home: String = getpwuid(getuid()).flatMap({ String(validatingUTF8: $0.pointee.pw_dir) }) ?? NSHomeDirectory()) -> String {
+        guard !home.isEmpty else { return path }
+        return path == home ? "~" : path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path
     }
 
     /// A Markdown document's text, downloaded first when iCloud has evicted it.
@@ -218,10 +602,129 @@ enum FileView {
             p["modified"] = Double(st.st_mtimespec.tv_sec) * 1000 + Double(st.st_mtimespec.tv_nsec / 1_000_000)
         }
         p["kindName"] = UTType(filenameExtension: (path as NSString).pathExtension).flatMap(\.localizedDescription) ?? "Document"
-        p["icon"] = kind.icon
+        p["icon"] = FileTypes.glyph(name: (path as NSString).lastPathComponent, kind: kind)
         p["canOpen"] = false
         p["view"] = "info"
         p["note"] = cloud ? "This file is in iCloud and couldn’t be downloaded." : "This file couldn’t be read."
+        if !cloud, let r = readRefusal(path) {
+            p["note"] = r.note
+            if r.privacy { p["privacy"] = true }
+        }
+        return p
+    }
+
+    /// An SVG's own size, from its root element's width and height (in px or unitless), else its viewBox: "24 × 24". Read
+    /// from the file's first 16 KB; nil when it names none. WebKit's size for an SVG without one is its default, not the file's.
+    static func svgSize(_ path: String) -> String? {
+        guard !FileTypes.isDataless(path), let h = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? h.close() }
+        guard let d = try? h.read(upToCount: 16 << 10), let text = String(data: d, encoding: .utf8) ?? String(data: d, encoding: .isoLatin1),
+              let open = text.range(of: #"<svg\b[^>]*>"#, options: [.regularExpression, .caseInsensitive]) else { return nil }
+        let tag = String(text[open])
+        func attr(_ name: String) -> String? {
+            guard let r = tag.range(of: #"(?<![-\w:])\#(name)\s*=\s*["']([^"']*)["']"#, options: [.regularExpression, .caseInsensitive]) else { return nil }
+            let v = tag[r]
+            guard let q = v.firstIndex(where: { $0 == "\"" || $0 == "'" }) else { return nil }
+            return String(v[v.index(after: q)..<v.index(before: v.endIndex)])
+        }
+        let num = { (s: String) -> Double? in
+            let t = s.trimmingCharacters(in: .whitespaces)
+            let n = t.hasSuffix("px") ? String(t.dropLast(2)) : t
+            return Double(n).flatMap { $0 > 0 && $0.isFinite ? $0 : nil }
+        }
+        let fmt = { (x: Double) in x == x.rounded() ? String(Int(x)) : String(format: "%.1f", x) }
+        if let w = attr("width").flatMap(num), let hgt = attr("height").flatMap(num) { return "\(fmt(w)) × \(fmt(hgt))" }
+        let vb = attr("viewBox")?.split(whereSeparator: { $0 == " " || $0 == "," }).compactMap { Double($0) } ?? []
+        guard vb.count == 4, vb[2] > 0, vb[3] > 0 else { return nil }
+        return "\(fmt(vb[2])) × \(fmt(vb[3]))"
+    }
+
+    /// The card of a video or audio file macOS cannot play: what to do next, by what its buttons offer.
+    static func unplayableNote(canOpen: Bool) -> String {
+        canOpen ? "macOS can’t play this format. Open it in an app that can, such as IINA or VLC."
+            : "macOS can’t play this format. Reveal it in Finder to open it in an app that can, such as IINA or VLC."
+    }
+
+    /// Why a regular file cannot be read, found by opening it (never reading): no permission (EACCES), which no app of the
+    /// user's gets round, or macOS's privacy protection keeping spacebar out of a folder (EPERM), which Privacy & Security's
+    /// Files and Folders can change. Nil when it opens, or when it is in iCloud and not downloaded.
+    static func readRefusal(_ path: String) -> (note: String, privacy: Bool)? {
+        guard !FileTypes.isDataless(path) else { return nil }
+        let fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+        if fd >= 0 { close(fd); return nil }
+        switch errno {
+        case EACCES: return ("You don’t have permission to read this file. Its owner can change that in Finder’s Get Info.", false)
+        case EPERM: return ("macOS hasn’t let spacebar read \(protectedPlace(path)). Allow it in System Settings › Privacy & Security › Files and Folders.", true)
+        default: return nil
+        }
+    }
+
+    /// What a Mach-O file is, from its header, as Finder names it; nil for anything else (or a file in iCloud, not read).
+    static func machOKind(_ path: String) -> String? {
+        guard !FileTypes.isDataless(path), let h = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? h.close() }
+        guard let d = try? h.read(upToCount: 16), d.count >= 8 else { return nil }
+        let b = [UInt8](d)
+        if b[0...3] == [0xCA, 0xFE, 0xBA, 0xBE] { return "Unix executable" }
+        guard b[0...3] == [0xCF, 0xFA, 0xED, 0xFE] || b[0...3] == [0xCE, 0xFA, 0xED, 0xFE], b.count >= 16 else { return nil }
+        switch UInt32(b[12]) | UInt32(b[13]) << 8 | UInt32(b[14]) << 16 | UInt32(b[15]) << 24 {
+        case 6: return "Dynamic library"
+        case 8: return "Plug-in bundle"
+        default: return "Unix executable"
+        }
+    }
+
+    /// The protected place `path` is in, as the privacy settings name it.
+    static func protectedPlace(_ path: String) -> String {
+        let home = tildePath(path)
+        for (dir, name) in [("~/Desktop/", "your Desktop folder"), ("~/Documents/", "your Documents folder"), ("~/Downloads/", "your Downloads folder"),
+                            ("~/Library/Mobile Documents/", "iCloud Drive")] where home.hasPrefix(dir) { return name }
+        return path.hasPrefix("/Volumes/") ? "files on this volume" : "files in this folder"
+    }
+
+    /// A kind as the toolbar and the info card show it: sentence case, as Finder's own kinds read ("HEIF image", "Application").
+    /// The system's descriptions are passed through as they are otherwise; only these common nouns are lowered.
+    static func kindName(_ s: String) -> String {
+        let lower: Set<String> = ["Image", "Text", "Document", "Movie", "Video", "Audio", "File", "Archive", "Application", "Presentation",
+                                  "Spreadsheet", "Font", "Library", "Executable", "Package", "Data", "Source", "Code", "Script", "List", "Model",
+                                  "Certificate", "Disk", "Playlist", "Folder", "Bundle"]
+        var words = s.split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+        guard let first = words.first, !first.isEmpty else { return s }
+        words[0] = first.prefix(1).uppercased() + first.dropFirst()
+        for i in words.indices.dropFirst() where lower.contains(words[i]) { words[i] = words[i].lowercased() }
+        return words.joined(separator: " ")
+    }
+
+    /// Why an item cannot be opened at all, as the info card says it: a link that loops or leads nowhere, no permission, or not
+    /// a regular file.
+    static func openRefusal(_ path: String) -> String {
+        var ls = stat(), st = stat()
+        let link = lstat(path, &ls) == 0 && ls.st_mode & S_IFMT == S_IFLNK
+        if stat(path, &st) != 0 {
+            let err = errno
+            if link && err == ELOOP { return "This item can’t be opened (a link that loops)." }
+            if link && err == ENOENT { return "This item can’t be opened (a link to an item that is missing)." }
+            if err == EACCES { return "You don’t have permission to read this item." }
+            if err == ENOENT { return "This file is no longer there. It may have been moved or deleted." }
+            return "This item can’t be opened."
+        }
+        if st.st_mode & S_IFMT != S_IFREG && st.st_mode & S_IFMT != S_IFDIR { return "This item can’t be opened (not a regular file)." }
+        if st.st_size > FolderListing.maxDocumentBytes { return "This item can’t be opened (too large to preview)." }
+        return "This item couldn’t be read."
+    }
+
+    /// The info card of an item that cannot be opened at all (openRefusal). Nothing here reads the file.
+    static func unopenable(path: String, root: String, note: String) -> [String: Any] {
+        var p = base(path: path, root: root, reason: "open")
+        var ls = stat()
+        let link = lstat(path, &ls) == 0 && ls.st_mode & S_IFMT == S_IFLNK
+        p["kindName"] = link ? "Broken link" : UTType(filenameExtension: (path as NSString).pathExtension).flatMap(\.localizedDescription) ?? "Document"
+        p["icon"] = FileTypes.glyph(name: (path as NSString).lastPathComponent, kind: .other)
+        p["size"] = NSNull()
+        p["canOpen"] = false
+        p["view"] = "info"
+        p["note"] = note
+        if !link, lstat(path, &ls) != 0, errno == ENOENT { p["missing"] = true }
         return p
     }
 
@@ -254,18 +757,33 @@ enum FileView {
     }
 
     /// A file that is not Markdown. `canOpen`: whether the link policy lets the writer open it (else Reveal in Finder only).
-    static func payload(path: String, kind: FileKind, root: String, reason: String, canOpen: Bool) -> [String: Any] {
+    /// `quickLook`: false once Apple's preview of the file showed only an icon; it is then shown as text if it is text.
+    static func payload(path: String, kind: FileKind, root: String, reason: String, canOpen: Bool, quickLook: Bool = true) -> [String: Any] {
+        payloadAndText(path: path, kind: kind, root: root, reason: reason, canOpen: canOpen, quickLook: quickLook).payload
+    }
+
+    /// The payload, and for a text view of a whole file that EditableText allows and can write back as it was read, that text's
+    /// editable form: the payload then carries `editable` and the text as edited.
+    static func payloadAndText(path: String, kind: FileKind, root: String, reason: String, canOpen: Bool,
+                               quickLook: Bool = true) -> (payload: [String: Any], edit: EditableText.Opened?) {
+        var opened: EditableText.Opened?
         var p = base(path: path, root: root, reason: reason)
         var st = stat()
-        guard stat(path, &st) == 0 else { p["view"] = "info"; return p }
+        guard stat(path, &st) == 0 else { p["view"] = "info"; return (p, nil) }
         let regular = st.st_mode & S_IFMT == S_IFREG
         let size = Int64(st.st_size)
         let ext = (path as NSString).pathExtension
+        let refusal = regular ? readRefusal(path) : nil
         p["size"] = regular ? size : NSNull()
         p["modified"] = Double(st.st_mtimespec.tv_sec) * 1000 + Double(st.st_mtimespec.tv_nsec / 1_000_000)
-        let type = UTType(filenameExtension: ext)
+        let type = (regular ? nil : UTType(filenameExtension: ext, conformingTo: .package)) ?? UTType(filenameExtension: ext)
         p["kindName"] = type.flatMap(\.localizedDescription) ?? (regular ? "Document" : "Folder")
-        p["icon"] = kind.icon
+        let media = FileTypes.unplayableMedia[ext.lowercased()]
+        if let media, type?.isDynamic != false { p["kindName"] = media }
+        if regular, ext.isEmpty || type?.isDynamic == true, let k = machOKind(path) { p["kindName"] = k }
+        // The system's name for .m4b is its DRM type's ("protected MPEG-4 audio"), whatever the file holds.
+        if ext.lowercased() == "m4b" { p["kindName"] = "Audiobook" }
+        p["icon"] = FileTypes.glyph(name: (path as NSString).lastPathComponent, kind: kind)
         p["canOpen"] = canOpen
         // A text file whose extension the system takes for something else (.ts is also an MPEG transport stream) is named by
         // what it holds, and is never handed to that other type's app.
@@ -276,60 +794,152 @@ enum FileView {
         var view = "info"
         let version = "\(st.st_mtimespec.tv_sec)\(st.st_mtimespec.tv_nsec)"
         switch kind {
+        case .image where regular && size <= FileTypes.maxImageBytes && FileTypes.nativeImageExtensions.contains(ext.lowercased()):
+            view = "bitmap"
         case .image where regular && size <= FileTypes.maxImageBytes:
             view = "image"
             p["src"] = FileTypes.fileURL(path, version: version)!.absoluteString
+            if ext.lowercased() == "svg", let d = svgSize(path) { p["svgSize"] = d }
         case .pdf where regular && size <= FileTypes.maxFileBytes:
             view = "pdf"
         case .html where regular && size <= FolderListing.maxDocumentBytes:
             view = "html"
+        // Drawn natively (RichTextPane): an .rtf file, or an .rtfd package or flattened file.
+        case .rtf where regular ? size <= FolderListing.maxDocumentBytes : st.st_mode & S_IFMT == S_IFDIR && ext.lowercased() == "rtfd":
+            view = "rtf"
         case .video where regular && size <= FileTypes.maxFileBytes, .audio where regular && size <= FileTypes.maxFileBytes:
             view = kind.rawValue
+        case .other where quickLook && (regular ? size <= FileTypes.maxFileBytes : st.st_mode & S_IFMT == S_IFDIR) && FileTypes.appleQuickLookType(path) != nil:
+            view = "quicklook"
         // Its contents come later, from the writer. An archive in iCloud is not downloaded to list it.
         case .archive where regular && !FileTypes.isDataless(path):
             view = "archive"
         case .code, .json, .csv, .text, .other, .app:
             // O_NONBLOCK and fstat: a file swapped for a FIFO since the stat can neither hang the open nor be read.
             let fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+            // No read permission: no app of the user's can read it either. (A sandbox's refusal is EPERM, and the writer may still open it.)
+            if fd < 0, regular, errno == EACCES { p["canOpen"] = false }
+            if fd < 0, refusal != nil { break }
             guard regular, size > 0 || kind != .other, fd >= 0 else { if fd >= 0 { close(fd) }; break }
             var fst = stat()
             guard fstat(fd, &fst) == 0, fst.st_mode & S_IFMT == S_IFREG else { close(fd); break }
             let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
-            let read = { try? h.read(upToCount: FileTypes.maxTextBytes) ?? Data() }
+            let cap = kind == .csv || kind == .json ? FileTypes.maxTableBytes : FileTypes.maxTextBytes
+            // A log past the cap shows its end: what was written last is what it is opened for. Not a UTF-16 one: read from an
+            // offset, its code units could be split.
+            // The size the descriptor has now, not the stat's: a log rotated in between is never read past its end. Its head is
+            // looked at only in the read, which is where an evicted file may be downloaded.
+            let now = Int64(fst.st_size)
+            var tail = kind == .text && FileTypes.logExtensions.contains(ext.lowercased()) && now > Int64(cap)
+            let read = { () -> Data? in
+                if tail {
+                    var head = [UInt8](repeating: 0, count: 2)
+                    if pread(fd, &head, 2, 0) != 2 || head == [0xFF, 0xFE] || head == [0xFE, 0xFF] { tail = false }
+                }
+                if tail { guard (try? h.seek(toOffset: UInt64(now - Int64(cap)))) != nil else { return nil } }
+                guard var d = try? h.read(upToCount: cap) ?? Data() else { return nil }
+                // The read starts mid-line, maybe mid-character: it starts at the next line, or failing one, the next character.
+                if tail, let nl = d.prefix(64 << 10).firstIndex(of: 10) { d = d.subdata(in: d.index(after: nl)..<d.endIndex) }
+                else if tail { while let b = d.first, b & 0xC0 == 0x80 { d = Data(d.dropFirst()) } }
+                return d
+            }
             // Only a text kind is downloaded when evicted, and within Markdown's bound: the download is the whole file, and
             // anything else only turns into its info card.
             let fetch = [.code, .json, .csv, .text].contains(kind) && size <= FolderListing.maxDocumentBytes
             guard var data = fetch ? FileTypes.materializing(read) : read() else { break }
+            var converted = false
             if ext.lowercased() == "plist", let xml = FileView.binaryPlistAsXML(data) {
                 data = xml
+                converted = true
                 p["kindName"] = "Binary property list, shown as XML"
             }
-            guard size == 0 || FileTypes.looksLikeText(data) else { break }
+            guard let decoded = size == 0 ? TextDecoding.Decoded(text: "", name: "UTF-8") : TextDecoding.decode(data, truncated: size > cap) else { break }
             view = kind == .code ? "code" : kind == .json ? "json" : kind == .csv ? "csv" : "text"
-            p["text"] = String(decoding: data, as: UTF8.self)
-            p["truncated"] = size > FileTypes.maxTextBytes
+            p["text"] = decoded.text
+            if !converted, size <= FileTypes.maxTextBytes, Int64(data.count) == size, EditableText.allowed(path: path),
+               let o = EditableText.open(data, decoded: decoded) {
+                opened = o
+                p["text"] = o.text
+                p["editable"] = true
+            }
+            if !decoded.isUTF8 {
+                p["encoding"] = decoded.name
+                p["kindName"] = "\(p["kindName"] as? String ?? "Plain text") (\(decoded.name))"
+            }
+            p["truncated"] = size > cap
+            p["readCap"] = cap
+            if tail { p["tail"] = true }
             p["lang"] = kind == .code ? FileTypes.language(name: (path as NSString).lastPathComponent) ?? NSNull() : NSNull()
             if ext.lowercased() == "tsv" { p["tsv"] = true }
         default:
             break
         }
+        // Apple's preview draws out of process, so a privacy refusal of this process does not stop it.
+        if let r = refusal, !(r.privacy && view == "quicklook") {
+            view = "info"
+            p["note"] = r.note
+            if r.privacy { p["privacy"] = true } else { p["canOpen"] = false }
+        }
+        if view == "info", regular, media != nil, p["note"] == nil { p["note"] = unplayableNote(canOpen: p["canOpen"] as? Bool == true) }
         p["view"] = view
-        return p
+        return (p, opened)
     }
 }
 
-/// One folder of the sidebar's tree, for a single file and a folder alike: folders first, then files, each sorted by `sort`
-/// ("name", or "modified", newest first), with a README first among the files when `readmeFirst`.
+/// Finder's own preferences the sidebar follows, so a folder lists as its Finder window does: "Keep folders on top" (Finder ›
+/// Settings › Advanced) and hidden files shown (⌘⇧.). They are read from Finder's plist in the real home: the extension's
+/// sandbox lets it read the file, while cfprefsd refuses it another app's domain. A missing key is Finder's default, off.
+/// SPACEBAR_FINDER_PLIST names another file (tests), and empty names none; under SPACEBAR_SUPPORT_DIR with it unset there is
+/// none either, so the Finder of the machine running the tests never shapes them.
+enum FinderPrefs {
+    struct Values: Equatable {
+        var foldersFirst = false
+        var showHidden = false
+    }
+
+    static var path: String? {
+        // getenv, not ProcessInfo's cached copy: a test sets and clears the variable while it runs.
+        if let p = getenv("SPACEBAR_FINDER_PLIST").map({ String(cString: $0) }) { return p.isEmpty ? nil : p }
+        if let p = getenv("SPACEBAR_SUPPORT_DIR").map({ String(cString: $0) }), !p.isEmpty { return nil }
+        let home = getpwuid(getuid()).flatMap { String(validatingUTF8: $0.pointee.pw_dir) } ?? NSHomeDirectory()
+        return home + "/Library/Preferences/com.apple.finder.plist"
+    }
+
+    /// The values in `path` now: a small file, parsed at each call. Nil, a missing or unreadable file or one that is not a
+    /// property list gives the defaults.
+    static func read(at path: String? = FinderPrefs.path) -> Values {
+        guard let path, let data = FileManager.default.contents(atPath: path), data.count <= 16 << 20,
+              let plist = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else { return Values() }
+        return parse(plist)
+    }
+
+    static func parse(_ plist: [String: Any]) -> Values {
+        Values(foldersFirst: flag(plist["_FXSortFoldersFirst"]), showHidden: flag(plist["AppleShowAllFiles"]))
+    }
+
+    /// Finder reads a boolean, a number, or the strings years of `defaults write` advice left behind (YES, TRUE, 1).
+    static func flag(_ v: Any?) -> Bool {
+        if let n = v as? NSNumber { return n.boolValue }
+        if let s = v as? String { return ["yes", "true", "1"].contains(s.lowercased()) }
+        return false
+    }
+}
+
+/// One folder of the sidebar's tree, for a single file and a folder alike, in Finder's order: by `sort` ("name", or "modified",
+/// newest first), folders among the files unless `foldersFirst`, and a README first when `readmeFirst` (above the files, or
+/// at the very top when folders are not first).
 ///
 /// Hidden files (a leading dot or the hidden flag) are skipped unless `showHidden`. A symbolic link is listed only when it
-/// resolves inside the root to a regular file or a folder, so the tree never reaches outside the root. FIFOs, sockets and
+/// resolves inside the root to a regular file or a folder, so the tree never reaches outside the root; one that loops or leads
+/// nowhere is listed as broken, by its name only, and is never opened. FIFOs, sockets and
 /// devices are skipped. A package (an app, a document bundle) is listed as one item. At most `cap` entries are listed and `more`
 /// counts the rest.
 enum FolderListing {
     static let markdownExtensions = FileTypes.markdownExtensions
-    static let cap = 500
+    /// The page draws only the rows in view, so a listing this long costs its transfer, not its drawing.
+    static let cap = 5_000
     /// Past this many names a folder is listed from its first names only (see `list`).
-    static let statCap = 5_000
+    static let statCap = 10_000
     static let maxDocumentBytes = 64 << 20
 
     struct Entry: Equatable {
@@ -338,10 +948,19 @@ enum FolderListing {
         let path: String
         let isDirectory: Bool
         let kind: FileKind
+        /// -1 for anything that is a directory on disk, a package included: it has no size of its own.
         let size: Int64
         let modified: Double
+        /// A symbolic link that loops or leads nowhere: listed greyed, never opened.
+        var broken = false
+        /// A name starting with "." or flagged hidden: listed only when hidden files are shown, and then dimmed.
+        var hidden = false
+        /// What a broken link points at, as it is written (at most 1 KB), for its tooltip.
+        var target: String?
 
         var isMarkdown: Bool { kind == .markdown }
+        /// An image or a video: the folder grid shows its thumbnail (ThumbnailPipeline).
+        var hasThumbnail: Bool { !broken && (kind == .image || kind == .video) }
     }
 
     struct Listing: Equatable {
@@ -355,7 +974,16 @@ enum FolderListing {
         /// What the page is sent for this folder of the tree rooted at `root`.
         func payload(root: String) -> [String: Any] {
             ["root": root, "rootName": (root as NSString).lastPathComponent, "dir": dir,
-             "entries": entries.map { ["name": $0.name, "path": $0.path, "dir": $0.isDirectory, "icon": $0.kind.icon] as [String: Any] },
+             "entries": entries.map { e -> [String: Any] in
+                 var d: [String: Any] = ["name": e.name, "path": e.path, "dir": e.isDirectory, "icon": FileTypes.glyph(name: e.name, kind: e.kind),
+                                         "modified": (e.modified * 1000).rounded()]
+                 if e.size >= 0 { d["size"] = e.size }
+                 if e.broken { d["broken"] = true }
+                 if e.hidden { d["hidden"] = true }
+                 if let t = e.target { d["target"] = t }
+                 if e.hasThumbnail { d["thumb"] = true }
+                 return d
+             },
              "more": more]
         }
     }
@@ -383,10 +1011,30 @@ enum FolderListing {
 
     static func isHidden(_ name: String, _ st: stat) -> Bool { name.hasPrefix(".") || st.st_flags & UInt32(UF_HIDDEN) != 0 }
 
+    /// How a folder is listed. `foldersFirst` from the setting of that name: "always", "never", or "finder" for Finder's own
+    /// "Keep folders on top", which Finder applies only when sorting by name. Hidden files show when the setting or Finder says so.
+    struct Options: Equatable {
+        var sort = "name"
+        var foldersFirst = false
+        var readmeFirst = false
+        var showHidden = false
+
+        init(sort: String = "name", foldersFirst: Bool = false, readmeFirst: Bool = false, showHidden: Bool = false) {
+            self.sort = sort
+            self.foldersFirst = foldersFirst
+            self.readmeFirst = readmeFirst
+            self.showHidden = showHidden
+        }
+
+        init(sort: String, foldersFirst mode: String, readmeFirst: Bool, showHidden: Bool, finder: FinderPrefs.Values) {
+            self.init(sort: sort, foldersFirst: mode == "always" || (mode == "finder" && finder.foldersFirst && sort == "name"),
+                      readmeFirst: readmeFirst, showHidden: showHidden || finder.showHidden)
+        }
+    }
+
     /// Reads one folder of the tree rooted at `root`; call it off the main thread. `pinned` (the document on screen) is listed
     /// even past the cap. A folder outside the root lists nothing.
-    static func list(_ dir: String, root: String? = nil, sort: String, readmeFirst: Bool, showHidden: Bool = false, cap: Int = cap,
-                     pinned: String? = nil) -> Listing {
+    static func list(_ dir: String, root: String? = nil, options o: Options, cap: Int = cap, pinned: String? = nil) -> Listing {
         let root = root ?? dir
         guard let realRoot = realPath(root), isInside(dir, root: root, allowRoot: true) else { return Listing(dir: dir, entries: [], more: 0) }
         let inside = realRoot == "/" ? "/" : realRoot + "/"
@@ -410,9 +1058,19 @@ enum FolderListing {
             let path = (dir as NSString).appendingPathComponent(name)
             var st = stat()
             guard lstat(path, &st) == 0 else { continue }
-            if !showHidden && isHidden(name, st) { continue }
+            if name == ".DS_Store" || name == ".localized" { continue }
+            let hidden = isHidden(name, st)
+            if !o.showHidden && hidden { continue }
             if st.st_mode & S_IFMT == S_IFLNK {
-                guard let real = realPath(path), real.hasPrefix(inside), stat(real, &st) == 0 else { continue }
+                guard let real = realPath(path) else {
+                    let e = errno
+                    if e == ELOOP || e == ENOENT {
+                        found.append(Entry(name: name, path: path, isDirectory: false, kind: .other, size: -1, modified: 0, broken: true, hidden: hidden,
+                                           target: linkTarget(path)))
+                    }
+                    continue
+                }
+                guard real.hasPrefix(inside), stat(real, &st) == 0 else { continue }
                 // A link to a folder that holds the link itself would nest without end.
                 if st.st_mode & S_IFMT == S_IFDIR, let parent = realPath(dir), (parent + "/").hasPrefix(real + "/") { continue }
             }
@@ -423,15 +1081,16 @@ enum FolderListing {
                 && ((try? URL(fileURLWithPath: path).resourceValues(forKeys: [.isPackageKey]))?.isPackage ?? false)
             let kind = FileTypes.kind(name: name, isDirectory: isDir, isPackage: isPackage, executable: st.st_mode & 0o111 != 0)
             let modified = Double(st.st_mtimespec.tv_sec) + Double(st.st_mtimespec.tv_nsec) / 1e9
-            found.append(Entry(name: name, path: path, isDirectory: kind == .folder, kind: kind, size: isDir ? 0 : Int64(st.st_size), modified: modified))
+            found.append(Entry(name: name, path: path, isDirectory: kind == .folder, kind: kind, size: isDir ? -1 : Int64(st.st_size), modified: modified,
+                               hidden: hidden))
         }
         found.sort { a, b in
-            if a.isDirectory != b.isDirectory { return a.isDirectory }
-            if sort == "modified", a.modified != b.modified { return a.modified > b.modified }
+            if o.foldersFirst, a.isDirectory != b.isDirectory { return a.isDirectory }
+            if o.sort == "modified", a.modified != b.modified { return a.modified > b.modified }
             return a.name.localizedStandardCompare(b.name) == .orderedAscending
         }
-        if readmeFirst, let i = found.firstIndex(where: { !$0.isDirectory && $0.kind == .markdown && isReadme($0.name) }),
-           let first = found.firstIndex(where: { !$0.isDirectory }) {
+        if o.readmeFirst, let i = found.firstIndex(where: { !$0.isDirectory && $0.kind == .markdown && isReadme($0.name) }),
+           let first = o.foldersFirst ? found.firstIndex(where: { !$0.isDirectory }) : 0 {
             found.insert(found.remove(at: i), at: first)
         }
         var shown = Array(found.prefix(max(cap, 0)))
@@ -441,10 +1100,58 @@ enum FolderListing {
         return Listing(dir: dir, entries: shown, more: found.count - shown.count + unseen)
     }
 
+    /// What the symbolic link at `path` holds, as text; nil when it cannot be read or is longer than 1 KB.
+    static func linkTarget(_ path: String) -> String? {
+        var buf = [CChar](repeating: 0, count: 1026)
+        let n = readlink(path, &buf, 1025)
+        guard n > 0, n <= 1024 else { return nil }
+        return String(decoding: buf[0..<n].map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
+    /// The tests' spelling, folders first unless said otherwise; the app derives its Options from the settings and Finder.
+    static func list(_ dir: String, root: String? = nil, sort: String, readmeFirst: Bool, showHidden: Bool = false, foldersFirst: Bool = true,
+                     cap: Int = cap, pinned: String? = nil) -> Listing {
+        list(dir, root: root, options: Options(sort: sort, foldersFirst: foldersFirst, readmeFirst: readmeFirst, showHidden: showHidden), cap: cap, pinned: pinned)
+    }
+
     /// The Markdown file a folder preview opens on when the folder itself holds one: its README, else its first Markdown file in
     /// the sidebar's order. Nil sends the preview to FolderScan.
+    /// `l` with only the entries named in `names`: the sidebar of a multiple selection, which moves among the selected items.
+    /// Entries past the listing's caps are not in `l` (but for the pinned file on screen).
+    /// A selection's view of a listing: the selected items (paths) in it, and the folders on the way to one. A selected folder,
+    /// and everything in it, lists in full.
+    static func only(_ l: Listing, selection: Set<String>) -> Listing {
+        if selection.contains(where: { l.dir == $0 || l.dir.hasPrefix($0 + "/") }) { return l }
+        let prefix = l.dir == "/" ? "/" : l.dir + "/"
+        let names = Set(selection.compactMap { p in p.hasPrefix(prefix) ? p.dropFirst(prefix.count).split(separator: "/").first.map(String.init) : nil })
+        return Listing(dir: l.dir, entries: l.entries.filter { names.contains($0.name) }, more: 0)
+    }
+
+    static func isDirectory(_ path: String) -> Bool {
+        var st = stat()
+        return stat(path, &st) == 0 && st.st_mode & S_IFMT == S_IFDIR
+    }
+
+    /// A folder the grid suits: at least `gridMinFiles` files, and `gridMediaShare` of them images or videos.
+    static let gridMinFiles = 6
+    static let gridMediaShare = 0.6
+    static func isMediaFolder(_ l: Listing) -> Bool {
+        let files = l.files
+        guard files.count >= gridMinFiles else { return false }
+        return Double(files.filter(\.hasThumbnail).count) >= gridMediaShare * Double(files.count)
+    }
+
+    /// Names that make a top-level note the one a folder opens on, in order of preference (without extension, lowercased).
+    static let landingNames = ["readme", "index", "home"]
+
+    /// The Markdown file a folder preview opens on: a README (or an index or Home note, as a vault has) in the folder itself.
+    /// Nil shows the folder overview: a note deeper down, or any other note at the top, is the user's to pick.
     static func firstDocument(_ l: Listing) -> Entry? {
-        l.files.first { $0.isMarkdown && isReadme($0.name) } ?? l.files.first(where: \.isMarkdown)
+        let notes = l.files.filter { $0.isMarkdown && !$0.broken }
+        for name in landingNames {
+            if let e = notes.first(where: { ($0.name as NSString).deletingPathExtension.lowercased() == name }) { return e }
+        }
+        return nil
     }
 }
 
@@ -475,4 +1182,147 @@ final class FolderWatch {
     }
 
     deinit { source?.cancel() }
+}
+
+/// One file inside an archive, previewed without extracting it (ArchiveEntry streams it through the writer's sandboxed bsdtar):
+/// what may be read, how much, and the read-only payload the page shows it with. The payload names the archive as its `path`,
+/// so every check of "the file on screen" still means the archive; `entry` names the file inside it.
+enum ArchiveEntryView {
+    static let maxTextBytes = 2 << 20
+    static let maxImageBytes = 20 << 20
+    static let maxPDFBytes = 32 << 20
+    /// Decoded by WebKit as `<img>`, from a blob the page makes of one read of `spacebar://entry/<token>`. No SVG.
+    static let webImages: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]
+    /// Decoded by ImageIO in the extension (ImagePane), from the bytes the writer sent.
+    static let nativeImages: Set<String> = ["heic", "heif", "avif", "tif", "tiff"]
+
+    enum Kind: Equatable { case markdown, code, json, csv, text, image, bitmap, pdf, archive, other }
+    static let textKinds: [Kind] = [.markdown, .code, .json, .csv, .text]
+
+    /// A single compressed file: what bsdtar cannot list unless it holds a tar.
+    static let compressedExtensions: Set<String> = ["gz", "gzip", "bz2", "bz", "xz", "zst"]
+    static func isLoneCompressed(_ path: String) -> Bool {
+        let lower = (path as NSString).lastPathComponent.lowercased()
+        return compressedExtensions.contains((lower as NSString).pathExtension) && !(lower as NSString).deletingPathExtension.hasSuffix(".tar")
+    }
+    /// The name of the one file a lone compressed file holds: its own name without the extension.
+    static func loneName(_ path: String) -> String { ((path as NSString).lastPathComponent as NSString).deletingPathExtension }
+    /// What the writer can decompress a lone file from (Apple's gzip reads gzip, bzip2 and xz; nothing on a stock Mac reads zstd).
+    static let loneExtensions: Set<String> = ["gz", "gzip", "bz2", "bz", "xz"]
+    static func isLoneReadable(_ path: String) -> Bool { isLoneCompressed(path) && loneExtensions.contains((path as NSString).pathExtension.lowercased()) }
+
+    static func kind(_ entry: String) -> Kind {
+        let name = displayName(entry)
+        let ext = (name as NSString).pathExtension.lowercased()
+        if webImages.contains(ext) { return .image }
+        if nativeImages.contains(ext) { return .bitmap }
+        switch FileTypes.kind(name: name) {
+        case .markdown: return .markdown
+        case .code: return .code
+        case .json: return .json
+        case .csv: return .csv
+        case .text: return .text
+        case .pdf: return .pdf
+        case .archive: return .archive
+        default: return .other
+        }
+    }
+
+    /// How many bytes of the entry may be read, or nil when it is not read at all (shown as its info card).
+    static func cap(for entry: String) -> Int? {
+        switch kind(entry) {
+        case .markdown, .code, .json, .csv, .text: return maxTextBytes
+        case .image, .bitmap: return maxImageBytes
+        case .pdf: return maxPDFBytes
+        case .archive, .other: return nil
+        }
+    }
+
+    /// The entry's own name: its last path component (a folder's trailing slash and a leading `./` do not count).
+    static func displayName(_ entry: String) -> String {
+        entry.split(separator: "/", omittingEmptySubsequences: true).last.map(String.init) ?? entry
+    }
+
+    /// The entry's path as the breadcrumb shows it, without a leading `./`.
+    static func shownPath(_ entry: String) -> String {
+        var s = Substring(entry)
+        while s.hasPrefix("./") { s = s.dropFirst(2) }
+        return String(s)
+    }
+
+    static let notes: [String: String] = [
+        "tooLarge": "This file is too large to preview inside the archive.",
+        "bomb": "This file expands far more than its archive could hold, so it wasn’t read.",
+        "timedOut": "Reading this file from the archive took too long.",
+        "archive": "An archive inside an archive isn’t opened here. To look inside it, open this archive with Archive Utility, then open that one.",
+        "other": "Only text, code, data, images and PDFs are shown from inside an archive. To use this file, open the archive with Archive Utility, which extracts it.",
+        "unreadable": "This file couldn’t be read from the archive.",
+        "link": "This is a link to another file in the archive, and has no contents of its own.",
+        "binary": "This file isn’t text, so it can’t be shown here.",
+    ]
+
+    /// What the page is sent for `entry` of the archive at `archive`: its text or image view when `data` was read, else its info
+    /// card saying why (`failure`, one of `notes`' keys, or a reason the writer gave). Never editable, never opened. A PDF's
+    /// view is drawn by the extension from `data`. `partial`: `data` is the first part of the file (a lone compressed log).
+    static func payload(archive: String, root: String, entry: String, size: Int64?, modified: Double?, data: Data?, failure: String?,
+                        partial: Bool = false) -> [String: Any] {
+        var p = FileView.base(path: archive, root: root, reason: "entry")
+        let name = displayName(entry), shown = shownPath(entry)
+        let archiveName = (archive as NSString).lastPathComponent
+        let k = kind(entry)
+        p["name"] = name
+        // Relative links and images in an entry resolve to nothing: never to files beside the archive.
+        p["base"] = "spacebar://entry/"
+        p["entry"] = ["name": entry, "path": shown, "archive": archiveName]
+        let inner = (shown as NSString).deletingLastPathComponent
+        p["folder"] = inner.isEmpty ? archiveName : "\(archiveName) › \(inner)"
+        p["size"] = size.map { NSNumber(value: $0) } ?? NSNull()
+        p["modified"] = modified.map { NSNumber(value: $0) } ?? NSNull()
+        p["kindName"] = UTType(filenameExtension: (name as NSString).pathExtension).flatMap(\.localizedDescription) ?? "Document"
+        let fk: FileKind = k == .bitmap || k == .image ? .image : FileTypes.kind(name: name)
+        p["icon"] = FileTypes.glyph(name: name, kind: fk)
+        p["canOpen"] = false
+        p["view"] = "info"
+        func info(_ why: String) -> [String: Any] {
+            p["note"] = notes[why] ?? notes["unreadable"]!
+            return p
+        }
+        if failure == "link" { return info("link") }
+        switch k {
+        case .archive: return info("archive")
+        case .other: return info("other")
+        default: break
+        }
+        if let failure { return info(failure) }
+        guard let data else { return info("unreadable") }
+        switch k {
+        case .image, .bitmap:
+            p["view"] = k == .image ? "image" : "bitmap"
+            p["size"] = NSNumber(value: data.count)
+            return p
+        case .pdf:
+            p["view"] = "pdf"
+            p["size"] = NSNumber(value: data.count)
+            return p
+        case .markdown, .code, .json, .csv, .text:
+            guard let decoded = data.isEmpty ? TextDecoding.Decoded(text: "", name: "UTF-8") : TextDecoding.decode(data, truncated: partial) else { return info("binary") }
+            p["view"] = k == .markdown ? "markdown" : k == .code ? "code" : k == .json ? "json" : k == .csv ? "csv" : "text"
+            p["text"] = decoded.text
+            if partial {
+                p["truncated"] = true
+                p["readCap"] = data.count
+            } else {
+                p["size"] = NSNumber(value: data.count)
+            }
+            if [.code, .json, .csv, .text].contains(k), UTType(filenameExtension: (name as NSString).pathExtension)?.conforms(to: .text) != true {
+                p["kindName"] = k == .code ? "Source code" : "Plain text"
+            }
+            if !decoded.isUTF8 { p["kindName"] = "\(p["kindName"] as? String ?? "Plain text") (\(decoded.name))" }
+            if k == .code { p["lang"] = FileTypes.language(name: name) ?? NSNull() }
+            if (name as NSString).pathExtension.lowercased() == "tsv" { p["tsv"] = true }
+            return p
+        default:
+            return info("unreadable")
+        }
+    }
 }

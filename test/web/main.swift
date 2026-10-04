@@ -1,6 +1,7 @@
 // Loads Preview/web in an offscreen WKWebView set up like the extension: the real SchemeHandler (spacebar://bundle, file and
-// user) and the real document-start settings script (PageSettings.userScript). Built with Shared/Settings.swift and
-// Shared/WebShell.swift, Shared/FolderListing.swift, Shared/LinkPolicy.swift and Preview/PDFPane.swift; run with SPACEBAR_SUPPORT_DIR set to a scratch folder.
+// user) and the real document-start settings script (PageSettings.userScript). Built with Shared/Settings.swift,
+// Shared/WebShell.swift, Shared/FolderListing.swift, Shared/ArchiveListing.swift, Shared/LinkPolicy.swift and Preview/PDFPane.swift; run with SPACEBAR_SUPPORT_DIR set to a scratch folder.
+// SPACEBAR_PAGE_HOST=panel loads the page as the Space helper's panel shows it (the default is Quick Look's).
 //   webcheck <web dir> <cmd>...   runs each command, prints one JSON line per command
 //   webcheck <web dir>            reads commands from stdin, one JSON-encoded string per line, and answers each with a line
 // Commands:
@@ -18,11 +19,23 @@
 //   @pixel:<x>,<y>     the snapshot's colour at that point of the view, as [r, g, b]
 //   @nativeclick:<selector>   a real mouse click (NSEvent down/up sent to the harness's own window) at the element's corner
 //   @nativedrag:<selector>,<dx>   a real mouse drag in the harness's own window: down in the element, moves in steps, up
+//   @nativepinch:<selector>,<by>  a trackpad pinch at the element's middle, five steps of <by> (0.1: a tenth larger), and
+//   @nativesmart:<selector>, @nativescroll:<selector>,<dx>,<dy>, @nativedblclick:<selector>: a two-finger double tap, a
+//                      two-finger scroll and a double-click there. These go through NSApp.sendEvent, as real input does, to a
+//                      window that is not key of an app that is not active, as in the Space viewer; GestureRouter is installed
+//                      and the web view is the extension's PreviewWebView.
 //   @remotereset       RemoteImageGate.reset(), as a new preview or another document does
+//   @searchlimits:<json>  ContentSearch.Limits for the searches that follow ({maxFiles, maxFileBytes, maxTotalBytes, maxResults,
+//                      budget}); empty: the defaults. "search" runs ContentSearch off the main thread as the extension does and
+//                      sends sb.searchResults; each file it finds may then be opened, and "searchStop" cancels it.
+//   @type:<json>       during a whole-file edit the page asked for ("editText"), stands in for the writer and the extension: {text,
+//                      selStart, selLen} goes to the page as the extension sends it (EditableText.change) and is saved in the file's
+//                      own encoding (EditableText.Source) under the writer's refusals; result "saved" or the refusal
 //   @loaddisk          reload the page with settings.json from the scratch folder, as the next preview would
 //   @relist            list the root and every folder the page expanded again and send them, as the folder watches do
 //   @root:<dir>        the sidebar's root for the renders that follow (a folder preview); empty: each file's own folder
-//   @session           a new preview of the same root: the next listings carry a new session number
+//   @session           a new preview of the same root: the next listings carry a new session number; the search on screen is
+//                      dropped and the page asked to run it again (sb.searchAgain), as the extension's start() does
 //   @folder:<dir>      a folder preview, as the extension starts one: declined (FolderRules), else its README or first Markdown
 //                      file, else the best Markdown FolderScan finds, else the overview; result "declined: …", "file:<path>" or
 //                      "overview". The overview's recent files and every wikilink target are "offered": the page may open them.
@@ -31,10 +44,17 @@
 // Every render sends the sidebar listing of the root first (FolderListing, as the extension does) and renders the file by its
 // kind (FileView for anything but Markdown). The page's "list" lists a folder the tree named, "open" renders a listed file,
 // "openFile" and "reveal" are recorded as "_openFile" / "_reveal" (or "_openRefused"), each checked as the extension does;
-// "setting" goes through the extension's gate (Settings.panelPatch) and the writer's update (SettingsFile.updateFromPanel),
+// "imageStatus" is answered by ImageCheck as the extension answers it, and "revealImageFolder" recorded as "_revealFolder" (or
+// "_revealRefused"); "setting" goes through the extension's gate (Settings.panelPatch) and the writer's update (SettingsFile.updateFromPanel),
 // recorded as "_written" or "_settingRefused". No subframe may load (ShellPolicy).
 // A PDF is shown as the extension shows it: a PDFPane (Preview/PDFPane.swift) over the web view, placed by the page's "pdfRect"
 // messages and closed by the next render of anything else.
+// "copy" is answered as the extension answers it, but the clipboard is never touched: the text is recorded as "_copied".
+// The `thumb` host is answered as the extension answers it (an image or video a listing named, made by ThumbnailPipeline);
+// a thumbnail the page drops is recorded as "_thumbStop", a refused one as "_refused".
+//   @thumbs            the pipeline's counts: {made, failed, hits, dropped, abandoned, cached, peak, pending}; @thumbs:purge empties
+//                      its cache, @thumbs:slow=<seconds> makes each thumbnail take that much longer
+//   @folder:<dir>      a media folder (FolderListing.isMediaFolder) with the grid setting opens on its overview, as the extension does
 //   @pdf               the pane: {open, hidden, placed, frame [x, y, w, h] from the top left of the web view, pages, text,
 //                      autoScales, continuous, bg [r, g, b], dark, docAlive (a weak reference to the last document), fds (open
 //                      descriptors on that file), pixel [r, g, b] at the pane's centre as the window draws it}
@@ -94,7 +114,9 @@ func object(_ json: String) -> [String: Any] {
 
 let args = CommandLine.arguments
 let webRoot = URL(fileURLWithPath: args[1])
+FileTypes.quickLookClaims = (try? String(contentsOf: webRoot.appendingPathComponent("../../scripts/quicklook-types.txt"), encoding: .utf8)).map(FileTypes.claims)
 _ = NSApplication.shared
+OffScreen.install()
 let rec = Recorder()
 let scheme = SchemeHandler(webRoot: webRoot)
 scheme.onRefused = { rec.messages.append(["type": "_refused", "msg": $0]) }
@@ -103,7 +125,13 @@ config.setURLSchemeHandler(scheme, forURLScheme: "spacebar")
 config.userContentController.add(rec, name: "sb")
 let gate = RemoteImageGate(config.userContentController)
 var currentFile: String?
-let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 2000), configuration: config)
+scheme.bodyCurrent = { $0 == currentFile }
+/// As the extension: the archive on screen as listed, and the file of it on screen.
+typealias EntryInfo = (size: Int64?, modified: Double?, link: Bool)
+var archiveState: (path: String, payload: [String: Any], files: [String: EntryInfo])?
+var entryShown: String?
+GestureRouter.install()
+let web = PreviewWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 2000), configuration: config)
 web.navigationDelegate = rec
 // With the screen locked the window counts as occluded, and WebKit then stops requestAnimationFrame; the test view should
 // behave like a visible one either way (WKWebView SPI, test harness only).
@@ -135,12 +163,19 @@ let probe = WKUserScript(source: """
 
 var settingsDict = Settings().dictionary
 
+/// As the extension's SettingsStore.listing: the settings with Finder's preferences (SPACEBAR_FINDER_PLIST here, else none).
+func listOptions() -> FolderListing.Options {
+    let s = Settings(dictionary: settingsDict)
+    return FolderListing.Options(sort: s.folderSort, foldersFirst: s.foldersFirst, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles, finder: FinderPrefs.read())
+}
+
 func load(_ patch: [String: Any]) -> Bool {
     settingsDict = Settings().dictionary.merging(patch) { _, new in new }
     gate.update(remoteImages: Settings(dictionary: settingsDict).remoteImages)
     let ucc = config.userContentController
     ucc.removeAllUserScripts()
-    ucc.addUserScript(PageSettings.userScript(PageSettings.payload(Settings(dictionary: settingsDict)), webRoot: webRoot))
+    ucc.addUserScript(PageSettings.userScript(PageSettings.payload(Settings(dictionary: settingsDict)), webRoot: webRoot,
+                                              host: ProcessInfo.processInfo.environment["SPACEBAR_PAGE_HOST"] ?? "quicklook"))
     ucc.addUserScript(probe)
     rec.ready = false
     var inPlace = false
@@ -192,9 +227,18 @@ var root = ""
 var session = 1
 var currentKind: FileKind = .markdown
 var currentCanOpen = false
+var currentText = false
+/// The text a copy of the whole file takes, as the extension keeps it (the Markdown source, or a text view's payload text).
+var currentBody: (text: String, truncated: Bool)?
 var offered: Set<String> = []
+var searchHits: (seq: Int, paths: Set<String>) = (0, [])
+var searchLimits = ContentSearch.Limits()
+var searchCancel: ContentSearch.Cancel?
 var linkIndex: LinkIndex?
 var pendingAnchor: String?
+/// The whole-file edit the page started: its session, and the file's text and bytes as last saved.
+var textEdit: (seq: Int, path: String, source: EditableText.Source, text: String, bytes: Data)?
+let images = ImageCheck()
 
 func rootFor(_ url: URL) -> String {
     if let rootOverride { return rootOverride }
@@ -208,15 +252,20 @@ func renderOverview(_ r: FolderScan.Result, reason: String) {
     pdfPane = nil
     currentFile = nil
     currentKind = .other
+    archiveState = nil
+    entryShown = nil
+    scheme.entryImage = nil
+    scheme.filesBlocked = false
     offered.formUnion(r.recent.map(\.path))
-    _ = eval(web, "sb.render(\(jsonString(r.payload(reason: reason)))); 0")
+    var payload = r.payload(reason: reason)
+    payload["media"] = listings[root].map(FolderListing.isMediaFolder) ?? false
+    _ = eval(web, "sb.render(\(jsonString(payload))); 0")
     spin(8) { rec.messages.contains { $0["type"] as? String == "rendered" } }
 }
 
 /// As the extension: one folder of the tree, listed with the settings and sent with sb.setFiles.
 func sendFolder(_ dir: String) {
-    let s = Settings(dictionary: settingsDict)
-    let l = FolderListing.list(dir, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles, pinned: currentFile)
+    let l = FolderListing.list(dir, root: root, options: listOptions(), pinned: currentFile)
     listings[dir] = l
     for f in l.folders { knownDirs.insert(f.path) }
     var p = l.payload(root: root)
@@ -230,8 +279,9 @@ func renderFile(_ file: String, listFirst: Bool = true) {
     let newRoot = rootFor(url)
     // As the extension: a single file is named inside its resolved folder; in a vault, the vault is the root.
     if rootOverride == nil { url = URL(fileURLWithPath: url.deletingLastPathComponent().resolvingSymlinksInPath().path).appendingPathComponent(url.lastPathComponent) }
-    if newRoot != root { root = newRoot; listings = [:]; knownDirs = [root]; offered = []; linkIndex = nil }
+    if newRoot != root { root = newRoot; listings = [:]; knownDirs = [root]; offered = []; searchHits = (0, []); searchCancel?.cancel(); linkIndex = nil }
     scheme.fileRoot = root
+    if url.path != currentFile { images.reset() }
     currentFile = url.path
     var st = stat()
     _ = stat(url.path, &st)
@@ -243,6 +293,7 @@ func renderFile(_ file: String, listFirst: Bool = true) {
         pdfPane?.close()
         pdfPane = nil
         currentCanOpen = false
+        currentText = false
         payload = FileView.base(path: url.path, root: root, reason: "open")
         payload["text"] = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         payload["view"] = "markdown"
@@ -250,8 +301,9 @@ func renderFile(_ file: String, listFirst: Bool = true) {
         if gate.allowedPath == url.path { payload[RemoteImageGate.payloadKey] = true }
         if let a = pendingAnchor { payload["anchor"] = a; pendingAnchor = nil }
         let text = payload["text"] as! String
+        currentBody = (text, false)
         if text.contains("[[") {
-            if linkIndex?.root != root { linkIndex = LinkIndex.build(root: root, showHidden: Settings(dictionary: settingsDict).showHiddenFiles) }
+            if linkIndex?.root != root { linkIndex = LinkIndex.build(root: root, showHidden: listOptions().showHidden) }
             let r = linkIndex!.payload(text: text, current: url.path)
             offered.formUnion(r.paths)
             payload["links"] = r.links
@@ -260,7 +312,16 @@ func renderFile(_ file: String, listFirst: Bool = true) {
         }
     } else {
         payload = FileView.payload(path: url.path, kind: currentKind, root: root, reason: "open", canOpen: LinkPolicy.fileRefusal(url) == nil)
+        // As the extension: text may open in a text editor even where its default app is refused.
+        currentText = ["code", "json", "csv", "text"].contains(payload["view"] as? String ?? "")
+        if currentText, LinkPolicy.editorRefusal(url) == nil { payload["canOpen"] = true }
         currentCanOpen = payload["canOpen"] as? Bool == true
+        currentBody = currentText ? (payload["text"] as? String).map { ($0, payload["truncated"] as? Bool == true) } : nil
+        // As the extension: an image's size from its header.
+        if payload["view"] as? String == "image", let s = ImagePane.pixelSize(url) {
+            payload["width"] = Int(s.width)
+            payload["height"] = Int(s.height)
+        }
         // As the extension's show(): a PDF PDFKit cannot open gets the info card with a note; any other view closes the pane.
         var doc: PDFDocument?
         if payload["view"] as? String == "pdf" {
@@ -283,23 +344,120 @@ func renderFile(_ file: String, listFirst: Bool = true) {
             pdfPane = nil
         }
     }
+    archiveState = nil
+    entryShown = nil
+    scheme.entryImage = nil
+    scheme.filesBlocked = false
     _ = eval(web, "sb.render(\(jsonString(payload))); 0")
     if !listFirst { sendFolder(root) }
     spin(8) { rec.messages.contains { $0["type"] as? String == "rendered" } }
+    // As the extension's listArchive: the writer's listing (ArchiveListing, run here unsandboxed but for bsdtar's own sandbox).
+    if payload["view"] as? String == "archive", let data = ArchiveListing.list(url.path),
+       let list = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let entries = list["entries"] as? [[String: Any]] {
+        var files: [String: EntryInfo] = [:]
+        for e in entries where e["isDir"] as? Bool == false {
+            if let n = e["name"] as? String, files[n] == nil {
+                files[n] = ((e["size"] as? NSNumber)?.int64Value, (e["modified"] as? NSNumber)?.doubleValue, e["isLink"] as? Bool == true)
+            }
+        }
+        var p = payload
+        p["entries"] = entries
+        p["truncated"] = list["truncated"] as? Bool ?? false
+        if let total = list["total"] as? Int { p["total"] = total }
+        archiveState = (url.path, p, files)
+        // As listArchive: a lone compressed file of text shows that text.
+        if ArchiveEntryView.isLoneReadable(url.path), files.count == 1, let only = files.first, only.key == ArchiveEntryView.loneName(url.path),
+           ArchiveEntryView.textKinds.contains(ArchiveEntryView.kind(only.key)) {
+            return renderEntry(only.key, only.value)
+        }
+        var msg: [String: Any] = ["path": url.path, "entries": entries, "truncated": p["truncated"]!]
+        if let total = p["total"] { msg["total"] = total }
+        _ = eval(web, "sb.setArchive(\(jsonString(msg))); 0")
+    }
+}
+
+/// As the extension's showEntry and putEntry: a listed file of the archive on screen, read through ArchiveEntry.
+func renderEntry(_ name: String, _ info: EntryInfo) {
+    guard let a = archiveState else { return }
+    var data: Data?, why: String?
+    let lone = ArchiveEntryView.isLoneReadable(a.path) && name == ArchiveEntryView.loneName(a.path)
+    if info.link { why = "link" } else if let cap = ArchiveEntryView.cap(for: name) {
+        if !(lone && ArchiveEntryView.textKinds.contains(ArchiveEntryView.kind(name))), let size = info.size, size > Int64(cap) { why = "tooLarge" } else {
+            let r = ArchiveEntry.read(a.path, name: name, cap: cap)
+            switch r {
+            case .data(let d): data = d
+            case .partial(let d): data = d; why = "partial"
+            default: why = r.reason
+            }
+        }
+    }
+    let partial = why == "partial"
+    var p = ArchiveEntryView.payload(archive: a.path, root: root, entry: name, size: info.size, modified: info.modified, data: data,
+                                     failure: partial ? nil : why, partial: partial)
+    if lone {
+        p.removeValue(forKey: "entry")
+        p["name"] = a.payload["name"] ?? name
+        p["canOpen"] = a.payload["canOpen"] ?? false
+        p["kindName"] = "\(p["kindName"] as? String ?? "Plain text"), compressed"
+    }
+    // As putEntry: the last entry's native view goes, and a PDF is drawn natively from the bytes.
+    pdfPane?.close()
+    pdfPane = nil
+    if p["view"] as? String == "pdf" {
+        if let data, let doc = PDFDocument(data: data), doc.pageCount > 0, !doc.isLocked {
+            let pane = PDFPane()
+            pane.show(doc, path: a.path, over: web)
+            pdfPane = pane
+        } else {
+            p["view"] = "info"
+            p["note"] = "This PDF can’t be shown here."
+        }
+    }
+    entryShown = name
+    // As putEntry: nothing opens a file of the archive; the text of a lone compressed file opens the file itself.
+    currentCanOpen = lone && p["canOpen"] as? Bool == true
+    currentText = false
+    currentBody = (p["text"] as? String).map { ($0, false) }
+    scheme.entryImage = nil
+    scheme.filesBlocked = true
+    // As putEntry: an image WebKit decodes is held to ImagePane's pixel bound first.
+    let area = data.flatMap { CGImageSourceCreateWithData($0 as CFData, nil) }.flatMap { CGImageSourceCopyPropertiesAtIndex($0, 0, nil) as? [CFString: Any] }
+        .map { ($0[kCGImagePropertyPixelWidth] as? Int ?? 0) * ($0[kCGImagePropertyPixelHeight] as? Int ?? 0) }
+    if p["view"] as? String == "image", !(1...80_000_000).contains(area ?? 0) {
+        p["view"] = "info"
+        p["note"] = "This image can’t be shown here."
+    }
+    if p["view"] as? String == "image", let data {
+        let image = EntryImage(path: a.path, name: name, data: data)
+        scheme.entryImage = image
+        p["src"] = image.url
+    }
+    if p["view"] as? String == "bitmap" {
+        if let data, let src = CGImageSourceCreateWithData(data as CFData, nil), let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+           let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int {
+            p["width"] = w
+            p["height"] = h
+        } else {
+            p["view"] = "info"
+            p["note"] = "This image can’t be shown here."
+        }
+    }
+    rec.messages.append(["type": "_entry", "view": p["view"] ?? "", "name": name])
+    _ = eval(web, "sb.render(\(jsonString(p))); 0")
 }
 
 /// As the extension: a path the page names is taken only when plain, inside the root, and a file a listing named or the
 /// overview or a wikilink offered.
 func listedFile(_ p: String?) -> String? {
     guard let p, FolderListing.isPlainPath(p, under: root),
-          listings.values.contains(where: { l in l.entries.contains { $0.path == p && !$0.isDirectory } }) || offered.contains(p),
+          listings.values.contains(where: { l in l.entries.contains { $0.path == p && !$0.isDirectory } }) || offered.contains(p) || searchHits.paths.contains(p),
           FolderListing.isInside(p, root: root) else { return nil }
     var st = stat()
     guard stat(p, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return nil }
     return p
 }
 
-/// As the extension's startFolder: the folder's README or first Markdown file, else the scan's best Markdown, else the overview.
+/// As the extension's startFolder: the grid for a folder of media, else the folder's own README (or index or Home), else the overview.
 func startFolder(_ dir: String) -> String {
     if let why = FolderRules.declineReason(dir) { return "declined: \(why)" }
     rootOverride = dir
@@ -309,11 +467,16 @@ func startFolder(_ dir: String) -> String {
     offered = []
     linkIndex = nil
     scheme.fileRoot = root
+    let o = listOptions()
     let s = Settings(dictionary: settingsDict)
-    let l = FolderListing.list(root, root: root, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles)
+    let l = FolderListing.list(root, root: root, options: o)
+    if FolderListing.isMediaFolder(l), s.folderViewMedia == "grid" {
+        sendFolder(root)
+        renderOverview(FolderScan.scan(root, showHidden: o.showHidden), reason: "overview")
+        return "overview"
+    }
     if let first = FolderListing.firstDocument(l) { renderFile(first.path); return "file:" + first.path }
-    let r = FolderScan.scan(root, showHidden: s.showHiddenFiles)
-    if let md = r.bestMarkdown { offered.insert(md.path); renderFile(md.path); return "file:" + md.path }
+    let r = FolderScan.scan(root, showHidden: o.showHidden)
     sendFolder(root)
     renderOverview(r, reason: "open")
     return "overview"
@@ -332,9 +495,35 @@ func snapshot(_ path: String) -> String {
     return result
 }
 
+// As the extension's thumbnail(): only an image or video a listing named, under listedFile's checks.
+/// Seconds each thumbnail takes on top of making it (@thumbs:slow=<s>), so a test can scroll past thumbnails still being made.
+var thumbDelay: TimeInterval = 0
+let thumbs = ThumbnailPipeline { key, cancelled in
+    if thumbDelay > 0 { Thread.sleep(forTimeInterval: thumbDelay) }
+    return ThumbnailPipeline.makeThumb(key, cancelled: cancelled)
+}
+scheme.thumbnail = { path, px, reply in
+    guard FolderListing.isPlainPath(path, under: root),
+          let e = listings[(path as NSString).deletingLastPathComponent]?.entries.first(where: { $0.path == path && !$0.isDirectory }),
+          e.hasThumbnail, FolderListing.isInside(path, root: root), let realRoot = FolderListing.realPath(root) else { return nil }
+    let ticket = thumbs.request(path: path, root: realRoot, stamp: "\(e.size)-\(e.modified)", px: px) { reply($0?.data, $0?.mime ?? "") }
+    return {
+        guard let ticket else { return }
+        rec.messages.append(["type": "_thumbStop", "path": path])
+        thumbs.cancel(ticket)
+    }
+}
+
 // As the extension: a granted request re-renders the file on screen with the gate's flag.
 rec.onLoadRemoteImages = { path in
     guard gate.allowOnce(path, current: currentFile), let f = currentFile else { rec.messages.append(["type": "_remoteRefused", "path": path]); return }
+    DispatchQueue.main.async { renderFile(f) }
+}
+
+// As the extension: a missing image that appears renders the document again.
+images.onAppeared = {
+    guard let f = currentFile, images.doc == f else { return }
+    rec.messages.append(["type": "_imagesAppeared"])
     DispatchQueue.main.async { renderFile(f) }
 }
 
@@ -357,14 +546,132 @@ rec.onMessage = { type, body in
             rec.messages.append(["type": "_listRefused", "path": path ?? ""]); return
         }
         DispatchQueue.main.async { sendFolder(p) }
+    case "imageStatus":
+        guard let f = currentFile, currentKind == .markdown, body["doc"] as? String == f, let r = images.answer(body["paths"], doc: f) else {
+            rec.messages.append(["type": "_imageStatusRefused"]); return
+        }
+        web.evaluateJavaScript("sb.imageStatus(\(jsonString(["doc": f, "images": r]))); 0")
+    case "revealImageFolder":
+        guard let f = currentFile, currentKind == .markdown, body["doc"] as? String == f, let dir = images.revealable(path, doc: f) else {
+            rec.messages.append(["type": "_revealRefused", "path": path ?? ""]); return
+        }
+        rec.messages.append(["type": "_revealFolder", "path": dir.path])
+    case "editText":
+        guard let f = currentFile, path == f, let seq = body["seq"] as? Int,
+              let o = FileView.payloadAndText(path: f, kind: currentKind, root: root, reason: "open", canOpen: true).edit else {
+            rec.messages.append(["type": "_editTextRefused"]); return
+        }
+        textEdit = (seq, f, o.source, o.text, o.bytes)
+    case "archiveEntry":
+        guard let f = currentFile, path == f, currentKind == .archive, let a = archiveState, a.path == f, let asked = body["entry"] as? String,
+              let i = a.files.index(forKey: asked) else {
+            rec.messages.append(["type": "_entryRefused", "entry": body["entry"] ?? ""]); return
+        }
+        let (name, info) = (a.files[i].key, a.files[i].value)
+        DispatchQueue.main.async { renderEntry(name, info) }
+    case "archiveBack":
+        guard let f = currentFile, path == f, let a = archiveState, a.path == f else { rec.messages.append(["type": "_backRefused"]); return }
+        entryShown = nil
+        currentBody = nil
+        currentCanOpen = a.payload["canOpen"] as? Bool == true
+        pdfPane?.close()
+        pdfPane = nil
+        scheme.filesBlocked = false
+        var p = a.payload
+        p["reason"] = "back"
+        DispatchQueue.main.async { _ = eval(web, "sb.render(\(jsonString(p))); 0") }
     case "pdfRect":
-        if currentKind == .pdf { pdfPane?.place(message: body, in: web) }
+        if currentKind == .pdf || (currentKind == .archive && entryShown != nil) { pdfPane?.place(message: body, in: web) }
+    case "search":
+        searchCancel?.cancel()
+        guard let q = body["q"] as? String, q.utf8.count <= ContentSearch.maxQueryBytes, let seq = body["seq"] as? Int else {
+            rec.messages.append(["type": "_searchRefused"]); return
+        }
+        let cancel = ContentSearch.Cancel(), r = root, s = Settings(dictionary: settingsDict), hidden = listOptions().showHidden, limits = searchLimits
+        searchCancel = cancel
+        if body["names"] as? Bool == true {
+            ContentSearch.queue.async {
+                ContentSearch.runNames(query: q, root: r, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: hidden,
+                                       limits: limits, cancel: cancel) { p in
+                    DispatchQueue.main.async {
+                        guard !cancel.isCancelled, r == root else { return }
+                        if searchHits.seq != seq { searchHits = (seq, []) }
+                        searchHits.paths.formUnion(p.hits.filter { !$0.isDir }.map(\.path))
+                        knownDirs.formUnion(p.hits.filter(\.isDir).map(\.path))
+                        rec.messages.append(["type": "_nameReport", "seq": seq, "hits": p.hits.count])
+                        web.evaluateJavaScript("sb.nameResults(\(jsonString(ContentSearch.payload(p, seq: seq)))); 0")
+                    }
+                }
+            }
+            return
+        }
+        ContentSearch.queue.async {
+            ContentSearch.run(query: q, root: r, sort: s.folderSort, readmeFirst: s.folderReadmeFirst, showHidden: hidden,
+                              limits: limits, cancel: cancel) { p in
+                DispatchQueue.main.async {
+                    guard !cancel.isCancelled, r == root else { return }
+                    if searchHits.seq != seq { searchHits = (seq, []) }
+                    searchHits.paths.formUnion(p.hits.map(\.path))
+                    rec.messages.append(["type": "_searchReport", "seq": seq, "hits": p.hits.count, "done": p.done])
+                    web.evaluateJavaScript("sb.searchResults(\(jsonString(ContentSearch.payload(p, seq: seq)))); 0")
+                }
+            }
+        }
+    case "searchStop":
+        searchCancel?.cancel()
+    case "thumbDrop":
+        if let urls = body["urls"] as? [Any], urls.count <= 512 { scheme.dropThumbs(urls.compactMap { $0 as? String }) }
     case "overview":
-        DispatchQueue.main.async { renderOverview(FolderScan.scan(root, showHidden: Settings(dictionary: settingsDict).showHiddenFiles), reason: "overview") }
+        DispatchQueue.main.async { renderOverview(FolderScan.scan(root, showHidden: listOptions().showHidden), reason: "overview") }
+    case "copy":
+        // As the extension, with the clipboard left alone: what it would copy is recorded as "_copied".
+        if let s = body["fenceStart"] as? Int, let e = body["fenceEnd"] as? Int {
+            guard let f = currentFile, path == f, currentKind == .markdown, let doc = currentBody?.text, let code = CodeFence.code(doc, start: s, end: e), !code.isEmpty else {
+                rec.messages.append(["type": "_copyRefused", "path": path ?? ""]); return
+            }
+            rec.messages.append(["type": "_copied", "text": code, "fence": true])
+            web.evaluateJavaScript("sb.copied(\(jsonString(["ok": true, "fence": true]))); 0")
+            return
+        }
+        let selection = body["text"] as? String
+        guard let f = currentFile, path == f, let text = selection ?? currentBody?.text, !text.isEmpty else {
+            rec.messages.append(["type": "_copyRefused", "path": path ?? ""]); return
+        }
+        let cut = selection == nil && currentBody?.truncated == true
+        rec.messages.append(["type": "_copied", "text": text, "truncated": cut])
+        web.evaluateJavaScript("sb.copied(\(jsonString(["ok": true, "truncated": cut]))); 0")
+    case "openWithList", "openWith":
+        // As the extension and the writer: the file on screen only, and only an app LinkPolicy.openWithApps offers for it now.
+        let u = path.map { URL(fileURLWithPath: $0) }
+        guard let u, path == currentFile, entryShown == nil, currentKind == .markdown || currentCanOpen, LinkPolicy.fileRefusal(u, allowArchives: currentKind == .archive) == nil else {
+            rec.messages.append(["type": "_openWithRefused", "path": path ?? ""])
+            if type == "openWithList" { web.evaluateJavaScript("sb.openWithApps(\(jsonString(["path": path ?? "", "apps": []]))); 0") }
+            return
+        }
+        let lead = LinkPolicy.opener(for: u, allowArchives: true)?.app
+        let apps = LinkPolicy.openWithApps(for: u, allowArchives: true).map { ["id": Bundle(url: $0)?.bundleIdentifier ?? "", "name": FileManager.default.displayName(atPath: $0.path),
+                                                                              "default": $0 == lead ? "1" : ""] }
+        if type == "openWithList" {
+            rec.messages.append(["type": "_openWithList", "apps": apps.map { $0["id"]! }])
+            web.evaluateJavaScript("sb.openWithApps(\(jsonString(["path": u.path, "apps": apps]))); 0")
+        } else {
+            let id = body["app"] as? String ?? ""
+            rec.messages.append(["type": LinkPolicy.openWith(u, app: id, allowArchives: true) == nil ? "_openWithRefused" : "_openWith", "path": u.path, "app": id])
+        }
+    case "dragOut":
+        // As the viewer (PanelController): a listed, offered or searched file, or the file on screen unless it is an archive
+        // showing a file inside it, and then only from a press still under way. The drag itself is never started here: it would
+        // follow the real pointer into other apps.
+        var st = stat()
+        let p = listedFile(path) ?? (path != nil && path == currentFile && entryShown == nil && stat(path!, &st) == 0 && st.st_mode & S_IFMT == S_IFREG ? path : nil)
+        guard let p else { rec.messages.append(["type": "_dragRefused", "path": path ?? ""]); return }
+        rec.messages.append(["type": "_dragOut", "path": p, "refusal": web.fileDragRefusal() ?? ""])
     case "openFile", "reveal":
-        let ok = path != nil && path == currentFile && currentKind != .markdown
-            && (type == "reveal" || (currentCanOpen && LinkPolicy.fileRefusal(URL(fileURLWithPath: path!)) == nil))
-        rec.messages.append(["type": ok ? "_\(type)" : "_openRefused", "path": path ?? ""])
+        let u = path.map { URL(fileURLWithPath: $0) }
+        let asText = type == "openFile" && currentText && u.map { LinkPolicy.editorRefusal($0) == nil } == true
+        let ok = u != nil && path == currentFile && currentKind != .markdown
+            && (type == "reveal" || (currentCanOpen && (LinkPolicy.fileRefusal(u!) == nil || asText)))
+        rec.messages.append(["type": !ok ? "_openRefused" : asText ? "_openText" : "_\(type)", "path": path ?? ""])
     default: break
     }
 }
@@ -439,6 +746,37 @@ func run(_ cmd: String) -> String {
         result = arg
     case "@shot":
         result = snapshot(arg)
+    case "@winshot":
+        // The whole window, native panes over the page included.
+        spin(0.2)
+        if let img = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming]),
+           let png = NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]), (try? png.write(to: URL(fileURLWithPath: arg))) != nil {
+            result = "\(img.width)x\(img.height)"
+        } else { result = "failed" }
+    case "@winmean":
+        // The mean colour of x,y,w,h (points from the top left) as the window last painted it: a snapshot draws the page afresh,
+        // so only this sees paint WebKit failed to invalidate.
+        spin(0.2)
+        let p = arg.split(separator: ",").compactMap { Double($0) }
+        var rgb: [Int] = []
+        var img: CGImage?
+        // The window server now and then has no image of the window yet.
+        for _ in 0..<10 where img == nil {
+            img = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming])
+            if img == nil { spin(0.1) }
+        }
+        if p.count == 4, p[2] > 0, p[3] > 0, let img {
+            let rep = NSBitmapImageRep(cgImage: img), s = Double(rep.pixelsWide) / window.frame.width
+            var sum = [0.0, 0.0, 0.0], n = 0.0
+            for y in Int(p[1] * s)..<Int((p[1] + p[3]) * s) where y >= 0 && y < rep.pixelsHigh {
+                for x in Int(p[0] * s)..<Int((p[0] + p[2]) * s) where x >= 0 && x < rep.pixelsWide {
+                    guard let c = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) else { continue }
+                    sum[0] += c.redComponent; sum[1] += c.greenComponent; sum[2] += c.blueComponent; n += 1
+                }
+            }
+            if n > 0 { rgb = sum.map { Int(($0 / n * 255).rounded()) } }
+        }
+        result = rgb
     case "@pixel":
         let p = arg.split(separator: ",").compactMap { Double($0) }
         var rgb: [Int] = [], done = false
@@ -487,6 +825,22 @@ func run(_ cmd: String) -> String {
             spin(0.4)
             result = true
         } else { result = false }
+    case "@nativepinch", "@nativesmart", "@nativescroll", "@nativedblclick":
+        let numbers = ["@nativepinch": 1, "@nativescroll": 2][name] ?? 0
+        let parts = arg.split(separator: ",", omittingEmptySubsequences: false)
+        let sel = parts.dropLast(numbers).joined(separator: ","), n = parts.suffix(numbers).map { Double($0) ?? 0 }
+        let js = "(() => { const t = document.querySelector(\(jsonString(sel))); if (!t) return null; const r = t.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })()"
+        if let p = eval(web, js) as? [Double], p.count == 2 {
+            let at = NSPoint(x: p[0], y: web.frame.height - p[1])
+            switch name {
+            case "@nativepinch": Synth.send(Synth.pinch(window, at: at, by: n[0]), pause: 0.03)
+            case "@nativesmart": Synth.send([Synth.smartMagnify(window, at: at)])
+            case "@nativescroll": Synth.send(Synth.scroll(window, at: at, dx: n[0], dy: n[1]), pause: 0.03)
+            default: Synth.send(Synth.click(window, at: at, 1) + Synth.click(window, at: at, 2), pause: 0.03)
+            }
+            spin(0.5)
+            result = true
+        } else { result = false }
     case "@pdf":
         var fds = 0
         if let path = lastPDFPath {
@@ -527,13 +881,43 @@ func run(_ cmd: String) -> String {
         rootOverride = arg.isEmpty ? nil : arg
         result = arg
     case "@session":
+        // As the extension's start(): the new preview holds no search, and the page asks again.
         session += 1
+        searchCancel?.cancel()
+        searchHits = (0, [])
+        _ = eval(web, "sb.searchAgain({}); 0")
         result = session
     case "@folder":
         result = startFolder(arg)
+    case "@type":
+        let o = object(arg)
+        guard let t = textEdit, t.path == currentFile, let text = o["text"] as? String else { result = "no edit"; break }
+        let c = EditableText.change(from: t.text, to: text)
+        let update: [String: Any] = ["seq": t.seq, "from": c?.from ?? 0, "to": c?.to ?? 0, "insert": c?.insert ?? "",
+                                     "selStart": o["selStart"] as? Int ?? 0, "selLen": o["selLen"] as? Int ?? 0, "keyTime": 0]
+        _ = eval(web, "sb.textUpdate(\(jsonString(update))); 0")
+        guard let data = t.source.bytes(text) else { result = "unencodable"; break }
+        if let why = EditableText.writeRefusal(path: t.path, data: data, base: t.bytes) { result = why; break }
+        do { try data.write(to: URL(fileURLWithPath: t.path)); textEdit = (t.seq, t.path, t.source, text, data); result = "saved" } catch { result = "\(error)" }
+    case "@thumbs":
+        if arg == "purge" { thumbs.purge() }
+        if arg.hasPrefix("slow=") { thumbDelay = Double(arg.dropFirst(5)) ?? 0 }
+        let st = thumbs.stats
+        result = ["made": st.made, "failed": st.failed, "hits": st.hits, "dropped": st.dropped, "abandoned": st.abandoned, "cached": thumbs.cachedCount,
+                  "peak": thumbs.peakRunning, "pending": thumbs.pending]
     case "@remotereset":
         gate.reset()
         result = gate.blocking
+    case "@searchlimits":
+        let o = arg.isEmpty ? [:] : object(arg)
+        var l = ContentSearch.Limits()
+        if let n = o["maxFiles"] as? Int { l.maxFiles = n }
+        if let n = o["maxFileBytes"] as? Int { l.maxFileBytes = n }
+        if let n = o["maxTotalBytes"] as? Int { l.maxTotalBytes = n }
+        if let n = o["maxResults"] as? Int { l.maxResults = n }
+        if let n = o["budget"] as? Double { l.budget = n }
+        searchLimits = l
+        result = "ok"
     default:
         result = "unknown command"
     }

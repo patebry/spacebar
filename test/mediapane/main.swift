@@ -69,7 +69,12 @@ func makeM4A(from wav: URL, to url: URL, art: Data) -> URL? {
     item.value = art as NSData
     s.outputURL = url
     s.outputFileType = .m4a
-    s.metadata = [item]
+    let title = AVMutableMetadataItem(), artist = AVMutableMetadataItem()
+    title.identifier = .commonIdentifierTitle
+    title.value = "Test Tone" as NSString
+    artist.identifier = .commonIdentifierArtist
+    artist.value = "spacebar" as NSString
+    s.metadata = [item, title, artist]
     var done = false
     s.exportAsynchronously { done = true }
     spin(until: 20) { done }
@@ -77,6 +82,7 @@ func makeM4A(from wav: URL, to url: URL, art: Data) -> URL? {
 }
 
 _ = NSApplication.shared
+OffScreen.install()
 let dir = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath()
 let wav = dir.appendingPathComponent("tone.wav"), mp4 = dir.appendingPathComponent("clip.mp4"), junk = dir.appendingPathComponent("junk.mp4")
 makeWAV(wav)
@@ -94,6 +100,19 @@ check("resume: at the start, invalid or indefinite: from the start",
 check("resume: at or past the end of a shorter file: from the start", MediaPane.resumeTime(s(3), duration: s(3)) == nil
       && MediaPane.resumeTime(s(5), duration: s(2)) == nil)
 check("resume: a duration not known yet does not stop it", MediaPane.resumeTime(s(1), duration: .indefinite) == s(1))
+
+// ---- info: what the kind line says of a video and an audio file ----
+func info(_ url: URL, audio: Bool) -> String? {
+    var out: String?, done = false
+    Task { out = await MediaPane.info(AVURLAsset(url: url), audio: audio); done = true }
+    spin(until: 10) { done }
+    return out
+}
+check("info: a video's size and length", info(mp4, audio: false).map { $0.hasPrefix("64 × 64 · 0:0") } == true, info(mp4, audio: false) ?? "nil")
+if let m4a {
+    check("info: an audio file's title, artist and length", info(m4a, audio: true).map { $0.hasPrefix("Test Tone — spacebar · 0:0") } == true, info(m4a, audio: true) ?? "nil")
+}
+check("info: lengths as m:ss, and h:mm:ss from an hour", MediaPane.duration(6) == "0:06" && MediaPane.duration(125.4) == "2:05" && MediaPane.duration(3725) == "1:02:05")
 
 // ---- the pane in a real (off-screen) window above a WKWebView, as in the extension ----
 let window = NSWindow(contentRect: NSRect(x: -20000, y: -20000, width: 1000, height: 800), styleMask: [.borderless], backing: .buffered, defer: false)
@@ -214,6 +233,42 @@ if let m4a {
           "\(pane.art.image?.size ?? .zero)")
 } else {
     print("SKIP no AAC export here: the embedded artwork was not checked")
+}
+
+// ---- the formats added for the Space helper: each is routed to the player, and plays ----
+var added: [(URL, Bool)] = []
+if let m4a { let b = dir.appendingPathComponent("book.m4b"); try? FileManager.default.copyItem(at: m4a, to: b); added.append((b, true)) }
+// AMR-NB: the magic, then frames of mode 12.2 (a header byte and 31 bytes of silence each).
+let amr = dir.appendingPathComponent("memo.amr")
+try! (Data("#!AMR\n".utf8) + Data((0..<50).flatMap { _ in [UInt8(0x3c)] + [UInt8](repeating: 0, count: 31) })).write(to: amr)
+added.append((amr, true))
+// 3GPP, MPEG-1 and MPEG-2 program streams and an MPEG-2 elementary stream need ffmpeg to make.
+for (name, args) in [("clip.3gp", ["-s", "176x144", "-r", "10", "-c:v", "h263", "-c:a", "aac", "-ar", "8000", "-ac", "1"]), ("clip.mpg", ["-c:v", "mpeg1video", "-c:a", "mp2"]), ("clip.mpeg", ["-c:v", "mpeg2video", "-c:a", "mp2", "-f", "vob"]),
+                     ("clip.m2v", ["-an", "-c:v", "mpeg2video", "-f", "mpeg2video"])] {
+    let ff = Process()
+    ff.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    ff.arguments = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=25", "-f", "lavfi", "-i", "sine",
+                    "-t", "1"] + args + [dir.appendingPathComponent(name).path]
+    ff.standardError = FileHandle.nullDevice
+    try? ff.run()
+    ff.waitUntilExit()
+    if ff.terminationStatus == 0 { added.append((dir.appendingPathComponent(name), false)) } else { print("SKIP \(name): no ffmpeg here to make one") }
+}
+for (url, isAudio) in added {
+    let kind = FileTypes.kind(name: url.lastPathComponent)
+    let view = FileView.payload(path: url.path, kind: kind, root: dir.path, reason: "open", canOpen: true)["view"] as? String
+    var playable: Bool?
+    Task { playable = (try? await AVURLAsset(url: url).load(.isPlayable)) ?? false }
+    spin { playable != nil }
+    failed = []
+    pane.show(url, audio: isAudio, over: web)
+    ready()
+    check(".\(url.pathExtension): the \(isAudio ? "audio" : "video") view, and AVFoundation plays it", kind == (isAudio ? .audio : .video)
+          && view == (isAudio ? "audio" : "video") && playable == true && item()?.status == .readyToPlay && failed.isEmpty,
+          "\(kind) \(view ?? "nil") playable \(playable ?? false) status \(item()?.status.rawValue ?? -1) \(failed)")
+}
+for ext in ["webm", "mkv", "ogg", "opus"] {
+    check(".\(ext) stays an info card", ![FileKind.video, .audio].contains(FileTypes.kind(name: "x.\(ext)")))
 }
 
 // ---- teardown: stopped, the item let go, the view gone ----

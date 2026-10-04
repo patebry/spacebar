@@ -10,6 +10,13 @@ let exe = CommandLine.arguments[0]
 var failures = 0
 func check(_ name: String, _ ok: Bool) { print("\(ok ? "PASS" : "FAIL") \(name)"); if !ok { failures += 1 } }
 func obj(_ json: String) -> [String: Any] { (try! JSONSerialization.jsonObject(with: Data(json.utf8))) as! [String: Any] }
+extension String {
+    /// The first capture group of every match of `pattern`.
+    func matches(_ pattern: String) -> [String] {
+        let re = try! NSRegularExpression(pattern: pattern)
+        return re.matches(in: self, range: NSRange(startIndex..., in: self)).compactMap { Range($0.range(at: 1), in: self).map { String(self[$0]) } }
+    }
+}
 func decode(_ json: String) -> Settings? { try? JSONDecoder().decode(Settings.self, from: Data(json.utf8)) }
 
 let dir = SettingsFile.supportDir
@@ -30,7 +37,7 @@ check("font size clamped low", Settings(dictionary: ["fontSize": -3]).fontSize =
 check("font size rounded", Settings(dictionary: ["fontSize": 16.6]).fontSize == 17)
 check("line height clamped", Settings(dictionary: ["lineHeight": 9.5]).lineHeight == 2.0 && Settings(dictionary: ["lineHeight": 0]).lineHeight == 1.2)
 check("bool is not a number", Settings(dictionary: ["fontSize": true]).fontSize == 15)
-check("number is not a bool", Settings(dictionary: ["stats": 0]).stats == true)
+check("number is not a bool", Settings(dictionary: ["math": 0]).math == true && Settings(dictionary: ["version": 4, "stats": 1]).stats == false)
 check("NaN-free: huge number clamps", Settings(dictionary: ["fontSize": 1e300]).fontSize == 24)
 check("rawHTML on is refused", Settings(dictionary: ["rawHTML": "on"]).rawHTML == "sanitized")
 check("rawHTML off accepted", Settings(dictionary: ["rawHTML": "off"]).rawHTML == "off")
@@ -73,10 +80,51 @@ check("panel allow-list takes theme", afterPanel.theme == "solarized")
 check("panel allow-list drops userTheme/editor/customCSS/editing/rawHTML/remoteImages",
       afterPanel.userTheme == nil && afterPanel.editorBundleID == nil && afterPanel.customCSS && afterPanel.inlineEditing
       && afterPanel.rawHTML == "sanitized" && !afterPanel.remoteImages)
-check("panel keys are cosmetic only", Settings.panelKeys.isSubset(of: ["theme", "appearance", "fontSize", "width", "bodyFont", "lineHeight", "sidebarCollapsed", "sidebarWidth"]))
+check("panel keys are cosmetic only", Settings.panelKeys.isSubset(of: ["theme", "appearance", "fontSize", "width", "bodyFont", "lineHeight", "sidebarCollapsed", "sidebarWidth", "folderSort",
+                                                                     "foldersFirst", "folderViewMedia", "folderViewOther", "rawMarkdown", "rawJSON", "rawNotebook", "rawCSV", "rawXML", "rawCSS",
+                                                                     "wrapText", "wrapMarkdown", "wrapCode", "editHintShown"]))
+check("folder views: grid for folders of pictures and list for the rest by default, grid or list only, from the panel",
+      Settings().folderViewMedia == "grid" && Settings().folderViewOther == "list"
+      && Settings(dictionary: ["folderViewMedia": "list", "folderViewOther": "grid"]).folderViewMedia == "list"
+      && Settings(dictionary: ["folderViewOther": "grid"]).folderViewOther == "grid"
+      && Settings(dictionary: ["folderViewMedia": "tiles", "folderViewOther": true]) == Settings()
+      && Settings.panelPatch("folderViewMedia", "list") != nil && Settings.panelPatch("folderViewOther", "huge") == nil)
+check("raw views: off by default, bools only, panel keys", Settings.rawKeys.allSatisfy { k in
+    !(Settings().dictionary[k] as? Bool ?? true) && Settings(dictionary: [k: true]).dictionary[k] as? Bool == true
+        && [1, "true", NSNull()].allSatisfy { Settings(dictionary: [k: $0]).dictionary[k] as? Bool == false }
+        && decode("{\"\(k)\":true}")?.dictionary[k] as? Bool == true
+        && Settings.panelPatch(k, true).map { obj(String(data: $0, encoding: .utf8)!)[k] as? Bool } == true && Settings.panelPatch(k, 1) == nil
+})
+check("folderSort: a panel key, name or modified only", Settings.panelPatch("folderSort", "modified").map { obj(String(data: $0, encoding: .utf8)!)["folderSort"] as? String } == "modified"
+      && [NSNumber(value: 1), "size", NSNull(), ["name"]].allSatisfy { Settings.panelPatch("folderSort", $0) == nil })
+check("foldersFirst: a panel key; finder, always or never only", Settings.panelPatch("foldersFirst", "always").map { obj(String(data: $0, encoding: .utf8)!)["foldersFirst"] as? String } == "always"
+      && Settings(dictionary: ["foldersFirst": "never"]).foldersFirst == "never" && Settings(dictionary: ["foldersFirst": "sometimes"]).foldersFirst == "finder"
+      && decode(#"{"foldersFirst":true}"#)?.foldersFirst == "finder"
+      && [NSNumber(value: 1), true, "yes", NSNull(), ["always"]].allSatisfy { Settings.panelPatch("foldersFirst", $0) == nil })
+check("welcomeShown: off by default, a bool only, not a panel key, kept by the file", !Settings().welcomeShown && Settings(dictionary: ["welcomeShown": true]).welcomeShown
+      && [1, "true", NSNull()].allSatisfy { !Settings(dictionary: ["welcomeShown": $0]).welcomeShown } && decode(#"{"welcomeShown":true}"#)?.welcomeShown == true
+      && Settings.allKeys.contains("welcomeShown") && Settings.panelPatch("welcomeShown", true) == nil)
+check("spaceHelper and helperOffered: off by default, bools only, never panel keys",
+      !Settings().spaceHelper && !Settings().helperOffered && Settings(dictionary: ["spaceHelper": true, "helperOffered": true]).helperOffered
+      && [1, "true", NSNull()].allSatisfy { !Settings(dictionary: ["spaceHelper": $0, "helperOffered": $0]).spaceHelper && !Settings(dictionary: ["helperOffered": $0]).helperOffered }
+      && decode(#"{"helperOffered":true,"spaceHelper":true}"#).map { $0.helperOffered && $0.spaceHelper } == true
+      && Settings.panelPatch("spaceHelper", true) == nil && Settings.panelPatch("helperOffered", true) == nil)
+do {
+    // The settings app restarts the helper only for spaceHelper as settings.json has it: a hand-edited non-bool is off.
+    let gate = { (raw: [String: Any]) in HelperState.shouldReregister(enabled: Settings(dictionary: raw).spaceHelper, agent: .enabled, answering: false, misses: 3) }
+    check("spaceHelper gates the automatic reregister", gate(["spaceHelper": true]) && !gate([:]) && !gate(["spaceHelper": false])
+          && !gate(["spaceHelper": 1]) && !gate(["spaceHelper": "true"]))
+    _ = SettingsFile.update(["spaceHelper": true])
+    _ = SettingsFile.updateFromPanel(Data(#"{"spaceHelper":false}"#.utf8))
+    check("the preview panel cannot turn the helper (and so its reregister) off", SettingsFile.load().spaceHelper)
+    _ = SettingsFile.update(["spaceHelper": false])
+}
 check("minimal chrome: off by default, a bool only, not a panel key", !Settings().minimalChrome && Settings(dictionary: ["minimalChrome": true]).minimalChrome
       && !Settings(dictionary: ["minimalChrome": 1]).minimalChrome && decode(#"{"minimalChrome":true}"#)?.minimalChrome == true
       && !Settings.panelKeys.contains("minimalChrome") && Settings.panelPatch("minimalChrome", true) == nil && Settings.allKeys.contains("minimalChrome"))
+check("sidebar keys on by default, a bool only, not a panel key", Settings().sidebarKeys && !Settings(dictionary: ["sidebarKeys": false]).sidebarKeys
+      && [0, "false", NSNull()].allSatisfy { Settings(dictionary: ["sidebarKeys": $0]).sidebarKeys } && decode(#"{"sidebarKeys":false}"#)?.sidebarKeys == false
+      && Settings.allKeys.contains("sidebarKeys") && Settings.panelPatch("sidebarKeys", false) == nil)
 check("hidden files off by default, a bool only, not a panel key", !Settings().showHiddenFiles && Settings(dictionary: ["showHiddenFiles": true]).showHiddenFiles
       && [1, "true", NSNull()].allSatisfy { !Settings(dictionary: ["showHiddenFiles": $0]).showHiddenFiles } && decode(#"{"showHiddenFiles":true}"#)?.showHiddenFiles == true
       && Settings.allKeys.contains("showHiddenFiles") && Settings.panelPatch("showHiddenFiles", true) == nil)
@@ -204,17 +252,56 @@ mkfifo(ld.appendingPathComponent("pipe.md").path, 0o600)
 let names = { (l: FolderListing.Listing) in l.entries.map(\.name) }
 let byName = FolderListing.list(ld.path, sort: "name", readmeFirst: true)
 check("tree: folders first, then README, then files in Finder order",
-      names(byName) == ["alpha", "inside-dir", "sub.md", "Zeta", "README.md", "a.markdown", "b.md", "c9.MD", "c10.md", "data.csv", "inside-link.md",
+      names(byName) == ["alpha", "inside-dir", "sub.md", "Zeta", "README.md", "a.markdown", "b.md", "c9.MD", "c10.md", "dangling.md", "data.csv", "inside-link.md",
                         "main.ts", "notes.txt", "paper.pdf", "photo.png", "run.sh", "Tool.app"])
 check("tree: folders are marked, a package is one item", byName.folders.map(\.name) == ["alpha", "inside-dir", "sub.md", "Zeta"]
       && byName.entries.first { $0.name == "Tool.app" }.map { !$0.isDirectory && $0.kind == .app } == true)
 check("tree: hidden, flagged hidden, FIFOs skipped", !names(byName).contains { [".hidden.md", ".hiddendir", "flagged.md", "pipe.md"].contains($0) })
-check("tree: links out of the root, to /etc, to the parent, or dangling are skipped",
-      !names(byName).contains { ["outside-link.md", "outside-dir", "etc", "up", "dangling.md"].contains($0) })
+check("tree: links out of the root, to /etc or to the parent are skipped",
+      !names(byName).contains { ["outside-link.md", "outside-dir", "etc", "up"].contains($0) })
+check("tree: a dangling link is listed as broken, a file, never a folder",
+      byName.entries.first { $0.name == "dangling.md" }.map { $0.broken && !$0.isDirectory && $0.kind == .other } == true
+      && byName.entries.filter(\.broken).count == 1)
 let hidden = FolderListing.list(ld.path, sort: "name", readmeFirst: true, showHidden: true)
 check("tree: showHidden lists dot files, flagged files and hidden folders", [".hidden.md", ".hiddendir", "flagged.md"].allSatisfy(names(hidden).contains)
       && !names(hidden).contains("pipe.md") && !names(hidden).contains("outside-link.md"))
 check("tree: README not first when that is off", names(FolderListing.list(ld.path, sort: "name", readmeFirst: false))[4] == "a.markdown")
+// Finder's order: folders among the files, by name; README first then goes to the very top.
+let finderSorted = { (l: FolderListing.Listing) in names(l) == names(l).sorted { $0.localizedStandardCompare($1) == .orderedAscending } }
+let mixed = FolderListing.list(ld.path, sort: "name", readmeFirst: false, foldersFirst: false)
+check("tree: Finder's order mixes folders and files by name", finderSorted(mixed) && mixed.entries.count == byName.entries.count
+      && names(mixed).firstIndex(of: "alpha")! > names(mixed).firstIndex(of: "a.markdown")! && names(mixed).firstIndex(of: "Zeta")! > names(mixed).firstIndex(of: "Tool.app")!)
+let mixedReadme = FolderListing.list(ld.path, sort: "name", readmeFirst: true, foldersFirst: false)
+check("tree: README first in Finder's order goes to the very top", names(mixedReadme).first == "README.md" && Array(names(mixedReadme).dropFirst()) == names(mixed).filter { $0 != "README.md" })
+try! fm.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -100)], ofItemAtPath: ld.appendingPathComponent("Zeta").path)
+let byDateMixed = FolderListing.list(ld.path, sort: "modified", readmeFirst: false, foldersFirst: false).entries
+check("tree: by date in Finder's order, folders among the files", zip(byDateMixed, byDateMixed.dropFirst()).allSatisfy { $0.modified >= $1.modified }
+      && Array(byDateMixed.map(\.name).suffix(2)) == ["Zeta", "dangling.md"])
+let finderOn = FinderPrefs.Values(foldersFirst: true, showHidden: true)
+check("options: as in Finder, folders first follows its setting only when sorting by name; hidden files follow it too",
+      FolderListing.Options(sort: "name", foldersFirst: "finder", readmeFirst: false, showHidden: false, finder: finderOn) == FolderListing.Options(sort: "name", foldersFirst: true, showHidden: true)
+      && !FolderListing.Options(sort: "modified", foldersFirst: "finder", readmeFirst: false, showHidden: false, finder: finderOn).foldersFirst
+      && FolderListing.Options(sort: "name", foldersFirst: "finder", readmeFirst: true, showHidden: false, finder: FinderPrefs.Values()) == FolderListing.Options(sort: "name", readmeFirst: true)
+      && FolderListing.Options(sort: "modified", foldersFirst: "always", readmeFirst: false, showHidden: false, finder: FinderPrefs.Values()).foldersFirst
+      && !FolderListing.Options(sort: "name", foldersFirst: "never", readmeFirst: false, showHidden: false, finder: finderOn).foldersFirst
+      && FolderListing.Options(sort: "name", foldersFirst: "never", readmeFirst: false, showHidden: true, finder: FinderPrefs.Values()).showHidden)
+check("finder prefs: a boolean, a number or a string as defaults(1) advice wrote them; off when missing",
+      FinderPrefs.parse(["_FXSortFoldersFirst": true, "AppleShowAllFiles": 1]) == finderOn && FinderPrefs.parse(["_FXSortFoldersFirst": "YES", "AppleShowAllFiles": "true"]) == finderOn
+      && FinderPrefs.parse(["_FXSortFoldersFirst": false, "AppleShowAllFiles": "NO"]) == FinderPrefs.Values() && FinderPrefs.parse([:]) == FinderPrefs.Values()
+      && FinderPrefs.parse(["AppleShowAllFiles": 0]) == FinderPrefs.Values())
+let finderPlist = dir.appendingPathComponent("finder.plist")
+try! PropertyListSerialization.data(fromPropertyList: ["_FXSortFoldersFirst": true, "AppleShowAllFiles": "1"], format: .binary, options: 0).write(to: finderPlist)
+check("finder prefs: read from a plist file; none under SPACEBAR_SUPPORT_DIR; a missing or broken file reads as defaults",
+      FinderPrefs.read(at: finderPlist.path) == finderOn && FinderPrefs.path == nil && FinderPrefs.read() == FinderPrefs.Values()
+      && FinderPrefs.read(at: finderPlist.path + ".nope") == FinderPrefs.Values()
+      && { try! Data("junk".utf8).write(to: finderPlist); return FinderPrefs.read(at: finderPlist.path) == FinderPrefs.Values() }())
+try! PropertyListSerialization.data(fromPropertyList: ["_FXSortFoldersFirst": "true"], format: .xml, options: 0).write(to: finderPlist)
+setenv("SPACEBAR_FINDER_PLIST", finderPlist.path, 1)
+let named = FinderPrefs.path == finderPlist.path && FinderPrefs.read() == FinderPrefs.Values(foldersFirst: true, showHidden: false)
+setenv("SPACEBAR_FINDER_PLIST", "", 1)
+let emptied = FinderPrefs.path == nil && FinderPrefs.read() == FinderPrefs.Values()
+unsetenv("SPACEBAR_FINDER_PLIST")
+check("finder prefs: SPACEBAR_FINDER_PLIST names the file to read, empty names none", named && emptied && FinderPrefs.path == nil)
 let byDate = FolderListing.list(ld.path, sort: "modified", readmeFirst: true).files.map(\.name)
 check("tree: files by date modified, newest first, README still first", Array(byDate.prefix(5)) == ["README.md", "Tool.app", "notes.txt", "photo.png", "paper.pdf"])
 let sub = FolderListing.list(ld.path + "/alpha", root: ld.path, sort: "name", readmeFirst: true)
@@ -225,19 +312,21 @@ check("tree: a folder outside the root lists nothing", FolderListing.list(outsid
       && FolderListing.list("/etc", root: ld.path, sort: "name", readmeFirst: true).entries.isEmpty)
 check("tree: a link to a folder inside the root lists it", names(FolderListing.list(ld.path + "/inside-dir", root: ld.path, sort: "name", readmeFirst: true)) == ["deep", "inner.md"])
 let capped = FolderListing.list(ld.path, sort: "name", readmeFirst: true, cap: 2)
-check("tree: capped, with a count of the rest", names(capped) == ["alpha", "inside-dir"] && capped.more == 15)
+check("tree: capped, with a count of the rest", names(capped) == ["alpha", "inside-dir"] && capped.more == 16)
 let pinned = FolderListing.list(ld.path, sort: "name", readmeFirst: true, cap: 2, pinned: ld.path + "/c10.md")
-check("tree: the document on screen is listed past the cap", names(pinned) == ["alpha", "inside-dir", "c10.md"] && pinned.more == 14)
+check("tree: the document on screen is listed past the cap", names(pinned) == ["alpha", "inside-dir", "c10.md"] && pinned.more == 15)
 let payload = byName.payload(root: ld.path)
 let pe = payload["entries"] as? [[String: Any]] ?? []
 check("tree: payload names the root, the folder and each entry's icon", payload["rootName"] as? String == "listing" && payload["dir"] as? String == ld.path
       && payload["more"] as? Int == 0 && pe.first?["dir"] as? Bool == true && pe.first?["icon"] as? String == "folder"
-      && pe.first { $0["name"] as? String == "data.csv" }?["icon"] as? String == "data" && pe.first { $0["name"] as? String == "Tool.app" }?["icon"] as? String == "other")
+      && pe.first { $0["name"] as? String == "data.csv" }?["icon"] as? String == "data" && pe.first { $0["name"] as? String == "Tool.app" }?["icon"] as? String == "app"
+      && pe.first { $0["name"] as? String == "data.csv" }?["size"] is Int64 && pe.first?["size"] == nil
+      && pe.first { $0["name"] as? String == "Tool.app" }.map { $0["size"] == nil } == true && (pe.first?["modified"] as? Double ?? 0) > 1e12)
 check("tree: a missing folder lists nothing", FolderListing.list(ld.path + "/nope", sort: "name", readmeFirst: true).entries.isEmpty)
-check("tree: a folder preview opens its README, else its first Markdown file, else nothing (the scan takes over)",
+check("tree: a folder preview opens its own README, never any other note (the overview takes over)",
       FolderListing.firstDocument(byName)?.name == "README.md"
       && FolderListing.firstDocument(FolderListing.list(ld.path, sort: "name", readmeFirst: false))?.name == "README.md"
-      && FolderListing.firstDocument(FolderListing.list(ld.path + "/alpha", root: ld.path, sort: "name", readmeFirst: true))?.name == "inner.md"
+      && FolderListing.firstDocument(FolderListing.list(ld.path + "/alpha", root: ld.path, sort: "name", readmeFirst: true)) == nil
       && FolderListing.firstDocument(FolderListing.list(ld.path + "/alpha/deep", root: ld.path, sort: "name", readmeFirst: true)) == nil)
 check("paths: inside the root, symlinks resolved", FolderListing.isInside(ld.path + "/b.md", root: ld.path) && FolderListing.isInside(ld.path + "/inside-link.md", root: ld.path)
       && !FolderListing.isInside(ld.path + "/outside-link.md", root: ld.path) && !FolderListing.isInside(ld.path + "/etc/hosts", root: ld.path)
@@ -249,12 +338,12 @@ check("paths: only plain spellings under the root", FolderListing.isPlainPath(ld
       && !FolderListing.isPlainPath("/etc/hosts", under: ld.path) && !FolderListing.isPlainPath(ld.path + "/alpha/..", under: ld.path))
 let big = dir.appendingPathComponent("big", isDirectory: true)
 try! fm.createDirectory(at: big, withIntermediateDirectories: true)
-for i in 0..<600 { fm.createFile(atPath: big.appendingPathComponent(String(format: "note-%04d.txt", i)).path, contents: Data()) }
+for i in 0..<5100 { fm.createFile(atPath: big.appendingPathComponent(String(format: "note-%04d.txt", i)).path, contents: Data()) }
 for i in 0..<20 { try! fm.createDirectory(at: big.appendingPathComponent("dir-\(i)"), withIntermediateDirectories: true) }
 let t0 = Date()
 let bigList = FolderListing.list(big.path, sort: "modified", readmeFirst: true)
-check("tree: 620 entries cap at 500 with 120 more, folders kept first (\(Int(Date().timeIntervalSince(t0) * 1000)) ms)",
-      bigList.entries.count == FolderListing.cap && bigList.more == 120 && bigList.folders.count == 20 && bigList.entries[20].name.hasPrefix("note-"))
+check("tree: 5,120 entries cap at 5,000 with 120 more, folders kept first (\(Int(Date().timeIntervalSince(t0) * 1000)) ms)",
+      FolderListing.cap == 5_000 && bigList.entries.count == FolderListing.cap && bigList.more == 120 && bigList.folders.count == 20 && bigList.entries[20].name.hasPrefix("note-"))
 try! fm.removeItem(at: big); try! fm.removeItem(at: ld); try! fm.removeItem(at: outside)
 
 // Type detection and the content-type map (Shared/FolderListing.swift, FileTypes)
@@ -285,7 +374,7 @@ check("types: all \(declared.count) declared extensions have a kind (\(unmapped.
 let langs: [(String, String?)] = [("a.toml", "ini"), ("a.go", "go"), ("a.rs", "rust"), ("a.kt", "kotlin"), ("a.cs", "csharp"), ("a.scss", "scss"),
     ("a.lua", "lua"), ("a.sql", "sql"), ("a.graphql", "graphql"), ("a.vb", "vbnet"), ("a.wat", "wasm"), ("a.gradle", "java"), ("a.vue", "xml"),
     ("a.xsd", "xml"), ("a.fish", "bash"), ("a.mak", "makefile"), ("a.phtml", "php"), ("a.hpp", "cpp"), ("a.dart", nil), ("a.zig", nil),
-    ("a.scala", nil), ("a.dockerfile", nil)]
+    ("a.scala", "scala"), ("a.dockerfile", "dockerfile"), ("Dockerfile.dev", "dockerfile"), ("main.tf", "hcl"), ("nginx.conf", "nginx")]
 let langWrong = langs.filter { FileTypes.language(name: $0.0) != $0.1 }.map { "\($0.0)=\(FileTypes.language(name: $0.0) ?? "nil")" }
 check("types: highlight.js languages for the new extensions, plain text where none is bundled (\(langWrong.joined(separator: " ")))", langWrong.isEmpty)
 check("types: the writer lists exactly the extensions the viewer calls archives", ArchiveListing.extensions == FileTypes.archiveExtensions)
@@ -321,6 +410,13 @@ do {
     try! PropertyListSerialization.data(fromPropertyList: ["Name": "spacebar", "List": [1, 2]], format: .binary, options: 0).write(to: bin)
     try! Data("<?xml version=\"1.0\"?><plist version=\"1.0\"><string>hi</string></plist>\n".utf8).write(to: xml)
     try! Data("PK\u{5}\u{6}".utf8 + Data(count: 18)).write(to: zip)
+    check("the info card's folder abbreviates the home", FileView.tildePath("/Users/a/Documents", home: "/Users/a") == "~/Documents"
+          && FileView.tildePath("/Users/a", home: "/Users/a") == "~" && FileView.tildePath("/Users/ab/x", home: "/Users/a") == "/Users/ab/x"
+          && FileView.tildePath("/Volumes/X", home: "/Users/a") == "/Volumes/X")
+    check("an empty home abbreviates nothing", FileView.tildePath("/Volumes/X", home: "") == "/Volumes/X"
+          && FileView.tildePath("/", home: "") == "/")
+    check("a payload names its folder", FileView.payload(path: bin.path, kind: .code, root: d.path, reason: "open", canOpen: true)["folder"] as? String
+          == FileView.tildePath(d.path))
     let b = FileView.payload(path: bin.path, kind: .code, root: d.path, reason: "open", canOpen: true)
     let x = FileView.payload(path: xml.path, kind: .code, root: d.path, reason: "open", canOpen: true)
     let z = FileView.payload(path: zip.path, kind: .archive, root: d.path, reason: "open", canOpen: true)
@@ -329,12 +425,66 @@ do {
           && (b["kindName"] as? String ?? "").contains("Binary"))
     check("XML plist: shown as it is", x["view"] as? String == "code" && (x["text"] as? String ?? "").hasPrefix("<?xml") && !(x["kindName"] as? String ?? "").contains("Binary"))
     check("archive: its own view, with no contents until the writer lists them", z["view"] as? String == "archive" && z["text"] == nil && z["entries"] == nil)
+    let locked = d.appendingPathComponent("locked.txt")
+    try! Data("secret".utf8).write(to: locked)
+    chmod(locked.path, 0)
+    let l = FileView.payload(path: locked.path, kind: .text, root: d.path, reason: "open", canOpen: true)
+    check("unreadable (chmod 000) text: the info card says it has no permission, and offers no app",
+          geteuid() == 0 || (l["view"] as? String == "info" && (l["note"] as? String)?.hasPrefix("You don’t have permission to read this file.") == true && l["canOpen"] as? Bool == false))
+    let lockedPDF = d.appendingPathComponent("locked.pdf")
+    try! Data("%PDF-1.4\n".utf8).write(to: lockedPDF)
+    chmod(lockedPDF.path, 0)
+    let lp = FileView.payload(path: lockedPDF.path, kind: .pdf, root: d.path, reason: "open", canOpen: true)
+    check("unreadable (chmod 000) PDF: an info card with the reason, not a PDF view that fails",
+          geteuid() == 0 || (lp["view"] as? String == "info" && (lp["note"] as? String)?.hasPrefix("You don’t have permission") == true && lp["privacy"] == nil))
+    let gone = d.appendingPathComponent("vanished.md").path
+    let card = FileView.unopenable(path: gone, root: d.path, note: FileView.openRefusal(gone))
+    check("missing at open: says it is no longer there, and is flagged so its folder is offered instead of Reveal",
+          card["note"] as? String == "This file is no longer there. It may have been moved or deleted." && card["missing"] as? Bool == true)
+    let lsCard = FileView.payload(path: "/bin/ls", kind: .other, root: "/bin", reason: "open", canOpen: false)
+    check("a Mach-O executable is named as Finder names it", lsCard["kindName"] as? String == "Unix executable")
+    check("kind names: sentence case, proper nouns kept",
+          FileView.kindName("HEIF Image") == "HEIF image" && FileView.kindName("application") == "Application" && FileView.kindName("PNG image") == "PNG image"
+          && FileView.kindName("Microsoft Word document") == "Microsoft Word document" && FileView.kindName("Markdown Text") == "Markdown text"
+          && FileView.kindName("text") == "Text")
+    let svg = d.appendingPathComponent("icon.svg")
+    try! #"<svg xmlns="http://www.w3.org/2000/svg" stroke-width="2" viewBox="0 0 24 24"><path d="M0 0"/></svg>"#.write(to: svg, atomically: true, encoding: .utf8)
+    let sized = d.appendingPathComponent("sized.svg")
+    try! #"<svg stroke-width='2' width="120px" height="80"></svg>"#.write(to: sized, atomically: true, encoding: .utf8)
+    check("SVG: its own size, from the viewBox or width and height, never a stroke-width", FileView.svgSize(svg.path) == "24 × 24" && FileView.svgSize(sized.path) == "120 × 80")
+    check("protected places are named as the privacy settings name them",
+          FileView.protectedPlace("/Volumes/X/a.md") == "files on this volume" && FileView.protectedPlace("/tmp/a.md") == "files in this folder")
     try? fm.removeItem(at: d)
 }
 check("claims summary names archives and Markdown", QuickLookClaims.summary.contains("archives") && QuickLookClaims.summary.hasPrefix("Markdown"))
+do {
+    // The claims by group, from scripts/quicklook-types.txt as the app carries it, and how another extension's claims overlap them.
+    let text = try! String(contentsOf: URL(fileURLWithPath: "scripts/quicklook-types.txt"), encoding: .utf8)
+    let claims = QuickLookClaims.parse(text)
+    let lines = text.split(separator: "\n").filter { $0.hasPrefix("claim ") || $0.hasPrefix("declare ") }
+    let group = { (t: String) in claims.first { $0.type == t }?.group }
+    check("claims: every claim and declaration parsed, once", claims.count == lines.count && Set(claims.map(\.type)).count == claims.count)
+    check("claims: grouped by the section they are listed in",
+          group("net.daringfireball.markdown") == .markdown && group("public.markdown") == .markdown && group("public.swift-source") == .code
+          && group("md.spacebar.type.go") == .code && group("public.json") == .data && group("com.apple.log") == .data
+          && group("md.spacebar.type.ipynb") == .data && group("public.zip-archive") == .archives && group("public.data") == .other
+          && group("md.spacebar.type.toml") == .text && group("md.spacebar.type.env") == .text)
+    check("claims: only public.data is in the no-extension group", claims.filter { $0.group == .other }.map(\.type) == ["public.data"])
+    check("claims: a declaration keeps its extensions", claims.first { $0.type == "md.spacebar.type.kt" }?.extensions == ["kt", "kts"])
+    let exts: [String: [String]] = ["public.swift-source": ["swift"], "com.vendor.swift": ["swift"], "dyn.go": ["go"], "public.json": ["json"],
+                                    "public.plain-text": ["txt", "text"], "public.png": ["png"]]
+    let o = QuickLookClaims.overlap(ours: claims, theirs: ["public.swift-source", "com.vendor.swift", "dyn.go", "public.json", "public.json",
+                                                            "public.plain-text", "public.source-code", "public.png", "com.acme.markdown",
+                                                            "md.spacebar.type.rs"], extensions: { exts[$0] ?? [] })
+    check("overlap: the same type, a vendor or dyn type for the same extension, any Markdown type; not a parent, Apple's own or spacebar's IDs",
+          o == [.code: ["com.vendor.swift", "dyn.go", "public.swift-source"], .data: ["public.json"], .markdown: ["com.acme.markdown"]])
+    check("overlap: none for an image previewer", QuickLookClaims.overlap(ours: claims, theirs: ["public.png", "public.jpeg"], extensions: { exts[$0] ?? [] }).isEmpty)
+    check("overlap: described Markdown first, then the largest group", QuickLookClaims.describe(o) == "Markdown (1 type), code (3 types), data (1 type)")
+}
 check("types: an executable with no extension is an app; a folder a folder; a package an item",
       FileTypes.kind(name: "tool", executable: true) == .app && FileTypes.kind(name: "src", isDirectory: true) == .folder
-      && FileTypes.kind(name: "X.app", isDirectory: true, isPackage: true) == .app && FileTypes.kind(name: "d.rtfd", isDirectory: true, isPackage: true) == .other)
+      && FileTypes.kind(name: "X.app", isDirectory: true, isPackage: true) == .app && FileTypes.kind(name: "d.pages", isDirectory: true, isPackage: true) == .other
+      && FileTypes.kind(name: "d.rtfd", isDirectory: true, isPackage: true) == .rtf)
 check("types: video and audio share the media icon and overview bucket; HTML is listed as code",
       FileKind.video.icon == "media" && FileKind.audio.icon == "media" && FolderScan.bucket(.video) == "media" && FolderScan.bucket(.audio) == "media"
       && FileKind.html.icon == "code" && FolderScan.bucket(.html) == "code")
@@ -352,13 +502,17 @@ do {
     let h = FileView.payload(path: huge.path, kind: .video, root: media.path, reason: "open", canOpen: true)
     let d = FileView.payload(path: media.path, kind: .video, root: media.path, reason: "open", canOpen: true)
     check("payload: a video or audio file is played natively, with its kind and size; one past 512 MB or not a file is its info card",
-          v["view"] as? String == "video" && v["size"] as? Int64 == 4096 && (v["kindName"] as? String)?.isEmpty == false && v["icon"] as? String == "media"
+          v["view"] as? String == "video" && v["size"] as? Int64 == 4096 && (v["kindName"] as? String)?.isEmpty == false && v["icon"] as? String == "video" && a["icon"] as? String == "audio"
           && a["view"] as? String == "audio" && a["size"] as? Int64 == 2048 && h["view"] as? String == "info" && d["view"] as? String == "info")
 }
 check("types: highlight.js languages", FileTypes.language(name: "a.ts") == "typescript" && FileTypes.language(name: "a.tsx") == "typescript"
-      && FileTypes.language(name: "page.html") == "xml" && FileTypes.language(name: "Makefile") == "makefile" && FileTypes.language(name: "Dockerfile") == nil
+      && FileTypes.language(name: "page.html") == "xml" && FileTypes.language(name: "Makefile") == "makefile" && FileTypes.language(name: "Dockerfile") == "dockerfile"
       && FileTypes.language(name: "a.sh") == "bash" && FileTypes.language(name: "a.toml") == "ini")
 check("types: icons", [FileKind.json, .csv].allSatisfy { $0.icon == "data" } && FileKind.app.icon == "other" && FileKind.code.icon == "code")
+let glyphs: [(String, FileKind, String)] = [("a.ttf", .other, "font"), ("a.docx", .other, "doc"), ("a.XLSX", .other, "sheet"), ("a.key", .other, "slides"),
+    ("a.usdz", .other, "model"), ("a.webm", .other, "video"), ("a.ogg", .other, "audio"), ("a.zip", .archive, "archive"), ("Tool.app", .app, "app"),
+    ("a.mp4", .video, "video"), ("a.wav", .audio, "audio"), ("a.json", .json, "data"), ("a.html", .html, "code"), ("a.dat", .other, "other"), ("sub", .folder, "folder")]
+check("types: the sidebar's finer icons, by kind and then extension", glyphs.allSatisfy { FileTypes.glyph(name: $0.0, kind: $0.1) == $0.2 })
 check("content types: images and PDF by the map, SVG as an image",
       FileTypes.contentType(forPath: "/a/b.PNG") == "image/png" && FileTypes.contentType(forPath: "/a/b.jpg") == "image/jpeg"
       && FileTypes.contentType(forPath: "/a/b.svg") == "image/svg+xml" && FileTypes.contentType(forPath: "/a/b.pdf") == "application/pdf")
@@ -386,16 +540,18 @@ put("Vault/Projects/Deep/a/b/c/d/far.md", "# far\n")
 check("folder rules: a vault whose notes are all in subfolders is previewed (it was declined: no top-level Markdown)",
       FolderRules.declineReason(vault) == nil && FolderListing.firstDocument(FolderListing.list(vault, sort: "name", readmeFirst: true)) == nil)
 let vs = FolderScan.scan(vault)
-check("finder: the vault opens on its newest note nearest the top, never inside .obsidian",
-      vs.bestMarkdown?.rel == "Daily/2026-09-25.md" && !vs.files.contains { $0.rel.hasPrefix(".obsidian") } && vs.hasObsidian && vs.complete)
+check("finder: the vault's overview counts its notes, never inside .obsidian",
+      vs.counts["markdown"] == 5 && !vs.files.contains { $0.rel.hasPrefix(".obsidian") } && vs.hasObsidian && vs.complete)
 check("finder: depth stops at 3", !vs.files.contains { $0.rel.hasSuffix("far.md") } && vs.files.allSatisfy { $0.depth <= FolderScan.maxDepth })
-check("finder: a preferred name wins at the same depth", {
+check("finder: a top-level Home note opens the vault; a stray top-level note or a deeper index does not", {
     put("Vault/Projects/Index.md", "# index\n", age: 99999)
     defer { try? fm.removeItem(atPath: vault + "/Projects/Index.md") }
+    put("Vault/Scratch.md", "# stray\n", age: 1)
+    defer { try? fm.removeItem(atPath: vault + "/Scratch.md") }
+    let stray = FolderListing.firstDocument(FolderListing.list(vault, sort: "name", readmeFirst: true))
     put("Vault/Home.md", "# home\n", age: 99999)
     defer { try? fm.removeItem(atPath: vault + "/Home.md") }
-    return FolderListing.firstDocument(FolderListing.list(vault, sort: "name", readmeFirst: true))?.name == "Home.md"
-        && FolderScan.scan(vault).bestMarkdown?.rel == "Home.md"
+    return stray == nil && FolderListing.firstDocument(FolderListing.list(vault, sort: "name", readmeFirst: true))?.name == "Home.md"
 }())
 let idx = LinkIndex.build(root: vault)
 check("wikilinks: by name anywhere under the root, the current folder first, then the shallowest",
@@ -445,11 +601,12 @@ mkdir("empty")
 let imgs = FolderScan.scan(fx.path + "/images"), pdfs = FolderScan.scan(fx.path + "/pdfs"), repo = FolderScan.scan(fx.path + "/repo"),
     empty = FolderScan.scan(fx.path + "/empty")
 check("overview: a folder of images has no Markdown to open: counts and recent files, newest first",
-      FolderRules.declineReason(fx.path + "/images") == nil && imgs.bestMarkdown == nil && imgs.counts == ["image": 4]
+      FolderRules.declineReason(fx.path + "/images") == nil && imgs.counts == ["image": 4]
       && imgs.recent.map(\.rel) == ["p0.png", "p1.png", "p2.png", "p3.png"])
-check("overview: a folder of PDFs", pdfs.bestMarkdown == nil && pdfs.counts == ["pdf": 3] && (pdfs.payload(reason: "open")["view"] as? String) == "overview")
-check("finder: a repository without a README opens its docs, never a dependency's README, and is labelled",
-      repo.bestMarkdown?.rel == "docs/guide.md" && !repo.files.contains { $0.rel.contains("node_modules") } && repo.hasGit
+check("overview: a folder of PDFs", pdfs.counts == ["pdf": 3] && (pdfs.payload(reason: "open")["view"] as? String) == "overview")
+check("finder: a repository without a README shows its overview, counting no dependency, and is labelled",
+      FolderListing.firstDocument(FolderListing.list(fx.path + "/repo", sort: "name", readmeFirst: true)) == nil
+      && repo.counts["markdown"] == 1 && !repo.files.contains { $0.rel.contains("node_modules") } && repo.hasGit
       && repo.payload(reason: "open")["label"] as? String == "Git repository")
 check("overview: an empty folder is previewed, with nothing in it", FolderRules.declineReason(fx.path + "/empty") == nil && empty.files.isEmpty
       && empty.folders == 0 && (empty.payload(reason: "open")["total"] as? Int) == 0)
@@ -482,6 +639,7 @@ check("declines: an app bundle and packages", FolderRules.declineReason(fx.path 
       && FolderRules.declineReason(fx.path + "/Doc.rtfd") != nil && FolderRules.declineReason(fx.path + "/Proj.xcodeproj") != nil)
 check("declines: the volume root and system folders", ["/", "/System", "/Library", "/usr", "/usr/bin", "/System/Library", "/private/var", "/Volumes",
       "/Applications", FolderRules.home + "/Library"].allSatisfy { FolderRules.declineReason($0) != nil })
+check("declines: not /usr/local itself, nor a folder in it", FolderRules.declineReason("/usr/local") == nil || !fm.fileExists(atPath: "/usr/local"))
 check("declines: not an ordinary folder, a dotted name, the home folder or a folder in /tmp's subtree",
       FolderRules.declineReason(fx.path + "/plain.folder.name") == nil && FolderRules.declineReason(fx.path) == nil
       && FolderRules.declineReason(FolderRules.home) == nil && FolderRules.declineReason(FolderRules.home + "/Library/NoSuchFolder") != nil)
@@ -511,22 +669,137 @@ withExtendedLifetime(watch) {}
 let migDir = FileManager.default.temporaryDirectory.appendingPathComponent("spacebar-migrate-\(UUID().uuidString)")
 try! FileManager.default.createDirectory(at: migDir, withIntermediateDirectories: true)
 let migFile = migDir.appendingPathComponent("settings.json")
-check("defaults: folder previews on, version 2", Settings().folderMode && Settings().version == 2)
+check("defaults: folder previews on, reading stats off, README first off, version 5", Settings().folderMode && !Settings().stats && !Settings().folderReadmeFirst && Settings().version == 5)
 try! Data(#"{"version": 1, "folderMode": false, "theme": "nord"}"#.utf8).write(to: migFile)
 check("a version-1 file reads as folder previews on", SettingsFile.load(at: migFile).folderMode)
 SettingsFile.migrate(at: migFile)
 let migrated = (try! JSONSerialization.jsonObject(with: Data(contentsOf: migFile))) as! [String: Any]
-check("migrate turns folder previews on once and writes version 2, keeping other keys",
-      migrated["folderMode"] as? Bool == true && (migrated["version"] as? NSNumber)?.intValue == 2 && migrated["theme"] as? String == "nord")
+check("migrate turns folder previews on once and writes version 5, keeping other keys",
+      migrated["folderMode"] as? Bool == true && (migrated["version"] as? NSNumber)?.intValue == 5 && migrated["theme"] as? String == "nord")
 _ = SettingsFile.update(["folderMode": false], at: migFile)
 SettingsFile.migrate(at: migFile)
 check("turned off after the migration stays off", SettingsFile.load(at: migFile).folderMode == false)
 try! Data(#"{"folderMode": false}"#.utf8).write(to: migFile)
 _ = SettingsFile.update(["folderMode": false], at: migFile)
 check("an unversioned file's off in the same write is kept", SettingsFile.load(at: migFile).folderMode == false)
+// Version 4: reading stats left the settings window, so a file from before is read, and rewritten, with them off.
+for v in 1...3 {
+    try! Data(#"{"version": \#(v), "stats": true, "theme": "nord"}"#.utf8).write(to: migFile)
+    check("a version-\(v) file with reading stats on reads with them off", SettingsFile.load(at: migFile).stats == false)
+}
+try! Data(#"{"version": 2, "theme": "nord"}"#.utf8).write(to: migFile)
+check("a version-2 file without the key reads with reading stats off", SettingsFile.load(at: migFile).stats == false)
+try! Data(#"{"version": 3, "stats": true, "theme": "nord", "futureKey": 7}"#.utf8).write(to: migFile)
+SettingsFile.migrate(at: migFile)
+let v4 = (try! JSONSerialization.jsonObject(with: Data(contentsOf: migFile))) as! [String: Any]
+check("migrate writes reading stats off and version 5, keeping other keys",
+      v4["stats"] as? Bool == false && (v4["version"] as? NSNumber)?.intValue == 5 && v4["theme"] as? String == "nord" && v4["futureKey"] as? Int == 7)
+_ = SettingsFile.update(["stats": true], at: migFile)
+SettingsFile.migrate(at: migFile)
+check("turned on in settings.json after the migration stays on", SettingsFile.load(at: migFile).stats)
+// Version 5: README first off by default, so the sidebar lists a folder as Finder does; a file from before reads, and is
+// rewritten, with it off. A version-4 file's reading stats are its own by then and stay.
+check("defaults: folders first as in Finder", Settings().foldersFirst == "finder")
+for v in 1...4 {
+    try! Data(#"{"version": \#(v), "folderReadmeFirst": true, "theme": "nord"}"#.utf8).write(to: migFile)
+    check("a version-\(v) file with README first on reads with it off", SettingsFile.load(at: migFile).folderReadmeFirst == false)
+}
+try! Data(#"{"version": 4, "folderReadmeFirst": true, "stats": true, "theme": "nord"}"#.utf8).write(to: migFile)
+check("a version-4 file's reading stats on reads on", SettingsFile.load(at: migFile).stats)
+SettingsFile.migrate(at: migFile)
+let v5 = (try! JSONSerialization.jsonObject(with: Data(contentsOf: migFile))) as! [String: Any]
+check("migrate writes README first off and version 5, keeping a version-4 file's reading stats and other keys",
+      v5["folderReadmeFirst"] as? Bool == false && (v5["version"] as? NSNumber)?.intValue == 5 && v5["stats"] as? Bool == true && v5["theme"] as? String == "nord")
+_ = SettingsFile.update(["folderReadmeFirst": true], at: migFile)
+SettingsFile.migrate(at: migFile)
+check("README first turned on in settings.json after the migration stays on", SettingsFile.load(at: migFile).folderReadmeFirst)
+try! Data(#"{"version": 3, "stats": true}"#.utf8).write(to: migFile)
+_ = SettingsFile.update(["stats": true], at: migFile)
+check("an old file's on in the same write as the migration is kept", SettingsFile.load(at: migFile).stats)
+// Settings the window no longer shows keep what the user chose, through the migration.
+let hiddenValues: [String: Any] = ["monoFont": "menlo", "lineHeight": 1.8, "codeTheme": "nord", "minimalChrome": true, "toc": "off", "frontMatter": "raw",
+                             "math": false, "mermaid": false, "mdLinks": "editor", "folderReadmeFirst": false, "sidebarKeys": false, "folderMode": false]
+var hiddenFile = hiddenValues; hiddenFile["version"] = 3
+try! JSONSerialization.data(withJSONObject: hiddenFile).write(to: migFile)
+SettingsFile.migrate(at: migFile)
+let keptHidden = SettingsFile.load(at: migFile).dictionary
+check("every setting the window no longer shows keeps its saved value", hiddenValues.allSatisfy { k, v in (keptHidden[k] as? NSObject) == (v as? NSObject) })
+try! FileManager.default.removeItem(at: migFile)
+_ = SettingsFile.update(["theme": "nord"], at: migFile)
+check("a first write with no file keeps reading stats off", SettingsFile.load(at: migFile).stats == false)
+try! FileManager.default.removeItem(at: migFile)
+check("a new settings.json has reading stats off", SettingsFile.ensure(at: migDir) == nil && SettingsFile.load(at: migFile).stats == false)
 try? FileManager.default.removeItem(at: migDir)
 SettingsFile.migrate(at: migFile)
 check("migrate creates nothing when there is no file", !FileManager.default.fileExists(atPath: migFile.path))
+
+// Where each key is changed: the window's page, its Advanced section, the preview, or settings.json.
+let security: Set<String> = ["htmlScripts", "rawHTML", "remoteImages"]
+check("security settings stay in the window, under Advanced", security.isSubset(of: Settings.advancedKeys))
+check("page and Advanced keys are known and do not overlap", Settings.windowKeys.union(Settings.advancedKeys).isSubset(of: Settings.allKeys)
+      && Settings.windowKeys.isDisjoint(with: Settings.advancedKeys))
+check("the preview can change no Advanced setting", Settings.panelKeys.isDisjoint(with: Settings.advancedKeys) && Settings.panelKeys.isSubset(of: Settings.allKeys))
+check("every key is in the window, the preview, or the README's settings.json list, or is spacebar's own",
+      Settings.allKeys == Settings.windowKeys.union(Settings.advancedKeys).union(Settings.panelKeys)
+        .union(["monoFont", "lineHeight", "codeTheme", "minimalChrome", "stats", "toc", "frontMatter", "math", "mermaid", "mdLinks",
+                "folderMode", "folderReadmeFirst", "sidebarKeys", "welcomeShown", "helperOffered", "webLinks"]))
+let paneSource = (try? String(contentsOfFile: "App/Panes.swift", encoding: .utf8)) ?? ""
+let paneKeys = Set(paneSource.matches(#"store\.(?:binding\(\\\.\w+, |set\()"(\w+)""#))
+check("the window's controls are exactly the page and Advanced keys (the helper's through its own toggle)",
+      !paneKeys.isEmpty && paneKeys.union(["spaceHelper"]) == Settings.windowKeys.union(Settings.advancedKeys))
+let readme = (try? String(contentsOfFile: "README.md", encoding: .utf8)) ?? ""
+check("the README lists every key only settings.json changes",
+      ["monoFont", "lineHeight", "codeTheme", "minimalChrome", "stats", "toc", "frontMatter", "math", "mermaid", "mdLinks", "folderMode", "folderReadmeFirst", "sidebarKeys"]
+        .allSatisfy { readme.contains("`\($0)`") })
+
+// Reset to Defaults
+var tweaked = Settings(dictionary: hiddenValues)
+tweaked.theme = "nord"; tweaked.remoteImages = true; tweaked.htmlScripts = "off"; tweaked.inlineEditing = false; tweaked.stats = true
+tweaked.spaceHelper = true; tweaked.welcomeShown = true; tweaked.helperOffered = true
+let resetDir = FileManager.default.temporaryDirectory.appendingPathComponent("spacebar-reset-\(UUID().uuidString)")
+let resetFile = resetDir.appendingPathComponent("settings.json")
+try! FileManager.default.createDirectory(at: resetDir, withIntermediateDirectories: true)
+var resetRaw = tweaked.dictionary; resetRaw["futureKey"] = "kept"
+try! JSONSerialization.data(withJSONObject: resetRaw).write(to: resetFile)
+if case .success(let r) = SettingsFile.update(Settings.resetPatch(), at: resetFile) {
+    var expected = Settings(); expected.spaceHelper = true; expected.welcomeShown = true; expected.helperOffered = true
+    check("Reset to Defaults resets every key, the settings.json-only ones too, and keeps the helper and the welcome sheet's state", r == expected)
+    check("Reset to Defaults turns inline editing back on and remote images off", r.inlineEditing && !r.remoteImages && r.htmlScripts == "local")
+} else { check("Reset to Defaults writes", false) }
+let afterReset = (try! JSONSerialization.jsonObject(with: Data(contentsOf: resetFile))) as! [String: Any]
+check("Reset to Defaults keeps keys a newer version wrote", afterReset["futureKey"] as? String == "kept")
+check("Reset to Defaults leaves the kept keys to the file", Settings.keptOnReset.allSatisfy { Settings.resetPatch()[$0] == nil })
+// A linked settings.json (a dotfiles setup) is read but never migrated: an old one reads with stats off and its target is left alone.
+let linkTarget = resetDir.appendingPathComponent("target.json"), link = resetDir.appendingPathComponent("link.json")
+try! Data(#"{"version": 3, "stats": true}"#.utf8).write(to: linkTarget)
+try! FileManager.default.createSymbolicLink(at: link, withDestinationURL: linkTarget)
+check("a linked version-3 file reads with reading stats off", SettingsFile.load(at: link).stats == false)
+SettingsFile.migrate(at: link)
+check("migrate leaves a linked file's target untouched", String(data: FileManager.default.contents(atPath: linkTarget.path)!, encoding: .utf8) == #"{"version": 3, "stats": true}"#)
+try! Data(#"{"version": 4, "stats": true}"#.utf8).write(to: linkTarget)
+check("a linked version-4 file can turn reading stats on", SettingsFile.load(at: link).stats)
+try? FileManager.default.removeItem(at: resetDir)
+
+// Settings' About row: what it says for a check's outcome, and nothing is asked of GitHub where checks are off.
+check("About: up to date, a newer version, or nothing known yet",
+      UpdateCheck.status(enabled: true, allowed: true, current: "0.4.0", latest: "0.4") == .upToDate
+      && UpdateCheck.status(enabled: true, allowed: true, current: "0.4.0", latest: "0.4.1") == .available("0.4.1")
+      && UpdateCheck.status(enabled: true, allowed: true, current: "0.4.0", latest: nil) == .unknown)
+check("About: checks off and development builds say so first",
+      UpdateCheck.status(enabled: false, allowed: true, current: "0.4.0", latest: "9.0") == .off
+      && UpdateCheck.status(enabled: true, allowed: false, current: "0.4.0", latest: "9.0") == .devBuild)
+check("About: each outcome reads as a short phrase", UpdateCheck.Status.available("0.5").text == "Version 0.5 is available"
+      && UpdateCheck.Status.failed.text == "Couldn’t check" && UpdateCheck.Status.upToDate.text == "Up to date" && UpdateCheck.Status.unknown.text == nil)
+
+// spacebar-md://settings/<name>: the old tab names still open the window; those whose settings moved open Advanced.
+let tabNames = ["general", "appearance", "folders", "editing", "advanced"]
+check("every name the preview may send opens the window", tabNames.allSatisfy { SettingsTab(url: URL(string: "spacebar-md://settings/\($0)")!) != nil }
+      && Set(SettingsTab.allCases.map(\.rawValue)) == Set(tabNames))
+check("no tab means the page, closed", SettingsTab(url: URL(string: "spacebar-md://settings")!) == .general && !SettingsTab.general.opensAdvanced)
+check("hidden files (folders), editing and advanced open Advanced; general and appearance do not",
+      tabNames.map { SettingsTab(rawValue: $0)!.opensAdvanced } == [false, false, true, true, true])
+check("other links open nothing", SettingsTab(url: URL(string: "spacebar-md://settings/sidebar")!) == nil
+      && SettingsTab(url: URL(string: "https://settings/general")!) == nil)
 
 print("\n\(failures == 0 ? "all" : "\(failures) FAILED of") settings checks")
 exit(failures == 0 ? 0 : 1)

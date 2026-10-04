@@ -9,6 +9,12 @@ import WebKit
 ///                                  page, a script, a style or a frame
 ///   spacebar://user/custom.css     the user's CSS in the support folder
 ///   spacebar://user/themes/<f>.css a user theme; only a plain file name inside themes/
+///   spacebar://body/<token>        the text of the render in flight, too large to send as a script (PageBody): once, as
+///                                  plain text, and only while its file is the one on screen. Nothing is read from disk
+///   spacebar://entry/<token>       the image of the archive entry on screen (ArchiveEntryView), as the writer read it: once,
+///                                  typed by FileTypes' map (raster images only), while its archive is the one on screen
+///   spacebar://thumb/<path>?s=<px> the folder grid's thumbnail of a file the sidebar listed, made in memory by `thumbnail`
+///                                  (which refuses any other path); a load the page drops (`dropThumbs`) is cancelled
 /// The app's live preview uses it with `fileHost: false`.
 final class SchemeHandler: NSObject, WKURLSchemeHandler {
     let webRoot: URL
@@ -36,6 +42,27 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
         return q
     }()
 
+    /// The one text the `body` host may serve, set by each render (nil for one that sends its text inline).
+    var body: PageBody?
+    /// Whether `path` is still the file on screen: a body for any other file is dropped unserved.
+    var bodyCurrent: (String) -> Bool = { _ in false }
+    /// The one archive entry image the `entry` host may serve, set when that entry is shown and cleared by any other render.
+    var entryImage: EntryImage?
+    /// While a file inside an archive is on screen the `file` host serves nothing: its Markdown reaches no file on disk.
+    var filesBlocked = false
+
+    /// The `thumb` host's source: for a path the page names and the pixels it asks for, nil when the path is refused, else a
+    /// cancel for a load the page drops; `reply` runs once on the main thread, maybe before this returns, with the image and
+    /// its Content-Type, or nil.
+    var thumbnail: ((_ path: String, _ px: Int, _ reply: @escaping (Data?, String) -> Void) -> (() -> Void)?)?
+    /// The `thumb` tasks still being made, by URL: WebKit keeps loading an image the page no longer shows, so the page names
+    /// the loads it dropped. A URL dropped before its task starts is remembered (the last `maxDropped`) and refused then.
+    private var thumbTasks: [String: (task: WKURLSchemeTask, cancel: () -> Void)] = [:]
+    private var dropped: [String] = []
+    private var droppedSet: Set<String> = []
+    static let maxThumbPixels = 1024
+    static let maxDropped = 1024
+
     init(webRoot: URL, supportDir: @escaping () -> URL = { SettingsFile.supportDir }, fileHost: Bool = true) {
         self.webRoot = webRoot.standardizedFileURL
         self.supportDir = supportDir
@@ -59,7 +86,7 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
         case "bundle":
             let f = webRoot.appendingPathComponent(url.path).standardizedFileURL
             return f.path.hasPrefix(webRoot.path + "/") ? f : nil
-        case "file" where fileHost:
+        case "file" where fileHost && !filesBlocked:
             // Only what a viewer loads: an image (inside the root, or beside a Markdown document anywhere). A PDF is drawn
             // natively, never loaded by the page. The checked path, symlinks resolved, is what is read.
             let f = URL(fileURLWithPath: url.path).standardizedFileURL
@@ -102,6 +129,9 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
 
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
         guard let url = task.request.url else { return }
+        if url.host == "body" { return serveBody(task, url: url) }
+        if url.host == "entry" { return serveEntry(task, url: url) }
+        if url.host == "thumb" { return serveThumb(task, url: url) }
         guard let fileURL = resolve(url) else {
             onRefused("refused load \(url.absoluteString)")
             return task.didFailWithError(URLError(.noPermissionsToReadFile))
@@ -139,7 +169,71 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {
-        live[ObjectIdentifier(task)] = nil
+        let id = ObjectIdentifier(task)
+        live[id] = nil
+        if let url = task.request.url?.absoluteString, let t = thumbTasks[url], t.task === task {
+            thumbTasks[url] = nil
+            t.cancel()
+        }
+    }
+
+    /// The page dropped these thumbnail loads (their tiles left the window): each is cancelled and failed, or refused when
+    /// its task starts.
+    func dropThumbs(_ urls: [String]) {
+        for u in urls {
+            if let t = thumbTasks.removeValue(forKey: u) {
+                live[ObjectIdentifier(t.task)] = nil
+                t.cancel()
+                t.task.didFailWithError(URLError(.cancelled))
+            } else if droppedSet.insert(u).inserted {
+                dropped.append(u)
+                if dropped.count > Self.maxDropped { droppedSet.remove(dropped.removeFirst()) }
+            }
+        }
+    }
+
+    /// The path and pixel size a `thumb` URL names: `/<the absolute path, percent-encoded as one component>?s=<px>`.
+    static func thumbRequest(_ url: URL) -> (path: String, px: Int)? {
+        guard url.host == "thumb", let c = URLComponents(url: url, resolvingAgainstBaseURL: false), c.percentEncodedPath.hasPrefix("/"),
+              let path = String(c.percentEncodedPath.dropFirst()).removingPercentEncoding, path.hasPrefix("/"), path.utf8.count <= 4096,
+              let s = c.queryItems?.first(where: { $0.name == "s" })?.value, let px = Int(s), (16...maxThumbPixels).contains(px) else { return nil }
+        return (path, px)
+    }
+
+    private func serveThumb(_ task: WKURLSchemeTask, url: URL) {
+        guard fileHost, !filesBlocked, let source = thumbnail, let req = Self.thumbRequest(url) else {
+            onRefused("refused load \(url.absoluteString)")
+            return task.didFailWithError(URLError(.noPermissionsToReadFile))
+        }
+        let key = url.absoluteString
+        if droppedSet.remove(key) != nil {
+            dropped.removeAll { $0 == key }
+            return task.didFailWithError(URLError(.cancelled))
+        }
+        tokens += 1
+        let id = ObjectIdentifier(task), token = tokens
+        live[id] = token
+        let cancel = source(req.path, req.px) { [weak self] data, mime in
+            guard let self, self.live[id] == token else { return }
+            self.live[id] = nil
+            if self.thumbTasks[key]?.task === task { self.thumbTasks[key] = nil }
+            guard let data, mime == "image/jpeg" || mime == "image/png" else { return task.didFailWithError(URLError(.cannotDecodeContentData)) }
+            let headers = ["Content-Type": mime, "Content-Length": String(data.count), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+                           "Content-Security-Policy": "default-src 'none'"]
+            task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!)
+            task.didReceive(data)
+            task.didFinish()
+        }
+        guard let cancel else {
+            live[id] = nil
+            onRefused("refused thumbnail \(req.path)")
+            return task.didFailWithError(URLError(.noPermissionsToReadFile))
+        }
+        if live[id] == token {
+            // A URL is one tile's load; should the same URL come again, the older task is let go.
+            if let old = thumbTasks[key] { live[ObjectIdentifier(old.task)] = nil; old.cancel(); old.task.didFailWithError(URLError(.cancelled)) }
+            thumbTasks[key] = (task, cancel)
+        }
     }
 
     private func respond(_ task: WKURLSchemeTask, url: URL, file: URL, data: Data) {
@@ -154,9 +248,209 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
         task.didFinish()
     }
 
+    /// The pending body, if `url` names its token exactly and its file is still on screen; taken, so a token is good for one
+    /// request. A request for any other URL (a superseded render's) leaves it for the render it belongs to.
+    private func serveBody(_ task: WKURLSchemeTask, url: URL) {
+        guard let b = body, url.absoluteString == b.url, bodyCurrent(b.path) else {
+            onRefused("refused load \(url.absoluteString)")
+            return task.didFailWithError(URLError(.noPermissionsToReadFile))
+        }
+        body = nil
+        let headers = ["Content-Type": "text/plain; charset=utf-8", "Content-Length": String(b.data.count), "Cache-Control": "no-store",
+                       "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'",
+                       "Access-Control-Allow-Origin": PageBody.origin]
+        task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!)
+        task.didReceive(b.data)
+        task.didFinish()
+    }
+
+    /// The pending entry image, under the body's rules: its exact URL, once, while its archive is on screen, and only a type
+    /// ArchiveEntryView sends to `<img>`.
+    private func serveEntry(_ task: WKURLSchemeTask, url: URL) {
+        guard let e = entryImage, url.absoluteString == e.url, bodyCurrent(e.path),
+              ArchiveEntryView.webImages.contains((e.name as NSString).pathExtension.lowercased()) else {
+            onRefused("refused load \(url.absoluteString)")
+            return task.didFailWithError(URLError(.noPermissionsToReadFile))
+        }
+        entryImage = nil
+        let headers = ["Content-Type": FileTypes.contentType(forPath: e.name), "Content-Length": String(e.data.count), "Cache-Control": "no-store",
+                       "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'",
+                       "Access-Control-Allow-Origin": PageBody.origin]
+        task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!)
+        task.didReceive(e.data)
+        task.didFinish()
+    }
+
     private func fail(_ task: WKURLSchemeTask, _ file: URL, _ error: Error) {
         onRefused("read failed \(file.path): \(error.localizedDescription)")
         task.didFailWithError(error)
+    }
+}
+
+/// A render's text sent apart from its script. JSON-escaping a large text into `sb.render(...)` holds the main thread (tens of
+/// ms for a 16 MB table, over 100 for one of accented or CJK text) and copies it several times; as a body it is one copy, and
+/// the page reads it with a synchronous request as its render starts, so renders still run one at a time, in order.
+struct PageBody {
+    static let threshold = 256 << 10
+    static let origin = "spacebar://bundle"
+    let url: String
+    /// The file the text is of: served only while it is on screen.
+    let path: String
+    let data: Data
+
+    /// Moves `payload`'s text into a body when it is past the threshold; the payload names the body's URL in its place.
+    static func take(_ payload: inout [String: Any]) -> PageBody? {
+        // Either count is constant-time for the string's own storage (native UTF-8, or a bridged UTF-16 NSString).
+        guard let text = payload["text"] as? String, let path = payload["path"] as? String,
+              (text.utf8.withContiguousStorageIfAvailable { $0.count } ?? text.utf16.count) > threshold else { return nil }
+        // A byte order mark first: the page's decoder takes exactly one off, so a text that starts with U+FEFF keeps it.
+        var data = Data([0xEF, 0xBB, 0xBF])
+        if text.utf8.withContiguousStorageIfAvailable({ data.append(contentsOf: $0) }) == nil { data.append(contentsOf: text.utf8) }
+        let body = PageBody(url: "spacebar://body/" + UUID().uuidString, path: path, data: data)
+        payload["text"] = nil
+        payload["textURL"] = body.url
+        return body
+    }
+}
+
+/// An image inside an archive, sent to the page as a one-time URL: `path` is the archive, `name` the entry.
+struct EntryImage {
+    let url: String
+    let path: String
+    let name: String
+    let data: Data
+
+    init(path: String, name: String, data: Data) {
+        url = "spacebar://entry/" + UUID().uuidString
+        self.path = path
+        self.name = name
+        self.data = data
+    }
+}
+
+/// Why a document's local images did not load, for the page's placeholders. The page asks only about images that failed, and
+/// the answer goes to the page alone: nothing is loaded or read. The folders an answer found are the only ones the page may
+/// then ask to reveal, and a missing image's nearest folder is watched, so the document renders again once the image appears.
+final class ImageCheck {
+    static let maxPaths = 64
+    /// Paths answered per document: a document naming thousands of images gets placeholders without reasons past this.
+    static let maxPerDoc = 256
+    static let maxWatches = 16
+    static let maxListed = 5000
+    private(set) var doc: String?
+    private var folders: Set<String> = []
+    private var missing: Set<String> = []
+    private var answered: Set<String> = []
+    /// Each folder's entries by lowercased name, read once per document for the case hint.
+    private var listed: [String: [String: String]] = [:]
+    private var watches: [String: FolderWatch] = [:]
+    /// A missing image of the document is now there.
+    var onAppeared: () -> Void = {}
+
+    func reset() {
+        doc = nil
+        folders = []
+        missing = []
+        answered = []
+        listed = [:]
+        watches = [:]
+    }
+
+    /// {reason: missing | unreadable | unsupported | tooLarge | notDownloaded | ok, folder: its folder exists, suggest: a name
+    /// in that folder differing only in case}. `ok`: readable now, so the page tries it once more.
+    static func status(_ path: String, caseMatch match: (String, String) -> String? = { caseMatch($0, in: $1) }) -> [String: Any] {
+        let dir = (path as NSString).deletingLastPathComponent
+        var st = stat()
+        let folder = stat(dir, &st) == 0 && st.st_mode & S_IFMT == S_IFDIR
+        var out: [String: Any] = ["folder": folder]
+        if stat(path, &st) != 0 {
+            let missing = errno == ENOENT || errno == ENOTDIR
+            out["reason"] = missing ? "missing" : "unreadable"
+            if missing, folder, let s = match((path as NSString).lastPathComponent, dir) { out["suggest"] = s }
+        } else if st.st_mode & S_IFMT != S_IFREG || !FileTypes.contentType(forPath: path).hasPrefix("image/") {
+            out["reason"] = "unsupported"
+        } else if Int64(st.st_size) > FileTypes.maxImageBytes {
+            out["reason"] = "tooLarge"
+        } else if st.st_flags & 0x4000_0000 != 0 {
+            out["reason"] = "notDownloaded"
+        } else {
+            let fd = open(path, O_RDONLY | O_NONBLOCK)
+            if fd >= 0 { close(fd) }
+            out["reason"] = fd >= 0 ? "ok" : "unreadable"
+        }
+        return out
+    }
+
+    /// The entry of `dir` whose name is `name` but for case, if any; at most maxListed entries are looked at.
+    static func caseMatch(_ name: String, in dir: String) -> String? {
+        caseMatch(name, among: entries(dir))
+    }
+
+    static func entries(_ dir: String) -> [String] {
+        guard let d = opendir(dir) else { return [] }
+        defer { closedir(d) }
+        var names: [String] = []
+        while names.count < maxListed, let e = readdir(d) {
+            names.append(withUnsafePointer(to: e.pointee.d_name) { $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) } })
+        }
+        return names
+    }
+
+    static func caseMatch(_ name: String, among names: [String]) -> String? {
+        let want = name.lowercased()
+        return names.first { $0 != name && $0.lowercased() == want }
+    }
+
+    /// The statuses of `raw` (the page's list of absolute, plain paths) for `doc`, the document on screen; nil for a bad list.
+    func answer(_ raw: Any?, doc: String) -> [String: Any]? {
+        guard let list = raw as? [Any], list.count <= Self.maxPaths else { return nil }
+        if doc != self.doc { reset(); self.doc = doc }
+        var out: [String: Any] = [:]
+        for case let p as String in list where p.utf8.count <= 4096 && p.hasPrefix("/")
+            && URL(fileURLWithPath: p, isDirectory: false).standardizedFileURL.path == p {
+            guard answered.contains(p) || answered.count < Self.maxPerDoc else { break }
+            answered.insert(p)
+            let s = Self.status(p) { name, dir in
+                if self.listed[dir] == nil {
+                    self.listed[dir] = Dictionary(Self.entries(dir).map { ($0.lowercased(), $0) }) { a, _ in a }
+                }
+                return self.listed[dir]?[name.lowercased()].flatMap { $0 == name ? nil : $0 }
+            }
+            out[p] = s
+            let dir = (p as NSString).deletingLastPathComponent
+            if s["folder"] as? Bool == true { folders.insert(dir) }
+            if s["reason"] as? String == "missing" {
+                missing.insert(p)
+                watchNearest(dir)
+            }
+        }
+        return out
+    }
+
+    /// The folder of `path`, when one of `doc`'s answers found it and it is still a folder.
+    func revealable(_ path: String?, doc: String) -> URL? {
+        guard doc == self.doc, let path else { return nil }
+        let dir = (path as NSString).deletingLastPathComponent
+        var st = stat()
+        guard folders.contains(dir), stat(dir, &st) == 0, st.st_mode & S_IFMT == S_IFDIR else { return nil }
+        return URL(fileURLWithPath: dir, isDirectory: true)
+    }
+
+    /// The deepest existing folder on the way to `dir`: a new entry there may be the image, or a folder on its way to it.
+    private func watchNearest(_ dir: String) {
+        var d = dir
+        var st = stat()
+        while d != "/", !(stat(d, &st) == 0 && st.st_mode & S_IFMT == S_IFDIR) { d = (d as NSString).deletingLastPathComponent }
+        guard d != "/", watches[d] == nil, watches.count < Self.maxWatches else { return }
+        watches[d] = FolderWatch(path: d) { [weak self] in self?.changed() }
+    }
+
+    private func changed() {
+        var st = stat()
+        let appeared = missing.filter { stat($0, &st) == 0 }
+        missing.subtract(appeared)
+        for p in missing { watchNearest((p as NSString).deletingLastPathComponent) }
+        if !appeared.isEmpty { onAppeared() }
     }
 }
 
@@ -171,11 +465,37 @@ enum ShellPolicy {
     }
 }
 
-/// What the page is told about the settings: the settings themselves plus the URLs of the user CSS to load, each versioned by
+/// A code fence's copy button: the page names the fence by its source lines, and the code is taken from the document's own text,
+/// never from the page, so a scripted page cannot put text of its choosing on the clipboard.
+enum CodeFence {
+    /// The code inside the fence that opens on line `start` (0-based) of `doc`, within lines [start, end); nil when that line
+    /// opens no fence.
+    static func code(_ doc: String, start: Int, end: Int) -> String? {
+        // Split as markdown-it counts lines: CRLF is one line end ("\r\n" is one Character to Swift).
+        let lines = doc.replacingOccurrences(of: "\r\n", with: "\n").split(separator: "\n", omittingEmptySubsequences: false)
+        guard start >= 0, end > start, end <= lines.count else { return nil }
+        let open = lines[start].drop { $0 == " " }
+        guard lines[start].count - open.count <= 3, let mark = open.first, mark == "`" || mark == "~" else { return nil }
+        let fence = open.prefix { $0 == mark }
+        guard fence.count >= 3 else { return nil }
+        var body = lines[(start + 1)..<end]
+        if let last = body.last, last.trimmingCharacters(in: .whitespaces).hasPrefix(String(fence)),
+           last.trimmingCharacters(in: .whitespaces).allSatisfy({ $0 == mark }) { body = body.dropLast() }
+        // An indented fence's content loses as much indentation, as CommonMark renders it.
+        let indent = lines[start].count - open.count
+        return body.map { line in String(line.dropFirst(min(indent, line.prefix { $0 == " " }.count))) }.joined(separator: "\n")
+    }
+}
+
+/// What the page is told about the settings: the settings themselves, the folders-first and hidden-files states in force
+/// (Finder's where the settings follow it, for the sidebar's menu), and the URLs of the user CSS to load, each versioned by
 /// its modification time so an edit to the file reloads it.
 enum PageSettings {
-    static func payload(_ s: Settings, supportDir dir: URL = SettingsFile.supportDir) -> [String: Any] {
+    static func payload(_ s: Settings, finder: FinderPrefs.Values = FinderPrefs.read(), supportDir dir: URL = SettingsFile.supportDir) -> [String: Any] {
         var p = s.dictionary
+        let o = FolderListing.Options(sort: s.folderSort, foldersFirst: s.foldersFirst, readmeFirst: s.folderReadmeFirst, showHidden: s.showHiddenFiles, finder: finder)
+        p["listsFoldersFirst"] = o.foldersFirst
+        p["listsHidden"] = o.showHidden
         func versioned(_ f: URL, _ path: String) -> Any {
             var st = stat()
             guard stat(f.path, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { return NSNull() }
@@ -193,10 +513,14 @@ enum PageSettings {
         String(data: try! JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]), encoding: .utf8)!
     }
 
-    /// The document-start script: the settings, then web/settings.js, which applies them to <html> before first paint.
-    static func userScript(_ payload: [String: Any], webRoot: URL) -> WKUserScript {
+    static let hosts = ["quicklook", "panel"]
+
+    /// The document-start script: the settings and who shows the page (`hosts`: Quick Look, or the Space helper's panel),
+    /// then web/settings.js, which applies them to <html> before first paint.
+    static func userScript(_ payload: [String: Any], webRoot: URL, host: String = "quicklook") -> WKUserScript {
         let apply = (try? String(contentsOf: webRoot.appendingPathComponent("settings.js"), encoding: .utf8)) ?? ""
-        return WKUserScript(source: "window.__sbInitial = \(json(payload));\n\(apply)", injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        let h = hosts.contains(host) ? host : "quicklook"
+        return WKUserScript(source: "window.__sbInitial = \(json(payload));\nwindow.__sbHost = \"\(h)\";\n\(apply)", injectionTime: .atDocumentStart, forMainFrameOnly: true)
     }
 
     /// Blocks every http(s) image; installed when remoteImages is off.

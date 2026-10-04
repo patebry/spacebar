@@ -2,21 +2,27 @@
 # spacebar installer: https://github.com/patebry/spacebar
 #
 #   curl -fsSL https://spacebar.patebryant.com/install.sh | sh
+#   curl -fsSL https://spacebar.patebryant.com/install.sh | sh -s -- --dry-run    (options go after sh -s --)
 #
 # What this does, in order:
-#   1. Checks for macOS 13 or later.
+#   1. Refuses to run as root, checks for macOS 13 or later, and picks the folder: ~/Applications, unless spacebar is only
+#      in /Applications (dragged there from spacebar.dmg), whose copy is then updated in place. It stops if this account
+#      cannot change a copy there, or at a link where a copy or its .new or .old would be.
 #   2. Downloads spacebar.zip and spacebar.zip.sha256 from the latest GitHub release (or SPACEBAR_VERSION) with curl
 #      into a temporary folder, and stops unless the SHA-256 matches. It makes no GitHub API calls, so it is never
 #      rate-limited.
-#   3. Unzips the new spacebar.app and copies it into ~/Applications as .spacebar.app.new (no sudo).
-#   4. If ~/Applications/spacebar.app exists: quits that copy and unregisters its Quick Look extensions, renames it to
-#      .spacebar.app.old, quits its extensions still running, renames the new copy into its place, then deletes
-#      .spacebar.app.old. If the new copy cannot be moved in, the old one is put back. Nothing outside those three exact
-#      paths is removed (and, when spacebar's Update button started this run, the private copy of this script it ran).
-#   5. Registers it with Launch Services and pluginkit, turns on the Markdown preview extension, and resets
-#      Quick Look's cache.
-#   6. Lists any other Quick Look extensions that claim Markdown and are turned on, and warns about a second copy in
-#      /Applications. It never turns anything off or deletes anything else itself.
+#   3. Unzips the new spacebar.app and copies it into that folder as .spacebar.app.new (no sudo).
+#   4. If spacebar.app exists there: quits that copy and unregisters its Quick Look extensions, renames it to
+#      .spacebar.app.old, quits its extensions still running, renames the new copy into its place, quits the Space
+#      helper's viewer, then deletes .spacebar.app.old. If the new copy cannot be moved in, the old one is put back.
+#      Nothing outside those three exact paths is removed (and, when spacebar's Update button started this run, the
+#      private copy of this script it ran).
+#   5. Registers it with Launch Services and pluginkit, turns on its preview extensions, and resets Quick Look's cache.
+#      If the Space helper's agent is registered, registers it again in the background, retrying for up to 10 minutes
+#      (logged to ~/Library/Logs/spacebar-helper.log): after the app is replaced, launchd refuses the new helper until then.
+#   6. Lists any other Quick Look extensions that are turned on and claim file types spacebar previews (Markdown, code,
+#      data, text, archives), and warns about a second copy in /Applications. It never turns anything off or deletes
+#      anything else itself.
 # Running it again reinstalls the same or a newer version. --dry-run downloads and verifies, then changes nothing.
 set -eu
 
@@ -25,14 +31,13 @@ INSTALL_URL=https://spacebar.patebryant.com/install.sh
 APP_NAME=spacebar.app
 APPEX_ID=md.spacebar.preview
 FOLDERS_ID=md.spacebar.preview.folders
-# A stalled connection gives up instead of hanging the install.
-CURL_LIMITS="--connect-timeout 15 --max-time 600"
+HELPER_LABEL=md.spacebar.helper
 LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 QL_SETTINGS='x-apple.systempreferences:com.apple.ExtensionsPreferences?extensionPointIdentifier=com.apple.quicklook.preview'
 
 usage() {
   cat <<'EOF'
-Install spacebar, the Quick Look previewer for Markdown, into ~/Applications.
+Install spacebar into ~/Applications, or update the copy in /Applications. Press Space. See everything: Quick Look for folders, documents, code and data.
 
 usage: install.sh [--version vX.Y.Z] [--dry-run] [--no-register] [--no-prompt] [--help]
 
@@ -51,6 +56,8 @@ EOF
 }
 
 say() { printf '%s\n' "$*"; }
+# A stalled connection gives up instead of hanging the install.
+fetch() { curl --connect-timeout 15 --max-time 600 "$@"; }
 # quote <word>: the word, single-quoted only when a shell would need it.
 quote() {
   case $1 in
@@ -81,6 +88,59 @@ run() {
 run_quiet() {
   if [ "$DRY_RUN" = 1 ]; then say "would run: $*"; else "$@" >/dev/null 2>&1; fi
 }
+# rival_report <app>: reads `pluginkit -mAvvv -p com.apple.quicklook.preview` on stdin and prints each other extension that is
+# turned on and claims a type <app>'s preview extension claims, with how many of those types it claims by group (the section
+# of <app>'s quicklook-types.txt; a Markdown type of any vendor counts as Markdown). It only reads Info.plists.
+rival_report() {
+  own_plist="$1/Contents/PlugIns/SpacebarPreview.appex/Contents/Info.plist"
+  own_types="$1/Contents/Resources/quicklook-types.txt"
+  tab=$(printf '\t')
+  ours=$(
+    if [ -f "$own_types" ]; then
+      awk '
+        /^[[:space:]]*$/ { blank = 1; next }
+        /^#/ { if (blank) { h = $0; sub(/^#[[:space:]]*/, "", h)
+                 if (h ~ /^Markdown/) g = "Markdown"; else if (h ~ /^Source code/) g = "code"; else if (h ~ /^Data/) g = "data"
+                 else if (h ~ /^Archives/) g = "archives"; else if (h ~ /^Plain text/) g = "text"
+                 else if (h ~ /^Files with no extension/) g = "files with no extension" }
+               blank = 0; next }
+        { blank = 0 }
+        $1 == "claim" { print "G\t" $2 "\t" g }
+        $1 == "declare" { split($2, e, ","); print "G\tmd.spacebar.type." e[1] "\t" g }' "$own_types"
+    fi
+    ql_types "$own_plist" | awk 'NF { print "O\t" $0 }'
+  )
+  # pluginkit prints a header per extension, "<mark> <id>(<version>)" with mark "-" when it is off, then tab-indented fields.
+  awk '
+    /^\t/ { if ($1 == "Path" && $2 == "=") { p = $0; sub(/^\t *Path = /, "", p); print m "\t" id "\t" p }; next }
+    /\(/ { m = substr($0, 1, 1); id = $0; sub(/^[-+=! ]*/, "", id); sub(/\(.*/, "", id) }' |
+  while IFS="$tab" read -r mark id path; do
+    # Apple's own previewers are never offered for turning off: Quick Look prefers an app's extension to them.
+    case $id in md.spacebar*|com.apple.*|"") continue ;; esac
+    [ "$mark" = "-" ] && continue
+    [ -f "$path/Contents/Info.plist" ] || continue
+    counts=$( { printf '%s\n' "$ours"; ql_types "$path/Contents/Info.plist" | awk 'NF { print "R\t" $0 }'; } | awk -F '\t' '
+      $1 == "G" { group[tolower($2)] = $3; next }
+      $1 == "O" { own[tolower($2)] = 1; next }
+      $1 == "R" { t = tolower($2)
+        if (t ~ /^md\.spacebar/ || seen[t]++) next
+        if (t in own) g = (group[t] != "") ? group[t] : (t ~ /markdown/) ? "Markdown" : "other types"
+        else if (t ~ /markdown/) g = "Markdown"
+        else next
+        n[g]++ }
+      END { out = ""
+        k = split("Markdown,code,data,text,archives,files with no extension,other types", order, ",")
+        for (i = 1; i <= k; i++) if (n[order[i]]) out = out (out ? ", " : "") order[i] ": " n[order[i]] (n[order[i]] == 1 ? " type" : " types")
+        print out }')
+    [ -n "$counts" ] && printf '  %s  %s\n      also previews %s\n' "$id" "$path" "$counts"
+  done
+  return 0
+}
+# ql_types <Info.plist>: its QLSupportedContentTypes, one per line.
+ql_types() {
+  plutil -extract NSExtension.NSExtensionAttributes.QLSupportedContentTypes json -o - "$1" 2>/dev/null | tr -d '[]" \n' | tr ',' '\n'
+}
+
 # The bundle path as an anchored regex, so pkill/pgrep match processes running from this exact bundle only.
 path_regex() { printf '^%s/' "$1" | sed 's/[][\.*$+?(){}|]/\\&/g'; }
 
@@ -95,6 +155,41 @@ quit_extensions() {
     tries=$((tries + 1))
   done
   pkill -f "$(path_regex "$1")Contents/PlugIns/" || true
+}
+
+# quit_viewer <bundle path>: quits the Space helper's viewer running from it, its writer first with the same 6 seconds. The
+# helper starts a new one from the new copy when it next needs it.
+quit_viewer() {
+  viewer=$(path_regex "$1/Contents/Helpers/spacebar Viewer.app")
+  pkill -f "${viewer}Contents/XPCServices/" || true
+  tries=0
+  while [ "$tries" -lt 30 ] && pgrep -f "${viewer}Contents/XPCServices/" >/dev/null 2>&1; do
+    sleep 0.2
+    tries=$((tries + 1))
+  done
+  pkill -f "$viewer" || true
+}
+
+# start_reregister <bundle path> <log>: starts the app's `--reregister` in the background and returns at once. It brings the
+# Space helper back after the swap (about 15 s, retrying with backoff for up to 10 minutes), appending to <log>.
+start_reregister() {
+  mkdir -p "${2%/*}" 2>/dev/null || true
+  printf '=== %s reregister after install ===\n' "$(date '+%Y-%m-%d %H:%M:%S')" >>"$2" 2>/dev/null || true
+  nohup "$1/Contents/MacOS/Spacebar" --reregister >>"$2" 2>&1 </dev/null &
+}
+
+# there <path>: something is at it, a link included.
+there() { [ -e "$1" ] || [ -L "$1" ]; }
+
+# replaceable <folder>: whether this account can do the swap there: write the folder, and every folder inside each copy it
+# would rename or delete (one dragged in by another account is that account's).
+replaceable() {
+  [ -d "$1" ] && [ -w "$1" ] || return 1
+  for b in "$1/$APP_NAME" "$1/.$APP_NAME.new" "$1/.$APP_NAME.old"; do
+    [ -e "$b" ] || continue
+    [ -z "$(find "$b" -type d 2>&1 | while IFS= read -r d; do [ -d "$d" ] && [ -w "$d" ] || { printf x; break; }; done)" ] || return 1
+  done
+  return 0
 }
 
 # Re-registers a copy that was unregistered for a swap that did not happen.
@@ -158,23 +253,44 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+# Root's HOME may be kept by sudo: the copy would be root's, and Launch Services and pluginkit root's, not the user's.
+[ "$(id -u)" != 0 ] || { echo "error: run this as yourself, without sudo: it installs spacebar for your account only." >&2; exit 1; }
+
 # 1. macOS 13 or later.
 [ "$(uname -s)" = Darwin ] || { echo "error: spacebar is a macOS app." >&2; exit 1; }
 os=$(sw_vers -productVersion)
 [ "${os%%.*}" -ge 13 ] || { echo "error: spacebar needs macOS 13 or later (this Mac has $os)." >&2; exit 1; }
 
+# Overridable only so the choice between the two can be tested without touching /Applications.
+SYSTEM_APPS=${SPACEBAR_SYSTEM_APPLICATIONS:-/Applications}
+# The copy in ~/Applications, else the one in /Applications; with neither, the folder where a swap was cut short (its .old),
+# else ~/Applications. A link counts as there: it is refused below. Updates.managedCopy picks the same.
 DEST_DIR="$HOME/Applications"
+if ! there "$DEST_DIR/$APP_NAME" && { there "$SYSTEM_APPS/$APP_NAME" || { ! there "$DEST_DIR/.$APP_NAME.old" && there "$SYSTEM_APPS/.$APP_NAME.old"; }; }; then
+  DEST_DIR=$SYSTEM_APPS
+fi
 DEST="$DEST_DIR/$APP_NAME"
 NEW="$DEST_DIR/.$APP_NAME.new"
 OLD="$DEST_DIR/.$APP_NAME.old"
-# Where a second, unmanaged copy would sit. Overridable only so the warning can be tested without touching /Applications.
-SYSTEM_APPS=${SPACEBAR_SYSTEM_APPLICATIONS:-/Applications}
 TMP=""
 MADE_NEW=0
 SWAPPING=0
 UNREGISTERED=0
 trap cleanup EXIT
 trap 'exit 130' INT TERM
+
+# A link would be moved aside and replaced, and the copy it points to left as it was: a second copy.
+for p in "$DEST" "$NEW" "$OLD"; do
+  [ ! -L "$p" ] || fail "$p is a link, not a copy of spacebar. Nothing was installed. Delete the link and run this again."
+done
+# Not a second copy in ~/Applications instead: Quick Look could go on using this one, which nobody here could then change.
+if [ "$DEST_DIR" = "$SYSTEM_APPS" ] && ! replaceable "$DEST_DIR"; then
+  where=$DEST
+  [ -e "$where" ] || where=$OLD
+  fail "spacebar is in $where, which this account cannot change. Nothing was installed. Ask an administrator to update it
+(open spacebar.dmg and drag spacebar to Applications, or run this command signed in as that administrator), or to delete
+it, so that this command installs spacebar in ~/Applications instead."
+fi
 
 # 2. Resolve the release and download it. github.com/<repo>/releases/latest/download/<asset> redirects to the newest
 # release's asset without the rate-limited API. The tag shown comes from where /releases/latest redirects.
@@ -185,7 +301,7 @@ elif [ -n "$VERSION" ]; then
   BASE="https://github.com/$REPO/releases/download/$VERSION"
 else
   BASE="https://github.com/$REPO/releases/latest/download"
-  landed=$(curl -fsSIL $CURL_LIMITS -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null || true)
+  landed=$(fetch -fsSIL -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null || true)
   case $landed in
     */releases/tag/?*) VERSION="${landed##*/releases/tag/} (latest)" ;;
     *) VERSION="(latest)" ;;
@@ -195,8 +311,8 @@ fi
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/spacebar-install.XXXXXX")
 
 say "Downloading spacebar $VERSION"
-curl -fSL $CURL_LIMITS --progress-bar -o "$TMP/spacebar.zip" "$BASE/spacebar.zip" || fail "download failed: $BASE/spacebar.zip"
-curl -fsSL $CURL_LIMITS -o "$TMP/spacebar.zip.sha256" "$BASE/spacebar.zip.sha256" || fail "download failed: $BASE/spacebar.zip.sha256"
+fetch -fSL --progress-bar -o "$TMP/spacebar.zip" "$BASE/spacebar.zip" || fail "download failed: $BASE/spacebar.zip"
+fetch -fsSL -o "$TMP/spacebar.zip.sha256" "$BASE/spacebar.zip.sha256" || fail "download failed: $BASE/spacebar.zip.sha256"
 
 expected=$(awk '{ print $1; exit }' "$TMP/spacebar.zip.sha256")
 actual=$(shasum -a 256 "$TMP/spacebar.zip" | awk '{ print $1 }')
@@ -225,6 +341,7 @@ if [ "$DRY_RUN" = 1 ]; then
     if [ "$SKIP_REGISTER" != 1 ]; then
       say "after the first move, would run: pkill -f $(path_regex "$DEST")Contents/PlugIns/[^/]*/Contents/XPCServices/,"
       say "  wait up to 6 s for those writers to exit, then run: pkill -f $(path_regex "$DEST")Contents/PlugIns/ (and the same for $OLD)"
+      say "after the swap, would quit the Space helper's viewer running from $DEST, its writer first"
     fi
   else
     say "would move $NEW to $DEST"
@@ -241,7 +358,7 @@ else
   MADE_NEW=1
   ditto "$TMP/unpacked/$APP_NAME" "$NEW" || fail "could not copy the app into $DEST_DIR. Nothing was installed."
 
-  # 4. Swap it in at exactly ~/Applications/spacebar.app: old copy aside, new copy in, then the old copy deleted.
+  # 4. Swap it in at exactly $DEST: old copy aside, new copy in, then the old copy deleted.
   if [ -e "$DEST" ]; then
     say "Replacing $DEST"
     if [ "$SKIP_REGISTER" != 1 ]; then
@@ -255,7 +372,8 @@ else
     SWAPPING=1
     if ! mv "$DEST" "$OLD"; then
       SWAPPING=0
-      fail "could not move the previous copy aside; it is still installed at $DEST."
+      fail "could not move the previous copy aside; it is still installed at $DEST. If macOS said your terminal was prevented
+from modifying apps, allow it in System Settings > Privacy & Security > App Management, or use Update in spacebar's preview."
     fi
     # Quick Look extensions (and their writers) still running the old code would keep serving it from a deleted bundle.
     if [ "$SKIP_REGISTER" != 1 ]; then
@@ -270,6 +388,7 @@ else
     SWAPPING=0
     UNREGISTERED=0
     MADE_NEW=0
+    [ "$SKIP_REGISTER" = 1 ] || quit_viewer "$DEST"
     rm -rf "$OLD" || say "note: could not delete $OLD; delete it yourself."
   else
     mv "$NEW" "$DEST" || fail "could not move the new copy into $DEST."
@@ -285,7 +404,7 @@ else
   run pluginkit -a "$DEST/Contents/PlugIns/SpacebarPreview.appex"
   run pluginkit -a "$DEST/Contents/PlugIns/SpacebarFolders.appex"
   run pluginkit -e use -i "$APPEX_ID"
-  # Folder previews are on by default (Settings > Sidebar); the folders extension stays off only if they were turned off.
+  # Folder previews are on by default ("folderMode" in settings.json); the folders extension stays off only if they were turned off.
   settings="$HOME/Library/Application Support/spacebar/settings.json"
   [ -e "${settings%/*}" ] || settings="$HOME/Library/Application Support/spacebar.md/settings.json"
   if grep -qE '"folderMode"[[:space:]]*:[[:space:]]*false' "$settings" 2>/dev/null && grep -qE '"version"[[:space:]]*:[[:space:]]*([2-9]|[1-9][0-9])' "$settings"; then
@@ -298,30 +417,23 @@ else
   if [ "$DRY_RUN" != 1 ] && pgrep -f "$(path_regex "$DEST")Contents/PlugIns/" >/dev/null 2>&1; then
     say "note: a Quick Look preview from the old version is still open; close it to load the new one."
   fi
+  # launchd refuses a replaced helper until it is registered again (FINDINGS.md, Space helper): not waited for.
+  if launchctl print "gui/$(id -u)/$HELPER_LABEL" >/dev/null 2>&1; then
+    helper_log="$HOME/Library/Logs/spacebar-helper.log"
+    if [ "$DRY_RUN" = 1 ]; then
+      say "would run in the background: $DEST/Contents/MacOS/Spacebar --reregister >>$helper_log"
+    else
+      start_reregister "$DEST" "$helper_log"
+      say "Registering the Space helper again in the background (log: $helper_log)."
+    fi
+  fi
 fi
 
-# 6. Other Quick Look extensions that claim Markdown: macOS picks one per file type, and it may not pick spacebar.
-# Read-only: pluginkit -m only lists what is registered.
+# 6. Other Quick Look extensions that claim types spacebar previews: macOS picks one per file type, and it may not pick
+# spacebar. Read-only: pluginkit -m only lists what is registered, and nothing is turned off here.
 rivals=""
 if command -v pluginkit >/dev/null 2>&1; then
-  # pluginkit prints a header per extension, "<mark> <id>(<version>)" with mark "-" when it is off, then tab-indented fields.
-  records=$(pluginkit -mAvvv -p com.apple.quicklook.preview 2>/dev/null | awk '
-    /^\t/ { if ($1 == "Path" && $2 == "=") { p = $0; sub(/^\t *Path = /, "", p); print m "\t" id "\t" p }; next }
-    /\(/ { m = substr($0, 1, 1); id = $0; sub(/^[-+=! ]*/, "", id); sub(/\(.*/, "", id) }')
-  tab=$(printf '\t')
-  while IFS="$tab" read -r mark id path; do
-    case $id in md.spacebar*|"") continue ;; esac
-    [ "$mark" = "-" ] && continue
-    plist="$path/Contents/Info.plist"
-    [ -f "$plist" ] || continue
-    if plutil -extract NSExtension.NSExtensionAttributes.QLSupportedContentTypes json -o - "$plist" 2>/dev/null |
-       grep -qi markdown; then
-      rivals="$rivals
-  $id  $path"
-    fi
-  done <<EOF
-$records
-EOF
+  rivals=$(pluginkit -mAvvv -p com.apple.quicklook.preview 2>/dev/null | rival_report "$TMP/unpacked/$APP_NAME")
 fi
 
 say ""
@@ -330,16 +442,23 @@ if [ "$DRY_RUN" = 1 ]; then
 else
   say "Installed spacebar $VERSION to $DEST"
 fi
-if [ -e "$SYSTEM_APPS/$APP_NAME" ]; then
+if [ "$DEST_DIR" != "$SYSTEM_APPS" ] && [ -e "$SYSTEM_APPS/$APP_NAME" ]; then
   say ""
-  say "warning: there is another copy at $SYSTEM_APPS/$APP_NAME. Both copies claim Markdown files, so Quick Look"
+  say "warning: there is another copy at $SYSTEM_APPS/$APP_NAME. Both copies claim the same files, so Quick Look"
   say "may use either one. This installer manages only $DEST and has left the other copy alone;"
   say "delete it yourself if you do not need it."
 fi
+if [ "$DEST_DIR" = "$SYSTEM_APPS" ] && there "$HOME/Applications/.$APP_NAME.old"; then
+  say ""
+  say "note: $HOME/Applications/.$APP_NAME.old is left from an install there that was cut short. This installer updates"
+  say "$DEST while that copy is there; delete the old one yourself if you do not need it."
+fi
 if [ -n "$rivals" ]; then
   say ""
-  say "Other Quick Look extensions that preview Markdown are turned on:$rivals"
-  say "If Markdown does not open in spacebar, turn the others off in System Settings > General >"
+  say "Other Quick Look extensions that preview some of the same files are turned on:"
+  say "$rivals"
+  say "Quick Look uses one extension per file type. If those files do not open in spacebar, turn the others off in"
+  say "spacebar's Settings, or in System Settings > General >"
   say "Login Items & Extensions > Quick Look (macOS 13-14: Privacy & Security > Extensions > Quick Look),"
   say "or run:  pluginkit -e ignore -i <id>"
   if [ "$PROMPT" = 1 ] && [ "$DRY_RUN" != 1 ] && [ -t 1 ] && (: </dev/tty) 2>/dev/null; then
@@ -349,9 +468,10 @@ if [ -n "$rivals" ]; then
   fi
 fi
 say ""
-say "Next: select a .md file in Finder and press Space."
-say "Settings: open ~/Applications/spacebar.app"
-say "Uninstall: curl -fsSL https://raw.githubusercontent.com/$REPO/main/scripts/uninstall.sh | sh"
+say "Next: select a file or folder in Finder and press Space. spacebar shows folders, Markdown, code, data and"
+say "archives; plain text, images, PDFs and media keep Apple's preview in Finder and open in spacebar's sidebar."
+say "Settings: open $(quote "$DEST")"
+say "Uninstall: curl -fsSL https://spacebar.patebryant.com/uninstall.sh | sh"
 }
 
 main "$@"

@@ -2,22 +2,32 @@
 <html>
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src spacebar://bundle/app.js spacebar://bundle/vendor/; style-src spacebar: 'unsafe-inline'; img-src spacebar: https: data:; font-src spacebar:; base-uri spacebar:; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src spacebar://bundle/app.js spacebar://bundle/vendor/; style-src spacebar: 'unsafe-inline'; img-src spacebar://bundle spacebar://file spacebar://user spacebar://entry spacebar://thumb https: data: blob:; font-src spacebar:; connect-src spacebar://body spacebar://entry; base-uri spacebar:; form-action 'none'">
 <base id="base" href="spacebar://bundle/">
 <link rel="stylesheet" href="spacebar://bundle/base.css">
 <link rel="stylesheet" href="spacebar://bundle/style.css">
 <link rel="stylesheet" href="spacebar://bundle/themes.css">
 <link rel="stylesheet" href="spacebar://bundle/code.css">
 <script src="spacebar://bundle/vendor/markdown-it.min.js"></script>
-<script src="spacebar://bundle/vendor/katex.min.js"></script>
 <script src="spacebar://bundle/vendor/texmath.js"></script>
+<script src="spacebar://bundle/vendor/markdown-it-footnote.min.js"></script>
+<script src="spacebar://bundle/vendor/markdown-it-mark.min.js"></script>
 <script src="spacebar://bundle/vendor/highlight.min.js"></script>
+<script src="spacebar://bundle/vendor/hljs-languages.min.js"></script>
 <script src="spacebar://bundle/vendor/purify.min.js"></script>
 </head>
 <body>
 <nav id="sidebar" aria-label="Files in this folder" hidden>
-  <div id="side-head"></div>
-  <div id="side-filter"><input id="side-q" type="search" placeholder="Filter" aria-label="Filter files" aria-controls="side-list" autocomplete="off" spellcheck="false"></div>
+  <div id="side-head"><button id="side-title" type="button"></button></div>
+  <div id="side-filter"><input id="side-q" type="search" placeholder="Filter" title="Filter (⌥⌘F)" aria-label="Filter files" aria-controls="side-list" autocomplete="off" spellcheck="false"><span id="side-hint" aria-live="polite" hidden></span><button id="side-menu" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="side-pop" title="Sort and view options"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v10M2.6 10.6 5 13l2.4-2.4M11 13V3M8.6 5.4 11 3l2.4 2.4"/></svg></button></div>
+  <div id="side-mode" role="radiogroup" aria-label="Search in" aria-controls="side-list"><button type="button" role="radio" data-mode="names" aria-checked="true" title="Filter by file name, in every folder">Names</button><button type="button" role="radio" data-mode="contents" aria-checked="false" title="Search the text in the files">Contents</button></div>
+  <div id="side-pop" role="menu" aria-label="Sidebar options" hidden>
+    <button type="button" role="menuitemradio" data-sort="name">Sort by Name</button>
+    <button type="button" role="menuitemradio" data-sort="modified">Sort by Date Modified</button>
+    <div class="side-pop-sep" role="separator"></div>
+    <button type="button" role="menuitemcheckbox" id="side-folders" title="As Finder's “Keep folders on top” until you choose here">Folders First</button>
+    <button type="button" role="menuitemcheckbox" id="side-hidden" title="Shown while Finder shows them (⇧⌘.), or always from Settings › Advanced">Show Hidden Files…</button>
+  </div>
   <div id="side-list" role="tree"></div>
   <div id="side-more" hidden></div>
   <div id="side-resize" role="separator" aria-orientation="vertical" aria-label="Resize the sidebar" title="Drag to resize. Double-click to reset."></div>
@@ -30,9 +40,23 @@
   </svg>
 </button>
 <div id="toolbar">
-  <span id="status"></span><span id="stats"></span>
-  <button id="aa" type="button" title="Appearance" aria-haspopup="dialog" aria-expanded="false">Aa</button>
-  <button id="edit" type="button">Open in editor</button>
+  <button id="undo" type="button" title="Undo the last change to this file" hidden><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 3.5 2.5 6.5l3 3"/><path d="M2.8 6.5h6.7a4 4 0 0 1 0 8H7"/></svg><span>Undo</span></button>
+  <span id="edit-pill" hidden><span class="ep-label">Editing · Esc to finish</span><span class="ep-saved" aria-hidden="true"><svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 8.6 6.4 11.6 12.8 4.6"/></svg>Saved</span></span>
+  <span id="status" role="status" aria-live="polite"></span><span id="selpos"></span><span id="kind"></span><span id="stats"></span>
+  <button id="upd" type="button" aria-label="Update available" aria-haspopup="dialog" aria-expanded="false" aria-controls="aa-pop" hidden><span class="upd-dot" aria-hidden="true"></span><span class="upd-label">Update</span></button>
+  <button id="raw" class="tb-ic tb-slot" type="button" aria-pressed="false" title="Show raw text" hidden><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4.5 1.8 8 5 11.5M11 4.5 14.2 8 11 11.5M9.2 3.2 6.8 12.8"/></svg></button>
+  <button id="find-btn" class="tb-ic tb-slot" type="button" title="Find (⌘F)" aria-controls="find" aria-expanded="false" hidden><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="7" cy="7" r="4.3"/><path d="M10.2 10.2 14 14"/></svg></button>
+  <button id="aa" class="tb-slot" type="button" title="Appearance" aria-label="Appearance" aria-haspopup="dialog" aria-expanded="false">Aa</button>
+  <button id="edit" class="tb-slot" type="button">Open in editor</button>
+  <button id="open-with" class="tb-ic tb-slot" type="button" title="Open With" aria-label="Open With" aria-haspopup="menu" aria-expanded="false" aria-controls="ow-pop" hidden><svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3.8 5 6.8l3-3"/></svg></button>
+  <div id="ow-pop" role="menu" aria-label="Open With" hidden></div>
+  <div id="find" role="search" aria-label="Find in this file" hidden>
+    <input id="find-q" type="search" placeholder="Find" aria-label="Find in this file" autocomplete="off" spellcheck="false">
+    <span id="find-count" aria-live="polite"></span>
+    <button id="find-prev" type="button" title="Previous match (⇧↵)" aria-label="Previous match"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 10 8 5.5l4.5 4.5"/></svg></button>
+    <button id="find-next" type="button" title="Next match (↵)" aria-label="Next match"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6 8 10.5 12.5 6"/></svg></button>
+    <button id="find-close" type="button" title="Close (Esc)" aria-label="Close"><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+  </div>
   <div id="aa-pop" role="dialog" aria-label="Appearance" hidden>
     <div id="aa-update" hidden>
       <p class="upd-title" id="aa-update-title"></p>
@@ -47,6 +71,7 @@
       <button id="aa-larger" type="button" data-step="1" title="Larger text">A</button>
     </div>
     <div class="pop-themes" id="aa-themes" role="radiogroup" aria-label="Theme"></div>
+    <div class="pop-theme-name" id="aa-theme-name" aria-hidden="true"></div>
     <div class="pop-seg" id="aa-width" role="radiogroup" aria-label="Width">
       <button type="button" role="radio" data-key="width" data-value="narrow">Narrow</button>
       <button type="button" role="radio" data-key="width" data-value="medium">Medium</button>
@@ -56,16 +81,33 @@
       <button type="button" role="radio" data-key="bodyFont" data-value="system">System</button>
       <button type="button" role="radio" data-key="bodyFont" data-value="serif" class="serif">Serif</button>
     </div>
+    <div class="pop-seg" id="aa-wrap" role="radiogroup" aria-label="Long lines" hidden>
+      <button type="button" role="radio" data-wrap="1">Wrap Lines</button>
+      <button type="button" role="radio" data-wrap="0">Don’t Wrap</button>
+    </div>
     <div class="pop-sep"></div>
     <button id="aa-settings" type="button">Settings…</button>
   </div>
 </div>
+<div id="alert" role="alert" hidden>
+  <svg class="alert-ic" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M8 1.8 15 14.2H1L8 1.8z"/><path d="M8 6.2v3.6M8 11.6v.4" stroke-linecap="round"/></svg>
+  <div class="alert-body">
+    <p id="alert-text"></p>
+    <div id="alert-actions" hidden>
+      <button type="button" data-choice="mine">Keep Mine</button>
+      <button type="button" data-choice="disk">Use Disk Version</button>
+      <button type="button" data-choice="copy">Copy My Text</button>
+    </div>
+  </div>
+</div>
+<div id="edit-tip" role="tooltip" hidden>Click to edit · changes save as you type</div>
 <div id="main">
   <nav id="crumbs" aria-label="File path" hidden></nav>
   <main id="doc"></main>
 </div>
 <nav id="toc" aria-label="Contents" hidden></nav>
 <div id="frame" aria-hidden="true"></div>
+<button id="copy" type="button" aria-label="Copy" title="Copy text (⌘C)" hidden><svg class="copy-ic" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><rect x="5.5" y="5.5" width="8" height="8.5" rx="1.6"/><path d="M3.5 10.5h-.4A1.1 1.1 0 0 1 2 9.4V3.1A1.1 1.1 0 0 1 3.1 2h5.8A1.1 1.1 0 0 1 10 3.1v.4"/></svg><svg class="done-ic" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.2 8.6 6.4 11.6 12.8 4.6"/></svg></button>
 <script src="spacebar://bundle/app.js"></script>
 </body>
 </html>

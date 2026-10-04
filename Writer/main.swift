@@ -4,28 +4,32 @@ import os
 
 // Unsandboxed XPC service embedded in the preview appex; only reachable by that appex (launchd scopes bundled services to their container).
 private let log = Logger(subsystem: logSubsystem, category: "writer")
-private let markdownExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "mkdn"]
-private let maxWriteBytes = 64 << 20
 private let writeGate = WriteGate()
 
 final class Writer: NSObject, SpacebarWriterProtocol {
     private weak var connection: NSXPCConnection?
+    let typed = TypedTexts()
 
     init(connection: NSXPCConnection) { self.connection = connection }
 
     func write(_ data: Data, toPath path: String, expecting base: Data, reply: @escaping (String?) -> Void) {
-        // Both the named path and what it resolves to must be existing markdown files, so a .md symlink cannot aim a write at
+        // Both the named path and what it resolves to must be of a type spacebar edits, so a .md symlink cannot aim a write at
         // some other file.
-        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath()
-        var st = stat()
-        guard path.hasPrefix("/"), [URL(fileURLWithPath: path), resolved].allSatisfy({ markdownExtensions.contains($0.pathExtension.lowercased()) }),
-              stat(resolved.path, &st) == 0, st.st_mode & S_IFMT == S_IFREG, data.count <= maxWriteBytes, base.count <= maxWriteBytes else {
-            log.error("refused write to \(path, privacy: .private)")
-            return reply("refused: not an existing markdown file")
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        var why = EditableText.writeRefusal(path: path, data: data, base: base)
+        if why == nil, !(EditableText.isMarkdown(path) && EditableText.isMarkdown(resolved)), !typed.allows(path: resolved, data: data, base: base) {
+            why = "not a text typed in this file's edit"
+        }
+        if let why {
+            log.error("refused write to \(path, privacy: .private): \(why, privacy: .public)")
+            return reply("refused: \(why)")
         }
         guard writeGate.begin() else { return reply("write failed (the writer is quitting); file left as it was") }
         defer { writeGate.end() }
-        let err = compareAndWrite(data, path: path, expecting: base)
+        let err = compareAndWrite(data, path: resolved, expecting: base, noFollow: true)
+        if !EditableText.isMarkdown(path) {
+            typed.wrote(path: resolved, err == nil ? data : nil, torn: err?.contains("partly written") == true ? FileManager.default.contents(atPath: resolved) : nil)
+        }
         if let err { log.error("write \(path, privacy: .private): \(err, privacy: .private)") } else { log.info("wrote \(data.count) bytes to \(path, privacy: .private)") }
         reply(err)
     }
@@ -56,13 +60,35 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         let target = opener.file
         var app = opener.app
         // The caller names the app, but only the editor the user chose in the settings is honoured.
-        if let id = appBundleID, id == SettingsFile.load().editorBundleID, let editor = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+        if let id = appBundleID, id == SettingsFile.load().editorBundleID, let editor = LinkPolicy.application(id), LinkPolicy.isTextEditor(editor) {
             app = editor
         }
         NSWorkspace.shared.open([target], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration()) { _, err in
             log.info("open \(target.absoluteString, privacy: .private) with \(app.lastPathComponent, privacy: .public) -> \(err == nil)")
             reply(err == nil)
         }
+    }
+
+    /// The chosen editor's bundle ID, when the caller names it: only the one in settings.json is honoured.
+    private func chosenEditor(_ id: String?) -> String? {
+        guard let id, id == SettingsFile.load().editorBundleID else { return nil }
+        return id
+    }
+
+    func openText(_ url: URL, appBundleID: String?, reply: @escaping (Bool) -> Void) {
+        guard url.isFileURL, let o = LinkPolicy.textOpener(for: url, editor: chosenEditor(appBundleID)) else {
+            log.error("refused openText \(url.path, privacy: .private)")
+            return reply(false)
+        }
+        NSWorkspace.shared.open([o.file], withApplicationAt: o.app, configuration: NSWorkspace.OpenConfiguration()) { _, err in
+            log.info("openText \(o.file.path, privacy: .private) with \(o.app.lastPathComponent, privacy: .public) editor=\(o.editor) -> \(err == nil)")
+            reply(err == nil)
+        }
+    }
+
+    func textOpener(_ url: URL, appBundleID: String?, reply: @escaping (String?, Bool) -> Void) {
+        guard url.isFileURL, let o = LinkPolicy.textOpener(for: url, editor: chosenEditor(appBundleID)) else { return reply(nil, false) }
+        reply(FileManager.default.displayName(atPath: o.app.path).replacingOccurrences(of: ".app", with: ""), o.editor)
     }
 
     /// Selects the file in Finder and nothing else: it must never open or launch what it is given.
@@ -80,6 +106,45 @@ final class Writer: NSObject, SpacebarWriterProtocol {
     func defaultApp(_ url: URL, reply: @escaping (String?) -> Void) {
         guard url.isFileURL, LinkPolicy.refusal(url, allowArchives: true) == nil, let app = LinkPolicy.opener(for: url, allowArchives: true)?.app else { return reply(nil) }
         reply(FileManager.default.displayName(atPath: app.path).replacingOccurrences(of: ".app", with: ""))
+    }
+
+    func openWithApps(_ url: URL, reply: @escaping (Data?) -> Void) {
+        guard url.isFileURL, LinkPolicy.fileRefusal(url, allowArchives: true) == nil else {
+            log.error("refused openWithApps \(url.path, privacy: .private)")
+            return reply(nil)
+        }
+        let lead = LinkPolicy.opener(for: url, allowArchives: true)?.app
+        let apps = LinkPolicy.openWithApps(for: url, allowArchives: true).compactMap { app -> [String: String]? in
+            guard let id = Bundle(url: app)?.bundleIdentifier else { return nil }
+            var entry = ["id": id, "name": FileManager.default.displayName(atPath: app.path).replacingOccurrences(of: ".app", with: "")]
+            if app == lead { entry["default"] = "1" }
+            if let icon = Self.iconURL(app) { entry["icon"] = icon }
+            return entry
+        }
+        reply(try? JSONSerialization.data(withJSONObject: apps))
+    }
+
+    /// The app's icon as a 32-pixel PNG data URL, for a 16-point menu row.
+    private static func iconURL(_ app: URL) -> String? {
+        let icon = NSWorkspace.shared.icon(forFile: app.path)
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 32, pixelsHigh: 32, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                         isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        icon.draw(in: NSRect(x: 0, y: 0, width: 32, height: 32))
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.representation(using: .png, properties: [:]).map { "data:image/png;base64," + $0.base64EncodedString() }
+    }
+
+    func openWith(_ url: URL, appBundleID: String, reply: @escaping (Bool) -> Void) {
+        guard url.isFileURL, LinkPolicy.fileRefusal(url, allowArchives: true) == nil, let o = LinkPolicy.openWith(url, app: appBundleID, allowArchives: true) else {
+            log.error("refused openWith \(url.path, privacy: .private) in \(appBundleID, privacy: .private)")
+            return reply(false)
+        }
+        NSWorkspace.shared.open([o.file], withApplicationAt: o.app, configuration: NSWorkspace.OpenConfiguration()) { _, err in
+            log.info("openWith \(o.file.path, privacy: .private) with \(o.app.lastPathComponent, privacy: .public) -> \(err == nil)")
+            reply(err == nil)
+        }
     }
 
     /// Lists an archive with a sandboxed bsdtar (ArchiveListing): only an archive, by name and by the exact type LinkPolicy lets
@@ -106,6 +171,34 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         DispatchQueue.global().asyncAfter(deadline: .now() + ArchiveListing.timeout + 4) { once(nil) }
     }
     private static let listQueue = DispatchQueue(label: "md.spacebar.list-archive", qos: .userInitiated)
+
+    /// One file of an archive, under listArchive's checks, streamed by ArchiveEntry into memory: the cap is the writer's own for
+    /// the entry's type, not the caller's. Shares listArchive's queue, so one bsdtar runs at a time.
+    func readArchiveEntry(_ path: String, entry: String, reply: @escaping (Data?, String?) -> Void) {
+        let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
+        guard path.hasPrefix("/"), ArchiveListing.extensions.contains(url.pathExtension.lowercased()),
+              LinkPolicy.fileRefusal(url, allowArchives: true) == nil, LinkPolicy.fileRefusal(url) != nil,
+              let cap = ArchiveEntryView.cap(for: entry), ArchiveEntry.pattern(entry) != nil else {
+            log.error("refused readArchiveEntry \(path, privacy: .private)")
+            return reply(nil, "unreadable")
+        }
+        let lock = NSLock()
+        var replied = false
+        let once = { (d: Data?, why: String?) in
+            lock.lock(); defer { lock.unlock() }
+            if !replied { replied = true; reply(d, why) }
+        }
+        Self.listQueue.async {
+            lock.lock(); let late = replied; lock.unlock()
+            guard !late else { return }
+            let outcome = ArchiveEntry.read(url.path, name: entry, cap: cap)
+            if case .data(let d) = outcome { return once(d, nil) }
+            if case .partial(let d) = outcome { return once(d, "partial") }
+            log.info("readArchiveEntry: \(outcome.reason ?? "", privacy: .public)")
+            once(nil, outcome.reason)
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + ArchiveEntry.timeout + 4) { once(nil, "timedOut") }
+    }
 
     func ensureSupportDir(reply: @escaping (Bool) -> Void) {
         let err = SettingsFile.ensure()
@@ -147,8 +240,10 @@ final class Writer: NSObject, SpacebarWriterProtocol {
     func updateOffer(reply: @escaping (Data?) -> Void) {
         guard SettingsFile.load().checkUpdates, updatesAllowed else { return reply(nil) }
         let answer = { (latest: String?) in
+            // Where this copy is matters only for a newer release, and finding out walks the bundle's folders.
+            let newer = latest.map { Updates.isNewer($0, than: self.currentVersion) } ?? false
             reply(Updates.offer(current: self.currentVersion, latest: latest, started: Updates.readCache()?.started, finished: Updates.readStatus(),
-                                place: self.misplaced(), running: Updates.isRunning(log: self.updateLog)).json)
+                                place: newer ? self.misplaced() : nil, running: Updates.isRunning(log: self.updateLog)).json)
         }
         let cached = Updates.readCache()
         if let c = cached, (0..<Updates.interval).contains(Date().timeIntervalSince1970 - c.checked) { return answer(c.latest) }
@@ -174,14 +269,29 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         }
     }
 
+    func spaceHelperState(reply: @escaping (String, String?) -> Void) {
+        guard SettingsFile.load().spaceHelper else { return reply("off", nil) }
+        guard HelperTap.taking() else { return reply("notRunning", nil) }
+        guard SecureInput.ownerPID() != nil else { return reply("on", nil) }
+        reply("paused", SecureInput.ownerName())
+    }
+
+    func copyText(_ text: String, reply: @escaping (Bool) -> Void) {
+        guard text.utf8.count <= EditableText.maxMarkdownBytes else { return reply(false) }
+        DispatchQueue.main.async {
+            NSPasteboard.general.clearContents()
+            reply(NSPasteboard.general.setString(text, forType: .string))
+        }
+    }
+
     func installUpdate(_ version: String, reply: @escaping (String?) -> Void) {
         if let why = Updates.installRefusal(version, current: currentVersion, enabled: SettingsFile.load().checkUpdates && updatesAllowed) {
             log.error("refused update to \(version, privacy: .private): \(why, privacy: .public)")
             return reply(why)
         }
         guard let app = containingApp() else { return reply("the spacebar app was not found") }
-        // The installer only ever replaces ~/Applications/spacebar.app; from anywhere else it would add a second copy.
-        guard misplaced() == nil else { return reply("spacebar is not in ~/Applications") }
+        // The installer replaces only the copy it picks (Updates.managedCopy); from anywhere else it would add a second one.
+        guard misplaced() == nil else { return reply("this copy of spacebar is not one the installer can update") }
         let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
         let env = ["HOME": home.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": NSTemporaryDirectory(),
                    "SPACEBAR_UPDATE_STATUS": Updates.statusURL.path]
@@ -216,19 +326,14 @@ final class Writer: NSObject, SpacebarWriterProtocol {
                        testFlag: FileManager.default.fileExists(atPath: Updates.testFlagURL.path))
     }
 
-    /// Where this copy of spacebar is, for the popover, when it is not ~/Applications/spacebar.app; nil when it is.
+    /// Where this copy of spacebar is, for the popover, when it is not the copy install.sh updates or this account cannot
+    /// replace it; nil when it is that copy.
     private func misplaced() -> String? {
         let home = NSHomeDirectory()
         guard let app = containingApp()?.resolvingSymlinksInPath().path else { return "an unknown folder" }
-        if app == URL(fileURLWithPath: home).appendingPathComponent("Applications/spacebar.app").resolvingSymlinksInPath().path { return nil }
+        if let managed = Updates.managedCopy(home: home), app == URL(fileURLWithPath: managed).resolvingSymlinksInPath().path,
+           Updates.canUpdate(managed) { return nil }
         return app.hasPrefix(home + "/") ? "~" + app.dropFirst(home.count) : app
-    }
-
-    /// The app that contains this service.
-    private func containingApp() -> URL? {
-        var app = Bundle.main.bundleURL
-        while app.pathExtension != "app", app.pathComponents.count > 1 { app.deleteLastPathComponent() }
-        return app.pathExtension == "app" && Bundle(url: app)?.bundleIdentifier == "md.spacebar" ? app : nil
     }
 
     func prepare() {
@@ -238,6 +343,22 @@ final class Writer: NSObject, SpacebarWriterProtocol {
     }
 
     func beginEdit(_ session: Int, text: String, caret: Int, clickX: Double, clickY: Double, blockWidth: Double, blockHeight: Double, reply: @escaping (Bool) -> Void) {
+        beginEdit(session, text: text, caret: caret, file: nil, clickX: clickX, clickY: clickY, width: blockWidth, height: blockHeight, reply: reply)
+    }
+
+    func beginTextEdit(_ session: Int, path: String, text: String, caret: Int, clickX: Double, clickY: Double, width: Double, height: Double,
+                       reply: @escaping (Bool) -> Void) {
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        guard path.hasPrefix("/"), typed.begin(path: resolved, text: text) else {
+            log.error("refused text edit of \(path, privacy: .private): not the file's text")
+            return reply(false)
+        }
+        beginEdit(session, text: text, caret: caret, file: resolved, clickX: clickX, clickY: clickY, width: width, height: height, reply: reply)
+    }
+
+    /// `file`: a whole text file (plain mode), whose sent texts are recorded for its writes.
+    private func beginEdit(_ session: Int, text: String, caret: Int, file: String?, clickX: Double, clickY: Double, width blockWidth: Double,
+                           height blockHeight: Double, reply: @escaping (Bool) -> Void) {
         log.info("lat[\(session)] writer-recv \(upMs(), format: .fixed(precision: 1))")
         let host = connection?.remoteObjectProxyWithErrorHandler { err in
             log.error("edit host gone: \(err.localizedDescription, privacy: .public)")
@@ -255,7 +376,7 @@ final class Writer: NSObject, SpacebarWriterProtocol {
             FilterSession.current?.end("replaced", notify: true, hide: false)
             let mouse = NSEvent.mouseLocation
             let frame = NSRect(x: mouse.x - clickX, y: mouse.y + clickY - blockHeight, width: max(blockWidth, 40), height: max(blockHeight, 24))
-            let s = EditSession(owner: self, id: session, text: text, caret: caret, frame: frame, host: host)
+            let s = EditSession(owner: self, id: session, text: text, caret: caret, file: file, frame: frame, host: host)
             EditSession.current = s
             log.info("lat[\(session)] panel-shown \(upMs(), format: .fixed(precision: 1))")
             reply(true)
@@ -284,6 +405,19 @@ final class Writer: NSObject, SpacebarWriterProtocol {
     }
 
     func beginFilter(_ session: Int, text: String, clickX: Double, clickY: Double, fieldWidth: Double, fieldHeight: Double, reply: @escaping (Bool) -> Void) {
+        beginKeys(session, text: text, list: false, clickX: clickX, clickY: clickY, width: fieldWidth, height: fieldHeight, reply: reply)
+    }
+
+    func beginListKeys(_ session: Int, clickX: Double, clickY: Double, rowWidth: Double, rowHeight: Double, reply: @escaping (Bool) -> Void) {
+        beginKeys(session, text: "", list: true, clickX: clickX, clickY: clickY, width: rowWidth, height: rowHeight, reply: reply)
+    }
+
+    func beginFind(_ session: Int, text: String, clickX: Double, clickY: Double, fieldWidth: Double, fieldHeight: Double, reply: @escaping (Bool) -> Void) {
+        beginKeys(session, text: text, list: false, find: true, clickX: clickX, clickY: clickY, width: fieldWidth, height: fieldHeight, reply: reply)
+    }
+
+    private func beginKeys(_ session: Int, text: String, list: Bool, find: Bool = false, clickX: Double, clickY: Double, width fieldWidth: Double,
+                           height fieldHeight: Double, reply: @escaping (Bool) -> Void) {
         let host = connection?.remoteObjectProxyWithErrorHandler { err in
             log.error("filter host gone: \(err.localizedDescription, privacy: .public)")
             DispatchQueue.main.async { FilterSession.end(owner: self, "host-gone") }
@@ -299,7 +433,7 @@ final class Writer: NSObject, SpacebarWriterProtocol {
             FilterSession.current?.end("replaced", notify: true, hide: false)
             let mouse = NSEvent.mouseLocation
             let frame = NSRect(x: mouse.x - clickX, y: mouse.y + clickY - fieldHeight, width: max(fieldWidth, 40), height: max(fieldHeight, 16))
-            let s = FilterSession(owner: self, id: session, text: FilterKeys.clean(text), frame: frame, host: host)
+            let s = FilterSession(owner: self, id: session, text: list ? "" : FilterKeys.clean(text), list: list, find: find, frame: frame, host: host)
             FilterSession.current = s
             reply(true)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
@@ -311,6 +445,39 @@ final class Writer: NSObject, SpacebarWriterProtocol {
 
     func endFilter(_ session: Int) {
         DispatchQueue.main.async { FilterSession.end(owner: self, session: session, "host") }
+    }
+}
+
+/// The app that contains this service: the outermost spacebar.app, since the viewer's copy sits in an app of its own inside it.
+func containingApp() -> URL? {
+    var dir = Bundle.main.bundleURL
+    var found: URL?
+    while dir.pathComponents.count > 1 {
+        if dir.pathExtension == "app", Bundle(url: dir)?.bundleIdentifier == "md.spacebar" { found = dir }
+        dir.deleteLastPathComponent()
+    }
+    return found
+}
+
+/// Whether the Space helper takes Space: an enabled event tap owned by this app's own spacebar Helper.app, read from the
+/// window server's list of taps, so nothing connects to the helper. Secure input is another app's, and is read on its own
+/// (SecureInput).
+enum HelperTap {
+    static func taking() -> Bool {
+        var n: UInt32 = 0
+        guard CGGetEventTapList(0, nil, &n) == .success, n > 0 else { return false }
+        var taps = [CGEventTapInformation](repeating: CGEventTapInformation(), count: Int(n))
+        guard CGGetEventTapList(n, &taps, &n) == .success else { return false }
+        guard let helper = containingApp()?.appendingPathComponent("Contents/Helpers/spacebar Helper.app", isDirectory: true)
+            .resolvingSymlinksInPath().path else { return false }
+        return taps.prefix(Int(n)).contains { $0.enabled && runs(helper, $0.tappingProcess) }
+    }
+
+    /// A stale or development copy of the helper runs from another bundle, so only this app's helper counts.
+    private static func runs(_ helper: String, _ pid: pid_t) -> Bool {
+        var buf = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        guard proc_pidpath(pid, &buf, UInt32(buf.count)) > 0 else { return false }
+        return URL(fileURLWithPath: String(cString: buf)).resolvingSymlinksInPath().path.hasPrefix(helper + "/Contents/MacOS/")
     }
 }
 
@@ -374,6 +541,8 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
     private var sendQueued = false
     private var ended = false
     private var keyLogged = false
+    /// The text file edited as a whole (resolved path), whose every sent buffer is recorded in the owner's TypedTexts.
+    private let file: String?
 
     static func find(owner: Writer, session: Int) -> EditSession? {
         guard let s = current, s.owner === owner, s.id == session, !s.ended else { return nil }
@@ -386,16 +555,19 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         s.end(reason, notify: true)
     }
 
-    init(owner: Writer, id: Int, text: String, caret: Int, frame: NSRect, host: SpacebarEditHostProtocol) {
+    init(owner: Writer, id: Int, text: String, caret: Int, file: String? = nil, frame: NSRect, host: SpacebarEditHostProtocol) {
         self.owner = owner
         self.id = id
         self.host = host
+        self.file = file
         super.init()
+        let plain = file != nil
         let panel = surface.panel
         panel.setFrame(frame, display: false)
         textView.frame = NSRect(origin: .zero, size: frame.size)
         textView.delegate = nil
         textView.dropHeld()
+        textView.setPlain(plain)
         textView.string = text
         textView.setSelectedRange(NSRange(location: min(caret, (text as NSString).length), length: 0))
         textView.undoManager?.removeAllActions()
@@ -404,16 +576,24 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         textView.delegate = self
         textView.onEscape = { [weak self] in self?.end("escape", notify: true) }
         textView.onHoldTimeout = { [weak self] in self?.end("hold-timeout", notify: true) }
+        textView.onFind = { [weak self] in self?.end("find", notify: true) }
         textView.onFilterKey = nil
-        textView.onMergeBackward = { [weak self] in
+        textView.listKeys = false
+        textView.findKeys = false
+        textView.onMergeBackward = plain ? nil : { [weak self] in
             guard let self, !self.ended else { return }
             self.flush(force: true)
             self.host.editMergeBackward(self.id)
         }
-        textView.onSplit = { [weak self] before, after, tail in
+        textView.onSplit = plain ? nil : { [weak self] before, after, tail in
             guard let self, !self.ended else { return }
             self.flush(force: true)
             self.host.editSplit(self.id, before: before, after: after, tail: tail)
+        }
+        textView.onUndoPastStart = { [weak self] redo in
+            guard let self, !self.ended else { return }
+            self.flush(force: true)
+            self.host.editUndo(self.id, redo: redo)
         }
         panel.delegate = self
         panel.makeKeyAndOrderFront(nil)
@@ -441,7 +621,8 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
 
     func reset(text: String?, caret: Int) {
         textView.releaseHeld {
-            if let text {
+            // A text file's buffer changes only by typing: what it holds may be written to the file.
+            if let text, file == nil {
                 textView.string = text
                 textView.undoManager?.removeAllActions()
             }
@@ -472,7 +653,9 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         guard force || !textView.isHolding, let keyTime = pendingKeyTime else { return }
         pendingKeyTime = nil
         let sel = textView.selectedRange()
-        host.editChanged(id, text: textView.string, selectionStart: sel.location, selectionLength: sel.length, keyTime: keyTime)
+        let text = textView.string
+        if let file { owner?.typed.sent(path: file, text: text) }
+        host.editChanged(id, text: text, selectionStart: sel.location, selectionLength: sel.length, keyTime: keyTime)
     }
 
     func windowDidBecomeKey(_ notification: Notification) { logKey() }
@@ -485,14 +668,17 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         // Messages on the connection are ordered, so a change still waiting for its main-queue turn lands before the end.
         flush()
         ended = true
+        if let file { owner?.typed.ended(path: file) }
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         log.info("edit end: \(reason, privacy: .public)")
         if surface.panel.delegate === self { surface.panel.delegate = nil }
         if textView.delegate === self {
             textView.delegate = nil
             textView.onEscape = {}
+            textView.onFind = nil
             textView.onMergeBackward = nil
             textView.onSplit = nil
+            textView.onUndoPastStart = nil
             textView.onHoldTimeout = {}
             textView.dropHeld()
         }
@@ -503,10 +689,14 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
 }
 
 /// The sidebar's filter field while it holds the keyboard: the edit panel and text view, with the text streamed to the host and
-/// the list keys forwarded. It has no path to any file.
+/// the list keys forwarded. A list session (a click on a row) has no text: it forwards the list keys only, and Esc or Space
+/// ends it. A find session is the find field's: its text, and the next and previous keys; Esc ends it. It has no path to any
+/// file.
 final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
     static var current: FilterSession?
     let id: Int
+    let list: Bool
+    let find: Bool
     weak var owner: Writer?
     private let surface = EditSurface.shared
     private var textView: EditTextView { surface.textView }
@@ -519,9 +709,11 @@ final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         s.end(reason, notify: true)
     }
 
-    init(owner: Writer, id: Int, text: String, frame: NSRect, host: SpacebarEditHostProtocol) {
+    init(owner: Writer, id: Int, text: String, list: Bool = false, find: Bool = false, frame: NSRect, host: SpacebarEditHostProtocol) {
         self.owner = owner
         self.id = id
+        self.list = list
+        self.find = find
         self.host = host
         super.init()
         let panel = surface.panel
@@ -529,6 +721,7 @@ final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         textView.frame = NSRect(origin: .zero, size: frame.size)
         textView.delegate = nil
         textView.dropHeld()
+        textView.setPlain(false)
         textView.string = text
         textView.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
         textView.undoManager?.removeAllActions()
@@ -536,12 +729,16 @@ final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         textView.firstKeyLogged = true
         textView.onMergeBackward = nil
         textView.onSplit = nil
+        textView.onUndoPastStart = nil
         textView.delegate = self
         textView.onEscape = { [weak self] in self?.escape() }
         textView.onHoldTimeout = {}
+        textView.onFind = nil
+        textView.listKeys = list
+        textView.findKeys = find
         textView.onFilterKey = { [weak self] key, isRepeat in
             guard let self, !self.ended else { return }
-            self.flush()
+            if !self.list { self.flush() }
             self.host.filterKey(self.id, key: key, isRepeat: isRepeat)
         }
         panel.delegate = self
@@ -553,14 +750,14 @@ final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
     @objc private func appActivated(_ n: Notification) { end("app-activated", notify: true) }
 
     private func escape() {
-        if FilterKeys.escapeEnds(text: textView.string) { return end("escape", notify: true) }
+        if list || find || FilterKeys.escapeEnds(text: textView.string) { return end("escape", notify: true) }
         textView.string = ""
         textView.undoManager?.removeAllActions()
         flush()
     }
 
     func textDidChange(_ notification: Notification) {
-        guard !ended, !sendQueued else { return }
+        guard !ended, !list, !sendQueued else { return }
         sendQueued = true
         DispatchQueue.main.async { [weak self] in
             guard let self, !self.ended else { return }
@@ -589,7 +786,10 @@ final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         if textView.delegate === self {
             textView.delegate = nil
             textView.onEscape = {}
+            textView.onFind = nil
             textView.onFilterKey = nil
+            textView.listKeys = false
+            textView.findKeys = false
         }
         if hide { surface.panel.orderOut(nil) }
         if notify { host.filterEnded(id, reason: reason) }

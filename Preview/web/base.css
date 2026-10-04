@@ -26,7 +26,8 @@
     --side-w: clamp(160px, var(--side-saved, 240px), max(160px, min(480px, 45vw)));
     --frame-left: var(--side-w); --frame-inset: 0px;
   }
-  :root[data-sidebar=collapsed] { --frame-left: var(--gap); --frame-inset: var(--gap); }
+  /* Set on the boxes that use them, not the root: a change of the root's inherited values restyles every element of a long note. */
+  :root[data-sidebar=collapsed] :is(#frame, #crumbs, #doc .pdf-area), :root[data-sidebar=collapsed] #main::before { --frame-left: var(--gap); --frame-inset: var(--gap); }
   :root[data-font=serif] { --font-body: ui-serif, "New York", Charter, Georgia, serif; }
   :root[data-font=rounded] { --font-body: ui-rounded, "SF Pro Rounded", -apple-system, sans-serif; }
   :root[data-font=mono] { --font-body: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace; }
@@ -43,30 +44,48 @@
     font-family: var(--font-body); font-size: var(--font-size); line-height: var(--line-height);
     -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; font-kerning: normal;
   }
-  [hidden] { display: none !important; }
+  [hidden]:not(.tb-slot) { display: none !important; }
 
   /* The sidebar keeps its full width inside and is clipped as it collapses, so its text never reflows mid-animation.
      Transitions start only after the first paint (sb-anim), so a collapsed sidebar never shows open first. */
   #sidebar { width: var(--side-w); flex: none; position: sticky; top: 0; height: 100vh; box-sizing: border-box;
     display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--border); }
   #sidebar > * { width: var(--side-w); box-sizing: border-box; flex: none; }
-  #side-list { flex: 1 1 auto; min-height: 0; overflow: auto; position: relative; }
-  /* The resize handle sits on the sidebar's right edge, over its border. */
-  #sidebar > #side-resize { position: absolute; top: 0; right: 0; width: 6px; height: 100%; z-index: 2; cursor: col-resize; touch-action: none; }
+  /* app.js keeps the row in view still through a redraw; a browser's own scroll anchoring would move it a second time. */
+  #side-list { flex: 1 1 auto; min-height: 0; overflow: auto; position: relative; overflow-anchor: none; }
+  /* The resize handle straddles the sidebar's right edge, so a press just either side of the line takes it. Fixed, so the
+     sidebar's clipping leaves its outer half; the sidebar sits above the page for that half. */
+  #sidebar { z-index: 1; }
+  #sidebar > #side-resize { position: fixed; top: 0; left: calc(var(--side-w) - 4px); width: 8px; height: 100vh; z-index: 2; cursor: col-resize;
+    touch-action: none; }
+  #sidebar > #side-resize[data-at=min] { cursor: e-resize; }
+  #sidebar > #side-resize[data-at=max] { cursor: w-resize; }
   :root.sb-resizing, :root.sb-resizing * { cursor: col-resize !important; -webkit-user-select: none !important; user-select: none !important; }
+  :root.sb-resizing:has(#side-resize[data-at=min]), :root.sb-resizing:has(#side-resize[data-at=min]) * { cursor: e-resize !important; }
+  :root.sb-resizing:has(#side-resize[data-at=max]), :root.sb-resizing:has(#side-resize[data-at=max]) * { cursor: w-resize !important; }
+  /* Nothing under a drag of the edge takes the pointer: no row or button lights up as it passes. */
+  :root.sb-resizing body * { pointer-events: none !important; }
+  :root.sb-resizing #sidebar > #side-resize { pointer-events: auto !important; }
   :root.sb-resizing #sidebar { transition: none !important; }
   :root[data-sidebar=collapsed] #sidebar { width: 0; border-right-width: 0; visibility: hidden; }
   :root.sb-anim #sidebar { transition: width .2s ease-out, visibility 0s; }
   :root.sb-anim[data-sidebar=collapsed] #sidebar { transition: width .2s ease-out, visibility 0s .2s; }
   #side-toggle { position: fixed !important; top: 8px; left: 12px; z-index: 10 !important; }
+  /* The Space helper's panel: its traffic lights sit over the page's top-left corner, centred in the --bar-h row (ViewerPanel). */
+  :root[data-host=panel] { --titlebar-inset: 56px; }
+  :root[data-host=panel] #side-toggle { left: var(--titlebar-inset); }
   #main { flex: 1 1 auto; min-width: 0; }
   #doc { max-width: var(--measure); margin: 0 auto; padding: 44px 40px 80px; overflow-x: auto;
     contain: paint !important; position: relative !important; isolation: isolate !important; }
   /* The file on screen, as a path from the root, in the band under the toolbar; the document starts just below it. */
   #crumbs { max-width: var(--measure); margin: 0 auto; padding: 44px 40px 0; }
   #crumbs:not([hidden]) + #doc { padding-top: 12px; }
-  :root[data-view]:not([data-view=markdown]):not([data-view=info]):not([data-view=loading]) :is(#doc, #crumbs) { max-width: none; }
+  :root[data-view]:not([data-view=markdown]):not([data-view=info]):not([data-view=loading]) :is(#doc, #crumbs), :root[data-raw] :is(#doc, #crumbs) { max-width: none; }
   #toc { flex: none; width: 210px; position: sticky; top: 0; max-height: 100vh; overflow: auto; box-sizing: border-box; padding: 56px 20px 24px 4px; }
+  /* A note with no TOC keeps the TOC's room wherever one could show, so the text column never moves from note to note. Raw
+     shows the source as a code view, which has no TOC. Of the #toc rules only [hidden]'s is weaker, so the ones below that
+     hide the TOC at a width still win. */
+  :where(:root[data-view=markdown]:not([data-toc=off]):not([data-raw])) #toc:where([hidden]) { display: block !important; visibility: hidden; }
   #toolbar { position: fixed !important; top: 8px; right: 12px; display: flex; gap: 6px; align-items: center; z-index: 10 !important; }
   :root.sb-embedded #toolbar, :root.sb-embedded #sidebar, :root.sb-embedded #side-toggle, :root.sb-embedded #crumbs,
   :root.sb-embedded #frame { display: none !important; }
@@ -75,10 +94,13 @@
     background: linear-gradient(transparent, var(--bg)); }
   @media (max-width: 899px) { #toc { display: none !important; } }
   @media (max-width: 1099px) { :root:not([data-sidebar=collapsed]) #sidebar:not([hidden]) ~ #toc { display: none !important; } }
+  /* Wide and Full need the TOC's room to be any wider than Medium. */
+  @media (max-width: 1399px) { :root:is([data-width=wide], [data-width=full]) #toc { display: none !important; } }
   /* Narrow: the sidebar collapses whatever the setting says (it is not changed), and the button shows it over the page. */
   @media (max-width: 639px) {
     :root { --frame-left: var(--gap); --frame-inset: var(--gap); }
     #sidebar { width: 0; border-right-width: 0; visibility: hidden; }
+    #sidebar > #side-resize { display: none; }
     :root.sb-peek #sidebar { position: fixed; left: 0; top: 0; z-index: 9; width: var(--side-w); visibility: visible;
       background: var(--bg); border-right-width: 1px; box-shadow: 0 0 24px rgba(0, 0, 0, .18); }
   }
@@ -109,13 +131,24 @@
     :root:not([data-chrome=minimal]) #sidebar { z-index: 9; background: var(--chrome); border-right-width: 0; }
     :root:not([data-chrome=minimal]) #side-toggle { top: calc((var(--bar-h) - 26px) / 2); left: 10px; }
     :root:not([data-chrome=minimal]) #toolbar { top: calc((var(--bar-h) - 26px) / 2); right: 10px; }
+    :root[data-host=panel]:not([data-chrome=minimal]) #side-toggle { left: var(--titlebar-inset); }
     :root:not([data-chrome=minimal]) #crumbs { position: fixed; z-index: 10; top: 0; height: var(--bar-h); line-height: var(--bar-h); padding: 0;
       margin: 0; max-width: none; box-sizing: border-box; left: max(calc(var(--frame-left) + 14px), 52px); right: calc(var(--tb-w, 180px) + 24px); }
+    :root[data-host=panel]:not([data-chrome=minimal]) #crumbs { left: max(calc(var(--frame-left) + 14px), calc(var(--titlebar-inset) + 40px)); }
     :root.sb-anim:not([data-chrome=minimal]) #crumbs { transition: left .2s ease-out; }
     :root:not([data-chrome=minimal]) #doc, :root:not([data-chrome=minimal]) #crumbs:not([hidden]) + #doc { padding-top: calc(var(--bar-h) + 28px); }
     :root:not([data-chrome=minimal]) #doc { padding-bottom: calc(80px + var(--gap)); }
     :root:not([data-chrome=minimal]) #toc { padding-top: calc(var(--bar-h) + 30px); padding-right: calc(20px + var(--gap)); }
-    :root:not([data-chrome=minimal]) #doc > :is(h1, h2, h3, h4, h5, h6) { scroll-margin-top: calc(var(--bar-h) + 16px); }
+    /* What scrollIntoView reveals (an archive row, the edit caret, a table cell) stays clear of the toolbar row and the frame's
+       bottom edge. A heading or an anchor scrolled to the top adds its own margin to this padding. */
+    :root:not([data-chrome=minimal]) { scroll-padding-top: calc(var(--bar-h) + 8px); scroll-padding-bottom: calc(var(--gap) + 8px); --anchor-mt: 8px; }
+    :root:not([data-chrome=minimal]) #doc > :is(h1, h2, h3, h4, h5, h6) { scroll-margin-top: var(--anchor-mt); }
   }
   @media (prefers-reduced-motion: reduce) { :root.sb-anim #frame, :root.sb-anim #crumbs { transition: none !important; } }
+  /* The sidebar shown over a narrow page: an opaque sheet above the page and the path, with its button still on top. */
+  @media (max-width: 639px) {
+    :root.sb-peek:not([data-chrome=minimal]) #sidebar, :root.sb-peek #sidebar { z-index: 11 !important; background: var(--chrome);
+      border-right: 1px solid var(--frame-line); box-shadow: 0 0 24px rgba(0, 0, 0, .22); }
+    :root.sb-peek #side-toggle { z-index: 12 !important; }
+  }
 }

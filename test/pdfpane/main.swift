@@ -33,6 +33,10 @@ func openDescriptors(_ path: String) -> Int {
 }
 
 _ = NSApplication.shared
+OffScreen.install()
+// run.sh runs the checks again as a GitHub runner draws them: at 1x, with scroll bars always shown.
+let forcedScale = UserDefaults.standard.double(forKey: "backingScale")
+if forcedScale > 0 { OffScreen.backingScale(forcedScale) }
 let dir = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath()
 let a = dir.appendingPathComponent("a.pdf"), b = dir.appendingPathComponent("b.pdf"), bad = dir.appendingPathComponent("bad.pdf")
 makePDF(a, pages: 3)
@@ -74,6 +78,14 @@ window.contentView = container
 window.orderBack(nil)
 
 let pane = PDFPane()
+/// The pane's find, which may answer later: waits up to 5 s for it.
+func findNow(_ q: String) -> Int {
+    var n: Int?
+    pane.find(q) { n = $0 }
+    let end = Date().addingTimeInterval(5)
+    while n == nil, Date() < end { spin(0.02) }
+    return n ?? -1
+}
 var links: [URL] = []
 pane.onLink = { links.append($0) }
 pane.show(docA, path: a.path, over: web)
@@ -154,12 +166,164 @@ spin(0.1)
 check("reload of the same file keeps the page on screen", pane.view.document === docA2 && pane.view.currentPage.map { docA2.index(for: $0) } == 2,
       "\(pane.view.currentPage.map { docA2.index(for: $0) } ?? -1)")
 
+// ---- the panel's keys: the page counter, go to page, find, zoom, paging, the selection ----
+var pages: [(Int, Int)] = []
+pane.onPage = { _, page, count in pages.append((page, count)) }
+pane.go(toPage: 1)
+spin(0.1)
+check("page counter: going to a page reports it and the count", pages.last.map { $0 == (1, 3) } == true, "\(pages)")
+check("go to page: past the end goes to the last page", { pane.go(toPage: 99); spin(0.1); return pages.last.map { $0 == (3, 3) } == true }(), "\(pages)")
+let hits = findNow("page")
+check("find: every match, case-insensitive, the first shown and selected", hits == 3 && pane.view.highlightedSelections?.count == 3
+      && pane.selectedText?.lowercased() == "page" && pages.last.map { $0.0 == 1 } == true, "\(hits) \(pages)")
+pane.findGo(2)
+spin(0.1)
+check("find: the next match is shown on its page", pages.last.map { $0.0 == 3 } == true, "\(pages)")
+check("find: nothing found for a word not there", findNow("absent") == 0 && pane.view.highlightedSelections == nil)
+pane.findClear()
+check("find: cleared, nothing highlighted or selected", pane.view.highlightedSelections == nil && pane.selectedText == nil)
+let s0 = pane.view.scaleFactor
+pane.zoom("zoomIn")
+check("zoom: ⌘+ zooms the PDF", pane.view.scaleFactor > s0 && !pane.view.autoScales, "\(s0) -> \(pane.view.scaleFactor)")
+pane.zoom("zoomReset")
+check("zoom: ⌘0 fits it again", pane.view.autoScales && abs(pane.view.scaleFactor - s0) < 0.01, "\(pane.view.scaleFactor)")
+pane.go(toPage: 1)
+spin(0.1)
+check("paging: End goes to the last page, Home to the first", pane.scrollKey("end") && { spin(0.1); return pages.last?.0 == 3 }()
+      && pane.scrollKey("home") && { spin(0.1); return pages.last?.0 == 1 }(), "\(pages)")
+let y0 = pane.view.documentView?.enclosingScrollView?.contentView.bounds.origin.y ?? 0
+check("paging: Page Down moves the PDF down a screen", pane.scrollKey("pagedown") && (pane.view.documentView?.enclosingScrollView?.contentView.bounds.origin.y ?? 0) != y0)
+check("paging: the arrow keys are left to the sidebar", !pane.scrollKey("down") && !pane.scrollKey("up"))
+
 pane.pdfViewWillClick(onLink: pane.view, with: URL(string: "https://example.com/x")!)
 check("a link goes to the owner, never to NSWorkspace", links == [URL(string: "https://example.com/x")!])
 check("links: web links pass the policy", PDFPane.linkRefusal(URL(string: "https://example.com/x")!) == nil && PDFPane.linkRefusal(URL(string: "HTTP://example.com")!) == nil)
 check("links: file, javascript, mailto and other schemes are refused",
       [URL(fileURLWithPath: a.path), URL(string: "javascript:alert(1)")!, URL(string: "mailto:x@example.com")!, URL(string: "x-apple.systempreferences:")!,
        URL(string: "spacebar://file/etc/hosts")!].allSatisfy { PDFPane.linkRefusal($0) != nil })
+
+// ---- a find started while another runs counts only its own matches ----
+let f = dir.appendingPathComponent("find.pdf")
+do {
+    var box = CGRect(x: 0, y: 0, width: 600, height: 800)
+    let ctx = CGContext(f as CFURL, mediaBox: &box, nil)!
+    for _ in 0..<60 {
+        ctx.beginPDFPage(nil)
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+        for i in 0..<20 {
+            NSAttributedString(string: "w wow word w w wave w", attributes: [.font: NSFont.systemFont(ofSize: 14)]).draw(at: NSPoint(x: 60, y: 60 + i * 30))
+        }
+        ctx.endPDFPage()
+    }
+    ctx.closePDF()
+}
+guard case .success(let docF) = PDFPane.open(f) else { fatalError("find.pdf did not open") }
+pane.show(docF, path: f.path, over: web)
+pane.place(message: msg.merging(["path": f.path]) { _, n in n }, in: web)
+spin(0.2)
+var raced = 0, racedFirst = -1
+for _ in 0..<5 {
+    pane.find("w") { racedFirst = $0 }
+    spin(0.005)
+    let n = findNow("word")
+    let marks = pane.view.highlightedSelections ?? []
+    if n != 1200 || marks.count != 1200 || !marks.allSatisfy({ $0.string?.lowercased() == "word" }) { raced += 1; print("  raced: \(n) \(marks.count)") }
+}
+spin(0.3)
+check("find: a find started while another runs counts and marks only its own matches", raced == 0 && racedFirst == -1, "\(raced) of 5, first done \(racedFirst)")
+pane.findClear()
+
+// ---- a drag off text moves the document; one on text selects; a link is still followed ----
+let c = dir.appendingPathComponent("c.pdf")
+do {
+    var box = CGRect(x: 0, y: 0, width: 600, height: 800)
+    let ctx = CGContext(c as CFURL, mediaBox: &box, nil)!
+    for _ in 0..<3 {
+        ctx.beginPDFPage(nil)
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
+        for i in 0..<5 {
+            NSAttributedString(string: "Lorem ipsum dolor sit amet \(i)", attributes: [.font: NSFont.systemFont(ofSize: 16)]).draw(at: NSPoint(x: 200, y: 400 + i * 22))
+        }
+        ctx.endPDFPage()
+    }
+    ctx.closePDF()
+}
+guard case .success(let docC) = PDFPane.open(c) else { fatalError("c.pdf did not open") }
+let link = PDFAnnotation(bounds: NSRect(x: 40, y: 600, width: 80, height: 30), forType: .link, withProperties: nil)
+link.url = URL(string: "https://example.com/link")!
+docC.page(at: 0)!.addAnnotation(link)
+pane.show(docC, path: c.path, over: web)
+pane.place(message: msg.merging(["path": c.path]) { _, n in n }, in: web)
+spin(0.2)
+func mouse(_ type: NSEvent.EventType, _ p: NSPoint, clicks: Int = 1) -> NSEvent {
+    NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                       context: nil, eventNumber: 0, clickCount: clicks, pressure: 1)!
+}
+var closedHandShown = false
+/// Sends `events` as real input arrives: PDFView's own selection tracking takes the ones after the first from the queue.
+func input(_ events: [NSEvent]) {
+    closedHandShown = false
+    for e in events.dropFirst() { NSApp.postEvent(e, atStart: false) }
+    NSApp.sendEvent(events[0])
+    while let e = NSApp.nextEvent(matching: .any, until: Date().addingTimeInterval(0.05), inMode: .default, dequeue: true) {
+        NSApp.sendEvent(e)
+        if NSCursor.current === NSCursor.closedHand { closedHandShown = true }
+    }
+}
+func drag(from p: NSPoint, by d: NSPoint) -> [NSEvent] {
+    let to = NSPoint(x: p.x + d.x, y: p.y + d.y)
+    return [mouse(.leftMouseDown, p), mouse(.leftMouseDragged, NSPoint(x: p.x + d.x / 2, y: p.y + d.y / 2)), mouse(.leftMouseDragged, to), mouse(.leftMouseUp, to)]
+}
+let page0 = docC.page(at: 0)!
+func onPage(_ p: NSPoint) -> NSPoint { pane.view.convert(pane.view.convert(p, from: page0), to: nil) }
+let clip = pane.view.documentView!.enclosingScrollView!.contentView
+/// Whether the document is where it was at `o`, to a device pixel: at 1x, PDFKit's own selection tracking (its autoscroll)
+/// snaps a scroll position that falls between two pixels onto one.
+func unmoved(since o: NSPoint) -> Bool {
+    let d = clip.convertToBacking(NSSize(width: clip.bounds.origin.x - o.x, height: clip.bounds.origin.y - o.y))
+    return abs(d.width) <= 1.01 && abs(d.height) <= 1.01
+}
+let margin = onPage(NSPoint(x: 60, y: 450))
+var origin = clip.bounds.origin
+input(drag(from: margin, by: NSPoint(x: 0, y: 120)))
+let grabbed = onPage(NSPoint(x: 60, y: 450))
+check("drag: from the margin it moves the document with the pointer and selects nothing",
+      abs(grabbed.y - (margin.y + 120)) < 2 && abs(grabbed.x - margin.x) < 2 && pane.selectedText == nil,
+      "\(margin) -> \(grabbed) \(origin) -> \(clip.bounds.origin) \(pane.selectedText ?? "")")
+check("drag: the closed hand shows while it moves and is let go on the mouse-up", closedHandShown && NSCursor.current !== NSCursor.closedHand)
+input(drag(from: onPage(NSPoint(x: 300, y: 1000)), by: NSPoint(x: 0, y: -120)))
+pane.go(toPage: 1)
+spin(0.1)
+let text0 = onPage(NSPoint(x: 260, y: 450))
+origin = clip.bounds.origin
+input(drag(from: text0, by: NSPoint(x: 120, y: -30)))
+check("drag: from text it selects and does not move the document", (pane.selectedText?.count ?? 0) > 10 && unmoved(since: origin) && !closedHandShown,
+      "\(pane.selectedText ?? "nil") \(origin) -> \(clip.bounds.origin)")
+let line = page0.selectionForLine(at: NSPoint(x: 260, y: 450))!.bounds(for: page0)
+for (label, from, to) in [("from 12 pt left of a line", NSPoint(x: line.minX - 12, y: line.midY), NSPoint(x: line.midX, y: line.midY)),
+                          ("from 15 pt past a line's end, leftward", NSPoint(x: line.maxX + 15, y: line.midY), NSPoint(x: line.midX, y: line.midY))] {
+    pane.view.clearSelection()
+    let a = onPage(from), b = onPage(to)
+    input(drag(from: a, by: NSPoint(x: b.x - a.x, y: b.y - a.y)))
+    check("drag: \(label) selects and does not move the document", (pane.selectedText?.count ?? 0) > 5 && unmoved(since: origin) && !closedHandShown,
+          "\(line) \(pane.selectedText ?? "nil") \(origin) -> \(clip.bounds.origin)")
+}
+input([mouse(.leftMouseDown, onPage(NSPoint(x: 60, y: 450))), mouse(.leftMouseUp, onPage(NSPoint(x: 60, y: 450)))])
+check("click: in the margin it clears the selection and moves nothing", pane.selectedText == nil && unmoved(since: origin),
+      "\(pane.selectedText ?? "nil") \(origin) -> \(clip.bounds.origin)")
+let word = onPage(NSPoint(x: 215, y: 450))
+input([mouse(.leftMouseDown, word), mouse(.leftMouseUp, word), mouse(.leftMouseDown, word, clicks: 2), mouse(.leftMouseUp, word, clicks: 2)])
+check("double-click: on text it selects the word", pane.selectedText?.trimmingCharacters(in: .whitespaces) == "Lorem", pane.selectedText ?? "nil")
+links = []
+let onLink = onPage(NSPoint(x: 80, y: 615))
+input([mouse(.leftMouseDown, onLink), mouse(.leftMouseUp, onLink)])
+check("click: a link in the margin is followed, not taken as a drag", links == [URL(string: "https://example.com/link")!], "\(links)")
+let m2 = onPage(NSPoint(x: 60, y: 450))
+NSApp.sendEvent(mouse(.leftMouseDown, m2))
+NSApp.sendEvent(mouse(.leftMouseDragged, NSPoint(x: m2.x, y: m2.y + 60)))
+check("drag: the closed hand shows while the document moves", NSCursor.current === NSCursor.closedHand)
+pane.close()
+check("close: mid-drag, the cursor is let go", NSCursor.current !== NSCursor.closedHand)
 
 // ---- teardown: the view leaves, the document is freed, no descriptor stays on the file ----
 weak var weakB: PDFDocument?
@@ -178,5 +342,5 @@ check("close: no descriptor left on either file", openDescriptors(a.path) == 0 &
 pane.place(message: ["path": b.path, "x": 0, "y": 0, "w": 100, "h": 100], in: web)
 check("close: a late message does not bring it back", pane.view.superview == nil && pane.view.isHidden)
 
-print("\n\(failures == 0 ? "all" : "\(failures) FAILED of the") PDF view checks")
+print("\n\(failures == 0 ? "all" : "\(failures) FAILED of the") PDF view checks at \(window.backingScaleFactor)x, \(NSScroller.preferredScrollerStyle == .legacy ? "legacy" : "overlay") scroll bars")
 exit(failures == 0 ? 0 : 1)

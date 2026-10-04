@@ -21,7 +21,7 @@ enum FolderRules {
         var st = stat(), parent = stat()
         guard stat(real, &st) == 0, st.st_mode & S_IFMT == S_IFDIR else { return "not a folder" }
         if systemFolders.contains(real) || real == (FolderListing.realPath(home) ?? home) + "/Library" { return "a system folder" }
-        if systemTrees.contains(where: real.hasPrefix), !real.hasPrefix("/usr/local/") { return "inside a system folder" }
+        if systemTrees.contains(where: real.hasPrefix), real != "/usr/local", !real.hasPrefix("/usr/local/") { return "inside a system folder" }
         let url = URL(fileURLWithPath: real)
         let values = try? url.resourceValues(forKeys: [.isPackageKey, .isApplicationKey, .isVolumeKey])
         // A mount point sits on another device than its parent.
@@ -53,10 +53,10 @@ enum FolderRules {
     }
 }
 
-/// A bounded, breadth-first look through a folder: the Markdown a folder preview opens on when the folder itself holds none, and
-/// the numbers and recent files of the folder overview. Hidden files and folders (and so `.obsidian` and `.git`) are left out
-/// unless `showHidden`; dependency and build folders are never entered; packages count as one item; a symbolic link is taken only
-/// when it resolves to a file inside the root, and linked folders are never followed. Call it off the main thread.
+/// A bounded, breadth-first look through a folder: the numbers and recent files of the folder overview. Hidden files and folders
+/// (and so `.obsidian` and `.git`) are left out unless `showHidden`; dependency and build folders are never entered; packages count
+/// as one item; a symbolic link is taken only when it resolves to a file inside the root, and linked folders are never followed.
+/// Call it off the main thread.
 enum FolderScan {
     static let maxDepth = 3
     static let maxEntries = 5_000
@@ -65,8 +65,6 @@ enum FolderScan {
     /// Folders a scan or the link index never enters, whatever `showHidden` says.
     static let skipped: Set<String> = [".obsidian", ".git", ".trash", ".Trash", "node_modules", "__pycache__", ".venv", "venv", "Pods",
                                        "DerivedData", ".build", ".next", ".cache", "bower_components"]
-    /// Names that make a note the one to open, in order of preference (compared without extension, lowercased).
-    static let preferredNames = ["readme", "index", "home", "welcome", "start here", "start", "overview", "contents", "00 index", "_index"]
 
     struct Item: Equatable {
         let path: String
@@ -88,22 +86,6 @@ enum FolderScan {
         var scanned = 0
         var hasObsidian = false
         var hasGit = false
-
-        /// The Markdown file to open: shallowest first, then a preferred name (the folder's own name counts), then the newest.
-        var bestMarkdown: Item? {
-            let rootName = (root as NSString).lastPathComponent.lowercased()
-            func rank(_ i: Item) -> Int {
-                let stem = ((i.path as NSString).lastPathComponent as NSString).deletingPathExtension.lowercased()
-                if let n = FolderScan.preferredNames.firstIndex(of: stem) { return n }
-                return stem == rootName ? FolderScan.preferredNames.count : 99
-            }
-            return files.filter { $0.kind == .markdown }.min { a, b in
-                if a.depth != b.depth { return a.depth < b.depth }
-                if rank(a) != rank(b) { return rank(a) < rank(b) }
-                if a.modified != b.modified { return a.modified > b.modified }
-                return a.rel.localizedStandardCompare(b.rel) == .orderedAscending
-            }
-        }
 
         var recent: [Item] { Array(files.sorted { $0.modified != $1.modified ? $0.modified > $1.modified : $0.rel < $1.rel }.prefix(FolderScan.recentCount)) }
 
@@ -133,7 +115,7 @@ enum FolderScan {
         case .video, .audio: return "media"
         case .code, .html: return "code"
         case .json, .csv: return "data"
-        case .text: return "text"
+        case .text, .rtf: return "text"
         default: return "other"
         }
     }
@@ -283,9 +265,10 @@ final class LinkIndex {
     static func links(in text: String, max: Int = maxTargets) -> [(target: String, embed: Bool)] {
         var out: [(String, Bool)] = []
         var seen: Set<String> = []
-        let ns = text as NSString
+        // A UTF-16 copy: the expression reads a native (UTF-8) string through its bridge ten times slower than the copy costs.
+        let ns = NSMutableString(string: text) as String as NSString
         guard let re = try? NSRegularExpression(pattern: #"(!?)\[\[([^\[\]\n]{1,400})\]\]"#) else { return [] }
-        for m in re.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+        for m in re.matches(in: ns as String, range: NSRange(location: 0, length: ns.length)) {
             let embed = m.range(at: 1).length > 0
             let t = parse(ns.substring(with: m.range(at: 2))).target
             guard !t.isEmpty, seen.insert((embed ? "!" : "") + t).inserted else { continue }
@@ -383,5 +366,363 @@ final class LinkIndex {
         let data = st.st_size <= FolderListing.maxDocumentBytes ? FileTypes.materializing(read) : read()
         guard FileTypes.looksLikeText(data) else { return nil }
         return String(decoding: data, as: UTF8.self)
+    }
+}
+
+/// The sidebar filter's searches of the whole tree under the root, whether or not a folder was ever listed. Contents mode reads
+/// the text of the files, matched as case-insensitive plain text; Names mode matches names alone and reads no file. The files
+/// are those FolderListing lists (hidden files by the setting, each folder up to `FolderListing.statCap` entries, so past the
+/// sidebar's own cap; links only inside the root), folder by folder from the root down; dependency and build folders
+/// (FolderScan.skipped) are never entered, and a folder reached twice through a link is searched once, as is a file reached
+/// through a link to it (its own row kept). Only Markdown, code, JSON, CSV and text are read, at most `maxFileBytes` of each
+/// (what the text view shows), and only what TextDecoding reads as text: binary is skipped, and a file iCloud has evicted is
+/// skipped rather than downloaded. `Limits` bound the files, the bytes, the results and the time; a search cut short says why.
+/// Searches run one at a time on `queue`; `Cancel` stops one between files. The walk is kept for `listTTL`, so the keystrokes
+/// of one word walk the tree once.
+enum ContentSearch {
+    struct Limits {
+        var maxFiles = 20_000
+        var maxFileBytes = FileTypes.maxTextBytes
+        var maxTotalBytes = 64 << 20
+        var maxResults = 500
+        var budget: TimeInterval = 2
+        /// Listing the tree has a budget of its own.
+        var walkBudget: TimeInterval = 1
+        var maxDepth = 32
+    }
+    static let queue = DispatchQueue(label: "md.spacebar.search", qos: .userInitiated)
+    static let listTTL: TimeInterval = 5
+    static let maxQueryBytes = 256
+    /// Matches in one file are counted up to this.
+    static let maxCount = 9_999
+    static let snippetBytes = 160
+    static let snippetLead = 12
+    static let kinds: Set<FileKind> = [.markdown, .code, .json, .csv, .text]
+
+    struct Hit: Equatable {
+        let path: String
+        let count: Int
+        /// 1-based line of the first match.
+        let line: Int
+        let snippet: String
+    }
+
+    /// One report: the hits found since the last one, and where the search is.
+    struct Progress {
+        var hits: [Hit] = []
+        var searched = 0
+        var total = 0
+        var done = false
+        /// A folder had more entries than the listing shows: only its listed files were searched.
+        var listedOnly = false
+        /// Why a finished search did not look at every file: "files", "bytes", "time" or "results".
+        var stopped: String?
+    }
+
+    final class Cancel {
+        private let lock = NSLock()
+        private var flag = false
+        func cancel() { lock.lock(); flag = true; lock.unlock() }
+        var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return flag }
+    }
+
+    /// The query lowercased; an ASCII query is matched against ASCII-folded bytes, anything else against the lowercased text.
+    struct Matcher {
+        let needle: [UInt8]
+        let ascii: Bool
+
+        init?(_ query: String) {
+            let q = query.lowercased()
+            guard !q.isEmpty, q.utf8.count <= ContentSearch.maxQueryBytes else { return nil }
+            needle = Array(q.utf8)
+            ascii = needle.allSatisfy { $0 < 0x80 }
+        }
+
+        /// The number of non-overlapping matches (at most maxCount) and the byte offset of the first, in `hay`.
+        func scan(_ hay: UnsafeBufferPointer<UInt8>, fold: Bool) -> (count: Int, first: Int) {
+            let m = needle.count, n = hay.count
+            guard m <= n else { return (0, -1) }
+            var count = 0, first = -1, i = 0
+            let lead = needle[0]
+            needle.withUnsafeBufferPointer { nd in
+                while i <= n - m {
+                    let b = hay[i]
+                    if (fold && b &- 65 < 26 ? b | 0x20 : b) == lead {
+                        var j = 1
+                        while j < m {
+                            let c = hay[i + j]
+                            if (fold && c &- 65 < 26 ? c | 0x20 : c) != nd[j] { break }
+                            j += 1
+                        }
+                        if j == m {
+                            if first < 0 { first = i }
+                            count += 1
+                            if count >= ContentSearch.maxCount { return }
+                            i += m
+                            continue
+                        }
+                    }
+                    i += 1
+                }
+            }
+            return (count, first)
+        }
+
+        /// The hit for `text`, the file at `path`, or nil when nothing matches.
+        func hit(_ text: String, path: String) -> Hit? {
+            var t = TextDecoding.nativeUTF8(text)
+            if ascii {
+                return t.withUTF8 { buf -> Hit? in
+                    let (count, first) = scan(buf, fold: true)
+                    guard count > 0 else { return nil }
+                    return Hit(path: path, count: count, line: ContentSearch.line(buf, at: first), snippet: ContentSearch.snippet(buf, at: first))
+                }
+            }
+            var low = TextDecoding.nativeUTF8(t.lowercased())
+            let found = low.withUTF8 { buf -> (count: Int, line: Int, chars: Int)? in
+                let (count, first) = scan(buf, fold: false)
+                guard count > 0 else { return nil }
+                let start = ContentSearch.lineStart(buf, at: first)
+                let before = String(decoding: UnsafeBufferPointer(rebasing: buf[start..<first]), as: UTF8.self)
+                return (count, ContentSearch.line(buf, at: first), before.count)
+            }
+            guard let found else { return nil }
+            // Lowercasing keeps every line break and, but for rare letters, every character: the match is as many characters
+            // into the same line of the original text.
+            return t.withUTF8 { buf -> Hit in
+                var start = 0, n = 1
+                while n < found.line, let nl = UnsafeBufferPointer(rebasing: buf[start...]).firstIndex(of: 0x0A) { start += nl + 1; n += 1 }
+                var end = start
+                while end < buf.count && buf[end] != 0x0A { end += 1 }
+                let line = String(decoding: UnsafeBufferPointer(rebasing: buf[start..<end]), as: UTF8.self)
+                let at = line.index(line.startIndex, offsetBy: found.chars, limitedBy: line.endIndex) ?? line.endIndex
+                let offset = line.utf8.distance(from: line.startIndex, to: at)
+                return Hit(path: path, count: found.count, line: found.line, snippet: ContentSearch.snippet(buf, at: start + offset))
+            }
+        }
+    }
+
+    static func lineStart(_ buf: UnsafeBufferPointer<UInt8>, at i: Int) -> Int {
+        var s = min(i, buf.count)
+        while s > 0 && buf[s - 1] != 0x0A { s -= 1 }
+        return s
+    }
+
+    static func line(_ buf: UnsafeBufferPointer<UInt8>, at i: Int) -> Int {
+        var n = 1
+        for k in 0..<min(i, buf.count) where buf[k] == 0x0A { n += 1 }
+        return n
+    }
+
+    /// The line holding byte `i`, from a little before it (a sidebar row shows about 40 characters) to at most `snippetBytes`,
+    /// cut on character boundaries and trimmed.
+    static func snippet(_ buf: UnsafeBufferPointer<UInt8>, at i: Int) -> String {
+        let s = lineStart(buf, at: i)
+        var e = min(i, buf.count)
+        while e < buf.count && buf[e] != 0x0A { e += 1 }
+        var a = i - s > snippetLead + 4 ? i - snippetLead : s
+        while a > s && buf[a] & 0xC0 == 0x80 { a -= 1 }
+        var b = min(e, a + snippetBytes)
+        while b < e && buf[b] & 0xC0 == 0x80 { b -= 1 }
+        let text = String(decoding: UnsafeBufferPointer(rebasing: buf[a..<b]), as: UTF8.self)
+            .replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\r", with: "")
+            .trimmingCharacters(in: .whitespaces)
+        return (a > s ? "…" : "") + text + (b < e ? "…" : "")
+    }
+
+    /// What the page is sent for one report of search `seq`.
+    static func payload(_ p: Progress, seq: Int) -> [String: Any] {
+        var d: [String: Any] = ["seq": seq, "searched": p.searched, "total": p.total, "done": p.done, "listedOnly": p.listedOnly,
+                                "hits": p.hits.map { h -> [String: Any] in
+                                    let name = (h.path as NSString).lastPathComponent
+                                    return ["path": h.path, "name": name, "icon": FileTypes.glyph(name: name, kind: FileTypes.kind(name: name)),
+                                            "count": h.count, "line": h.line, "snippet": h.snippet]
+                                }]
+        if let s = p.stopped { d["stopped"] = s }
+        return d
+    }
+
+    /// One item a walk found: a file (of the searched kinds, unless every name is wanted) or, for Names, a folder.
+    struct Found: Equatable {
+        let path: String
+        let isDir: Bool
+        let kind: FileKind
+    }
+    typealias Walk = (found: [Found], listedOnly: Bool, stopped: String?)
+
+    /// The items to search, in the order they are searched: each folder's as it lists them, the root's first. `names`: every file
+    /// and folder, for Names; else only the files Contents reads, each real file once.
+    static func walk(root: String, sort: String, readmeFirst: Bool, showHidden: Bool, only: Set<String>? = nil, names: Bool = false,
+                     limits: Limits, until deadline: Date, cancel: Cancel) -> Walk {
+        var found: [Found] = [], listedOnly = false
+        var queue: [(String, Int)] = [(root, 0)], head = 0
+        var seen: Set<String> = FolderListing.realPath(root).map { [$0] } ?? []
+        // A file's resolved path to its place in `found`, and whether that row is a link: a link's row gives way to the file's own.
+        var files: [String: (at: Int, link: Bool)] = [:]
+        var st = stat()
+        while head < queue.count {
+            if cancel.isCancelled { return (found, listedOnly, "cancelled") }
+            if Date() > deadline { return (found, listedOnly, "time") }
+            let (dir, depth) = queue[head]
+            head += 1
+            var l = FolderListing.list(dir, root: root, sort: sort, readmeFirst: readmeFirst, showHidden: showHidden, cap: FolderListing.statCap)
+            if let only { l = FolderListing.only(l, selection: only) }
+            if l.more > 0 { listedOnly = true }
+            // A folder's own entry before a link to it beside it: the folder is searched under its own name.
+            let entries = l.entries.filter { !$0.isDirectory || !(lstat($0.path, &st) == 0 && st.st_mode & S_IFMT == S_IFLNK) }
+                + l.entries.filter { $0.isDirectory && lstat($0.path, &st) == 0 && st.st_mode & S_IFMT == S_IFLNK }
+            for e in entries where !e.broken {
+                if e.isDirectory {
+                    guard depth < limits.maxDepth, !FolderScan.skipped.contains(e.name), let real = FolderListing.realPath(e.path),
+                          seen.insert(real).inserted else { continue }
+                    if names {
+                        if found.count >= limits.maxFiles { return (found, listedOnly, "files") }
+                        found.append(Found(path: e.path, isDir: true, kind: .folder))
+                    }
+                    queue.append((e.path, depth + 1))
+                } else if names {
+                    if found.count >= limits.maxFiles { return (found, listedOnly, "files") }
+                    found.append(Found(path: e.path, isDir: false, kind: e.kind))
+                } else if kinds.contains(e.kind) {
+                    let link = lstat(e.path, &st) == 0 && st.st_mode & S_IFMT == S_IFLNK
+                    if let real = FolderListing.realPath(e.path), let had = files[real] {
+                        if had.link && !link {
+                            found[had.at] = Found(path: e.path, isDir: false, kind: e.kind)
+                            files[real] = (had.at, false)
+                        }
+                        continue
+                    }
+                    if found.count >= limits.maxFiles { return (found, listedOnly, "files") }
+                    if let real = FolderListing.realPath(e.path) { files[real] = (found.count, link) }
+                    found.append(Found(path: e.path, isDir: false, kind: e.kind))
+                }
+            }
+        }
+        return (found, listedOnly, nil)
+    }
+
+    /// The files Contents searches, in order (see `walk`).
+    static func files(root: String, sort: String, readmeFirst: Bool, showHidden: Bool, only: Set<String>? = nil, limits: Limits,
+                      until deadline: Date, cancel: Cancel) -> (paths: [String], listedOnly: Bool, stopped: String?) {
+        let w = walk(root: root, sort: sort, readmeFirst: readmeFirst, showHidden: showHidden, only: only, limits: limits, until: deadline, cancel: cancel)
+        return (w.found.map(\.path), w.listedOnly, w.stopped)
+    }
+
+    /// Whether `name` matches a Names query as the page's filter does: the query's characters in order anywhere in the name,
+    /// ignoring case. `query` is already lowercased.
+    static func nameMatches(_ name: String, _ query: [Unicode.Scalar]) -> Bool {
+        guard !query.isEmpty else { return true }
+        var i = 0
+        for c in name.lowercased().unicodeScalars where c == query[i] {
+            i += 1
+            if i == query.count { return true }
+        }
+        return false
+    }
+
+    /// The text of the file at `path` from its first `cap` bytes (nil when it cannot be read without a download, or is not text),
+    /// and how many bytes were read. `inside` is the resolved root with a trailing slash: a file swapped for a link out of the
+    /// root since it was listed is not read.
+    static func read(_ path: String, cap: Int, inside: String) -> (text: String?, bytes: Int) {
+        guard let real = FolderListing.realPath(path), real.hasPrefix(inside) else { return (nil, 0) }
+        let fd = open(real, O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW)
+        guard fd >= 0 else { return (nil, 0) }
+        let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG, st.st_flags & 0x4000_0000 == 0, st.st_size > 0,
+              let data = try? h.read(upToCount: cap), !data.isEmpty else { return (nil, 0) }
+        return (TextDecoding.decode(data, truncated: Int64(data.count) < Int64(st.st_size))?.text, data.count)
+    }
+
+    /// The last tree walked, reused within `listTTL`. Read and written only on `queue` (or a test's one thread).
+    private static var cached: (key: String, at: Date, walk: Walk)?
+
+    /// The walk for these arguments, from the cache when it is fresh. Nil when it was cancelled.
+    private static func walked(root: String, sort: String, readmeFirst: Bool, showHidden: Bool, only: Set<String>?, names: Bool,
+                               limits: Limits, cancel: Cancel) -> Walk? {
+        let key = [root, sort, "\(readmeFirst)", "\(showHidden)", only.map { $0.sorted().joined(separator: "\n") } ?? "", "\(limits.maxFiles)",
+                   "\(limits.maxDepth)", "\(names)"].joined(separator: "\0")
+        if let c = cached, c.key == key, Date().timeIntervalSince(c.at) < listTTL { return c.walk }
+        let w = walk(root: root, sort: sort, readmeFirst: readmeFirst, showHidden: showHidden, only: only, names: names, limits: limits,
+                     until: Date().addingTimeInterval(limits.walkBudget), cancel: cancel)
+        if w.stopped == "cancelled" { return nil }
+        cached = (key, Date(), w)
+        return w
+    }
+
+    /// Searches the names under the root for `query` (see `nameMatches`), reading no file, and reports once with every match,
+    /// files and folders, up to `maxResults`. Nothing is reported after `cancel`.
+    static func runNames(query: String, root: String, sort: String = "name", readmeFirst: Bool = false, showHidden: Bool, only: Set<String>? = nil,
+                         limits: Limits = Limits(), cancel: Cancel, report: (NameProgress) -> Void) {
+        if cancel.isCancelled { return }
+        let q = Array(query.lowercased().unicodeScalars)
+        guard !q.isEmpty, query.utf8.count <= maxQueryBytes else { return report(NameProgress()) }
+        guard let w = walked(root: root, sort: sort, readmeFirst: readmeFirst, showHidden: showHidden, only: only, names: true, limits: limits,
+                             cancel: cancel) else { return }
+        var p = NameProgress(searched: w.found.count, listedOnly: w.listedOnly, stopped: w.stopped)
+        for f in w.found where nameMatches((f.path as NSString).lastPathComponent, q) {
+            if cancel.isCancelled { return }
+            if p.hits.count >= limits.maxResults { p.stopped = "results"; break }
+            p.hits.append(f)
+        }
+        if cancel.isCancelled { return }
+        report(p)
+    }
+
+    /// A Names search's one report.
+    struct NameProgress {
+        var hits: [Found] = []
+        var searched = 0
+        var listedOnly = false
+        var stopped: String?
+    }
+
+    /// What the page is sent for Names search `seq`.
+    static func payload(_ p: NameProgress, seq: Int) -> [String: Any] {
+        var d: [String: Any] = ["seq": seq, "names": true, "done": true, "searched": p.searched, "listedOnly": p.listedOnly,
+                                "hits": p.hits.map { f -> [String: Any] in
+                                    let name = (f.path as NSString).lastPathComponent
+                                    return ["path": f.path, "name": name, "dir": f.isDir, "icon": f.isDir ? "folder" : FileTypes.glyph(name: name, kind: f.kind)]
+                                }]
+        if let s = p.stopped { d["stopped"] = s }
+        return d
+    }
+
+    /// Searches for `query`, calling `report` (on this thread) with the first hit at once, then at most every `every` seconds,
+    /// and once when done. Nothing is reported after `cancel`.
+    static func run(query: String, root: String, sort: String = "name", readmeFirst: Bool = false, showHidden: Bool, only: Set<String>? = nil,
+                    limits: Limits = Limits(), every: TimeInterval = 0.05, cancel: Cancel, report: (Progress) -> Void) {
+        if cancel.isCancelled { return }
+        guard let matcher = Matcher(query), let realRoot = FolderListing.realPath(root) else { return report(Progress(done: true)) }
+        let inside = realRoot == "/" ? "/" : realRoot + "/"
+        guard let w = walked(root: root, sort: sort, readmeFirst: readmeFirst, showHidden: showHidden, only: only, names: false, limits: limits,
+                             cancel: cancel) else { return }
+        let found = (paths: w.found.map(\.path), listedOnly: w.listedOnly, stopped: w.stopped)
+        let start = Date(), deadline = start.addingTimeInterval(limits.budget)
+        var p = Progress(total: found.paths.count, listedOnly: found.listedOnly, stopped: found.stopped)
+        var bytes = 0, results = 0, sent = start, firstOut = false
+        for path in found.paths {
+            if cancel.isCancelled { return }
+            let now = Date()
+            if now > deadline { p.stopped = "time"; break }
+            if bytes >= limits.maxTotalBytes { p.stopped = "bytes"; break }
+            if results >= limits.maxResults { p.stopped = "results"; break }
+            // The first hit goes at once; after it, what was found (or only how far the search got) goes every `every`.
+            if (!firstOut && !p.hits.isEmpty) || now.timeIntervalSince(sent) >= every {
+                firstOut = firstOut || !p.hits.isEmpty
+                report(p)
+                p.hits = []
+                sent = now
+            }
+            p.searched += 1
+            let (text, n) = read(path, cap: min(limits.maxFileBytes, limits.maxTotalBytes - bytes), inside: inside)
+            bytes += n
+            guard let text, let hit = matcher.hit(text, path: path) else { continue }
+            results += 1
+            p.hits.append(hit)
+        }
+        if cancel.isCancelled { return }
+        p.done = true
+        report(p)
     }
 }

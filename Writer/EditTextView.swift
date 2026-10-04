@@ -18,8 +18,19 @@ final class EditTextView: NSTextView {
     var onHoldTimeout: () -> Void = {}
     /// Set while a filter session is active; takes the keys FilterKeys names instead of the text.
     var onFilterKey: ((_ key: String, _ isRepeat: Bool) -> Void)?
+    /// A list session: only the list keys (FilterKeys.listNames) go anywhere, Esc and Space end it (onEscape), nothing is typed
+    /// and no shortcut runs.
+    var listKeys = false
+    /// A find session: Return and Shift+Return (⌘G and ⇧⌘G too) go to onFilterKey as FilterKeys.findNames.
+    var findKeys = false
+    /// ⌘Z (true: ⇧⌘Z) with the session's own undo used up: the host undoes across sessions, splits and merges.
+    var onUndoPastStart: ((_ redo: Bool) -> Void)?
+    /// ⌘F while an edit holds the keys: the edit ends (its text is already saved) and the page opens find.
+    var onFind: (() -> Void)?
     var session = 0
     var firstKeyLogged = false
+    /// A whole text file rather than a Markdown block (see setPlain).
+    private(set) var plain = false
     /// Keys (and shortcuts) that arrive between a merge or split request and its resetEdit, replayed onto the new text. They are
     /// never applied to the old buffer: the host has already saved the change, so the buffer must not change until the reset.
     private var held: [NSEvent]?
@@ -31,9 +42,17 @@ final class EditTextView: NSTextView {
             log.info("lat[\(self.session)] first-key \(upMs(), format: .fixed(precision: 1)) (event \(event.timestamp * 1000, format: .fixed(precision: 1)))")
         }
         if held != nil { held!.append(event); return }
+        if listKeys {
+            let mods = event.modifierFlags.rawValue
+            if FilterKeys.listEnds(keyCode: event.keyCode, modifiers: mods) { onEscape(); return }
+            if let name = FilterKeys.name(keyCode: event.keyCode, modifiers: mods, list: true) { onFilterKey?(name, event.isARepeat) }
+            return
+        }
         // While an input method composes, its keys (Esc to cancel, arrows to choose, Return to commit) belong to it.
         if event.keyCode == 53, !hasMarkedText() { onEscape(); return }
-        if let key = onFilterKey, !hasMarkedText(), let name = FilterKeys.name(keyCode: event.keyCode, modifiers: event.modifierFlags.rawValue) {
+        if let key = onFilterKey, !hasMarkedText(),
+           let name = findKeys ? FilterKeys.findName(keyCode: event.keyCode, modifiers: event.modifierFlags.rawValue)
+                               : FilterKeys.name(keyCode: event.keyCode, modifiers: event.modifierFlags.rawValue) {
             key(name, event.isARepeat)
             return
         }
@@ -90,19 +109,33 @@ final class EditTextView: NSTextView {
     // The service has no main menu, so the standard editing shortcuts are routed here.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if held != nil, event.modifierFlags.contains(.command) { held!.append(event); return true }
+        // A plain key may come here before keyDown: only Command shortcuts are swallowed, so the list keys, Esc and Space still arrive.
+        let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        if listKeys, event.modifierFlags.contains(.command) {
+            if let name = FilterKeys.command(chars, modifiers: event.modifierFlags.rawValue, find: false) { onFilterKey?(name, event.isARepeat) }
+            return true
+        }
+        if findKeys, let key = onFilterKey, let name = FilterKeys.command(chars, modifiers: event.modifierFlags.rawValue, find: true) {
+            key(name, event.isARepeat)
+            return true
+        }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard flags.contains(.command), let key = event.charactersIgnoringModifiers?.lowercased() else { return super.performKeyEquivalent(with: event) }
+        guard flags.contains(.command), !chars.isEmpty else { return super.performKeyEquivalent(with: event) }
+        let key = chars
         let shift = flags.contains(.shift)
         if flags.isDisjoint(with: [.option, .control]), let binding = Self.commandBindings[key] {
             if let command = shift ? binding.extend : binding.move { doCommand(by: command) }
             return true
         }
         switch key {
+        case "f" where flags.isDisjoint(with: [.shift, .option, .control]): onFind?()
         case "a": selectAll(nil)
         case "c": copy(nil)
         case "x": cut(nil)
         case "v": pasteAsPlainText(nil)
-        case "z": shift ? undoManager?.redo() : undoManager?.undo()
+        case "z":
+            let um = undoManager
+            if shift ? um?.canRedo == true : um?.canUndo == true { shift ? um?.redo() : um?.undo() } else { onUndoPastStart?(shift) }
         default: return true  // swallow everything else so no shortcut leaks to another window
         }
         return true
@@ -133,15 +166,30 @@ final class EditTextView: NSTextView {
         re.firstMatch(in: s, range: NSRange(location: 0, length: (s as NSString).length))
     }
 
+    /// A text file: monospaced and unwrapped like the page's code view, so ↑ and ↓ keep the column and Command-arrows reach the
+    /// ends of the real line; a Markdown block: the proportional font, wrapped at the block's width.
+    func setPlain(_ on: Bool) {
+        plain = on
+        indentStep = nil
+        font = on ? .monospacedSystemFont(ofSize: 13, weight: .regular) : .systemFont(ofSize: 15)
+        layoutManager?.allowsNonContiguousLayout = on
+        isHorizontallyResizable = on
+        textContainer?.widthTracksTextView = !on
+        textContainer?.containerSize = NSSize(width: on ? CGFloat.greatestFiniteMagnitude : frame.width, height: CGFloat.greatestFiniteMagnitude)
+    }
+
     /// Enter ends the block like a block editor: the text after the caret becomes a new paragraph below, shown as one new line
     /// (the blank line markdown needs between them is never part of an edited block). A list item or quote line continues with
-    /// its marker; Enter on an empty one leaves the list or quote. Code, math and HTML blocks take a plain line break, and so
-    /// does Shift+Enter anywhere.
+    /// its marker; Enter on an empty one leaves the list or quote. Code, math and HTML blocks take a line break that keeps the
+    /// indentation, as a text file does; elsewhere Shift+Enter, and Enter in a block with no text yet (so a second Enter shows a
+    /// blank line), take a plain line break.
     override func insertNewline(_ sender: Any?) {
         let ns = string as NSString
         let sel = selectedRange()
+        let literal = !plain && Self.matches(Self.literal, string) != nil
+        if plain || literal { return indentedNewline() }
         guard let split = onSplit, sel.length == 0, (replaying ?? NSApp.currentEvent)?.modifierFlags.contains(.shift) != true,
-              Self.matches(Self.literal, string) == nil else { return insertText("\n", replacementRange: sel) }
+              string.contains(where: { !$0.isWhitespace }) else { return insertText("\n", replacementRange: sel) }
         let lineRange = ns.lineRange(for: NSRange(location: sel.location, length: 0))
         var lineEnd = NSMaxRange(lineRange)
         if lineEnd > lineRange.location, ns.character(at: lineEnd - 1) == 10 { lineEnd -= 1 }
@@ -172,6 +220,76 @@ final class EditTextView: NSTextView {
         let before = Self.trimNewlines(ns.substring(to: sel.location), trailing: true)
         let after = Self.trimNewlines(ns.substring(from: NSMaxRange(sel)), trailing: false)
         holdKeys { split(before, after, "") }
+    }
+
+    /// The indentation one level adds in this text: the file's own step, else four spaces.
+    private var indentStep: String?
+
+    /// A line break that keeps the line's indentation, as a code editor does. After an opening bracket the new line is one step
+    /// deeper, and a closing bracket right after the caret goes to a line of its own at the old depth.
+    private func indentedNewline() {
+        let ns = string as NSString
+        let sel = selectedRange()
+        let start = ns.lineRange(for: NSRange(location: sel.location, length: 0)).location
+        let head = ns.substring(with: NSRange(location: start, length: sel.location - start))
+        let indent = String(head.prefix { $0 == " " || $0 == "\t" })
+        guard let open = head.last(where: { !$0.isWhitespace }), let close = Self.pairs[open] else {
+            return insertText("\n" + indent, replacementRange: sel)
+        }
+        let inner = "\n" + indent + step(for: indent)
+        let end = NSMaxRange(sel)
+        if end < ns.length, ns.substring(with: NSRange(location: end, length: 1)) == String(close) {
+            insertText(inner + "\n" + indent, replacementRange: sel)
+            return setSelectedRange(NSRange(location: sel.location + (inner as NSString).length, length: 0))
+        }
+        insertText(inner, replacementRange: sel)
+    }
+
+    private static let pairs: [Character: Character] = ["{": "}", "[": "]", "(": ")"]
+
+    /// One indentation step: a tab where the line, or most of the text, is indented with tabs; else the commonest step by which
+    /// one line's space indentation exceeds the line before it (2 to 8), else four spaces.
+    private func step(for indent: String) -> String {
+        if indent.hasPrefix("\t") { return "\t" }
+        if let s = indentStep { return s }
+        var tabs = 0, spaces = 0, prev = 0
+        var steps: [Int: Int] = [:]
+        (string as NSString).enumerateSubstrings(in: NSRange(location: 0, length: min((string as NSString).length, 1 << 16)), options: .byLines) { line, _, _, _ in
+            guard let line, line.contains(where: { !$0.isWhitespace }) else { return }
+            if line.hasPrefix("\t") { tabs += 1; return }
+            let n = line.prefix { $0 == " " }.count
+            if n > 0 { spaces += 1 }
+            if (2...8).contains(n - prev) { steps[n - prev, default: 0] += 1 }
+            prev = n
+        }
+        let s = tabs > spaces ? "\t" : String(repeating: " ", count: steps.max { ($0.value, -$0.key) < ($1.value, -$1.key) }?.key ?? 4)
+        if plain { indentStep = s }
+        return s
+    }
+
+    /// Shift-Tab takes one step of indentation off each line the selection touches, and never types anything.
+    override func insertBacktab(_ sender: Any?) {
+        let ns = string as NSString
+        let sel = selectedRange()
+        // A selection that ends at a line's start (⇧↓) does not take that line in.
+        let touched = sel.length > 0 && ns.character(at: NSMaxRange(sel) - 1) == 10 ? NSRange(location: sel.location, length: sel.length - 1) : sel
+        let lines = ns.lineRange(for: touched)
+        let unit = step(for: "").count
+        var out = "", removedBefore = 0, removedInside = 0
+        var at = lines.location
+        ns.substring(with: lines).split(separator: "\n", omittingEmptySubsequences: false).enumerated().forEach { i, line in
+            if i > 0 { out += "\n"; at += 1 }
+            let cut = line.hasPrefix("\t") ? 1 : min(line.prefix { $0 == " " }.count, unit)
+            out += line.dropFirst(cut)
+            if at < sel.location { removedBefore += min(cut, sel.location - at) }
+            removedInside += max(0, min(at + cut, NSMaxRange(sel)) - max(at, sel.location))
+            at += line.utf16.count
+        }
+        guard out != ns.substring(with: lines), shouldChangeText(in: lines, replacementString: out) else { return }
+        textStorage?.replaceCharacters(in: lines, with: out)
+        didChangeText()
+        let loc = sel.location - removedBefore
+        setSelectedRange(NSRange(location: loc, length: sel.length - removedInside))
     }
 
     private static func trimNewlines(_ s: String, trailing: Bool) -> String {

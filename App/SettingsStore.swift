@@ -10,6 +10,15 @@ final class SettingsStore: ObservableObject {
     @Published private(set) var userThemes: [UserTheme] = []
     /// Bumped whenever something the page reads may have changed, so the preview re-applies the payload.
     @Published private(set) var revision = 0
+    /// The settings window's Advanced section is open.
+    @Published var advancedExpanded = false
+    /// Bumped when a link asks for Advanced, so the page scrolls to it.
+    @Published private(set) var advancedRequests = 0
+
+    func revealAdvanced(_ reveal: Bool) {
+        advancedExpanded = reveal
+        if reveal { advancedRequests += 1 }
+    }
 
     private var watcher: FolderWatcher?
 
@@ -37,8 +46,13 @@ final class SettingsStore: ObservableObject {
         apply(SettingsFile.update([key: value]))
     }
 
-    func resetToDefaults() {
-        apply(SettingsFile.update(Settings().dictionary))
+    /// Whether the defaults were written.
+    @discardableResult
+    func resetToDefaults() -> Bool {
+        let result = SettingsFile.update(Settings.resetPatch())
+        apply(result)
+        if case .success = result { return true }
+        return false
     }
 
     private func apply(_ result: Result<Settings, SettingsFile.Failure>) {

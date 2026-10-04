@@ -15,6 +15,10 @@
   li > ul, li > ol { margin-bottom: 0; }
   a { color: var(--link); text-decoration: none; }
   a:hover { text-decoration: underline; text-underline-offset: 2px; }
+  /* A link in running text is underlined, not told by its colour alone (WCAG 1.4.1). */
+  #doc :is(p, li, dd, td, th, blockquote, figcaption) a[href]:not(.wl-embed-head, .unresolved) { text-decoration-line: underline; text-decoration-thickness: 1px;
+    text-underline-offset: .2em; text-decoration-color: color-mix(in srgb, currentColor 45%, transparent); }
+  #doc :is(p, li, dd, td, th, blockquote, figcaption) a[href]:not(.wl-embed-head, .unresolved):hover { text-decoration-color: currentColor; }
   strong, b { font-weight: 650; }
   hr { border: 0; height: 1px; background: var(--border); margin: 2em 0; }
   img { max-width: 100%; border-radius: 4px; }
@@ -31,10 +35,48 @@
   table { border-collapse: collapse; display: block; max-width: 100%; overflow: auto; width: max-content; font-variant-numeric: tabular-nums; }
   th, td { border: 1px solid var(--border); padding: 5px 12px; }
   th { background: var(--code-bg); font-weight: 600; text-align: left; }
+  /* A wide table keeps its short cells on one line and scrolls; a shadow at an edge says there is more past it. */
+  #doc table:not(.csv, .frontmatter, .archive) :is(th, td).nw { white-space: nowrap; }
+  #doc table:not(.csv, .frontmatter, .archive) :is(th, td):not(.nw) { min-width: 16em; }
+  #doc > table {
+    background: linear-gradient(to right, var(--bg) 30%, transparent) left / 32px 100% no-repeat local,
+      linear-gradient(to left, var(--bg) 30%, transparent) right / 32px 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, color-mix(in srgb, var(--fg) 18%, transparent), transparent) left / 10px 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, color-mix(in srgb, var(--fg) 18%, transparent), transparent) right / 10px 100% no-repeat scroll; }
+  /* A long table scrolls in a box the window's height, its header row pinned. */
+  #doc table.tall { max-height: calc(100vh - var(--bar-h) - 96px); }
+  #doc table.tall thead th { position: sticky; top: 0; z-index: 1; box-shadow: 0 1px 0 var(--border); }
 
   li.task { list-style: none; }
   li.task > input { margin: 0 .45em 0 -1.35em; vertical-align: -1px; accent-color: var(--accent); }
   li.task > input:disabled { opacity: .75; }
+  li.task:has(> input:checked) > .task-text, li.task > p:has(> input:checked) > .task-text { color: var(--muted); }
+
+  /* Footnotes: small and muted under a rule; a reference is a raised number. */
+  sup.footnote-ref { font-size: .75em; line-height: 0; }
+  sup.footnote-ref > a { text-decoration: none !important; padding: 0 .1em; }
+  hr.footnotes-sep { margin: 2.5em 0 1em; }
+  section.footnotes { font-size: .875em; color: var(--muted); }
+  section.footnotes ol { padding-left: 1.4em; }
+  a.footnote-backref { text-decoration: none !important; font-family: var(--font-body); }
+  #doc [id] { scroll-margin-top: var(--anchor-mt, calc(var(--bar-h) + 16px)); }
+  /* A formula while KaTeX loads (app.js loadKatex): a quiet mark in the line, and a display formula's own line. */
+  #doc span.tex:empty::before { content: "…"; color: var(--muted); }
+  #doc span.tex[data-display="1"]:empty { display: block; margin: 1em 0; text-align: center; }
+
+  /* A code fence's language and Copy button, in its top right corner; the button shows on hover. */
+  #doc .blk { position: relative; }
+  #doc .fence-bar { position: absolute; z-index: 1; top: 4px; right: 4px; display: flex; align-items: center; gap: 6px; padding: 0 0 0 8px; border-radius: 6px;
+    background: var(--hl-bg); font: 11px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+    color: var(--muted); -webkit-user-select: none; user-select: none; pointer-events: none; }
+  #doc .fence-lang { opacity: .8; }
+  #doc .fence-copy { pointer-events: auto; width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 6px; cursor: default;
+    color: var(--muted); background: color-mix(in srgb, var(--hl-bg) 70%, var(--fg) 8%); opacity: 0; transition: opacity .12s; }
+  #doc .blk:hover .fence-copy, #doc .fence-copy:focus-visible, #doc .fence-copy.done { opacity: 1; }
+  #doc .fence-copy:hover { color: var(--fg); }
+  #doc .fence-copy.done { color: var(--accent); }
+  #doc .fence-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  @media (prefers-reduced-motion: reduce) { #doc .fence-copy { transition: none; } }
 
   .mermaid { text-align: center; }
   pre.mermaid { background: transparent; color: var(--muted); }
@@ -44,12 +86,28 @@
   @keyframes mm-in { from { opacity: 0; } }
   @media (prefers-reduced-motion: reduce) { pre.mermaid.mm-in > svg { animation: none; } }
   pre.mermaid.mm-error { text-align: left; white-space: pre-wrap; border: 1px dashed var(--border); }
+  pre.mermaid.mm-error[data-reason]::before { content: attr(data-reason); display: block; margin: 0 0 .6em; font: 12px/1.4 -apple-system, BlinkMacSystemFont, sans-serif;
+    color: var(--muted); }
   /* Where mermaid lays diagrams out, away from the page: never painted, never in the body's flex row. */
   #mm-stage { position: fixed !important; left: -100000px !important; top: 0 !important; width: 1000px; height: 0; overflow: hidden !important;
     visibility: hidden !important; pointer-events: none !important; }
   .img-blocked { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: .2em .8em; font-size: .8em; color: var(--muted); border: 1px dashed var(--border); border-radius: 6px; padding: .2em .6em; }
   .img-load { font: inherit; color: var(--link); background: none; border: 0; padding: 0; cursor: pointer; }
   .img-load:hover { text-decoration: underline; text-underline-offset: 2px; }
+  /* An image that did not load: what it was, where the document looks for it, and why. */
+  .img-missing { display: inline-flex; align-items: flex-start; gap: .65em; max-width: 100%; box-sizing: border-box; vertical-align: top;
+    padding: .6em .85em; border: 1px dashed var(--border); border-radius: 8px; background: color-mix(in srgb, var(--code-bg) 45%, transparent);
+    font-size: .82em; line-height: 1.45; color: var(--muted); text-align: left; }
+  .img-missing > .ic { color: var(--muted); margin-top: .1em; }
+  .img-missing-text { display: flex; flex-direction: column; gap: .15em; min-width: 0; }
+  .img-missing-alt { color: var(--fg); font-weight: 600; overflow-wrap: anywhere; }
+  .img-missing-path { font-family: var(--font-mono); font-size: .92em; overflow-wrap: anywhere; }
+  .img-missing-why { display: flex; flex-wrap: wrap; align-items: baseline; gap: .15em .8em; }
+  .img-missing-why:empty { display: none; }
+  .img-reason { color: var(--fg); }
+  /* The link colour reaches 4.5:1 on the page, not always on the placeholder's tint: nudged toward the text colour. */
+  .img-reveal { font: inherit; color: color-mix(in srgb, var(--link) 80%, var(--fg)); background: none; border: 0; padding: 0; cursor: pointer; }
+  .img-reveal:hover { text-decoration: underline; text-underline-offset: 2px; }
 
   /* A document's SVG or math inside a link must not reach past its own box and take clicks meant for the text around it. */
   #doc svg { overflow: hidden !important; } #doc a .katex { pointer-events: none !important; } pre.mermaid { contain: paint !important; }
@@ -83,6 +141,14 @@
   .callout-title:only-child { margin-bottom: 0; }
   .callout-icon { flex: none; width: .95em; height: .95em; border-radius: 50%; background: var(--c);
     box-shadow: inset 0 0 0 .22em color-mix(in srgb, var(--c) 45%, var(--bg)); }
+  details.callout-fold { margin: 0; }
+  details.callout-fold > summary { list-style: none; cursor: default; }
+  details.callout-fold > summary::-webkit-details-marker { display: none; }
+  details.callout-fold:not([open]) > summary { margin-bottom: 0; }
+  details.callout-fold > :last-child { margin-bottom: 0; }
+  .callout-chev { width: .45em; height: .45em; margin-left: .1em; border: solid currentColor; border-width: 0 1.5px 1.5px 0; transform: rotate(-45deg);
+    transition: transform .12s; opacity: .7; }
+  details.callout-fold[open] > summary .callout-chev { transform: rotate(45deg); }
 
   /* ---------- the folder overview ---------- */
   :root[data-view=overview] #doc { max-width: 720px; }
@@ -100,6 +166,15 @@
   #doc a.ov-row { display: grid; grid-template-columns: 16px minmax(0, max-content) minmax(0, 1fr) auto; gap: 10px; align-items: center;
     padding: 7px 12px; color: var(--fg); text-decoration: none; transition: background-color .12s; }
   #doc a.ov-row + a.ov-row { border-top: 1px solid var(--frame-line); }
+  /* List view: one row per item of the folder, name, size and date; rows off screen are laid out only when reached. */
+  #doc a.ov-row.ov-file { grid-template-columns: 16px minmax(0, 1fr) auto 11em; content-visibility: auto; contain-intrinsic-size: auto 33px; }
+  #doc .ov-row-size { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #doc a.ov-row.ov-file .ov-row-date { text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #doc a.ov-row.broken { opacity: .45; }
+  #doc a.ov-row.hidden-file > .ic, #doc a.ov-row.hidden-file > .ov-row-name { opacity: .55; }
+  #doc .ov-note { padding: 7px 12px 7px 38px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--frame-line); }
+  #doc .ov-note:first-child { border-top: 0; }
+  @media (max-width: 560px) { #doc a.ov-row.ov-file { grid-template-columns: 16px minmax(0, 1fr) auto; } #doc a.ov-row.ov-file .ov-row-date { display: none; } }
   #doc a.ov-row:hover { background: color-mix(in srgb, var(--fg) 5%, transparent); }
   #doc a.ov-row:active { background: color-mix(in srgb, var(--fg) 9%, transparent); }
   #doc .ov-row-name, #doc .ov-row-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -107,6 +182,28 @@
   #doc .ov-row-date { font-variant-numeric: tabular-nums; }
   #doc .ov-empty { color: var(--muted); padding: 24px 0; }
   #doc .overview .viewer-note { margin-top: 12px; }
+  #doc .ov-title { min-width: 0; flex: 1; }
+  #doc .ov-views { flex: none; align-self: flex-start; display: inline-flex; border: 1px solid var(--frame-line); border-radius: 7px; overflow: hidden; }
+  #doc .ov-views button { appearance: none; border: 0; margin: 0; padding: 3px 7px; display: flex; background: transparent; color: var(--muted); cursor: default; }
+  #doc .ov-views button + button { border-left: 1px solid var(--frame-line); }
+  #doc .ov-views button[aria-pressed=true] { background: var(--accent); color: #fff; }
+  #doc .ov-views .ic { width: 14px; height: 14px; stroke-width: 1.3; color: inherit; }
+
+  /* ---------- the folder grid: only the tiles in view are in the page, placed by app.js ---------- */
+  :root[data-view=overview][data-grid] #doc { max-width: none; }
+  #doc .ov-grid { position: relative; margin: 0 0 12px; }
+  #doc .gt-probe { position: absolute; top: 0; left: 0; right: 0; height: 0; }
+  #doc a.gt { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 5px; color: var(--fg); text-decoration: none;
+    -webkit-user-drag: none; }
+  #doc .gt-pic { box-sizing: border-box; display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 1;
+    border-radius: 8px; background: color-mix(in srgb, var(--fg) 5%, transparent); overflow: hidden; }
+  #doc .gt-pic img { max-width: 100%; max-height: 100%; border-radius: 3px; opacity: 0; transition: opacity .12s; }
+  #doc .gt-pic img.ld { opacity: 1; }
+  #doc .gt-pic .ic { width: 40%; height: 40%; stroke-width: .75; }
+  #doc .gt-name { max-width: 100%; box-sizing: border-box; padding: 1px 6px; border-radius: 4px; font-size: 11.5px; line-height: 16px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #doc a.gt.sel .gt-pic { background: color-mix(in srgb, var(--fg) 12%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent); }
+  #doc a.gt.sel .gt-name { background: var(--accent); color: #fff; }
 
   /* ---------- front matter ---------- */
   .frontmatter { display: table; width: 100%; margin: 0 0 1.75em; font-size: .85em; border-collapse: separate; border-spacing: 0;
@@ -119,47 +216,125 @@
     background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--fg); }
 
   /* ---------- inline editing ---------- */
-  :root:not([data-editing=off]) #doc > [data-src]:not(.md-editing):hover { background: color-mix(in srgb, var(--code-bg) 60%, transparent); border-radius: 4px; cursor: text; }
-  .md-editing { white-space: pre-wrap; background: var(--code-bg); border-radius: 4px; outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent); outline-offset: 2px; }
-  .md-editing .caret { display: inline-block; width: 0; border-left: 2px solid var(--accent); margin-right: -2px; height: 1.15em; vertical-align: text-bottom; animation: blink 1s steps(1) infinite; }
-  .md-editing .sel { background: color-mix(in srgb, var(--accent) 30%, transparent); }
+  :root:not([data-editing=off]) #doc > [data-src]:not(.md-editing):hover { background: color-mix(in srgb, var(--code-bg) 70%, transparent); border-radius: 4px; cursor: text;
+    box-shadow: -4px 0 0 color-mix(in srgb, var(--accent) 40%, transparent); }
+  .md-editing { white-space: pre-wrap; background: var(--code-bg); border-radius: 4px; outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent); outline-offset: 2px;
+    padding: 4px 8px; }
+  div.md-editing { margin: 0 0 1em; }
+  /* Code, diagrams, math and tables are edited in the code font, unwrapped, so their spacing and alignment show. */
+  .md-editing.mono { font-family: var(--font-mono); font-size: .87em; line-height: 1.5; white-space: pre; overflow-x: auto; tab-size: 4; }
+  :root:not([data-editing=off]) #doc .code-view pre.code[data-file-text]:not(.text-editing) { cursor: text; }
+  #doc .code-view pre.code.text-editing { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+  #doc pre.text-editing .tchunk { display: block; }
+  /* A long file's pieces, highlighted one at a time: each is laid out on its own, and unwrapped at the size of its lines. */
+  #doc pre.code :is(code.parts, .tpart) { display: block; }
+  #doc pre.code code.sized > .tpart { content-visibility: auto; contain-intrinsic-size: calc(var(--w) * 1ch) calc(var(--n) * 1lh); }
+  :is(.md-editing, .text-editing) .caret { display: inline-block; width: 0; border-left: 2px solid var(--accent); margin-right: -2px; height: 1.15em; vertical-align: text-bottom; animation: blink 1s steps(1) infinite; }
+  :is(.md-editing, .text-editing) .sel { background: color-mix(in srgb, var(--accent) 30%, transparent); }
   @keyframes blink { 50% { border-color: transparent; } }
+  @media (prefers-reduced-motion: reduce) { :is(.md-editing, .text-editing) .caret { animation: none; } }
+  #edit-tip { position: fixed; z-index: 11; padding: 4px 9px; border-radius: 6px; font: 12px/1.3 -apple-system, BlinkMacSystemFont, sans-serif;
+    color: #fff; background: rgba(40, 40, 42, .92); box-shadow: 0 2px 8px rgba(0, 0, 0, .18); pointer-events: none; white-space: nowrap; }
+  #edit-tip[hidden] { display: none; }
 
   /* ---------- sidebar and table of contents ---------- */
+  /* Only the document is selectable: a selection that runs past it must not paint the empty page, the frame or the chrome. */
+  #toc, #frame, #toolbar, #side-toggle { -webkit-user-select: none; user-select: none; }
   #sidebar { font: 13px/1.35 -apple-system, BlinkMacSystemFont, sans-serif; -webkit-user-select: none; user-select: none; }
-  #side-head { padding: 44px 16px 6px; font-size: 11px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #side-list { padding: 0 8px 12px; }
-  #side-list a.row { display: flex; align-items: center; gap: 5px; padding: 3px 8px 3px calc(2px + var(--depth, 0) * 14px); border-radius: 6px;
-    color: var(--fg); text-decoration: none; white-space: nowrap; }
-  #side-list a.row { transition: background-color .12s; }
+  /* The folder's name is a plain section title: only its text takes a click (the overview), and the space around it, under
+     the traffic lights in the Space helper's panel, is the window's to drag. */
+  #side-head { padding: 44px 16px 6px; font-size: 11px; font-weight: 600; color: var(--muted); white-space: nowrap; overflow: hidden; }
+  #side-title { display: inline-block; max-width: 100%; vertical-align: top; overflow: hidden; text-overflow: ellipsis; margin: 0; padding: 0; border: 0;
+    border-radius: 3px; background: none; font: inherit; color: inherit; text-align: left; cursor: default; -webkit-appearance: none; appearance: none;
+    transition: color .12s; }
+  #side-title:hover { color: var(--fg); }
+  #side-title:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 2px; }
+  #side-list { padding: 0 8px 12px; --row-sel: color-mix(in srgb, var(--accent) 12%, transparent); }
+  /* Every row is as tall as app.js's SIDE_ROW_H: the list draws only the rows in view and spaces out the rest by that height. */
+  #side-list a.row { display: flex; align-items: center; gap: 5px; height: 24px; box-sizing: border-box; padding: 0 8px 0 calc(2px + var(--depth, 0) * 14px);
+    border-radius: 6px; color: var(--fg); text-decoration: none; white-space: nowrap; }
+  /* Only the hover fades: a row lit as selected, or let go, changes at once, as in Finder. */
+  #side-list a.row:hover:not(.active) { transition: background-color .12s; }
   #side-list a.row:hover { background: color-mix(in srgb, var(--fg) 6%, transparent); }
   #side-list a.row.folder:hover .twisty { color: var(--fg); }
   #side-list a.row:active { background: color-mix(in srgb, var(--fg) 10%, transparent); }
-  #side-list a.row.active { background: color-mix(in srgb, var(--accent) 12%, transparent); font-weight: 600; }
-  /* The row of the file just opened settles into its highlight. */
-  #side-list a.row.active.arrive { animation: row-in .24s ease-out; }
-  @keyframes row-in { from { background-color: color-mix(in srgb, var(--accent) 26%, transparent); transform: scale(.985); } }
-  #sidebar > #side-head { width: calc(var(--side-w) - 16px); }
-  #side-head { cursor: default; border-radius: 6px; margin: 0 8px; padding-left: 8px; padding-right: 8px; transition: background-color .12s; }
-  #side-head:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 6%, transparent); }
-  #side-list .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #side-list a.row.broken { opacity: .45; cursor: default; }
+  #side-list a.row.hidden-file > .nm, #side-list a.row.hidden-file > .ic { opacity: .55; }
+  /* The active row keeps the weight of the others, so its name is cut where it was. */
+  #side-list a.row.active { background: var(--row-sel); }
+  /* A name too long for the row is cut in the middle (app.js nameNode): the head gives way, the tail and extension stay. */
+  #side-list .nm { min-width: 0; display: flex; overflow: hidden; }
+  #side-list .nm-h { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #side-list .nm-t { flex: none; white-space: pre; }
   #side-list .twisty { flex: none; width: 12px; height: 12px; display: inline-grid; place-items: center; color: var(--muted); }
   #side-list .twisty svg { width: 10px; height: 10px; fill: currentColor; transition: transform .12s ease-out; }
   #side-list a.open .twisty svg { transform: rotate(90deg); }
-  #side-list.keyed a.row.cursor:not(.active) { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent); }
-  #side-filter { padding: 0 8px 6px; }
-  #side-q { display: block; width: 100%; box-sizing: border-box; margin: 0; padding: 3px 8px; border: 0; border-radius: 6px; outline: none;
+  /* Moving with the keys, the cursor is the one selected row, at once: the file on screen catches up with it, and the hover of a
+     pointer left over the list waits for the next click. */
+  #sidebar #side-list.keyed a.row { transition: none; }
+  #side-list.keyed a.row:not(.cursor, :active) { background: transparent; }
+  #side-list.keyed a.row.cursor { background: var(--row-sel); }
+  #side-list.keyed.lost a.row.active { background: var(--row-sel); }
+  /* A click lights the row clicked at once, as the keys do, and the file on screen gives up its highlight. */
+  #side-list.clicked a.row.cursor { background: var(--row-sel); transition: none; }
+  #side-list.clicked a.row.active:not(.cursor, :hover) { background: transparent; }
+  #side-filter { padding: 0 8px 6px; display: flex; position: relative; gap: 4px; align-items: center; }
+  /* Contents with one character typed: the ask for another sits in the field, so the list below keeps its height. */
+  #side-hint { position: absolute; right: 64px; top: 0; height: calc(100% - 6px); display: flex; align-items: center; pointer-events: none;
+    font-size: 11px; color: var(--muted); white-space: nowrap; }
+  #side-hint[hidden] { display: none; }
+  #side-menu { flex: none; width: 24px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; cursor: default;
+    color: var(--muted); background: transparent; }
+  #side-menu:hover, #side-menu[aria-expanded=true] { color: var(--fg); background: color-mix(in srgb, var(--fg) 7%, transparent); }
+  #sidebar > #side-pop { position: absolute; z-index: 3; top: 0; left: 8px; right: 8px; width: auto; padding: 5px; display: grid;
+    border-radius: 8px;
+    background: linear-gradient(color-mix(in srgb, var(--fg) 5%, transparent), color-mix(in srgb, var(--fg) 5%, transparent)), linear-gradient(var(--bg), var(--bg)), Canvas;
+    box-shadow: 0 0 0 .5px color-mix(in srgb, var(--fg) 22%, transparent), 0 8px 24px rgba(0, 0, 0, .28); }
+  #side-pop[hidden] { display: none; }
+  #side-pop button { font: inherit; text-align: left; color: var(--fg); background: none; border: 0; border-radius: 5px; padding: 4px 8px 4px 24px;
+    position: relative; cursor: default; white-space: nowrap; }
+  #side-pop button:hover { background: var(--accent); color: #fff; }
+  #side-pop button[aria-checked=true]::before { content: "✓"; position: absolute; left: 8px; }
+  #side-pop .side-pop-sep { height: 1px; margin: 4px 6px; background: var(--border); }
+  #side-q { display: block; flex: 1 1 auto; min-width: 0; box-sizing: border-box; margin: 0; padding: 3px 8px; border: 0; border-radius: 6px; outline: none;
     font: inherit; font-size: 12px; color: var(--fg); background: color-mix(in srgb, var(--fg) 6%, transparent);
     -webkit-appearance: none; appearance: none; -webkit-user-select: text; user-select: text; }
   #side-q::placeholder { color: var(--muted); }
   #side-q:focus, #side-q.held { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
-  #side-list .row-note { padding: 3px 8px 3px calc(21px + var(--depth, 0) * 14px); font-size: 11.5px; color: var(--muted); white-space: nowrap; }
-  #side-more { padding: 4px 16px 14px; font-size: 11.5px; color: var(--muted); }
-  #side-resize::after { content: ""; position: absolute; top: 0; bottom: 0; right: 0; width: 2px; background: transparent; transition: background .12s; }
+  #side-q:disabled { opacity: .5; }
+  /* Names | Contents: two equal segments on a row of their own, so the field never changes width. */
+  #sidebar > #side-mode { width: calc(var(--side-w) - 16px); }
+  #side-mode { display: grid; grid-template-columns: 1fr 1fr; margin: 0 8px 6px; padding: 2px; gap: 2px; border-radius: 7px;
+    background: color-mix(in srgb, var(--fg) 6%, transparent); }
+  #side-mode button { height: 18px; padding: 0 4px; border: 0; border-radius: 5px; cursor: default; font: inherit; font-size: 11px; color: var(--muted);
+    background: transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #side-mode button:hover:not(:disabled) { color: var(--fg); }
+  #side-mode button[aria-checked=true] { color: var(--fg); font-weight: 500; background: var(--bg);
+    box-shadow: 0 0 0 .5px color-mix(in srgb, var(--fg) 18%, transparent), 0 1px 2px rgba(0, 0, 0, .12); }
+  #side-mode button:disabled { opacity: .5; }
+  #side-mode button:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); outline-offset: 0; }
+  #side-filter :disabled { pointer-events: none; }
+  /* A Contents search's result: the name, its folder and match count, then the matching line. As tall as SIDE_HIT_H. */
+  #side-list a.row.hit { height: 40px; align-items: flex-start; padding-top: 4px; padding-left: 4px; }
+  #side-list a.row.hit > svg { margin-top: 1px; }
+  #side-list .hit-body { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 1px; }
+  #side-list .hit-top { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+  #side-list .hit-top .nm { flex: 0 1 auto; }
+  /* A long name never hides the folder entirely. */
+  #side-list .hit-dir { flex: 1 1 0; min-width: 3em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--muted); font-weight: 400; }
+  #side-list .hit-n { flex: none; margin-left: auto; font-size: 10.5px; color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+  #side-list .hit-snip { overflow: hidden; text-overflow: ellipsis; font-size: 11px; color: var(--muted); font-weight: 400; }
+  #side-list .hit-snip mark { background: none; color: var(--fg); font-weight: 600; }
+  #side-list .row-note { height: 24px; line-height: 24px; box-sizing: border-box; padding: 0 8px 0 calc(21px + var(--depth, 0) * 14px);
+    font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* The search's progress wraps in a narrow sidebar rather than lose its counts. */
+  #side-more { padding: 4px 16px 14px; font-size: 11.5px; line-height: 1.35; color: var(--muted); overflow-wrap: anywhere; }
+  /* Searching contents, it keeps two lines' room while a search is on, so the list's bottom edge holds as the status comes and goes. */
+  #side-more.reserve { min-height: calc(2.7em + 18px); }
+  #side-resize::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background .12s; }
   #side-resize:hover::after, :root.sb-resizing #side-resize::after { background: color-mix(in srgb, var(--accent) 60%, transparent); }
   @media (prefers-reduced-motion: reduce) {
-    #side-list .twisty svg, #side-list a.row, #side-head, #doc a.ov-row { transition: none; }
-    #side-list a.row.active.arrive { animation: none; }
+    #side-list .twisty svg, #side-list a.row:hover:not(.active), #side-title, #doc a.ov-row, #doc .gt-pic img { transition: none; }
     #toolbar > button, #side-toggle, #doc .viewer button { transition: none !important; transform: none !important; }
   }
 
@@ -168,35 +343,64 @@
   .ic .ic-body { fill: color-mix(in srgb, currentColor 10%, transparent); }
   .ic-folder { color: #3a8ee6; } .ic-folder .ic-body { fill: color-mix(in srgb, currentColor 28%, transparent); }
   .ic-image { color: #2e9a63; } .ic-pdf { color: #d8453a; } .ic-code { color: #8656cf; } .ic-data { color: #1d9588; } .ic-markdown { color: var(--fg); }
-  .ic-media { color: #d9761f; }
+  .ic-media, .ic-video, .ic-audio { color: #d9761f; } .ic-archive { color: #a0712c; } .ic-app { color: #5b6f8c; } .ic-font { color: var(--fg); }
+  .ic-doc { color: #2f6fd6; } .ic-sheet { color: #1f8a4c; } .ic-slides { color: #d4652b; } .ic-model { color: #7a5bd1; }
 
   /* ---------- the breadcrumb ---------- */
   #crumbs { font: 12px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--muted); white-space: nowrap; overflow: hidden;
     text-overflow: ellipsis; -webkit-user-select: none; user-select: none; }
   #crumbs .crumb-sep { margin: 0 .4em; opacity: .7; }
   #crumbs .here { color: var(--fg); font-weight: 600; }
+  #crumbs button.crumb { all: unset; cursor: default; border-radius: 4px; padding: 0 2px; }
+  #crumbs button.crumb:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 7%, transparent); }
+  #crumbs button.crumb:focus-visible { outline: 2px solid var(--accent); }
+  /* Squeezed, the folders give way first; the file's own name keeps its room and is cut only when it alone does not fit. */
+  #crumbs:not([hidden]) { display: flex; align-items: baseline; }
+  #crumbs > * { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #crumbs > button.crumb { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #crumbs > .crumb-sep { flex: none; }
+  #crumbs > .here { flex: 0 1 auto; }
 
   /* ---------- file views ---------- */
-  #doc .viewer-head { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font: 12px/1.3 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--muted); }
-  #doc .viewer-kind { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #doc .viewer-head { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin: 0 0 12px; font: 12px/1.3 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--muted); }
   #doc .viewer button { font: 500 12px/1 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--fg); background: var(--code-bg); border: 1px solid var(--border);
     border-radius: 6px; height: 24px; padding: 0 10px; cursor: default; flex: none; }
   #doc .viewer button:hover { background: color-mix(in srgb, var(--code-bg) 80%, var(--fg) 8%); }
   #doc .viewer button:active { background: color-mix(in srgb, var(--code-bg) 70%, var(--fg) 14%); transform: scale(.97); }
   #doc .viewer button { transition: background-color .12s, transform .08s; }
   #doc .viewer-note { font: 12px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--muted); margin: 0 0 10px; }
-  #doc .code-view { display: flex; align-items: flex-start; background: var(--hl-bg); border-radius: 8px; overflow: auto; font: 12.5px/1.5 var(--font-mono); }
+  #doc .code-view { display: flex; align-items: flex-start; background: var(--hl-bg); border-radius: 8px; overflow: auto; font: calc(var(--font-size, 15px) * .8333)/1.5 var(--font-mono); }
   #doc .code-view pre { margin: 0; padding: 12px 14px; background: none; border-radius: 0; overflow: visible; font: inherit; }
   #doc .code-view code { font: inherit; background: none; padding: 0; }
   #doc .code-view .gutter { position: sticky; left: 0; z-index: 1; flex: none; text-align: right; color: var(--muted); background: var(--hl-bg);
     border-right: 1px solid var(--border); padding-right: 10px; -webkit-user-select: none; user-select: none; }
   #doc .code-view pre.code { flex: 1 1 auto; }
+  /* Wrapped: the rows no longer match the line numbers, which go. */
+  #doc .code-view.wrap > .gutter { display: none; }
+  #doc .code-view.wrap > pre.code { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #doc .viewer-note.trunc-tail { margin: 10px 0 0; }
   #doc .viewer-image { margin: 0; }
-  #doc .viewer-image img { display: block; margin: 0 auto; max-width: 100%; max-height: calc(100vh - 150px); object-fit: contain; }
+  #doc .img-stage { -webkit-user-select: none; user-select: none; }
+  /* Fitted, the picture sits in the middle of the room it has, as the panel's natively drawn images do. */
+  #doc .img-stage:not(.zoomed) { display: flex; align-items: center; justify-content: center; min-height: calc(100vh - var(--img-room)); }
+  #doc .img-stage.zoomable { cursor: zoom-in; }
+  /* The height around a fitted image: the page's padding, and the head where Minimal chrome keeps Open (fitScale reads it). */
+  :root { --img-room: 150px; }
+  #doc .viewer-image img { display: block; margin: 0 auto; max-width: 100%; max-height: calc(100vh - var(--img-room)); object-fit: contain; }
+  /* Zoomed: the image at its size in a box the panel's height, scrolled by a drag, a trackpad or the scroll bars. */
+  #doc .img-stage.zoomed { display: flex; height: calc(100vh - var(--img-room)); overflow: auto; cursor: zoom-out; border-radius: 6px;
+    background: color-mix(in srgb, var(--fg) 4%, transparent); }
+  #doc .img-stage.zoomed img { flex: none; margin: auto; max-width: none; max-height: none; border-radius: 0; }
+  #doc .img-stage.panning { cursor: grabbing; }
+  /* The Space helper's panel closed: emptied until the next file renders. The window's shell (the chrome, the sidebar's
+     sheet, the page's outline) stays, so the first frame of the next file is not a bare sheet. */
+  :root[data-blank] :is(#doc, #crumbs, #toolbar, #toc, #copy, #side-head, #side-filter, #side-pop, #side-list, #side-more) { visibility: hidden !important; }
+  /* Moved or deleted while on screen: the last content stays, dimmed. */
+  :root[data-gone] #doc { opacity: .45; }
   /* A PDF fills the rest of the panel under its toolbar, edge to edge; the extension lays its native PDFView over .pdf-area. */
-  :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio]) body { height: 100vh; overflow: hidden; }
-  :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio]) #main { display: flex; flex-direction: column; height: 100vh; }
-  :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio]) #doc { flex: 1 1 auto; min-height: 0; width: 100%; box-sizing: border-box; display: flex; flex-direction: column;
+  :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=quicklook], [data-view=rtf], [data-view=bitmap]) body { height: 100vh; overflow: hidden; }
+  :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=quicklook], [data-view=rtf], [data-view=bitmap]) #main { display: flex; flex-direction: column; height: 100vh; }
+  :root:is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=quicklook], [data-view=rtf], [data-view=bitmap]) #doc { flex: 1 1 auto; min-height: 0; width: 100%; box-sizing: border-box; display: flex; flex-direction: column;
     padding-left: 0; padding-right: 0; padding-bottom: 0; }
   #doc .viewer-pdf { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
   #doc .viewer-pdf .viewer-head { padding: 0 40px; }
@@ -205,10 +409,72 @@
   /* Audio: a player of its own height, centred in the space under the toolbar. */
   :root[data-view=audio] #doc .viewer-audio .pdf-area { flex: none; box-sizing: border-box; width: min(560px, calc(100% - 40px)); height: 220px;
     max-height: 100%; margin: auto; border: 1px solid var(--border); border-radius: 8px; }
-  #doc .viewer-csv table { font-size: 13px; }
-  #doc .viewer-csv th, #doc .viewer-csv td { max-width: 32em; vertical-align: top; white-space: pre-wrap; }
+  /* CSV: a scroll box of its own, so the header row and the row numbers stay put while the rows scroll under them. The table is
+     the whole view, as in Numbers: the page itself does not scroll, and the box ends above the Copy button. A small table is
+     as wide and tall as its cells. */
+  :root[data-view=csv]:has(#doc > .viewer-csv) body { height: 100vh; overflow: hidden; }
+  :root[data-view=csv]:has(#doc > .viewer-csv) #main { display: flex; flex-direction: column; height: 100vh; }
+  :root[data-view=csv]:has(#doc > .viewer-csv) #doc { flex: 1 1 auto; min-height: 0; width: 100%; box-sizing: border-box; display: flex; flex-direction: column;
+    padding-bottom: 56px; }
+  #doc > .viewer-csv { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  #doc > .viewer-csv > * { flex: none; }
+  #doc > .viewer-csv > .csv-scroll { flex: 0 1 auto; min-height: 0; align-self: flex-start; max-width: 100%; box-sizing: border-box; }
+  #doc .csv-scroll { overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+  #doc table.csv { display: table; width: max-content; max-width: none; overflow: visible; margin: 0; border-collapse: separate;
+    border-spacing: 0; font-size: calc(var(--font-size, 15px) * .8667); line-height: 1.45; }
+  #doc table.csv :is(th, td) { border: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 4px 10px;
+    max-width: 32em; vertical-align: top; white-space: pre-wrap; text-align: left; }
+  #doc table.csv :is(th, td):last-child { border-right: 0; }
+  #doc table.csv thead th { position: sticky; top: 0; z-index: 2; background: linear-gradient(var(--code-bg), var(--code-bg)), var(--bg); }
+  #doc table.csv th.rn { position: sticky; left: 0; z-index: 1; width: 1%; min-width: 2ch; text-align: right; color: var(--muted); font-weight: 400;
+    font-variant-numeric: tabular-nums; background: linear-gradient(var(--code-bg), var(--code-bg)), var(--bg); -webkit-user-select: none; user-select: none; }
+  #doc table.csv thead th.rn { z-index: 3; }
+  #doc table.csv .num { text-align: right; font-variant-numeric: tabular-nums; }
+  #doc table.csv tbody tr:not(.pad):hover > td { background: color-mix(in srgb, var(--fg) 4%, transparent); }
+  /* Windowed: the widths are fixed from a sample (app.js csvWidths), so they never follow the rows drawn. */
+  #doc table.csv.virtual { table-layout: fixed; }
+  #doc table.csv.virtual :is(th, td) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: none; }
+  #doc table.csv tr.pad > td { padding: 0; border: 0; }
+  #doc .viewer-csv button.csv-sort, #doc .viewer-csv button.csv-sort:hover, #doc .viewer-csv button.csv-sort:active {
+    all: unset; display: flex; align-items: baseline; gap: 6px; width: 100%; cursor: default; font-weight: 600; transform: none; }
+  #doc .viewer-csv th.num button.csv-sort { justify-content: flex-end; }
+  #doc .viewer-csv button.csv-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+  #doc .viewer-csv .csv-ind { font-size: .7em; color: var(--muted); }
+  /* JSON: one row per key or item, indented by depth; values in the code theme's colours. */
+  #doc .json-tree { background: var(--hl-bg); color: var(--hl-fg); border-radius: 8px; padding: 10px 12px; overflow: auto;
+    font: calc(var(--font-size, 15px) * .8333)/1.6 var(--font-mono); }
+  #doc .jt-row { display: flex; align-items: baseline; padding-left: calc(var(--d, 0) * 1.4em); white-space: pre; min-width: max-content; }
+  #doc .viewer .jt-tw, #doc .viewer .jt-tw:hover, #doc .viewer .jt-tw:active { all: unset; flex: none; width: 1.3em; text-align: center; color: var(--muted);
+    cursor: default; font-size: .85em; transform: none; }
+  #doc .viewer button.jt-tw:focus-visible { outline: 2px solid var(--accent); border-radius: 3px; }
+  #doc .jt-index { color: var(--muted); }
+  #doc .jt-sum { color: var(--muted); }
+  /* A row holding a string wraps it at the tree's width; other rows keep their width and scroll. */
+  #doc .jt-row:has(> .jt-val.hljs-string) { min-width: 0; }
+  #doc .jt-val.hljs-string { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; flex: 0 1 auto; }
+  #doc .viewer button.jt-more-b { height: 20px; font-size: 11px; margin: 2px 0; }
+  #doc .viewer button.json-all { flex: none; }
+  /* A notebook: cells one under another, code in the code theme, outputs under their cell. */
+  #doc .notebook { display: grid; gap: 14px; }
+  #doc .nb-cell { min-width: 0; }
+  #doc .nb-md > :first-child { margin-top: 0; }
+  #doc .nb-md > :last-child { margin-bottom: 0; }
+  #doc .nb-code { display: grid; gap: 6px; }
+  #doc .nb-prompt { font: 11px/1 var(--font-mono); color: var(--muted); }
+  #doc .nb-out { margin: 0; padding: 6px 12px; background: none; color: var(--fg); border-left: 2px solid var(--border); border-radius: 0;
+    font: calc(var(--font-size, 15px) * .8)/1.45 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  #doc .nb-out.nb-err { color: #cf222e; border-left-color: #cf222e; background: color-mix(in srgb, #cf222e 6%, transparent); }
+  @media (prefers-color-scheme: dark) { #doc .nb-out.nb-err { color: #f47067; border-left-color: #f47067; } }
+  #doc .nb-img { display: block; max-width: 100%; background: #fff; border-radius: 4px; }
   #doc .viewer-archive table.archive { display: table; width: 100%; font-size: 13px; }
   #doc .viewer-archive th, #doc .viewer-archive td { padding-top: 3px; padding-bottom: 3px; vertical-align: middle; }
+  /* Folder and file rows alike: one height, whatever button the name is. */
+  #doc .viewer-archive tbody td { height: 30px; box-sizing: border-box; padding-top: 0; padding-bottom: 0; line-height: 20px; }
+  #doc .viewer-archive th button.arc-sort { all: unset; cursor: default; font-weight: 600; }
+  #doc .viewer-archive th button.arc-sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #doc .viewer-archive th .arc-arrow { display: inline-block; width: 1em; color: var(--muted); font-weight: 400; text-align: center; }
+  #doc .viewer-archive td.arc-size.arc-sum { color: var(--muted); }
+  #doc .viewer-archive tr.arc-nopreview .arc-label, #doc .viewer-archive tr.arc-nopreview .ic { opacity: .6; }
   #doc .viewer-archive th:nth-child(2), #doc .viewer-archive td.arc-size { text-align: right; white-space: nowrap; }
   #doc .viewer-archive td.arc-date { color: var(--muted); white-space: nowrap; }
   #doc .viewer-archive td.arc-name { overflow-wrap: anywhere; }
@@ -217,16 +483,28 @@
   #doc .viewer-archive td.arc-name > .ic { margin: 0 6px 0 0; vertical-align: -3px; }
   #doc .viewer-archive .arc-chevron { display: inline-block; width: 12px; color: var(--muted); }
   #doc .viewer-archive td.arc-name > .arc-chevron { margin-right: 6px; }
+  #doc .viewer-archive button.arc-entry { all: unset; display: inline-flex; align-items: center; gap: 6px; cursor: default; border-radius: 4px; }
+  #doc .viewer-archive tr:hover button.arc-entry .arc-label { text-decoration: underline; text-underline-offset: 2px; }
+  #doc .viewer-archive button.arc-entry:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #doc .viewer-archive tr.arc-sel td { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  #doc .viewer-head.entry-head { justify-content: flex-start; }
+  #crumbs button.crumb-back { all: unset; cursor: default; color: var(--fg); border-radius: 4px; padding: 0 2px; }
+  #crumbs button.crumb-back:hover { background: color-mix(in srgb, var(--fg) 7%, transparent); }
+  #crumbs button.crumb-back:focus-visible { outline: 2px solid var(--accent); }
   #doc .viewer-loading { display: grid; justify-items: center; gap: 10px; padding: 96px 0 24px; font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--muted); }
   #doc .viewer-loading .viewer-note { margin: 0; }
+  #doc .overview .ov-loading { padding-top: 48px; }
   #doc .viewer-loading .spinner { width: 18px; height: 18px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--muted) 25%, transparent);
     border-top-color: var(--muted); animation: sb-spin .8s linear infinite, sb-fade .2s ease-out both; }
   @keyframes sb-spin { to { transform: rotate(360deg); } }
   @keyframes sb-fade { from { opacity: 0; } }
   @media (prefers-reduced-motion: reduce) { #doc .viewer-loading .spinner { animation: none; } }
   #doc .info-card { display: grid; justify-items: center; text-align: center; gap: 4px; padding: 48px 0 24px; }
+  /* The thumbnail can arrive seconds after the card: the icon holds the thumbnail's box, so nothing below it moves. */
+  #doc .info-card { --info-pic: max(64px, min(160px, 25vh)); }
   #doc .info-card .ic { width: 64px; height: 64px; stroke-width: .7; margin-bottom: 8px; }
-  #doc .info-thumb { display: block; max-width: min(320px, 100%); max-height: min(320px, 40vh); object-fit: contain; margin-bottom: 8px; }
+  #doc .info-card > .ic:first-child { margin: calc((var(--info-pic) - 64px) / 2) 0 calc((var(--info-pic) - 64px) / 2 + 8px); }
+  #doc .info-thumb { display: block; height: var(--info-pic); max-width: min(320px, 100%); object-fit: scale-down; margin-bottom: 8px; }
   #doc .info-name { font-weight: 600; font-size: 1.15em; overflow-wrap: anywhere; }
   #doc .info-kind { color: var(--muted); }
   #doc .info-card dl { display: grid; grid-template-columns: auto auto; gap: 4px 12px; margin: 16px 0; font-size: 13px; text-align: left; }
@@ -254,8 +532,73 @@
       --ui-hover: rgba(255, 255, 255, .08); --ui-seg: rgba(255, 255, 255, .08); --ui-seg-on: rgba(255, 255, 255, .2); --ui-accent: #0a84ff; }
   }
   @supports (color: -apple-system-control-accent) { #toolbar, #side-toggle { --ui-accent: -apple-system-control-accent; } }
-  #status:empty, #stats:empty { display: none; }
+  #status:empty, #selpos:empty, #kind:empty, #stats:empty { display: none; }
+  #selpos { flex: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  /* Editing: a quiet label while the keys go to the text, and a tick for a moment after each save. */
+  #edit-pill { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; height: 24px; }
+  #edit-pill[hidden] { display: none; }
+  #toolbar > #edit-pill { padding: 0 8px; border-radius: 6px; background: var(--ui-bg); box-shadow: 0 0 0 .5px var(--ui-edge), 0 1px 2px rgba(0, 0, 0, .06); }
+  #edit-pill:not(.active) .ep-label { display: none; }
+  #edit-pill .ep-saved { display: inline-flex; align-items: center; gap: 3px; opacity: 0; transition: opacity .2s; }
+  #edit-pill.saved .ep-saved { opacity: 1; }
+  #edit-pill.active .ep-saved::before { content: "·"; margin-right: 3px; }
+  #toolbar > #undo { display: inline-flex; align-items: center; gap: 4px; }
+  #toolbar > #undo[hidden] { display: none; }
+  @media (prefers-reduced-motion: reduce) { #edit-pill .ep-saved { transition: none; } }
+  /* Text that is not saved: a banner under the toolbar that stays until it is resolved. */
+  #alert { position: fixed; z-index: 10; top: calc(var(--bar-h, 40px) + 4px); right: 12px; width: min(460px, calc(100vw - 24px)); box-sizing: border-box;
+    display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: 8px;
+    font: 12px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: #3d2600; background: #fff4d6; box-shadow: 0 0 0 .5px rgba(160, 100, 0, .45), 0 4px 14px rgba(0, 0, 0, .12); }
+  #alert[hidden] { display: none; }
+  /* Under the find bar when both are up, never over it. */
+  :root:has(#find:not([hidden])) #alert { top: calc(var(--bar-h, 40px) + 40px); }
+  #alert .alert-ic { flex: none; color: #b25f00; margin-top: 1px; }
+  #alert p { margin: 0; overflow-wrap: anywhere; }
+  #alert-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  #alert-actions[hidden] { display: none; }
+  #alert-actions button { font: inherit; font-weight: 500; height: 24px; padding: 0 10px; border-radius: 6px; border: 0; color: inherit;
+    background: rgba(255, 255, 255, .75); box-shadow: 0 0 0 .5px rgba(160, 100, 0, .45); }
+  #alert-actions button:hover { background: #fff; }
+  #alert-actions button:focus-visible { outline: 2px solid #b25f00; outline-offset: 1px; }
+  @media (prefers-color-scheme: dark) {
+    #alert { color: #ffe3b0; background: #3a2a10; box-shadow: 0 0 0 .5px rgba(255, 190, 90, .4), 0 4px 14px rgba(0, 0, 0, .4); }
+    #alert .alert-ic { color: #ffb340; }
+    #alert-actions button { background: rgba(255, 255, 255, .1); box-shadow: 0 0 0 .5px rgba(255, 190, 90, .4); }
+    #alert-actions button:hover { background: rgba(255, 255, 255, .18); }
+  }
   #stats { font-variant-numeric: tabular-nums; margin-right: 2px; }
+  /* The file's kind and size (an image's zoom too): quiet text, cut before it crowds the path. */
+  #kind { display: flex; gap: 6px; min-width: 0; max-width: 34vw; white-space: nowrap; }
+  #kind .kind-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* As wide as "800%" while it counts, and before the first count arrives. */
+  #kind .img-zoom { flex: none; min-width: 5ch; font-variant-numeric: tabular-nums; }
+  /* An archive entry's place among its files, and a video's or audio file's length and size: room is kept for them. */
+  #kind :is(.kind-pos, .kind-media) { flex: none; font-variant-numeric: tabular-nums; }
+  #kind .kind-media { min-width: 19ch; }
+  #kind :is(.kind-pos, .kind-media:not(:empty))::before { content: "·"; margin-right: .3em; }
+  #kind .pdf-page { flex: none; font: inherit; font-variant-numeric: tabular-nums; color: inherit; height: 20px; margin: -2px 0; padding: 0 6px;
+    border: 0; border-radius: 5px; background: none; cursor: default; }
+  #kind .pdf-page:hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 8%, transparent); }
+  #kind > .ic { align-self: center; }
+  #kind.drag { cursor: grab; }
+  #kind.drag:active { cursor: grabbing; }
+  /* A passing message is capped like the kind, so neither takes the file name's room. */
+  #status { max-width: min(34vw, 280px); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 760px) { #status { max-width: 16vw; } }
+  @media (max-width: 700px) {
+    #kind .kind-text { display: none; }
+    #toolbar > #kind:not(:has(> .ic, > .img-zoom:not(:empty), > .pdf-page)) { display: none; }
+  }
+  #kind:not(:empty) + #stats:not(:empty)::before { content: "· "; }
+  /* Over the page (Minimal chrome, or a very narrow panel) the text sits on the buttons' material, so it stays legible. */
+  #toolbar > :is(#status, #selpos, #kind, #stats):not(:empty) { display: flex; height: 24px; align-items: center; padding: 0 8px; border-radius: 6px; background: var(--ui-bg);
+    box-shadow: 0 0 0 .5px var(--ui-edge), 0 1px 2px rgba(0, 0, 0, .06); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); }
+  #toolbar > #kind:not(:empty) + #stats:not(:empty)::before { content: none; }
+  #toolbar > #status:not(:empty) { display: block; line-height: 24px; }
+  #status[data-hint] { cursor: pointer; }
+  #status .hint-pill { display: inline-flex; align-items: center; height: 20px; margin-left: 6px; padding: 0 8px; border-radius: 6px; color: var(--ui-fg);
+    background: color-mix(in srgb, var(--fg) 7%, transparent); font-weight: 500; vertical-align: middle; }
+  #status[data-hint]:hover .hint-pill { background: color-mix(in srgb, var(--fg) 12%, transparent); }
   #toolbar > button, #side-toggle {
     font: inherit; font-weight: 500; color: var(--ui-fg); height: 24px; padding: 0 10px; border-radius: 6px; cursor: default;
     background: var(--ui-bg); border: 0; box-shadow: 0 0 0 .5px var(--ui-edge), 0 1px 2px rgba(0, 0, 0, .06);
@@ -286,6 +629,7 @@
   #aa-size { font-size: 11px; color: var(--ui-muted); min-width: 36px; text-align: center; font-variant-numeric: tabular-nums; }
 
   .pop-themes { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; padding: 2px 0 0; }
+  .pop-theme-name { margin: -6px 0 0; font-size: 11px; text-align: center; color: var(--ui-muted); min-height: 14px; }
   #aa-pop .swatch { display: grid; justify-items: center; padding: 3px 0; }
   .swatch-dot {
     position: relative; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
@@ -306,8 +650,14 @@
   #aa-pop #aa-settings { text-align: left; height: 26px; padding: 0 8px; margin: -4px; border-radius: 6px; }
   #aa-pop #aa-settings:hover { background: var(--ui-accent); color: #fff; }
   #toolbar > #aa { position: relative; }
-  #toolbar > #aa[data-update]::after { content: ""; position: absolute; top: 3px; right: 3px; width: 6px; height: 6px; border-radius: 50%;
-    background: var(--ui-accent); }
+  /* Text views: size and theme only. The update's own button opens the update row alone. */
+  #aa-pop[data-mode=text] :is(#aa-width, #aa-font) { display: none; }
+  #aa-pop[data-mode=update] > :not(#aa-update) { display: none; }
+  #aa-pop[data-mode=update] #aa-update { padding-bottom: 0; box-shadow: none; }
+  #toolbar > #upd { display: inline-flex; align-items: center; gap: 6px; }
+  #toolbar > #upd[hidden] { display: none; }
+  #upd .upd-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ui-accent); }
+  #aa-pop:not([data-mode=update]) #aa-update { display: none; }
   #aa-update { display: grid; gap: 2px; padding-bottom: 8px; margin: 0 -12px; padding-inline: 12px; box-shadow: 0 .5px 0 var(--ui-edge); }
   #aa-update[hidden] { display: none; }
   #aa-update p { margin: 0; overflow-wrap: anywhere; }
@@ -316,33 +666,116 @@
   #aa-pop :is(#aa-install, #aa-copy) { height: 28px; margin-top: 8px; padding: 0 10px; border-radius: 6px; font-size: 13px; font-weight: 500;
     background: var(--ui-accent); color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #aa-pop :is(#aa-install, #aa-copy):not(:disabled):hover { filter: brightness(1.08); }
+  /* With Update, copying the command is the second choice. */
+  #aa-pop #aa-install:not([hidden]) ~ #aa-copy { background: var(--ui-seg); color: var(--ui-fg); }
   #aa-pop #aa-install:disabled { opacity: .6; }
   #aa-pop #aa-notes { justify-self: center; margin-top: 2px; padding: 3px 8px; border-radius: 5px; font-size: 12px; color: var(--ui-muted); }
   #aa-pop #aa-notes:hover { background: var(--ui-hover); color: var(--ui-fg); }
   #toolbar > button, #side-toggle { transition: background-color .12s, transform .08s; }
   #toolbar > button:active, #side-toggle:active { transform: scale(.96); }
 
+  /* Icon buttons: raw text and find, each shown only where it applies. A hidden .tb-slot (Raw, Find, Aa, Open) keeps its place,
+     in the toolbar row and floating over the page alike, so nothing moves from file to file; hidden, it takes no click. An update
+     where Aa is hidden (so are Raw and Find) takes their slots. */
+  #toolbar > .tb-ic { width: 28px; padding: 0; display: inline-grid; place-items: center; }
+  #toolbar > .tb-slot[hidden] { visibility: hidden; }
+  #toolbar > .tb-ic[hidden] { display: inline-grid; }
+  #toolbar > :is(#aa, #edit)[hidden] { display: inline-block; }
+  #toolbar:has(> #upd:not([hidden])) > :is(#raw, #find-btn, #aa)[hidden] { display: none; }
+  #toolbar > #edit { min-width: 60px; box-sizing: border-box; }
+  /* Open With: a chevron beside Open, and a menu of apps under it drawn as a native one. */
+  #toolbar > #open-with { width: 18px; margin-left: -3px; }
+  :root[data-chrome=minimal] #open-with { display: none !important; }
+  @media (max-width: 479px) { #open-with { display: none !important; } }
+  #ow-pop { position: absolute !important; z-index: 2 !important; top: calc(100% + 6px); right: 0; min-width: 200px; max-width: 320px; padding: 5px;
+    display: grid; font: 13px/1.35 -apple-system, BlinkMacSystemFont, sans-serif; color: var(--ui-fg); border-radius: 8px; background: var(--ui-pop);
+    -webkit-backdrop-filter: saturate(180%) blur(30px); backdrop-filter: saturate(180%) blur(30px);
+    box-shadow: 0 0 0 .5px var(--ui-edge), 0 8px 24px rgba(0, 0, 0, .2); -webkit-user-select: none; user-select: none; }
+  #ow-pop[hidden] { display: none; }
+  #ow-pop button { display: flex; align-items: center; gap: 6px; font: inherit; text-align: left; color: inherit; background: none; border: 0;
+    border-radius: 5px; padding: 3px 8px; cursor: default; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #ow-pop button:hover, #ow-pop button:focus-visible { background: var(--ui-accent); color: #fff; outline: 0; }
+  #ow-pop img { width: 16px; height: 16px; flex: none; }
+  #ow-pop .ow-default { color: var(--ui-muted); }
+  #ow-pop button:hover .ow-default { color: inherit; }
+  #ow-pop .ow-sep { height: 1px; margin: 4px 6px; background: var(--ui-edge); }
+  #ow-pop .ow-none { padding: 3px 8px; color: var(--ui-muted); }
+  #toolbar > button:focus-visible, #side-toggle:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 1px; }
+  #toolbar > #raw[aria-pressed=true], #toolbar > #find-btn[aria-expanded=true] { background: color-mix(in srgb, var(--ui-bg) 70%, var(--ui-fg) 16%); }
+  /* Copy: a button at the bottom right of the content, as on a code block, clear of the window's scrollbar. The icon is the
+     theme's muted text on a tint of the page, above 3:1 in every theme. The document keeps clear of its column, so the
+     button never covers a line or a table row. */
+  #copy { position: fixed; z-index: 9; right: 26px; bottom: 18px; width: 30px; height: 30px; padding: 0; display: grid; place-items: center;
+    border: 0; border-radius: 7px; color: var(--muted); cursor: default;
+    background: color-mix(in srgb, var(--bg) 90%, var(--fg) 10%); box-shadow: 0 0 0 .5px var(--border), 0 2px 8px rgba(0, 0, 0, .12);
+    transition: color .15s; -webkit-user-select: none; user-select: none; }
+  #copy[hidden] { display: none; }
+  #copy:hover, #copy:focus-visible, #copy.done { color: var(--fg); }
+  #copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  :root:not(.sb-embedded):has(#copy:not([hidden])) #doc { padding-right: 64px; }
+  :root:not(.sb-embedded):has(#copy:not([hidden])) #doc pre.code { padding-right: 40px; }
+  /* The table ends above Copy, so it needs no column of its own: both margins are the page's 40px. */
+  :root:not(.sb-embedded)[data-view=csv]:has(#doc > .viewer-csv) #doc { padding-right: 40px; }
+  #copy:active { transform: scale(.96); }
+  :root.sb-embedded #copy { display: none; }
+  #copy .done-ic, #copy.done .copy-ic { display: none; }
+  #copy.done .done-ic { display: block; color: var(--accent); }
+
+  /* Find: a bar under the toolbar; the matches are drawn with the CSS Custom Highlight API, so the document is never changed. */
+  #find {
+    position: absolute !important; z-index: 1 !important; top: calc(100% + 8px); right: 0; display: flex; align-items: center; gap: 2px;
+    padding: 4px; border-radius: 9px; color: var(--ui-fg); background: var(--ui-pop);
+    -webkit-backdrop-filter: saturate(180%) blur(30px); backdrop-filter: saturate(180%) blur(30px);
+    box-shadow: 0 0 0 .5px var(--ui-edge), 0 8px 24px rgba(0, 0, 0, .16), 0 2px 6px rgba(0, 0, 0, .08);
+  }
+  #find[hidden] { display: none; }
+  #find-q { width: 180px; height: 24px; box-sizing: border-box; padding: 0 8px; border: 0; border-radius: 6px; outline: 0; font: 12px/1 -apple-system, BlinkMacSystemFont, sans-serif;
+    color: var(--ui-fg); background: var(--ui-seg); -webkit-user-select: text; user-select: text; }
+  #find-q:focus, #find-q.held { box-shadow: 0 0 0 2px color-mix(in srgb, var(--ui-accent) 45%, transparent); }
+  /* The bar's own ✕ closes it; the field's clear button would sit beside it. */
+  #find-q::-webkit-search-cancel-button { display: none; -webkit-appearance: none; }
+  #find[data-none] #find-q { box-shadow: 0 0 0 2px rgba(255, 59, 48, .35); }
+  #find[data-none] :is(#find-prev, #find-next) { opacity: .35; }
+  /* As wide as "1 of 10,000+" when empty too, so the field being typed in never moves. */
+  #find-count { min-width: 13ch; padding: 0 6px; text-align: right; font-size: 11px; color: var(--ui-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #find button { width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; color: inherit; background: none; cursor: default; }
+  #find button:hover { background: var(--ui-hover); }
+  ::highlight(sb-find) { background-color: rgba(255, 214, 10, .45); color: inherit; }
+  ::highlight(sb-find-cur) { background-color: #ff9f0a; color: #000; }
+
   /* ---------- the toolbar row (not Minimal chrome): quiet buttons on the chrome, in the theme's own colours ---------- */
-  @media (max-width: 479px) { #edit[data-kind=file] { display: none; } }
-  :root[data-chrome=minimal] #edit[data-kind=file] { display: none; }
+  /* There the viewer's own button opens a file that is not Markdown; the toolbar keeps Open's slot, empty. */
+  @media (max-width: 479px) { #edit[data-kind=file] { visibility: hidden; } }
+  :root[data-chrome=minimal] #edit[data-kind=file] { visibility: hidden; }
   @media (min-width: 480px) {
     :root:not([data-chrome=minimal]) #toolbar { color: var(--muted); gap: 4px; }
+    :root:not([data-chrome=minimal]) #toolbar > :is(#status, #selpos, #kind, #stats) { height: auto; padding: 0; background: none; box-shadow: none;
+      -webkit-backdrop-filter: none; backdrop-filter: none; }
+    :root:not([data-chrome=minimal]) #toolbar > #kind:not(:empty) + #stats:not(:empty)::before { content: "· "; }
+    :root:not([data-chrome=minimal]) #toolbar > #selpos:not(:empty) + #kind:not(:empty)::before { content: "·"; margin-right: -2px; }
+    :root:not([data-chrome=minimal]) #toolbar > #edit-pill { padding: 0 4px 0 0; background: none; box-shadow: none; }
+    /* An update where Aa is hidden (so are Raw and Find) fills exactly their three slots. */
+    :root:not([data-chrome=minimal]) #toolbar:has(> #aa[hidden]) > #upd { width: calc(28px + 28px + 32px + 2 * 4px); box-sizing: border-box; justify-content: center; }
     :root:not([data-chrome=minimal]) :is(#toolbar > button, #side-toggle) { height: 26px; color: var(--fg); background: transparent; box-shadow: none;
       -webkit-backdrop-filter: none; backdrop-filter: none; }
     :root:not([data-chrome=minimal]) #side-toggle { color: var(--muted); }
     :root:not([data-chrome=minimal]) :is(#toolbar > button, #side-toggle):hover { color: var(--fg); background: color-mix(in srgb, var(--fg) 7%, transparent); }
     :root:not([data-chrome=minimal]) :is(#toolbar > button:active, #toolbar > #aa[aria-expanded=true], #side-toggle:active) {
       background: color-mix(in srgb, var(--fg) 9%, transparent); }
-    :root:not([data-chrome=minimal]) #side-list a.row.active { background: color-mix(in srgb, var(--accent) 11%, transparent); }
-    :root[data-theme=solarized] #side-list a.row.active { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+    :root:not([data-chrome=minimal]) :is(#toolbar > #raw[aria-pressed=true], #toolbar > #find-btn[aria-expanded=true]) {
+      background: color-mix(in srgb, var(--fg) 11%, transparent); }
+    :root:not([data-chrome=minimal]) #side-list { --row-sel: color-mix(in srgb, var(--accent) 11%, transparent); }
+    :root[data-theme=solarized] #side-list { --row-sel: color-mix(in srgb, var(--accent) 9%, transparent); }
     :root:not([data-chrome=minimal]) #toolbar > #edit { padding: 0 10px; box-shadow: inset 0 0 0 1px var(--frame-line); }
     :root:not([data-chrome=minimal]) #crumbs { color: var(--muted); font-size: 12.5px; line-height: var(--bar-h); }
     :root:not([data-chrome=minimal]) #side-head { padding-top: calc(var(--bar-h) + 8px); }
     /* A PDF stays inside the page's outline; the extension rounds the native view's corners to match. */
-    :root:not([data-chrome=minimal]):is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio]) #main { height: calc(100vh - var(--gap) - 1px); }
-    :root:not([data-chrome=minimal]):is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio]) #doc { padding-top: calc(var(--bar-h) + 12px); }
-    :root:not([data-chrome=minimal]) #doc .pdf-area { margin: 0 calc(var(--gap) + 1px) 0 calc(var(--frame-inset) + 1px); border-top-color: var(--frame-line); }
-    /* The viewer's Open button moves up into the toolbar row. */
-    :root:not([data-chrome=minimal]) #doc .viewer-head .viewer-open { display: none; }
+    :root:not([data-chrome=minimal]):is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=quicklook], [data-view=rtf], [data-view=bitmap]) #main { height: calc(100vh - var(--gap) - 1px); }
+    :root:not([data-chrome=minimal]):is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=quicklook], [data-view=rtf], [data-view=bitmap]) #doc { padding-top: calc(var(--bar-h) + 1px); }
+    :root:not([data-chrome=minimal]) #doc .pdf-area { margin: 0 calc(var(--gap) + 1px) 0 calc(var(--frame-inset) + 1px); border-top: 0; }
+    /* The viewer's Open button moves up into the toolbar row, and a head with nothing else in it goes. */
+    :root:not([data-chrome=minimal]) #doc :is(.viewer-head, .info-card) > .viewer-open:not(.viewer-privacy) { display: none; }
+    :root:not([data-chrome=minimal]) #doc .viewer-head.bare { display: none; }
+    :root:not([data-chrome=minimal]) { --img-room: 114px; }
   }
 }

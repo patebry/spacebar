@@ -10,6 +10,8 @@
 #   SIGN_ID=...               codesigning identity; default the name in .sign-id (untracked), else the first valid local
 #                             identity, else ad-hoc. SIGN_ID=- forces ad-hoc. A stable identity keeps TCC grants across rebuilds.
 #   SIGN_KEYCHAIN=...         keychain file holding SIGN_ID, when it is not in the search list (CI's temporary keychain)
+#   TIMESTAMP=1|0             a secure timestamp from Apple's server on every signature, as notarization requires (needs the
+#                             network); default 1 for a Developer ID identity, else 0, so a local build signs offline
 set -euo pipefail
 cd "$(dirname "$0")"
 for arg in "$@"; do
@@ -28,6 +30,10 @@ APP_EXE=Spacebar
 APPEX_EXE=SpacebarPreview
 FOLDERS_EXE=SpacebarFolders
 WRITER_EXE=SpacebarWriter           # each appex embeds its own writer as <appex ID>.writer
+HELPER_ID=md.spacebar.helper        # the Space helper: a launchd agent holding the event tap (Helper/)
+VIEWER_ID=md.spacebar.viewer        # the panel the helper opens, sandboxed like the preview extension (Viewer/)
+HELPER_EXE=SpacebarHelper
+VIEWER_EXE=SpacebarViewer
 # Claimed only by this extension: `qlmanage -c $ROUTE_TYPE -p file` reaches it even where another extension claims markdown.
 ROUTE_TYPE=md.spacebar.qlmanage
 PREFERRED_SIGN_ID=$(head -n1 .sign-id 2>/dev/null || true)
@@ -54,7 +60,20 @@ if [ -z "${SIGN_ID:-}" ]; then
   fi
 fi
 
-SIGN_ARGS=(--force --sign "$SIGN_ID" --timestamp=none)
+if [ -z "${TIMESTAMP:-}" ]; then
+  TIMESTAMP=0
+  if [ "$SIGN_ID" != - ]; then
+    identity=$(security find-identity -p codesigning ${SIGN_KEYCHAIN:+"$SIGN_KEYCHAIN"} 2>/dev/null | grep -F -- "$SIGN_ID" || true)
+    [[ $identity == *'"Developer ID Application: '* ]] && TIMESTAMP=1
+  fi
+fi
+case $TIMESTAMP in
+  1) TIMESTAMP_ARG=--timestamp ;;
+  0) TIMESTAMP_ARG=--timestamp=none ;;
+  *) echo "TIMESTAMP must be 1 or 0" >&2; exit 2 ;;
+esac
+# Every executable runs under the hardened runtime: the helper admits only peers that do, and notarization requires it.
+SIGN_ARGS=(--force --sign "$SIGN_ID" --options runtime "$TIMESTAMP_ARG")
 [ -n "${SIGN_KEYCHAIN:-}" ] && SIGN_ARGS+=(--keychain "$SIGN_KEYCHAIN")
 
 rm -rf "$OUT"
@@ -108,22 +127,31 @@ plist() {
 }
 
 WRITER_BIN=$OBJ/$WRITER_EXE
-compile "$WRITER_BIN" -module-name "$WRITER_EXE" Writer/main.swift Writer/EditTextView.swift Writer/FileWrite.swift Shared/ArchiveListing.swift Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/Updates.swift
+compile "$WRITER_BIN" -module-name "$WRITER_EXE" Writer/main.swift Writer/EditTextView.swift Writer/FileWrite.swift Shared/SecureInput.swift Shared/ArchiveListing.swift Shared/FolderListing.swift Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/Updates.swift
 PREVIEW_BIN=$OBJ/$APPEX_EXE
 PROBE_FLAGS=()
 [ "${PROBE:-0}" = 1 ] && PROBE_FLAGS=(-D PROBE)
-compile "$PREVIEW_BIN" -application-extension -module-name "$APPEX_EXE" \
-  Preview/PreviewViewController.swift Preview/PDFPane.swift Preview/HTMLPane.swift Preview/MediaPane.swift Preview/Thumbnail.swift Preview/SettingsStore.swift Preview/Probe.swift \
-  Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/Updates.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift \
+# The preview's sources, less its Quick Look entry point: a second host can compile them with its own.
+PREVIEW_SRC=(Preview/PreviewController.swift Preview/PDFPane.swift Preview/HTMLPane.swift Preview/MediaPane.swift Preview/QLFallbackPane.swift Preview/RichTextPane.swift Preview/ImagePane.swift Preview/Gestures.swift Preview/DiskImage.swift Preview/Thumbnail.swift Preview/SettingsStore.swift
+  Shared/WriterProtocol.swift Shared/LinkPolicy.swift Shared/Settings.swift Shared/Updates.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift)
+compile "$PREVIEW_BIN" -application-extension -module-name "$APPEX_EXE" "${PREVIEW_SRC[@]}" Preview/PreviewViewController.swift Preview/Probe.swift \
   ${PROBE_FLAGS[@]+"${PROBE_FLAGS[@]}"} \
   -framework QuickLookUI -framework WebKit -framework PDFKit -framework AVKit -framework AVFoundation -framework QuickLookThumbnailing -Xlinker -e -Xlinker _NSExtensionMain
-compile "$APP/Contents/MacOS/$APP_EXE" -parse-as-library -module-name "$APP_EXE" App/*.swift Shared/Settings.swift Shared/Updates.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift Shared/QuickLookClaims.swift \
+# The helper sees every key: it is built from its own few files and the settings reader, never the file-parsing code.
+HELPER_BIN=$OBJ/$HELPER_EXE
+compile "$HELPER_BIN" -module-name "$HELPER_EXE" Helper/*.swift Shared/HelperProtocol.swift Shared/Settings.swift
+VIEWER_BIN=$OBJ/$VIEWER_EXE
+compile "$VIEWER_BIN" -module-name "$VIEWER_EXE" "${PREVIEW_SRC[@]}" Shared/HelperProtocol.swift Viewer/*.swift \
+  -framework QuickLookUI -framework WebKit -framework PDFKit -framework AVKit -framework AVFoundation -framework QuickLookThumbnailing
+compile "$APP/Contents/MacOS/$APP_EXE" -parse-as-library -module-name "$APP_EXE" App/*.swift Shared/HelperProtocol.swift Shared/Settings.swift Shared/Updates.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift Shared/QuickLookClaims.swift Shared/LinkPolicy.swift Shared/SecureInput.swift \
   -framework WebKit -framework SwiftUI
 plist App/Info.plist "$APP/Contents/Info.plist"
 cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
 # The writer runs this copy for the one-click update, so it is sealed by the app's signature.
 cp scripts/install.sh "$APP/Contents/Resources/install.sh"
 cp scripts/uninstall.sh "$APP/Contents/Resources/uninstall.sh"
+# What the preview extension claims, by kind: the settings window and install.sh name the other extensions that claim the same.
+cp scripts/quicklook-types.txt "$APP/Contents/Resources/quicklook-types.txt"
 if [ -f App/AppIcon.icns ]; then cp App/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"; fi
 
 ENT=$OUT/Preview.entitlements
@@ -139,6 +167,9 @@ ENT=$OUT/Preview.entitlements
   if [ "$READ_ACCESS" = abs-rw ]; then
     echo '<key>com.apple.security.temporary-exception.files.absolute-path.read-write</key><array><string>/</string></array>'
   fi
+  # Apple's own previews of Office, iWork, font and 3D files (Preview/QLFallbackPane.swift) are made by Quick Look's daemons; the
+  # sandbox reaches them only by these two names. Both extensions: a folder preview shows the same pane. SECURITY.md has why.
+  echo '<key>com.apple.security.temporary-exception.mach-lookup.global-name</key><array><string>com.apple.quicklook</string><string>com.apple.quicklook.ThumbnailsAgent</string></array>'
   echo '</dict></plist>'
 } > "$ENT"
 
@@ -151,7 +182,7 @@ appex() {
   cp "$PREVIEW_BIN" "$dir/Contents/MacOS/$2"
   cp "$WRITER_BIN" "$xpc/Contents/MacOS/$WRITER_EXE"
   cp -R Preview/web "$dir/Contents/Resources/web"
-  cp LICENSE THIRD_PARTY_NOTICES.md "$dir/Contents/Resources/"
+  cp LICENSE THIRD_PARTY_NOTICES.md scripts/quicklook-types.txt "$dir/Contents/Resources/"
   plist Preview/Info.plist "$dir/Contents/Info.plist" "$1" "$2" "$3" "$4"
   plist Writer/Info.plist "$xpc/Contents/Info.plist" "$1" "$2" "$3" "$4"
   codesign "${SIGN_ARGS[@]}" "$xpc"
@@ -160,9 +191,37 @@ appex() {
 types() { printf '<string>%s</string>' "$@"; }
 appex "$APPEX_ID" "$APPEX_EXE" "$APP_NAME" "$(types "${CLAIMS[@]}" "$ROUTE_TYPE")"
 appex "$FOLDERS_ID" "$FOLDERS_EXE" "$APP_NAME Folders" "$(types public.folder public.directory)"
+
+# The viewer: the preview extension's entitlements, plus the one Mach name that reaches the helper.
+VIEWER_ENT=$OUT/Viewer.entitlements
+sed 's#<string>com.apple.quicklook.ThumbnailsAgent</string></array>#<string>com.apple.quicklook.ThumbnailsAgent</string><string>'"$HELPER_ID"'</string></array>#' "$ENT" > "$VIEWER_ENT"
+grep -q "<string>$HELPER_ID</string>" "$VIEWER_ENT" || { echo "viewer entitlements: helper Mach name not added" >&2; exit 1; }
+VIEWER_DIR="$APP/Contents/Helpers/$APP_NAME Viewer.app"
+VIEWER_XPC=$VIEWER_DIR/Contents/XPCServices/$VIEWER_ID.writer.xpc
+mkdir -p "$VIEWER_DIR/Contents/MacOS" "$VIEWER_DIR/Contents/Resources" "$VIEWER_XPC/Contents/MacOS"
+cp "$VIEWER_BIN" "$VIEWER_DIR/Contents/MacOS/$VIEWER_EXE"
+cp "$WRITER_BIN" "$VIEWER_XPC/Contents/MacOS/$WRITER_EXE"
+cp -R Preview/web "$VIEWER_DIR/Contents/Resources/web"
+# What spacebar claims: Apple's previews in the panel are never asked for these (FileTypes.appleQuickLookType).
+cp LICENSE THIRD_PARTY_NOTICES.md scripts/quicklook-types.txt "$VIEWER_DIR/Contents/Resources/"
+plist Viewer/Info.plist "$VIEWER_DIR/Contents/Info.plist" "$VIEWER_ID" "$VIEWER_EXE" "$APP_NAME"
+plist Writer/Info.plist "$VIEWER_XPC/Contents/Info.plist" "$VIEWER_ID"
+codesign "${SIGN_ARGS[@]}" "$VIEWER_XPC"
+codesign "${SIGN_ARGS[@]}" --entitlements "$VIEWER_ENT" "$VIEWER_DIR"
+
+# The helper: unsandboxed and without entitlements. launchd starts it from the app's agent plist.
+HELPER_DIR="$APP/Contents/Helpers/$APP_NAME Helper.app"
+mkdir -p "$HELPER_DIR/Contents/MacOS" "$APP/Contents/Library/LaunchAgents"
+cp "$HELPER_BIN" "$HELPER_DIR/Contents/MacOS/$HELPER_EXE"
+plist Helper/Info.plist "$HELPER_DIR/Contents/Info.plist" "$HELPER_ID" "$HELPER_EXE" "$APP_NAME"
+# System Settings lists the helper under Accessibility by its own icon.
+if [ -f App/AppIcon.icns ]; then mkdir -p "$HELPER_DIR/Contents/Resources"; cp App/AppIcon.icns "$HELPER_DIR/Contents/Resources/AppIcon.icns"; fi
+sed -e "s#__HELPER_ID__#$HELPER_ID#g" -e "s#__HELPER_PROGRAM__#Contents/Helpers/$APP_NAME Helper.app/Contents/MacOS/$HELPER_EXE#g" -e "s#__APP_ID__#$APP_ID#g" \
+  Helper/agent.plist > "$APP/Contents/Library/LaunchAgents/$HELPER_ID.plist"
+codesign "${SIGN_ARGS[@]}" "$HELPER_DIR"
 codesign "${SIGN_ARGS[@]}" "$APP"
 rm -rf "$OBJ"
-echo "built $APP ($(lipo -archs "$APP/Contents/MacOS/$APP_EXE"), macOS $MIN_OS+)"
+echo "built $APP ($(lipo -archs "$APP/Contents/MacOS/$APP_EXE"), macOS $MIN_OS+, TIMESTAMP=$TIMESTAMP)"
 [ "${NO_INSTALL:-0}" = 1 ] && exit 0
 
 mkdir -p "$INSTALL_DIR"
@@ -188,6 +247,19 @@ running=$(pgrep -x "$APPEX_EXE" || true)
 [ -n "$running" ] && echo "note: $APPEX_EXE still running (pid $running); close its Quick Look preview to load this build"
 qlmanage -r >/dev/null 2>&1
 qlmanage -r cache >/dev/null 2>&1
+# As install.sh after its swap: the viewer running the replaced code quits, its writer first (the helper starts the new one),
+# and a registered helper is registered again in the background, since launchd refuses a replaced helper until then.
+viewer=$(printf '^%s/' "$DEST/Contents/Helpers/$APP_NAME Viewer.app" | sed 's/[][\.*$+?(){}|]/\\&/g')
+pkill -f "${viewer}Contents/XPCServices/" || true
+for _ in $(seq 30); do pgrep -f "${viewer}Contents/XPCServices/" >/dev/null || break; sleep 0.2; done
+pkill -f "$viewer" || true
+if launchctl print "gui/$(id -u)/$HELPER_ID" >/dev/null 2>&1; then
+  helper_log="$HOME/Library/Logs/spacebar-helper.log"
+  mkdir -p "$(dirname "$helper_log")"
+  printf '=== %s reregister after build.sh ===\n' "$(date '+%Y-%m-%d %H:%M:%S')" >>"$helper_log"
+  nohup "$DEST/Contents/MacOS/$APP_EXE" --reregister >>"$helper_log" 2>&1 </dev/null &
+  echo "registering the Space helper again in the background (log: $helper_log)"
+fi
 echo "installed $DEST (READ_ACCESS=$READ_ACCESS PROBE=${PROBE:-0} SIGN_ID=$SIGN_ID)"
 pluginkit -mAvvv -i "$APPEX_ID" | sed -n '1,4p'
 pluginkit -m -i "$FOLDERS_ID"

@@ -15,17 +15,21 @@ THEMES = ['apple', 'github', 'paper', 'solarized', 'nord', 'contrast']
 class Page:
     """The harness in stdin mode: one command in, one JSON line out."""
 
-    def __init__(self):
+    def __init__(self, host='quicklook'):
         self.out = tempfile.mkdtemp(prefix='spacebar-webthemes-')
         self.support = os.path.join(self.out, 'support')
         os.makedirs(os.path.join(self.support, 'themes'))
         exe = os.path.join(self.out, 'webcheck')
         subprocess.run(['xcrun', 'swiftc', '-swift-version', '5', '-O', '-target', 'arm64-apple-macos13.0',
-                        os.path.join(ROOT, 'test', 'web', 'main.swift'), os.path.join(ROOT, 'Shared', 'Settings.swift'),
+                        os.path.join(ROOT, 'test', 'web', 'main.swift'), os.path.join(ROOT, 'test', 'offscreen.swift'), os.path.join(ROOT, 'Shared', 'Settings.swift'),
                         os.path.join(ROOT, 'Shared', 'WebShell.swift'),
-                        os.path.join(ROOT, 'Shared', 'FolderListing.swift'), os.path.join(ROOT, 'Shared', 'FolderScan.swift'), os.path.join(ROOT, 'Shared', 'LinkPolicy.swift'), os.path.join(ROOT, 'Preview', 'PDFPane.swift'), '-o', exe], check=True)
+                        os.path.join(ROOT, 'Shared', 'FolderListing.swift'), os.path.join(ROOT, 'Shared', 'ArchiveListing.swift'), os.path.join(ROOT, 'Shared', 'FolderScan.swift'), os.path.join(ROOT, 'Shared', 'LinkPolicy.swift'), os.path.join(ROOT, 'Preview', 'PDFPane.swift'),
+                        os.path.join(ROOT, 'Preview', 'Gestures.swift'), os.path.join(ROOT, 'Preview', 'Thumbnail.swift'), os.path.join(ROOT, 'Preview', 'ImagePane.swift'),
+                        os.path.join(ROOT, 'test', 'nsevents.swift'), '-o', exe], check=True)
+        # Finder's preferences come from a plist a test may write beside the support folder; absent, the sidebar sees Finder's defaults.
+        self.finder_plist = os.path.join(self.out, 'finder.plist')
         self.proc = subprocess.Popen([exe, WEB], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
-                                     env=dict(os.environ, SPACEBAR_SUPPORT_DIR=self.support))
+                                     env=dict(os.environ, SPACEBAR_SUPPORT_DIR=self.support, SPACEBAR_PAGE_HOST=host, SPACEBAR_FINDER_PLIST=self.finder_plist))
         self.logs = []
 
     def cmd(self, c):
@@ -108,6 +112,12 @@ CONTRAST = HELPERS + """
   return out;
 """.replace('TOKENS', json.dumps(TOKENS))
 
+# The floating Copy button's icon on the button, as each is painted over the page (WCAG 1.4.11: 3:1 for a control).
+COPY_CONTRAST = HELPERS + """
+  const b = document.getElementById('copy'), cs = getComputedStyle(b);
+  return measure(root, cs.color, ['var(--bg)', cs.backgroundColor]);
+"""
+
 # The Apple link under other system accent colours (the macOS accent palette), through the same relative-colour clamp.
 ACCENTS = ['#007aff', '#953d96', '#f74f9e', '#e0383e', '#f7821b', '#ffc600', '#62ba46', '#8c8c8c']
 ACCENT_LINKS = HELPERS + """
@@ -116,6 +126,32 @@ ACCENT_LINKS = HELPERS + """
   root.style.removeProperty('--sys-accent');
   return out;
 """
+
+# A missing image's Reveal folder button, in the placeholder as imageFailed draws it, over the page (WCAG 1.4.3: 4.5:1). With
+# ACCENTS, the Apple theme's link colour under every system accent colour.
+REVEAL_CONTRAST = HELPERS + """
+  const p = document.getElementById('doc').appendChild(el('p')), box = p.appendChild(el('span', 'img-missing'));
+  const b = box.appendChild(el('span', 'img-missing-text')).appendChild(el('span', 'img-missing-why')).appendChild(el('button', 'img-reveal', 'Reveal folder'));
+  const one = () => measure(root, getComputedStyle(b).color, ['var(--bg)', getComputedStyle(box).backgroundColor]);
+  const out = { base: one() };
+  for (const a of ACCENTS) { root.style.setProperty('--sys-accent', a); out[a] = one().ratio; }
+  root.style.removeProperty('--sys-accent');
+  p.remove();
+  return out;
+"""
+
+# Links in running text: underlined (WCAG 1.4.1, not colour alone), with an underline that stands out from the page.
+LINK_CUE = HELPERS + """
+  return [...document.querySelectorAll('#doc :is(p, li) a[href]:not(.unresolved)')].map((a) => { const cs = getComputedStyle(a);
+    return [a.textContent, cs.textDecorationLine, measure(a, cs.textDecorationColor, ['var(--bg)']).ratio]; })
+    .filter(([, line, r]) => !line.includes('underline') || r < 1.5);
+"""
+
+# Each task checkbox's accessible name: the text its aria-labelledby points at, which must be its item's text.
+TASK_NAMES = """const boxes = [...document.querySelectorAll('#doc li.task input[type=checkbox]')];
+  const ids = boxes.map((b) => b.getAttribute('aria-labelledby'));
+  return { n: boxes.length, unique: new Set(ids).size === ids.length && !ids.includes(null),
+    names: boxes.map((b, i) => [(document.getElementById(ids[i]) || {}).textContent || '', b.closest('li').textContent.trim()]) };"""
 
 
 MERMAID_FILL = """
@@ -157,7 +193,7 @@ UPDATE_FIT = """const pop = document.getElementById('aa-pop').getBoundingClientR
     if (e.scrollWidth > e.clientWidth || r.left < pop.left + 11 || r.right > pop.right - 11 || (e.tagName === 'BUTTON' && r.height > parseFloat(cs.fontSize) * 2.5))
       bad.push([e.id, e.textContent, Math.round(r.width), e.scrollWidth, e.clientWidth]);
   }
-  return { bad, shown, dot: document.getElementById('aa').dataset.update === '' };"""
+  return { bad, shown, button: !document.getElementById('upd').hidden };"""
 CLICK = """(sel) => { const t = document.querySelector(sel); if (!t) return false; const r = t.getBoundingClientRect();
   for (const type of ['mouseover', 'mousedown', 'mouseup', 'click'])
     t.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: r.left + 3, clientY: r.top + 3, detail: 1 }));
@@ -201,6 +237,15 @@ def main():
                 low = [p for p in page.js(CONTRAST) if p['ratio'] < 4.5]
                 check(not low, f'theme {t} {mode}: text, code tokens, links and toolbar text reach 4.5:1',
                       '; '.join(f"{p['name']} {p['ratio']} ({p['text']} on {p['bg']})" for p in low))
+                cp = page.js(COPY_CONTRAST)
+                check(cp['ratio'] >= 3, f'theme {t} {mode}: the Copy button\'s icon reaches 3:1 on the button', json.dumps(cp))
+                rv = page.js(REVEAL_CONTRAST.replace('ACCENTS', json.dumps(ACCENTS if t == 'apple' else [])))
+                check(rv['base']['ratio'] >= 4.5 and all(r >= 4.5 for k, r in rv.items() if k != 'base'),
+                      f'theme {t} {mode}: a missing image\'s Reveal folder reaches 4.5:1 on its placeholder' + (' with every system accent colour' if t == 'apple' else ''),
+                      json.dumps(rv))
+                bare = page.js(LINK_CUE)
+                check(not bare and page.js("return document.querySelectorAll('#doc p a[href]').length") >= 3,
+                      f'theme {t} {mode}: links in running text are underlined, not told by colour alone', json.dumps(bare))
                 if t == 'apple':
                     ratios = page.js(ACCENT_LINKS.replace('ACCENTS', json.dumps(ACCENTS)))
                     low = {a: r for a, r in ratios.items() if r < 4.5}
@@ -364,6 +409,9 @@ def main():
         page.apply(toc='auto', fontSize=15, theme='apple')
 
         # ---- settings that change what is rendered ----
+        tn = page.js(TASK_NAMES)
+        check(tn['n'] == 3 and tn['unique'] and all(a == b and a for a, b in tn['names']),
+              'each task checkbox is named by its item\'s text (aria-labelledby)', json.dumps(tn))
         page.apply(math=False, mermaid=False, taskToggles=False)
         off = page.js("""return { katex: document.querySelectorAll('#doc .katex').length, tex: document.querySelectorAll('#doc .tex-src').length,
           mermaid: document.querySelectorAll('#doc pre.mermaid').length, code: [...document.querySelectorAll('#doc pre code')].some((c) => /graph LR/.test(c.textContent)),
@@ -382,10 +430,17 @@ def main():
         page.render(raw)
         h = page.js("return [document.querySelectorAll('#doc b').length, document.querySelector('#doc p').textContent]")
         check(h[0] == 0 and '<b>bold</b>' in h[1], "rawHTML off renders the document's HTML as text", json.dumps(h))
+        page.render(demo)
+        tn = page.js(TASK_NAMES)
+        check(tn['n'] == 3 and tn['unique'] and all(a == b and a for a, b in tn['names']), 'rawHTML off: task checkboxes still named by their text', json.dumps(tn))
         page.apply(rawHTML='sanitized')
 
         # ---- stats ----
         page.render(demo)
+        page.cmd('@wait:0.3')
+        s0 = page.js("return document.getElementById('stats').textContent")
+        check(s0 == '', 'reading stats are off by default', repr(s0))
+        page.apply(stats=True)
         page.cmd('@wait:0.3')
         s = page.js("return document.getElementById('stats').textContent")
         check(s and 'words' in s and 'min read' in s, 'reading stats shown', repr(s))
@@ -417,7 +472,7 @@ def main():
             ok = len(posted) == 1 and all(posted[0].get(k) == v for k, v in want.items()) and got == val \
                 and not [m for m in r['messages'] if m.get('type') in ('editBlock', 'link')]
             check(ok, f'popover {sel} posts {want["key"]}={want["value"]} and applies it', f'{posted} root={got}')
-        checked = page.js("return [...document.querySelectorAll('#aa-pop [aria-checked=true]')].map((b) => b.dataset.value)")
+        checked = page.js("return [...document.querySelectorAll('#aa-pop [data-key][aria-checked=true]')].map((b) => b.dataset.value)")
         check(sorted(checked) == ['paper', 'serif', 'wide'], 'popover shows the current choices', json.dumps(checked))
         r = click(page, '#aa-settings')
         o = [m for m in r['messages'] if m.get('type') == 'openSettings']
@@ -434,14 +489,15 @@ def main():
         states = [('available', {}), ('elsewhere', {'place': long_place}), ('started', {}), ('inProgress', {}), ('done', {}),
                   ('failed', {'reason': 'The installer stopped with status 1. See ~/Library/Logs/spacebar-update.log.', 'copy': True}),
                   ('failed', {'reason': 'An update is already running.'}), ('failed', {'reason': 'Not started: save failed; edit again to retry.', 'retry': True})]
-        click(page, '#aa')
+        page.js("sb.update({ state: 'available', version: '10.10.10' }); return 0")
+        click(page, '#upd')
         page.cmd('@wait:0.3')
         for state, extra in states:
             page.js('sb.update(' + json.dumps({'state': state, 'version': '10.10.10', **extra}) + '); return 0')
             fit = page.js(UPDATE_FIT)
             want = ['aa-update-title', 'aa-update-sub'] + (['aa-install'] if state in ('available', 'started', 'inProgress') or extra.get('retry') else []) \
                 + (['aa-copy'] if extra.get('copy') else []) + ['aa-notes']
-            check(fit['bad'] == [] and fit['shown'] == want and fit['dot'], f'update row ({state} {sorted(extra)}): shows {want[2:-1] or "no button"}, nothing overflows',
+            check(fit['bad'] == [] and fit['shown'] == want and fit['button'], f'update row ({state} {sorted(extra)}): shows {want[2:-1] or "no button"}, nothing overflows',
                   json.dumps(fit))
         page.js("sb.update({ state: 'available', version: '10.10.10' }); return 0")
         r = click(page, '#aa-install')
@@ -500,7 +556,7 @@ def main():
         rb = page.cmd("@eval:(() => { const b = document.querySelector('#doc input[type=checkbox][data-line]'); b.click(); b.click(); return 0; })()")
         reset = page.js("return [document.getElementById('aa-update').hidden, 'update' in document.getElementById('aa').dataset]")
         check(len([m for m in rb['messages'] if m.get('type') == 'toggle']) == 2 and reset == [True, False],
-              'sb.updateReset clears the busy flag, the update row and the dot', json.dumps([reset, rb['messages']]))
+              'sb.updateReset clears the busy flag, the update row and its button', json.dumps([reset, rb['messages']]))
         click(page, '#doc')
         page.apply(theme='apple', width='medium', bodyFont='system', fontSize=15)
 
@@ -669,13 +725,12 @@ def main():
             const s = r.selectorText || ''; if (/#toolbar > button:active/.test(s) && /scale/.test(r.style.transform)) out.press = true;
             if (/#toolbar > button, #side-toggle\\)?:hover/.test(s.replace(/:is\\(/g, '')) || /#toolbar > button:hover/.test(s)) out.hover = true;
             if (/#side-list a\\.row\\.folder:hover/.test(s) || (/#side-list a\\.row:hover/.test(s))) out.rowHover = true;
-            if (/a\\.row\\.active\\.arrive/.test(s) && r.style.animationName === 'row-in') out.arrive = true;
-            if (media && /prefers-reduced-motion/.test(media) && /arrive/.test(s) && r.style.animationName === 'none') out.arriveReduced = true;
+            if ((/a\\.row\\.active/.test(s) && r.style.animationName && r.style.animationName !== 'none') || (r.type === CSSRule.KEYFRAMES_RULE && r.name === 'row-in')) out.pulse = true;
             if (media && /prefers-reduced-motion/.test(media) && /#toolbar > button/.test(s) && /none/.test(r.style.transform)) out.pressReduced = true;
             if (media && /prefers-reduced-motion/.test(media) && /#frame/.test(s)) out.frameReduced = true; } };
           for (const sh of document.styleSheets) { try { walk(sh.cssRules, ''); } catch (e) {} } return out""")
-        check(states == {'press': True, 'hover': True, 'rowHover': True, 'arrive': True, 'arriveReduced': True, 'pressReduced': True, 'frameReduced': True},
-              'buttons have hover and pressed states, rows highlight on hover, the current row settles in; all still under reduced motion', json.dumps(states))
+        check(states == {'press': True, 'hover': True, 'rowHover': True, 'pressReduced': True, 'frameReduced': True},
+              'buttons have hover and pressed states, rows highlight on hover, the current row does not pulse as the arrows move; all still under reduced motion', json.dumps(states))
         side_click = page.js("""const r = document.getElementById('frame').getBoundingClientRect();
           const e = document.elementFromPoint(r.left + 200, r.bottom + 2); return e ? e.id : null""")
         page.cmd('@eval:scrollTo(0, 300); 0')
@@ -701,6 +756,25 @@ def main():
         check(p.get('startChrome') == 'minimal' and p.get('dclChrome') == 'minimal' and m == {'frame': 'none', 'aaTop': 8, 'sideBorder': '1px', 'crumbs': 'static', 'docPad': '12px'},
               'minimal chrome: no outline or row, floating buttons, set at document start (no flash)', json.dumps([p, m]))
         page.cmd(f'@shot:{SHOTS}/minimal-chrome.png')
+        code = os.path.join(page.out, 'tool.py')
+        with open(code, 'w') as f:
+            f.write('def main():\n    print("hi")\n' * 40)
+        BAR = """const bar = document.getElementById('toolbar'), kids = [...bar.children].filter((e) => getComputedStyle(e).display !== 'none');
+          const r = kids.map((e) => e.getBoundingClientRect()), k = getComputedStyle(document.getElementById('kind'));
+          return { shown: kids.map((e) => e.id), hidden: kids.filter((e) => getComputedStyle(e).visibility !== 'visible').map((e) => e.id),
+            gaps: r.slice(1).map((x, i) => Math.round(x.left - r[i].right)), kindBg: k.backgroundColor, kindBlur: /blur/.test(k.backdropFilter) }"""
+        bars = {}
+        for name, path in (('code', code), ('image', os.path.join(ROOT, 'test', 'fixtures', 'img.png'))):
+            page.render(path)
+            page.cmd('@wait:0.3')
+            bars[name] = page.js(BAR)
+            page.cmd(f'@shot:{SHOTS}/minimal-chrome-{name}.png')
+        slots = ['raw', 'find-btn', 'aa', 'edit']
+        check(all(b['shown'] and 'kind' in b['shown'] and 'kind' not in b['hidden'] and [x for x in b['shown'] if x in slots] == slots
+                  and set(b['gaps']) <= {6} and b['kindBlur'] and b['kindBg'] not in ('rgba(0, 0, 0, 0)', 'transparent') for b in bars.values())
+              and bars['code']['hidden'] == ['raw', 'edit'] and bars['image']['hidden'] == slots,
+              'minimal chrome: a hidden Raw, Find, Aa or Open keeps its slot, unseen, so the floating buttons never move; the kind sits on their material',
+              json.dumps(bars))
         page.apply(minimalChrome=False)
         check(page.js("return getComputedStyle(document.getElementById('frame')).display") == 'block', 'minimal chrome switches off live')
         page.cmd('@load:{}')

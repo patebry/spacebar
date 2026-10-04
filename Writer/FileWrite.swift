@@ -2,6 +2,93 @@ import Foundation
 
 private let writeLock = NSLock()
 
+/// What one connection's text edits sent, by resolved path: the file's encoding and the last texts of its buffer. A write to a
+/// file other than Markdown must be one of those texts in that encoding, so the extension can save only what was typed into
+/// this writer's own panel, starting from the file as the writer read it, never content of its own.
+final class TypedTexts {
+    private let lock = NSLock()
+    /// Per file: the recent buffers its edits sent, the texts it held where an edit began or ended (which ⌘Z can go back to
+    /// while the preview stays open), and the bytes a failed write of the writer's own left on disk. Every text is the file as
+    /// the writer read it or a buffer the panel sent.
+    private var files: [String: Record] = [:]
+    private var order: [String] = []
+    private static let recent = 16, keptFiles = 4, keptEnded = 2, keptMarks = 32
+
+    private struct Record {
+        let source: EditableText.Source
+        var texts: [String]
+        var kept: [String]
+        var torn: Data?
+        /// The bytes the writer's own last write put there: a save typed meanwhile names them as its base.
+        var written: Data?
+        func knows(_ t: String) -> Bool { texts.contains { $0.utf16.elementsEqual(t.utf16) } || kept.contains { $0.utf16.elementsEqual(t.utf16) } }
+        func holds(_ data: Data) -> Bool { data == torn || data == written || texts.reversed().contains { source.bytes($0) == data } || kept.reversed().contains { source.bytes($0) == data } }
+        mutating func mark(_ t: String) {
+            kept.removeAll { $0.utf16.elementsEqual(t.utf16) }
+            kept.append(t)
+            if kept.count > TypedTexts.keptMarks { kept.removeFirst() }
+        }
+    }
+
+    /// Starts or continues the record of `path` with `text`: the file as on disk, or a text an edit of it already sent. A record
+    /// continues only while the file still holds something it recorded; a file changed on disk starts a new one.
+    func begin(path: String, text: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let disk = EditableText.read(path: path)
+        if var f = files[path], f.knows(text), let d = disk, f.holds(d.bytes) {
+            if d.text.utf16.elementsEqual(text.utf16) || f.kept.contains(where: { $0.utf16.elementsEqual(text.utf16) }) { f.mark(text) }
+            files[path] = f
+            return true
+        }
+        guard let o = disk, o.text.utf16.elementsEqual(text.utf16) else { return false }
+        files[path] = Record(source: o.source, texts: [o.text], kept: [o.text])
+        order.removeAll { $0 == path }
+        order.append(path)
+        if order.count > Self.keptFiles { files[order.removeFirst()] = nil }
+        return true
+    }
+
+    /// An edit of `path` ended: only its last buffers can still be saved (the saves in flight) or start the next edit, besides
+    /// the texts kept for undo, which now include the last one.
+    func ended(path: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var f = files[path] else { return }
+        if let last = f.texts.last { f.mark(last) }
+        if f.texts.count > Self.keptEnded { f.texts.removeFirst(f.texts.count - Self.keptEnded) }
+        files[path] = f
+    }
+
+    func sent(path: String, text: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var f = files[path] else { return }
+        if let last = f.texts.last, last.utf16.elementsEqual(text.utf16) { return }
+        f.texts.append(text)
+        if f.texts.count > Self.recent { f.texts.removeFirst() }
+        files[path] = f
+    }
+
+    /// `data` may replace `base` only when both are this record's: a text typed or kept, over bytes the file held while the
+    /// writer was recording it (or the bytes its own failed write left). So nothing is written over a change made elsewhere.
+    func allows(path: String, data: Data, base: Data) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let f = files[path] else { return false }
+        return f.holds(base) && f.holds(data) && data != f.torn
+    }
+
+    /// The writer's own write of `path` ended: it left `wrote` there, or failed part-way leaving `torn` (a retry may name
+    /// either as its base).
+    func wrote(path: String, _ wrote: Data?, torn: Data?) {
+        lock.lock()
+        defer { lock.unlock() }
+        files[path]?.written = wrote
+        files[path]?.torn = torn
+    }
+}
+
 /// Holds the writer's exit on SIGTERM while a write is in flight. Writes rewrite the file in place, so a kill in the middle
 /// would leave it partly written (the installer quits the writer this way when it updates the app). After the signal no new
 /// write starts; the process exits `grace` seconds after the last one ends (so its reply still reaches the preview), or after
@@ -82,14 +169,16 @@ final class WriteGate {
 /// fails the error says the file may be partly written, and the intended text is saved atomically, under a name unique to
 /// this failure, beside it (`<name>.spacebar-unsaved-<time>`) or failing that (the disk is likely full) in the temporary
 /// directory; the error names where, or says nothing was kept. Copies are left for the user to delete.
-func compareAndWrite(_ data: Data, path: String, expecting base: Data) -> String? {
+/// `noFollow`: `path` is already resolved, and a link swapped in for it since is refused rather than followed.
+func compareAndWrite(_ data: Data, path: String, expecting base: Data, noFollow: Bool = false) -> String? {
     writeLock.lock()
     defer { writeLock.unlock() }
-    let fd = open(path, O_RDWR | O_CLOEXEC)
+    let fd = open(path, O_RDWR | O_CLOEXEC | (noFollow ? O_NOFOLLOW | O_NONBLOCK : 0))
     guard fd >= 0 else { return String(cString: strerror(errno)) }
     defer { close(fd) }
     var before = stat()
     guard fstat(fd, &before) == 0 else { return String(cString: strerror(errno)) }
+    guard before.st_mode & S_IFMT == S_IFREG else { return "not a regular file" }
     guard let current = readAll(fd, size: Int(before.st_size)) else { return "read failed: \(String(cString: strerror(errno)))" }
     guard current == base else { return "conflict" }
     var checked = stat()

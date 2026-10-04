@@ -21,15 +21,21 @@ struct Settings: Codable, Equatable {
     var inlineEditing = true
     var taskToggles = true
     var folderMode = true
-    var folderReadmeFirst = true
+    var folderReadmeFirst = false
     var folderSort = "name"
+    /// Folders above the files in the sidebar: as Finder's own "Keep folders on top" ("finder"), "always" or "never".
+    var foldersFirst = "finder"
     var sidebarCollapsed = false
     var sidebarWidth = 240
+    var sidebarKeys = true
+    /// The folder view's grid or list, remembered for folders mostly of images and video and for every other folder.
+    var folderViewMedia = "grid"
+    var folderViewOther = "list"
     var showHiddenFiles = false
     var minimalChrome = false
     var frontMatter = "table"
     var toc = "auto"
-    var stats = true
+    var stats = false
     var mdLinks = "preview"
     var webLinks = "browser"
     var math = true
@@ -38,10 +44,34 @@ struct Settings: Codable, Equatable {
     var remoteImages = false
     var htmlScripts = "local"
     var checkUpdates = true
+    var welcomeShown = false
+    /// Space in Finder opens spacebar's own panel through the helper (Settings, or the welcome sheet).
+    var spaceHelper = false
+    /// The welcome sheet has offered the helper once; an upgrade that already dismissed the sheet sees only that step.
+    var helperOffered = false
+    /// The preview has shown its one-time "Click to edit" hint.
+    var editHintShown = false
+    /// What the toolbar's Raw toggle once remembered per kind. Raw now lasts only while the preview stays open, so these are
+    /// read (old files keep sanitizing) but no longer change what is shown.
+    var rawMarkdown = false
+    var rawJSON = false
+    var rawNotebook = false
+    var rawCSV = false
+    var rawXML = false
+    var rawCSS = false
+    /// Long lines wrapped in the text view, remembered per kind: prose (text and logs) and Markdown's source wrap, code does not.
+    var wrapText = true
+    var wrapMarkdown = true
+    var wrapCode = false
 
     /// 2: folder previews became on by default. A file written before that stores the old default, false, so it reads as on
     /// until SettingsFile.update rewrites it; a user who turns them off afterwards stays off.
-    static let currentVersion = 2
+    /// 3: reading stats became off by default.
+    /// 4: reading stats left the settings window, so a file from before is read and rewritten with them off: its "on" was almost
+    /// always the old default, which the window could no longer turn off.
+    /// 5: README first became off by default, so the sidebar lists a folder as Finder does; a file from before is read and
+    /// rewritten with it off, its "on" being the old default.
+    static let currentVersion = 5
     static func fileVersion(_ raw: [String: Any]) -> Int { (raw["version"] as? NSNumber)?.intValue ?? 1 }
 
     static let themes = ["apple", "github", "paper", "solarized", "nord", "contrast"]
@@ -54,6 +84,9 @@ struct Settings: Codable, Equatable {
         "monoFont": ["system", "menlo", "monaco", "courier"],
         "width": ["narrow", "medium", "wide", "full"],
         "folderSort": ["name", "modified"],
+        "folderViewMedia": ["grid", "list"],
+        "folderViewOther": ["list", "grid"],
+        "foldersFirst": ["finder", "always", "never"],
         "frontMatter": ["table", "hide", "raw"],
         "toc": ["auto", "on", "off"],
         "mdLinks": ["preview", "editor"],
@@ -63,15 +96,36 @@ struct Settings: Codable, Equatable {
     ]
     static let intRanges: [String: ClosedRange<Int>] = ["fontSize": 12...24, "sidebarWidth": 160...480]
     static let doubleRanges: [String: ClosedRange<Double>] = ["lineHeight": 1.2...2.0]
-    static let boolKeys: Set<String> = ["customCSS", "inlineEditing", "taskToggles", "folderMode", "folderReadmeFirst", "stats", "math",
-                                        "mermaid", "remoteImages", "sidebarCollapsed", "showHiddenFiles", "minimalChrome", "checkUpdates"]
+    static let boolKeys: Set<String> = Set(["customCSS", "inlineEditing", "taskToggles", "folderMode", "folderReadmeFirst", "stats", "math",
+                                        "mermaid", "remoteImages", "sidebarCollapsed", "sidebarKeys", "showHiddenFiles", "minimalChrome", "checkUpdates",
+                                        "welcomeShown", "spaceHelper", "helperOffered", "editHintShown"]).union(rawKeys).union(wrapKeys)
+    static let rawKeys: Set<String> = ["rawMarkdown", "rawJSON", "rawNotebook", "rawCSV", "rawXML", "rawCSS"]
+    static let wrapKeys: Set<String> = ["wrapText", "wrapMarkdown", "wrapCode"]
     /// Keys whose value is a string or null, each checked by its own pattern.
     static let optionalKeys: Set<String> = ["userTheme", "editorBundleID"]
     static var allKeys: Set<String> { Set(choices.keys).union(intRanges.keys).union(doubleRanges.keys).union(boolKeys).union(optionalKeys) }
-    /// The only keys the preview panel may change (its Aa popover and sidebar button). The page renders an untrusted document,
+    /// The only keys the preview panel may change (its Aa popover and sidebar controls). The page renders an untrusted document,
     /// so even a page that was somehow scripted can restyle the preview but never pick a CSS file, an editor app, or what is
-    /// rendered or opened.
-    static let panelKeys: Set<String> = ["theme", "appearance", "fontSize", "width", "bodyFont", "sidebarCollapsed", "sidebarWidth"]
+    /// rendered or opened. folderSort and foldersFirst only reorder what is listed, and the folder views lay it out as a grid or a
+    /// list (a folder of images shows its grid instead of opening its README); showHiddenFiles would list, and so open, more, so
+    /// it is changed in the settings window only.
+    static let panelKeys: Set<String> = Set(["theme", "appearance", "fontSize", "width", "bodyFont", "sidebarCollapsed", "sidebarWidth", "folderSort", "foldersFirst",
+                                             "folderViewMedia", "folderViewOther", "editHintShown"])
+        .union(rawKeys).union(wrapKeys)
+    /// The keys the settings window shows, on its page and under Advanced. Every other key is changed in the preview (panelKeys),
+    /// by spacebar itself, or in settings.json only, and keeps its stored value.
+    static let windowKeys: Set<String> = ["theme", "appearance", "fontSize", "spaceHelper", "editorBundleID", "checkUpdates"]
+    static let advancedKeys: Set<String> = ["htmlScripts", "rawHTML", "remoteImages", "inlineEditing", "taskToggles", "showHiddenFiles", "userTheme", "customCSS"]
+    /// Kept by Reset to Defaults: resetting must not bring the welcome sheet back or change the Space helper behind its Login Items entry.
+    static let keptOnReset = ["welcomeShown", "helperOffered", "spaceHelper", "editHintShown"]
+
+    /// Reset to Defaults as a patch: every key at its default, including the ones only settings.json can change. The kept keys
+    /// are left out, so the file's own values stand.
+    static func resetPatch() -> [String: Any] {
+        var d = Settings().dictionary
+        for k in keptOnReset { d.removeValue(forKey: k) }
+        return d
+    }
 
     /// A panel change as the JSON patch the writer takes, or nil when the key is not a panel key or the value does not
     /// sanitize (sidebarCollapsed takes a JSON boolean only, never a number or a string; sidebarWidth a number, clamped).
@@ -126,6 +180,8 @@ struct Settings: Codable, Equatable {
             if let clean = Self.sanitize(k, v) { d[k] = clean }
         }
         if !raw.isEmpty, Self.fileVersion(raw) < 2 { d["folderMode"] = true }
+        if !raw.isEmpty, Self.fileVersion(raw) < 4 { d["stats"] = false }
+        if !raw.isEmpty, Self.fileVersion(raw) < 5 { d["folderReadmeFirst"] = false }
         let data = try! JSONSerialization.data(withJSONObject: d)
         self = (try? JSONDecoder().decode(Settings.self, from: data)) ?? Settings()
     }
@@ -148,11 +204,17 @@ struct Settings: Codable, Equatable {
         if let n = try? c.decodeIfPresent(Double.self, forKey: .lineHeight), let v = Self.sanitize("lineHeight", n) as? Double { s.lineHeight = v }
         take(.width, \.width); takeOptional(.editorBundleID, \.editorBundleID)
         take(.inlineEditing, \.inlineEditing); take(.taskToggles, \.taskToggles); take(.folderMode, \.folderMode)
-        take(.folderReadmeFirst, \.folderReadmeFirst); take(.folderSort, \.folderSort); take(.frontMatter, \.frontMatter)
-        take(.sidebarCollapsed, \.sidebarCollapsed); take(.showHiddenFiles, \.showHiddenFiles); take(.minimalChrome, \.minimalChrome)
+        take(.folderReadmeFirst, \.folderReadmeFirst); take(.folderSort, \.folderSort); take(.foldersFirst, \.foldersFirst); take(.frontMatter, \.frontMatter)
+        take(.folderViewMedia, \.folderViewMedia); take(.folderViewOther, \.folderViewOther)
+        take(.sidebarCollapsed, \.sidebarCollapsed); take(.sidebarKeys, \.sidebarKeys); take(.showHiddenFiles, \.showHiddenFiles); take(.minimalChrome, \.minimalChrome)
         if let n = try? c.decodeIfPresent(Double.self, forKey: .sidebarWidth), let v = Self.sanitize("sidebarWidth", n) as? Int { s.sidebarWidth = v }
         take(.toc, \.toc); take(.stats, \.stats); take(.mdLinks, \.mdLinks); take(.webLinks, \.webLinks)
         take(.math, \.math); take(.mermaid, \.mermaid); take(.rawHTML, \.rawHTML); take(.remoteImages, \.remoteImages); take(.checkUpdates, \.checkUpdates); take(.htmlScripts, \.htmlScripts)
+        take(.welcomeShown, \.welcomeShown); take(.spaceHelper, \.spaceHelper); take(.helperOffered, \.helperOffered)
+        take(.editHintShown, \.editHintShown)
+        take(.rawMarkdown, \.rawMarkdown); take(.rawJSON, \.rawJSON); take(.rawNotebook, \.rawNotebook); take(.rawCSV, \.rawCSV)
+        take(.rawXML, \.rawXML); take(.rawCSS, \.rawCSS)
+        take(.wrapText, \.wrapText); take(.wrapMarkdown, \.wrapMarkdown); take(.wrapCode, \.wrapCode)
         self = s
     }
 
@@ -165,6 +227,15 @@ struct Settings: Codable, Equatable {
     }
 
     var json: String { String(data: try! JSONSerialization.data(withJSONObject: dictionary, options: [.sortedKeys]), encoding: .utf8)! }
+}
+
+enum WelcomeStep: Equatable { case intro, helper }
+
+extension Settings {
+    /// The welcome sheet's pages: the introduction until it is dismissed once, then the helper's offer once, where there is one.
+    func welcomeSteps(helperAvailable: Bool) -> [WelcomeStep] {
+        (welcomeShown ? [] : [.intro]) + (helperAvailable && !helperOffered ? [.helper] : [])
+    }
 }
 
 /// Where the settings live, and reading and writing them.
@@ -261,6 +332,9 @@ enum SettingsFile {
         var changed = false
         // Migrated before the patch, so a user's "off" in the same write is kept.
         if Settings.fileVersion(obj) < Settings.currentVersion {
+            // No file yet: nothing was written under an older default.
+            if !obj.isEmpty, Settings.fileVersion(obj) < 4, obj["stats"] as? Bool == true { obj["stats"] = false }
+            if !obj.isEmpty, Settings.fileVersion(obj) < 5, obj["folderReadmeFirst"] as? Bool == true { obj["folderReadmeFirst"] = false }
             if Settings.fileVersion(obj) < 2 { obj["folderMode"] = true }
             obj["version"] = Settings.currentVersion
             changed = true
@@ -275,8 +349,9 @@ enum SettingsFile {
     }
 
     /// Brings an existing settings.json up to Settings.currentVersion. Run by the app and the writer, never the sandboxed extension.
-    /// A symbolic link (a dotfiles setup) is never written, so it is not migrated: until its target gains "version": 2 it reads
-    /// as folder previews on whatever its folderMode says. The failure is returned for the caller's log.
+    /// A symbolic link (a dotfiles setup) is never written, so it is not migrated: until its target gains the current "version"
+    /// it reads as folder previews on whatever its folderMode says, and reading stats and README first off. The failure is
+    /// returned for the caller's log.
     @discardableResult
     static func migrate(at url: URL = url) -> Failure? {
         var st = stat()

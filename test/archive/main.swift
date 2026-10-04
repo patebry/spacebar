@@ -158,6 +158,8 @@ let exact = work.appendingPathComponent("exact")
 try! fm.createDirectory(at: exact, withIntermediateDirectories: true)
 for i in 0..<(ArchiveListing.maxEntries - 1) { fm.createFile(atPath: exact.appendingPathComponent("f\(i)").path, contents: nil) }
 sh(["/usr/bin/tar", "-cf", "exact.tar", "exact"])
+check("list big.tar: the listing past the cap is counted, so the page can say of how many", listing("big.tar")?["total"] as? Int == ArchiveListing.maxEntries + 201,
+      "\(String(describing: listing("big.tar")?["total"]))")
 check("list exact.tar: exactly \(ArchiveListing.maxEntries) entries is whole", listed("exact.tar")?.count == ArchiveListing.maxEntries && listing("exact.tar")?["truncated"] as? Bool == false)
 
 // The sandbox: bsdtar reads only its standard input, so a path it is handed, or a file it would write, is refused.
@@ -186,6 +188,145 @@ check("sandbox: bsdtar extracting from its input writes nothing", extractor.term
       "\(extractor.terminationStatus) \((try? fm.contentsOfDirectory(atPath: into.path)) ?? [])")
 check("sandbox: the profile imports system.sb, not bsd.sb, and denies writes", ArchiveListing.profile.contains(#"(import "system.sb")"#)
       && !ArchiveListing.profile.contains("bsd.sb") && ArchiveListing.profile.contains("(deny file-write*)"))
+
+// ---- one entry, streamed without extracting (ArchiveEntry) ----
+check("entry pattern: a name starting with - is refused, however long", ArchiveEntry.pattern("-rf") == nil
+      && ArchiveEntry.pattern("--use-compress-program=x") == nil && ArchiveEntry.pattern("-") == nil)
+check("entry pattern: wildcards and the escape character are escaped, so a pattern matches only its own name",
+      ArchiveEntry.pattern("*") == "\\*" && ArchiveEntry.pattern("?") == "\\?" && ArchiveEntry.pattern("[") == "\\["
+      && ArchiveEntry.pattern("a]b") == "a\\]b" && ArchiveEntry.pattern("x\\*") == "x\\\\\\*" && ArchiveEntry.pattern("^a") == "\\^a"
+      && ArchiveEntry.pattern("a^b") == "a^b")
+check("entry pattern: a folder, an empty name, a NUL and an over-long name are refused",
+      ArchiveEntry.pattern("dir/") == nil && ArchiveEntry.pattern("") == nil && ArchiveEntry.pattern("a\u{0}b") == nil
+      && ArchiveEntry.pattern(String(repeating: "a", count: ArchiveListing.maxNameBytes + 1)) == nil)
+check("entry pattern: ../, absolute and Unicode names are kept as they are", ArchiveEntry.pattern("../../etc/passwd") == "../../etc/passwd"
+      && ArchiveEntry.pattern("/abs.txt") == "/abs.txt" && ArchiveEntry.pattern("caf\u{E9} 日本.md") == "caf\u{E9} 日本.md"
+      && ArchiveEntry.pattern("./-rf") == "./-rf")
+let argv = ArchiveEntry.arguments(pattern: "\\*")
+check("entry command: sandbox-exec with the lister's profile, bsdtar -x -O -q -n from stdin, the pattern alone after --",
+      argv == ["-p", ArchiveListing.profile, "/usr/bin/bsdtar", "-x", "-O", "-q", "-n", "-f", "-", "--", "\\*"], "\(argv.dropFirst(2))")
+check("entry ratio: at least the floor, the ratio above it, no overflow", ArchiveEntry.ratioLimit(archiveBytes: 10) == ArchiveEntry.ratioFloor
+      && ArchiveEntry.ratioLimit(archiveBytes: 1 << 20) == (1 << 20) * ArchiveEntry.maxRatio && ArchiveEntry.ratioLimit(archiveBytes: .max) == .max)
+
+// Hostile names, made safely on disk and renamed as bsdtar writes them (-s), in zip, tar.gz and 7z.
+let hsrc = work.appendingPathComponent("hsrc")
+try! fm.createDirectory(at: hsrc.appendingPathComponent("a"), withIntermediateDirectories: true)
+let named: [(disk: String, entry: String, text: String)] = [
+    ("star", "*", "only the star\n"), ("q", "?", "only the question\n"), ("br", "[", "only the bracket\n"), ("rb", "x]", "close bracket\n"),
+    ("dash", "-rf", "dash rf\n"), ("dash2", "./-rf", "dot dash\n"), ("prog", "--use-compress-program=x", "not a program\n"), ("bs", "b\\*", "backslash star\n"),
+    ("pw", "../../etc/passwd", "archive passwd\n"), ("uni", "caf\u{E9} 日本.md", "# unicode\n"), ("one", "one.txt", "one\n"), ("caret", "^one.txt", "caret\n"),
+    ("dup1", "dup.txt", "first\n"), ("dup2", "dup.txt", "second\n"), ("a/x", "a/x", "under a\n"), ("afile", "a", "the file a\n"),
+]
+for n in named { try! Data(n.text.utf8).write(to: hsrc.appendingPathComponent(n.disk)) }
+let regex = { (s: String) in s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: ".", with: "\\.")
+    .replacingOccurrences(of: "*", with: "\\*").replacingOccurrences(of: "[", with: "\\[").replacingOccurrences(of: "?", with: "\\?")
+    .replacingOccurrences(of: "]", with: "\\]") }
+// "a/x" comes first so "a" is also a folder of the archive; the file "a" follows it.
+let order = ["a/x"] + named.map(\.disk).filter { $0 != "a/x" && $0 != "a" }
+let renames = named.filter { $0.disk != $0.entry }.flatMap { ["-s", ",^\(regex($0.disk))$,\($0.entry),"] }
+for (file, fmt) in [("h.zip", ["--format", "zip"]), ("h.tgz", ["-z"]), ("h.7z", ["--format", "7zip"])] {
+    sh(["/usr/bin/bsdtar", "-c", "-P"] + fmt + ["-f", work.appendingPathComponent(file).path] + renames + order, in: hsrc)
+}
+let before = Set((try? fm.contentsOfDirectory(atPath: work.path)) ?? [])
+let passwd = try? Data(contentsOf: URL(fileURLWithPath: "/etc/passwd"))
+for file in ["h.zip", "h.tgz", "h.7z"] {
+    let path = work.appendingPathComponent(file).path
+    let listedNames = Set((listed(file) ?? []).compactMap { $0["name"] as? String })
+    let read = { (name: String) -> ArchiveEntry.Outcome in ArchiveEntry.read(path, name: name, cap: 1 << 20) }
+    let text = { (name: String) -> String? in if case .data(let d) = read(name) { return String(decoding: d, as: UTF8.self) }; return nil }
+    // libarchive reads a zip's backslash as a folder separator: the name is asked for as it was listed.
+    let bs = listedNames.first { $0.hasPrefix("b") && $0.hasSuffix("*") } ?? "b\\*"
+    check("entry \(file): * ? [ ] and a backslash each read only their own file", text("*") == "only the star\n" && text("?") == "only the question\n"
+          && text("[") == "only the bracket\n" && text("x]") == "close bracket\n" && text(bs) == "backslash star\n",
+          "\([text("*"), text("?"), text("["), text("x]"), text(bs)]) \(bs)")
+    check("entry \(file): a name that is an option is refused, never passed", read("-rf") == .refused && read("--use-compress-program=x") == .refused)
+    check("entry \(file): ./-rf, which bsdtar would read as -rf, is a name after --, not an option", ["dash rf\n", "dot dash\n"].contains(text("./-rf") ?? ""),
+          text("./-rf") ?? "nil")
+    check("entry \(file): ../../etc/passwd is the archive's own file, streamed, never the system's", text("../../etc/passwd") == "archive passwd\n"
+          && text("../../etc/passwd").map { Data($0.utf8) } != passwd)
+    let uni = listedNames.first { $0.precomposedStringWithCanonicalMapping == "caf\u{E9} 日本.md" } ?? "caf\u{E9} 日本.md"
+    check("entry \(file): a Unicode name, as listed, reads", text(uni) == "# unicode\n", "\(listedNames.sorted())")
+    check("entry \(file): the file a is only a, not a/x after it", text("a") == "the file a\n", text("a") ?? "nil")
+    check("entry \(file): ^one.txt reads itself, not one.txt (a leading ^ is escaped)", text("^one.txt") == "caret\n", text("^one.txt") ?? "nil")
+    check("entry \(file): a name listed twice reads once, the first", text("dup.txt") == "first\n", text("dup.txt") ?? "nil")
+    check("entry \(file): a missing name is not found", read("nope.txt") == .notFound)
+    check("entry \(file): past its cap it is too large, and no bytes come back", ArchiveEntry.read(path, name: "one.txt", cap: 2) == .tooLarge)
+}
+check("entry: a file not named as an archive is refused", ArchiveEntry.read(work.appendingPathComponent("t.png").path, name: "src/a.txt", cap: 100) == .refused)
+check("entry: reading writes nothing anywhere near the archives", Set((try? fm.contentsOfDirectory(atPath: work.path)) ?? []) == before
+      && (try? Data(contentsOf: URL(fileURLWithPath: "/etc/passwd"))) == passwd)
+for lone in ["notes.txt.gz", "notes.txt.bz2"] {
+    let path = work.appendingPathComponent(lone).path
+    check("entry \(lone): a lone compressed file's one file is decompressed whole", ArchiveEntry.read(path, name: "notes.txt", cap: 1 << 20) == .data(Data(repeating: 65, count: 12345)))
+    check("entry \(lone): past the cap, its first part", ArchiveEntry.read(path, name: "notes.txt", cap: 100) == .partial(Data(repeating: 65, count: 100)))
+    check("entry \(lone): no other name is read from it", ArchiveEntry.read(path, name: "other.txt", cap: 1 << 20) != .data(Data(repeating: 65, count: 12345)))
+}
+let loneBomb = work.appendingPathComponent("zeros.log")
+try! Data(count: 8 << 20).write(to: loneBomb)
+sh(["/usr/bin/gzip", "-k", "zeros.log"])
+check("entry zeros.log.gz: a lone file expanding past the ratio is a bomb, not a partial read",
+      ArchiveEntry.read(work.appendingPathComponent("zeros.log.gz").path, name: "zeros.log", cap: 64 << 20) == .bomb)
+let pic = work.appendingPathComponent("pic.png")
+try! Data(repeating: 9, count: 5000).write(to: pic)
+sh(["/usr/bin/gzip", "-k", "pic.png"])
+check("entry pic.png.gz: a lone file that is not text is too large past its cap, never shown in part",
+      ArchiveEntry.read(work.appendingPathComponent("pic.png.gz").path, name: "pic.png", cap: 100) == .tooLarge)
+check("lone: a .zst is listed as its one file but not read (nothing decompresses it)", ArchiveEntryView.isLoneCompressed("/x/a.log.zst")
+      && !ArchiveEntryView.isLoneReadable("/x/a.log.zst") && ArchiveEntryView.isLoneReadable("/x/a.log.xz"))
+check("lone: ArchiveEntryView names the one file and knows a tar in disguise", ArchiveEntryView.isLoneCompressed("/x/server.log.gz") && ArchiveEntryView.loneName("/x/server.log.gz") == "server.log"
+      && !ArchiveEntryView.isLoneCompressed("/x/backup.tar.gz") && !ArchiveEntryView.isLoneCompressed("/x/t.zip"))
+
+// Links inside an archive: listed as links, never read (bsdtar -x -O prints nothing for one), never followed.
+let lsrc = work.appendingPathComponent("lsrc")
+try! fm.createDirectory(at: lsrc, withIntermediateDirectories: true)
+try! Data("target text\n".utf8).write(to: lsrc.appendingPathComponent("target.txt"))
+try! fm.createSymbolicLink(atPath: lsrc.appendingPathComponent("soft.txt").path, withDestinationPath: "target.txt")
+try! fm.createSymbolicLink(atPath: lsrc.appendingPathComponent("out.txt").path, withDestinationPath: "/etc/passwd")
+try! fm.linkItem(at: lsrc.appendingPathComponent("target.txt"), to: lsrc.appendingPathComponent("hard.txt"))
+sh(["/usr/bin/tar", "-cf", work.appendingPathComponent("links.tar").path, "target.txt", "hard.txt", "soft.txt", "out.txt"], in: lsrc)
+let links = Dictionary((listed("links.tar") ?? []).map { ($0["name"] as? String ?? "", $0) }, uniquingKeysWith: { a, _ in a })
+check("links: a symbolic and a hard link are marked as links, not folders; the file itself is not",
+      ["soft.txt", "hard.txt", "out.txt"].allSatisfy { links[$0]?["isLink"] as? Bool == true && links[$0]?["isDir"] as? Bool == false }
+      && links["target.txt"]?["isLink"] as? Bool == false, "\(links)")
+let linksPath = work.appendingPathComponent("links.tar").path
+check("links: bsdtar reads no bytes for a link member (why the preview never asks), and never the file outside",
+      ["soft.txt", "out.txt"].allSatisfy { ArchiveEntry.read(linksPath, name: $0, cap: 1 << 20) == .data(Data()) }
+      && ArchiveEntry.read(linksPath, name: "target.txt", cap: 1 << 20) == .data(Data("target text\n".utf8)))
+let linkNote = ArchiveEntryView.payload(archive: linksPath, root: work.path, entry: "soft.txt", size: 0, modified: nil, data: nil, failure: "link")
+check("links: the entry view says it is a link", linkNote["view"] as? String == "info" && (linkNote["note"] as? String)?.contains("link") == true)
+
+// -n anchors a member's name: a top-level notes.txt listed after sub/notes.txt still reads itself.
+let nsrc = work.appendingPathComponent("nsrc")
+try! fm.createDirectory(at: nsrc.appendingPathComponent("sub"), withIntermediateDirectories: true)
+try! Data("nested\n".utf8).write(to: nsrc.appendingPathComponent("sub/notes.txt"))
+try! Data("top\n".utf8).write(to: nsrc.appendingPathComponent("notes.txt"))
+sh(["/usr/bin/tar", "-cf", work.appendingPathComponent("order.tar").path, "sub/notes.txt", "notes.txt"], in: nsrc)
+check("entry order.tar: notes.txt after sub/notes.txt reads the top-level one", ArchiveEntry.read(work.appendingPathComponent("order.tar").path, name: "notes.txt", cap: 1 << 20)
+      == .data(Data("top\n".utf8)))
+
+// A bomb: 40 MB of zeros that bzip2 packs into a few hundred bytes.
+let bombDir = work.appendingPathComponent("bomb")
+try! fm.createDirectory(at: bombDir, withIntermediateDirectories: true)
+fm.createFile(atPath: bombDir.appendingPathComponent("zeros.txt").path, contents: Data(count: 40 << 20))
+sh(["/usr/bin/tar", "-cjf", "bomb.tar.bz2", "bomb"])
+let bombSize = ((try? fm.attributesOfItem(atPath: work.appendingPathComponent("bomb.tar.bz2").path))?[.size] as? Int) ?? 0
+let t1 = Date()
+let bomb = ArchiveEntry.read(work.appendingPathComponent("bomb.tar.bz2").path, name: "bomb/zeros.txt", cap: 20 << 20)
+check("entry bomb: \(bombSize) bytes that expand to 40 MB are stopped at the ratio, not read to the cap (\(Int(Date().timeIntervalSince(t1) * 1000)) ms)",
+      bomb == .bomb && Date().timeIntervalSince(t1) < 3, "\(bomb)")
+let ok = ArchiveEntry.read(work.appendingPathComponent("t.tgz").path, name: "src/sub/b.bin", cap: 1 << 20)
+check("entry: an ordinary file reads whole", ok == .data(Data(repeating: 7, count: 3000)))
+
+// The stream itself: stopped past its limit, and on its timeout.
+let t2 = Date()
+let slow = ArchiveEntry.stream("/bin/sleep", ["30"], input: FileHandle.nullDevice, limit: 10, timeout: 0.5)
+check("entry stream: a run past its timeout is stopped and says so (\(Int(Date().timeIntervalSince(t2) * 1000)) ms)",
+      slow?.timedOut == true && slow?.over == false && Date().timeIntervalSince(t2) < 2, "\(String(describing: slow))")
+let zeros = try! FileHandle(forReadingFrom: URL(fileURLWithPath: "/dev/zero"))
+let t3 = Date()
+let endless = ArchiveEntry.stream("/bin/cat", [], input: zeros, limit: 100_000, timeout: 5)
+check("entry stream: endless output is cut at its limit and stopped at once", endless?.over == true && endless?.data.count == 100_000
+      && Date().timeIntervalSince(t3) < 2, "\(String(describing: endless?.data.count))")
 
 try? fm.removeItem(at: work)
 print(failures == 0 ? "archive: all passed" : "archive: \(failures) failed")

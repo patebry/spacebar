@@ -16,6 +16,8 @@ xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/qlpane/main.
   Shared/LinkPolicy.swift Shared/FolderListing.swift -framework Quartz \
   -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$out/Info.plist" -o "$out/qlpane"
 "$out/qlpane" "$out"
+# Again as a GitHub runner draws (test/offscreen.swift): a 1x display, legacy scroll bars.
+mkdir "$out/1x" && OFFSCREEN_1X=1 "$out/qlpane" "$out/1x"
 [ "${QLPANE_RENDER:-1}" = 0 ] && { echo "SKIP sandboxed with the extension's entitlements: the Word document renders"; exit 0; }
 # As build.sh signs the extensions (READ_ACCESS=abs-ro).
 cp "$out/qlpane" "$out/qlpane-sandboxed"

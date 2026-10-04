@@ -89,7 +89,16 @@ check("place: at the page's area, above the web view", !pane.view.isHidden && pa
       && pane.view.superview === container && container.subviews.last === pane.view, "\(pane.view.frame)")
 check("place: the text wraps to the view's width and scrolls", abs(pane.textView.frame.width - pane.view.contentSize.width) < 1
       && pane.textView.frame.height > pane.view.contentSize.height, "\(pane.textView.frame) in \(pane.view.contentSize)")
-check("place: starts at the top", pane.view.contentView.bounds.origin.y == 0)
+check("place: starts at the top", pane.view.contentView.bounds.origin.y == 0, "\(pane.view.contentView.bounds.origin)")
+// A GitHub runner settles on legacy scroll bars only after the view is placed; a Mac does when a mouse is plugged in.
+let style = pane.view.scrollerStyle
+var kept: [CGFloat] = []
+for s in [style == .legacy ? NSScroller.Style.overlay : .legacy, style] {
+    pane.view.scrollerStyle = s
+    spin(0.1)
+    kept.append(pane.view.contentView.bounds.origin.y)
+}
+check("scroll bar style: a change, and back, keeps the text at the top", kept == [0, 0], "\(kept)")
 
 /// The mean brightness of the text view as drawn, and of its darkest pixels (the text).
 func shot() -> (mean: Double, ink: Double) {
@@ -135,7 +144,7 @@ pane.show(a2, path: rtf.path)
 check("reload of the same file keeps the place on screen", abs(pane.view.contentView.bounds.origin.y - 900) < 1, "\(pane.view.contentView.bounds.origin.y)")
 guard case .success(let b) = RichTextPane.open(pkg) else { fatalError() }
 pane.show(b, path: pkg.path)
-check("another file starts at the top", pane.view.contentView.bounds.origin.y == 0)
+check("another file starts at the top", pane.view.contentView.bounds.origin.y == 0, "\(pane.view.contentView.bounds.origin)")
 pane.place(message: ["path": pkg.path, "hide": true], in: web)
 check("hide alone: hidden, text kept", pane.view.isHidden && pane.textView.string.hasPrefix("Quarterly"))
 pane.place(message: msg.merging(["path": pkg.path]) { _, n in n }, in: web)

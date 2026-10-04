@@ -10,6 +10,8 @@ printf '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CF
 xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/imagepane/main.swift test/offscreen.swift test/nsevents.swift Preview/ImagePane.swift Preview/Gestures.swift Preview/PDFPane.swift \
   Shared/LinkPolicy.swift Shared/FolderListing.swift -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$out/Info.plist" -o "$out/imagepane"
 "$out/imagepane" "$out"
+# Again as a GitHub runner draws (test/offscreen.swift): a 1x display, legacy scroll bars.
+mkdir "$out/1x" && OFFSCREEN_1X=1 "$out/imagepane" "$out/1x"
 cp "$out/imagepane" "$out/imagepane-sandboxed"
 { echo '<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict>'
   echo '<key>com.apple.security.app-sandbox</key><true/><key>com.apple.security.files.user-selected.read-only</key><true/>'

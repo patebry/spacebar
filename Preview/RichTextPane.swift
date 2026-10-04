@@ -19,7 +19,7 @@ final class RichTextPane: NSObject, NSTextViewDelegate, NativeDocument {
     private var matches: [NSRange] = []
 
     override init() {
-        view = NSScrollView(frame: .zero)
+        view = PlaceKeepingScrollView(frame: .zero)
         textView = NSTextView(frame: .zero)
         super.init()
         view.hasVerticalScroller = true
@@ -229,4 +229,18 @@ final class RichTextPane: NSObject, NSTextViewDelegate, NativeDocument {
 
     /// An attachment (an RTFD's picture or file) is never opened from here.
     func textView(_ view: NSTextView, doubleClickedOn cell: NSTextAttachmentCellProtocol, in cellFrame: NSRect, at charIndex: Int) {}
+}
+
+/// Keeps the text where it is when the scroll bar style changes (a mouse plugged in or out, or the system setting): AppKit
+/// otherwise scrolls it by the width of the scroll bar that came or went.
+final class PlaceKeepingScrollView: NSScrollView {
+    override var scrollerStyle: NSScroller.Style {
+        get { super.scrollerStyle }
+        set {
+            let clip = contentView, y = clip.bounds.origin.y
+            super.scrollerStyle = newValue
+            clip.scroll(to: clip.constrainBoundsRect(NSRect(origin: NSPoint(x: clip.bounds.origin.x, y: y), size: clip.bounds.size)).origin)
+            reflectScrolledClipView(clip)
+        }
+    }
 }

@@ -8,3 +8,5 @@ trap 'rm -rf "$out"' EXIT
 xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/richtext/main.swift test/offscreen.swift Preview/RichTextPane.swift Preview/PDFPane.swift \
   Shared/LinkPolicy.swift Shared/FolderListing.swift -o "$out/richtext"
 "$out/richtext" "$out"
+# Again as a GitHub runner draws (test/offscreen.swift): a 1x display, legacy scroll bars.
+mkdir "$out/1x" && OFFSCREEN_1X=1 "$out/richtext" "$out/1x"

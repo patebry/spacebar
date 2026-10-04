@@ -14,6 +14,17 @@ enum OffScreen {
     static func install() {
         guard !installed else { return }
         installed = true
+        // OFFSCREEN_1X=1 draws as a GitHub runner does: a 1x display, and legacy scroll bars (no trackpad), which still hide
+        // when there is nothing to scroll. "Always shown" would also show them then.
+        if ProcessInfo.processInfo.environment["OFFSCREEN_1X"] == "1" {
+            backingScale(1)
+            var args = UserDefaults.standard.volatileDomain(forName: UserDefaults.argumentDomain)
+            args["AppleShowScrollBars"] = "Automatic"
+            UserDefaults.standard.setVolatileDomain(args, forName: UserDefaults.argumentDomain)
+            let legacy: @convention(block) (AnyObject) -> Int = { _ in NSScroller.Style.legacy.rawValue }
+            let m = class_getClassMethod(NSScroller.self, #selector(getter: NSScroller.preferredScrollerStyle))!
+            method_setImplementation(m, imp_implementationWithBlock(legacy))
+        }
         let sel = #selector(NSWindow.constrainFrameRect(_:to:))
         let identity: @convention(block) (AnyObject, NSRect, NSScreen?) -> NSRect = { _, rect, _ in rect }
         let imp = imp_implementationWithBlock(identity)
@@ -55,10 +66,11 @@ enum OffScreen {
 
     /// Gives every window and screen `scale` as its backing scale, whatever the displays are, so a 2x Mac can check what a 1x
     /// display (a GitHub runner's) does: AppKit aligns scroll positions to backing pixels. Call it before any window exists.
-    static func backingScale(_ scale: CGFloat) {
+    private static func backingScale(_ scale: CGFloat) {
         let fixed: @convention(block) (AnyObject) -> CGFloat = { _ in scale }
-        for (cls, sel) in [(NSWindow.self as AnyClass, #selector(getter: NSWindow.backingScaleFactor)),
-                           (NSScreen.self as AnyClass, #selector(getter: NSScreen.backingScaleFactor))] {
+        let getters: [(AnyClass, Selector)] = [(NSWindow.self, #selector(getter: NSWindow.backingScaleFactor)),
+                                               (NSScreen.self, #selector(getter: NSScreen.backingScaleFactor))]
+        for (cls, sel) in getters {
             method_setImplementation(class_getInstanceMethod(cls, sel)!, imp_implementationWithBlock(fixed))
         }
     }

@@ -295,7 +295,7 @@ func readyCount() -> Int { rec.readies }
 
 print("scenarios: \(out.path)\(videoDir.map { ", videos \($0.path)" } ?? "")")
 
-// ================= 1. a repo folder: README first, then ↓ through 30 files =================
+// ================= 1. a repo folder: opened on its README, listed in Finder's order, ↓ through 30 files =================
 if flows.contains("1") {
     print("\n== 1. open a repo folder, arrow through 30 files of mixed types")
     let s = space([repo], expect: repo.appendingPathComponent("README.md"), settle: 0.5)
@@ -304,8 +304,10 @@ if flows.contains("1") {
     spin(until: 5) { viewer.keys.session != nil }
     check("1: the sidebar holds the arrow keys", viewer.keys.session != nil)
     let rows = page().fileRows
-    check("1: the sidebar lists README first and every file", rows.first?.hasSuffix("/README.md") == true && rows.count == (manifest["repo"] as? [String])?.count,
-          "\(rows.count) rows, first \(rows.first ?? "-")")
+    // By name as Finder sorts, the README among the files: it is pinned first only with folderReadmeFirst, off by default.
+    let finderOrder = (manifest["repo"] as? [String] ?? []).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    check("1: the sidebar lists every file in Finder's order", rows.map { ($0 as NSString).lastPathComponent } == finderOrder && !rows.isEmpty,
+          "\(rows.count) rows: \(rows.map { ($0 as NSString).lastPathComponent })")
     // The traffic lights and the sidebar button share the top row's centre line, and the lights are clear of the button.
     let lights = [NSWindow.ButtonType.closeButton, .zoomButton].compactMap { viewer.panel.standardWindowButton($0).map { $0.convert($0.bounds, to: nil) } }
     let tg = jsJSON("const r = document.getElementById('side-toggle').getBoundingClientRect(); return { mid: r.top + r.height / 2, left: r.left };")
@@ -327,6 +329,12 @@ if flows.contains("1") {
                                   timestamp: 0, windowNumber: viewer.panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
     check("1: the window's top edge resizes and a control-click is the page's, not a drag", !pressDrags(300, 2) && ctrl.map { !viewer.panel.drags($0) } == true)
     hover(300, 200)
+    // The README sorts after the f-files: the walk starts from the top of the list.
+    let homeFrom = rec.renders.count, homeAt = now()
+    DispatchQueue.global(qos: .userInteractive).async { viewer.key("home", isRepeat: false) }
+    let home = waitShown(rows.first ?? "", from: homeFrom, t0: homeAt, timeout: 5)
+    check("1: Home shows the first file in the list", home.painted != nil && page().path == rows.first, "\(page().path)")
+    spin(0.1)
     var passes: [[Double]] = []
     var worst: [(String, Double)] = []
     var idx = 0
@@ -344,7 +352,7 @@ if flows.contains("1") {
             let p = page(), n = natives()
             let name = (want as NSString).lastPathComponent
             if w.painted == nil {
-                check("1: ↓ shows \(name)", false, "never painted (last render \(rec.renders.last.map { "\($0.path) \($0.view)" } ?? "none"))")
+                check("1: \(down ? "↓" : "↑") shows \(name)", false, "never painted (last render \(rec.renders.last.map { "\($0.path) \($0.view)" } ?? "none"))")
             } else if pass == 0 {
                 // What a person sees the moment it is painted: this file, highlighted in the sidebar, nothing of the last one.
                 let own = marker(of: URL(fileURLWithPath: want))

@@ -34,9 +34,6 @@ func openDescriptors(_ path: String) -> Int {
 
 _ = NSApplication.shared
 OffScreen.install()
-// run.sh runs the checks again as a GitHub runner draws them: at 1x, with scroll bars always shown.
-let forcedScale = UserDefaults.standard.double(forKey: "backingScale")
-if forcedScale > 0 { OffScreen.backingScale(forcedScale) }
 let dir = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath()
 let a = dir.appendingPathComponent("a.pdf"), b = dir.appendingPathComponent("b.pdf"), bad = dir.appendingPathComponent("bad.pdf")
 makePDF(a, pages: 3)

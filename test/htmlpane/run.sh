@@ -7,3 +7,5 @@ out=$(mktemp -d)
 xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/htmlpane/main.swift test/offscreen.swift Preview/HTMLPane.swift Preview/PDFPane.swift \
   Shared/LinkPolicy.swift Shared/FolderListing.swift -o "$out/htmlpane"
 "$out/htmlpane" "$out"
+# Again as a GitHub runner draws (test/offscreen.swift): a 1x display, legacy scroll bars.
+mkdir "$out/1x" && OFFSCREEN_1X=1 "$out/htmlpane" "$out/1x"

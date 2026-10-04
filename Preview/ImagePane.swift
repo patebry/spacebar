@@ -211,9 +211,11 @@ final class ImagePane: NSObject {
         if placed { refit() }
     }
 
-    /// What the image is scaled to when fitted: the whole of it in the area, never above its own size.
+    /// What the image is scaled to when fitted: the whole of it in the area, never above its own size. The area is measured
+    /// without scroll bars: a fitted image needs none, and legacy ones (a mouse, no trackpad) are shown until it is fitted.
     var fitScale: CGFloat {
-        let area = view.contentSize
+        let area = NSScrollView.contentSize(forFrameSize: view.frame.size, horizontalScrollerClass: nil, verticalScrollerClass: nil,
+                                            borderType: view.borderType, controlSize: .regular, scrollerStyle: view.scrollerStyle)
         guard size.width > 0, size.height > 0, area.width > 0, area.height > 0 else { return 1 }
         return min(1, area.width / size.width, area.height / size.height)
     }

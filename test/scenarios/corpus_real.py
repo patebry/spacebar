@@ -6,7 +6,7 @@ show for each file. Nothing here is committed as a fixture: every file is made a
 
 <out>/corpus     one of everything: data, encodings, code, documents, archives, images, hostile names, links and permissions
 <out>/corpus/many    5,000 files
-<out>/repo       a small project folder (README first, then 32 files of mixed kinds), for the arrow-key walk
+<out>/repo       a small project folder (a README and 32 files of mixed kinds), for the arrow-key walk
 <out>/manifest.json  {"corpus": {name: {"view": [allowed views], "kind": kind, ...checks}}, "repo": [names], "skipped": [...]}
 
 Tools beyond Python: sips (HEIC) and openssl (a certificate); a file whose tool is missing is left out and listed as skipped."""

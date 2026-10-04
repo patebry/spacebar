@@ -325,6 +325,8 @@ actual=$(shasum -a 256 "$TMP/spacebar.zip" | awk '{ print $1 }')
 say "Checksum OK ($actual)"
 
 ditto -x -k "$TMP/spacebar.zip" "$TMP/unpacked" || fail "could not unpack spacebar.zip. Nothing was installed."
+# A link would pass every check below on the app it points to, and be copied from there.
+[ -d "$TMP/unpacked/$APP_NAME" ] && [ ! -L "$TMP/unpacked/$APP_NAME" ] || fail "the download does not contain $APP_NAME. Nothing was installed."
 [ -d "$TMP/unpacked/$APP_NAME/Contents/PlugIns" ] || fail "the download does not contain $APP_NAME. Nothing was installed."
 
 # The checksum comes from the same release as the zip, so it proves only that the zip arrived whole. Only a zip on this Mac
@@ -336,10 +338,19 @@ else
   # codesign's first line names the app's path, then the reason: only the reason is kept.
   why=$(codesign --verify --deep --strict "$new_app" 2>&1) ||
     fail "the downloaded $APP_NAME is not signed, or its signature is broken ($(printf '%s\n' "$why" | sed -n '1s/^[^:]*: //p')). Nothing was installed."
-  codesign --verify -R="anchor apple generic and certificate leaf[subject.OU] = \"$TEAM_ID\"" "$new_app" 2>/dev/null ||
+  # Developer ID's designated requirement, so this holds with Gatekeeper turned off too.
+  codesign --verify -R="identifier \"md.spacebar\" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists \
+and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"$TEAM_ID\"" "$new_app" 2>/dev/null ||
     fail "the downloaded $APP_NAME is not signed by spacebar's developer (Team ID $TEAM_ID). Nothing was installed."
   spctl --assess --type execute "$new_app" 2>/dev/null ||
     fail "macOS does not accept the downloaded $APP_NAME as notarized. Nothing was installed."
+  # An older signed release served under a newer tag would otherwise install as that tag.
+  case $VERSION in
+    v[0-9]*)
+      want=${VERSION%% *}
+      got=v$(plutil -extract CFBundleShortVersionString raw -o - "$new_app/Contents/Info.plist" 2>/dev/null) || got=
+      [ "$got" = "$want" ] || fail "the downloaded $APP_NAME is ${got:-unversioned}, not $want. Nothing was installed." ;;
+  esac
   say "Signed by the developer ($TEAM_ID) and notarized"
 fi
 

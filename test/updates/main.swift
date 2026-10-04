@@ -560,6 +560,20 @@ do {
     r = install("file://\(adhoc.path)", ["--dry-run"], ["SPACEBAR_ALLOW_UNSIGNED_LOCAL_ZIP": unsignedOK])
     check("install.sh skips it, and says so, for a zip on this Mac given the exact setting", r.0 == 0 && r.1.contains("Dry run: nothing was changed.")
           && r.1.contains("warning: not checking the signature of file://\(adhoc.path)/spacebar.zip") && untouched())
+    r = install("FILE://\(adhoc.path)", ["--dry-run"], ["SPACEBAR_ALLOW_UNSIGNED_LOCAL_ZIP": unsignedOK])
+    check("install.sh does not skip it for FILE://", r.0 == 1 && r.1.contains(notOurs) && !r.1.contains("not checking") && untouched())
+    // symlinked(<name>, <target>): a release whose spacebar.app is a link to <target>, zipped as a link.
+    func symlinked(_ name: String, _ target: String) -> URL {
+        let rel = base.appendingPathComponent("rel-\(name)"), stage = base.appendingPathComponent("stage-\(name)")
+        try! fm.createDirectory(at: rel, withIntermediateDirectories: true)
+        try! fm.createDirectory(at: stage, withIntermediateDirectories: true)
+        let r = sh("cd '\(stage.path)' && ln -s '\(target)' spacebar.app && zip -qy '\(rel.path)/spacebar.zip' spacebar.app && cd '\(rel.path)' && shasum -a 256 spacebar.zip > spacebar.zip.sha256")
+        check("signing: made the \(name) release", r.0 == 0)
+        return rel
+    }
+    let linkRefusal = "error: the download does not contain spacebar.app" + refusal
+    r = install("file://\(symlinked("link", base.appendingPathComponent("stage-ad-hoc/spacebar.app").path).path)")
+    check("install.sh refuses a spacebar.app that is a link, and installs nothing", r.0 == 1 && r.1.contains(linkRefusal) && untouched())
     check("install.sh leaves no download behind", !(((try? fm.contentsOfDirectory(atPath: dir.path)) ?? []).contains { $0.hasPrefix("spacebar-install.") }))
 
     // Signed and notarized, by another developer: an app on this Mac with a PlugIns folder, renamed (SPACEBAR_TEST_OTHER_APP picks one).
@@ -581,8 +595,16 @@ do {
         r = install("", ["--dry-run", "--version", "v0.4.3"])
         check("install.sh dry run: the published v0.4.3 is signed by the developer and notarized", r.0 == 0
               && r.1.contains("Signed by the developer (J36XXAR4T7) and notarized\n") && r.1.contains("Dry run: nothing was changed.") && untouched())
-        let tampered = release("tampered", "curl -fsSL -o real.zip https://github.com/patebry/spacebar/releases/download/v0.4.3/spacebar.zip"
-            + " && ditto -x -k real.zip . && echo '# changed' >> spacebar.app/Contents/Resources/install.sh")
+        let real = release("real", "curl -fsSL -o real.zip https://github.com/patebry/spacebar/releases/download/v0.4.3/spacebar.zip && ditto -x -k real.zip .")
+        let genuine = base.appendingPathComponent("stage-real/spacebar.app").path
+        r = install("file://\(real.path)", ["--dry-run", "--version", "v0.4.3"])
+        check("install.sh dry run: v0.4.3 from a file:// release verifies as v0.4.3", r.0 == 0 && r.1.contains("Signed by the developer (J36XXAR4T7) and notarized\n"))
+        r = install("file://\(real.path)", ["--version", "v0.4.4"])
+        check("install.sh refuses v0.4.3 served as v0.4.4, and installs nothing", r.0 == 1 && untouched()
+              && r.1.contains("error: the downloaded spacebar.app is v0.4.3, not v0.4.4" + refusal))
+        r = install("file://\(symlinked("genuine-link", genuine).path)")
+        check("install.sh refuses a link to a genuine v0.4.3, and installs nothing", r.0 == 1 && r.1.contains(linkRefusal) && untouched())
+        let tampered = release("tampered", "ditto -x -k '\(base.path)/stage-real/real.zip' . && echo '# changed' >> spacebar.app/Contents/Resources/install.sh")
         r = install("file://\(tampered.path)")
         check("install.sh refuses v0.4.3 with one file changed, and installs nothing", r.0 == 1 && untouched()
               && r.1.contains("error: the downloaded spacebar.app is not signed, or its signature is broken (") && r.1.contains(refusal))

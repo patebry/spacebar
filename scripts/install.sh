@@ -11,7 +11,9 @@
 #   2. Downloads spacebar.zip and spacebar.zip.sha256 from the latest GitHub release (or SPACEBAR_VERSION) with curl
 #      into a temporary folder, and stops unless the SHA-256 matches. It makes no GitHub API calls, so it is never
 #      rate-limited.
-#   3. Unzips the new spacebar.app and copies it into that folder as .spacebar.app.new (no sudo).
+#   3. Unzips the new spacebar.app and stops unless its signature verifies, is the developer's Developer ID (TEAM_ID),
+#      and macOS accepts it as notarized: curl sets no quarantine flag, so Gatekeeper never checks it. Releases before v0.3
+#      are not Developer ID signed, so they are refused. Then copies it into that folder as .spacebar.app.new (no sudo).
 #   4. If spacebar.app exists there: quits that copy and unregisters its Quick Look extensions, renames it to
 #      .spacebar.app.old, quits its extensions still running, renames the new copy into its place, quits the Space
 #      helper's viewer, then deletes .spacebar.app.old. If the new copy cannot be moved in, the old one is put back.
@@ -29,6 +31,7 @@ set -eu
 REPO=patebry/spacebar
 INSTALL_URL=https://spacebar.patebryant.com/install.sh
 APP_NAME=spacebar.app
+TEAM_ID=J36XXAR4T7
 APPEX_ID=md.spacebar.preview
 FOLDERS_ID=md.spacebar.preview.folders
 HELPER_LABEL=md.spacebar.helper
@@ -41,7 +44,8 @@ Install spacebar into ~/Applications, or update the copy in /Applications. Press
 
 usage: install.sh [--version vX.Y.Z] [--dry-run] [--no-register] [--no-prompt] [--help]
 
-  --version vX.Y.Z  install this release instead of the latest (or set SPACEBAR_VERSION)
+  --version vX.Y.Z  install this release instead of the latest (or set SPACEBAR_VERSION); releases before
+                    v0.3 are not Developer ID signed and are refused
   --dry-run         download and verify, then print what would change; changes and removes nothing
   --no-register     install the files only: skip quitting, lsregister, pluginkit and qlmanage
                     (or set SPACEBAR_SKIP_REGISTER=1)
@@ -322,6 +326,22 @@ say "Checksum OK ($actual)"
 
 ditto -x -k "$TMP/spacebar.zip" "$TMP/unpacked" || fail "could not unpack spacebar.zip. Nothing was installed."
 [ -d "$TMP/unpacked/$APP_NAME/Contents/PlugIns" ] || fail "the download does not contain $APP_NAME. Nothing was installed."
+
+# The checksum comes from the same release as the zip, so it proves only that the zip arrived whole. Only a zip on this Mac
+# can skip this, and only with this exact setting: the tests install made-up, unsigned bundles.
+new_app="$TMP/unpacked/$APP_NAME"
+if [ "${SPACEBAR_ALLOW_UNSIGNED_LOCAL_ZIP:-}" = yes-i-built-it ] && [ "${BASE#file://}" != "$BASE" ]; then
+  say "warning: not checking the signature of $BASE/spacebar.zip (SPACEBAR_ALLOW_UNSIGNED_LOCAL_ZIP)."
+else
+  # codesign's first line names the app's path, then the reason: only the reason is kept.
+  why=$(codesign --verify --deep --strict "$new_app" 2>&1) ||
+    fail "the downloaded $APP_NAME is not signed, or its signature is broken ($(printf '%s\n' "$why" | sed -n '1s/^[^:]*: //p')). Nothing was installed."
+  codesign --verify -R="anchor apple generic and certificate leaf[subject.OU] = \"$TEAM_ID\"" "$new_app" 2>/dev/null ||
+    fail "the downloaded $APP_NAME is not signed by spacebar's developer (Team ID $TEAM_ID). Nothing was installed."
+  spctl --assess --type execute "$new_app" 2>/dev/null ||
+    fail "macOS does not accept the downloaded $APP_NAME as notarized. Nothing was installed."
+  say "Signed by the developer ($TEAM_ID) and notarized"
+fi
 
 if [ "$DRY_RUN" = 1 ]; then
   if [ ! -e "$DEST" ] && [ -e "$OLD" ]; then

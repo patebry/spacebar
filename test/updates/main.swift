@@ -1,9 +1,10 @@
 // Checks Shared/Updates.swift: version parsing and comparison, the release response, the cache and the last run's status, what
 // the popover offers, the detached run (against a stub), scripts/install.sh's exit record in a dry run that fails its
 // download from a missing file:// URL, the order its quit_extensions and quit_viewer stop stand-in processes in, and its dry run
-// through registration with the Space helper's agent loaded or not, and which copy it updates (~/Applications's, or one only in
-// /Applications, or none it cannot change), against scratch folders. Build and run with test/updates/run.sh. Touches no
-// network and installs nothing.
+// through registration with the Space helper's agent loaded or not, which copy it updates (~/Applications's, or one only in
+// /Applications, or none it cannot change), and the signatures it refuses, against scratch folders. Build and run with
+// test/updates/run.sh. Installs nothing outside scratch folders, and touches no network unless SPACEBAR_TEST_NETWORK=1
+// (run.sh --network), which also checks the published v0.4.3 release in a dry run.
 import Foundation
 
 var failures = 0
@@ -28,6 +29,8 @@ check("release not json", Updates.parseLatest(Data("nope".utf8)) == nil)
 check("release tag without v refused", Updates.parseLatest(Data(#"{"tag_name":"0.2.0"}"#.utf8)) == nil)
 
 let dir = FileManager.default.temporaryDirectory.appendingPathComponent("spacebar-updates-\(UUID().uuidString)")
+// The made-up releases below are unsigned: install.sh skips its signature check for a file:// zip given exactly this.
+let unsignedOK = "yes-i-built-it"
 try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 let cache = dir.appendingPathComponent("update.json")
 check("no cache", Updates.readCache(at: cache) == nil)
@@ -337,7 +340,7 @@ do {
     let home = dir.appendingPathComponent("dryhome", isDirectory: true)
     func dry(agent: Bool) -> (Int32, String) {
         sh("sh scripts/install.sh --dry-run --no-prompt", env: ["HOME": home.path, "PATH": "\(stubs.path):/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": dir.path + "/",
-                                                        "SPACEBAR_RELEASE_URL": "file://\(rel.path)", "STUB_AGENT": agent ? "1" : "0",
+                                                        "SPACEBAR_RELEASE_URL": "file://\(rel.path)", "SPACEBAR_ALLOW_UNSIGNED_LOCAL_ZIP": unsignedOK, "STUB_AGENT": agent ? "1" : "0",
                                                         "SPACEBAR_SYSTEM_APPLICATIONS": dir.appendingPathComponent("none").path])
     }
     let dest = home.appendingPathComponent("Applications/spacebar.app")
@@ -357,7 +360,7 @@ do {
             .map { over.1[$0.upperBound...].contains("--reregister") } == true)
     check("install.sh dry run: --no-register touches neither", {
         let r = sh("sh scripts/install.sh --dry-run --no-prompt --no-register", env: ["HOME": home.path, "PATH": "\(stubs.path):/usr/bin:/bin:/usr/sbin:/sbin",
-                                                                               "TMPDIR": dir.path + "/", "SPACEBAR_RELEASE_URL": "file://\(rel.path)", "STUB_AGENT": "1",
+                                                                               "TMPDIR": dir.path + "/", "SPACEBAR_RELEASE_URL": "file://\(rel.path)", "SPACEBAR_ALLOW_UNSIGNED_LOCAL_ZIP": unsignedOK, "STUB_AGENT": "1",
                                                                                "SPACEBAR_SYSTEM_APPLICATIONS": dir.appendingPathComponent("none").path])
         return r.0 == 0 && !r.1.contains("--reregister") && !r.1.contains("viewer")
     }())
@@ -371,7 +374,7 @@ do {
     func pick(_ extra: [String] = []) -> (Int32, String) {
         sh((["sh scripts/install.sh --dry-run --no-prompt"] + extra).joined(separator: " "),
            env: ["HOME": h2.path, "PATH": "\(stubs.path):/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": dir.path + "/",
-                 "SPACEBAR_RELEASE_URL": "file://\(rel.path)", "STUB_AGENT": "1", "SPACEBAR_SYSTEM_APPLICATIONS": sys.path])
+                 "SPACEBAR_RELEASE_URL": "file://\(rel.path)", "SPACEBAR_ALLOW_UNSIGNED_LOCAL_ZIP": unsignedOK, "STUB_AGENT": "1", "SPACEBAR_SYSTEM_APPLICATIONS": sys.path])
     }
     func tree(_ u: URL) -> [String] { ((fm.enumerator(atPath: u.path)?.allObjects as? [String]) ?? []).sorted() }
     func bundle(_ path: String) { try! fm.createDirectory(atPath: path + "/Contents/PlugIns/SpacebarPreview.appex", withIntermediateDirectories: true) }
@@ -392,7 +395,7 @@ do {
           && r.1.contains("would move \(theirs) to \(sys.path)/.spacebar.app.old, move \(sys.path)/.spacebar.app.new to \(theirs)")
           && r.1.contains("would run: pluginkit -r \(theirs)/Contents/PlugIns/SpacebarPreview.appex") && r.1.contains("lsregister -f -R \(theirs)\n")
           && r.1.contains("would run in the background: \(theirs)/Contents/MacOS/Spacebar --reregister") && !r.1.contains(h2.path + "/Applications")
-          && !r.1.contains("warning:"))
+          && !r.1.contains("warning: there is another copy"))
     check("install.sh names that copy for Settings", r.1.contains("Settings: open \(theirs)\n"))
 
     bundle(mine)
@@ -459,7 +462,7 @@ do {
     try! "#!/bin/sh\n[ \"$1\" = -u ] && { echo 0; exit 0; }\nexec /usr/bin/id \"$@\"\n".write(to: rootStubs.appendingPathComponent("id"), atomically: true, encoding: .utf8)
     chmod(rootStubs.appendingPathComponent("id").path, 0o755)
     r = sh("sh scripts/install.sh --no-prompt --dry-run --no-register", env: ["HOME": h2.path, "PATH": "\(rootStubs.path):\(stubs.path):/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": dir.path + "/",
-                                                  "SPACEBAR_RELEASE_URL": "file://\(rel.path)", "SPACEBAR_SYSTEM_APPLICATIONS": sys.path])
+                                                  "SPACEBAR_RELEASE_URL": "file://\(rel.path)", "SPACEBAR_ALLOW_UNSIGNED_LOCAL_ZIP": unsignedOK, "SPACEBAR_SYSTEM_APPLICATIONS": sys.path])
     check("install.sh refuses to run as root, before anything", r.0 == 1 && r.1.contains("run this as yourself, without sudo") && !r.1.contains("Downloading"))
     check("install.sh dry runs change nothing in either folder", tree(h2) == before.0 && tree(sys) == before.1
           && !fm.fileExists(atPath: h2.appendingPathComponent("Applications").path))
@@ -469,7 +472,7 @@ do {
     let marker = theirs + "/Contents/old-copy"
     func real(_ path: String = "\(stubs.path):/usr/bin:/bin:/usr/sbin:/sbin") -> (Int32, String) {
         sh("sh scripts/install.sh --no-register --no-prompt", env: ["HOME": h2.path, "PATH": path, "TMPDIR": dir.path + "/",
-                                                                   "SPACEBAR_RELEASE_URL": "file://\(rel.path)", "SPACEBAR_SYSTEM_APPLICATIONS": sys.path])
+                                                                   "SPACEBAR_RELEASE_URL": "file://\(rel.path)", "SPACEBAR_ALLOW_UNSIGNED_LOCAL_ZIP": unsignedOK, "SPACEBAR_SYSTEM_APPLICATIONS": sys.path])
     }
     let swapped = ["spacebar.app", "spacebar.app/Contents", "spacebar.app/Contents/PlugIns", "spacebar.app/Contents/PlugIns/SpacebarPreview.appex",
                    "spacebar.app/Contents/PlugIns/SpacebarPreview.appex/Contents"]
@@ -493,6 +496,99 @@ do {
     r = real()
     check("install.sh finishes a swap cut short in /Applications: the copy back from .old, then replaced", r.0 == 0
           && r.1.contains("Replacing \(theirs)") && tree(sys) == swapped)
+}
+
+// install.sh checks the unpacked app's signature before it changes anything, in a dry run too: it must verify, be the Developer
+// ID of spacebar's developer, and be notarized. Each refused zip goes to a real run (files only) with a scratch home, which must
+// stay empty. Only the exact setting skips the check, and only for a zip on this Mac.
+do {
+    let fm = FileManager.default
+    let base = dir.appendingPathComponent("signing", isDirectory: true)
+    let home = base.appendingPathComponent("home", isDirectory: true)
+    try! fm.createDirectory(at: home, withIntermediateDirectories: true)
+    func sh(_ cmd: String, _ env: [String: String]? = nil) -> (Int32, String) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/sh")
+        p.arguments = ["-c", cmd]
+        p.environment = env ?? ProcessInfo.processInfo.environment
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = out
+        p.standardInput = FileHandle.nullDevice
+        try! p.run()
+        let said = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        p.waitUntilExit()
+        return (p.terminationStatus, said)
+    }
+    // release(<name>, <make>): a folder holding spacebar.zip and its checksum, zipped from the spacebar.app <make> leaves.
+    func release(_ name: String, _ make: String) -> URL {
+        let stage = base.appendingPathComponent("stage-\(name)"), rel = base.appendingPathComponent("rel-\(name)")
+        try! fm.createDirectory(at: stage, withIntermediateDirectories: true)
+        try! fm.createDirectory(at: rel, withIntermediateDirectories: true)
+        let r = sh("cd '\(stage.path)' && \(make) && ditto -c -k --keepParent spacebar.app '\(rel.path)/spacebar.zip' && cd '\(rel.path)' && shasum -a 256 spacebar.zip > spacebar.zip.sha256")
+        check("signing: made the \(name) release", r.0 == 0)
+        if r.0 != 0 { print(r.1) }
+        return rel
+    }
+    func install(_ url: String, _ extra: [String] = [], _ env: [String: String] = [:]) -> (Int32, String) {
+        var e = ["HOME": home.path, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": dir.path + "/",
+                 "SPACEBAR_SYSTEM_APPLICATIONS": dir.appendingPathComponent("none").path]
+        if !url.isEmpty { e["SPACEBAR_RELEASE_URL"] = url }
+        e.merge(env) { $1 }
+        return sh((["sh scripts/install.sh --no-register --no-prompt"] + extra).joined(separator: " "), e)
+    }
+    let untouched = { ((try? fm.contentsOfDirectory(atPath: home.path)) ?? ["?"]).isEmpty }
+    let refusal = ". Nothing was installed."
+    let notOurs = "error: the downloaded spacebar.app is not signed by spacebar's developer (Team ID J36XXAR4T7)" + refusal
+    let plist = "spacebar.app/Contents/Info.plist"
+    let bundle = "mkdir -p spacebar.app/Contents/MacOS spacebar.app/Contents/PlugIns && cp /usr/bin/true spacebar.app/Contents/MacOS/Spacebar"
+        + " && plutil -create xml1 \(plist) && plutil -insert CFBundleIdentifier -string md.spacebar \(plist)"
+        + " && plutil -insert CFBundleExecutable -string Spacebar \(plist) && codesign --remove-signature spacebar.app/Contents/MacOS/Spacebar"
+
+    let unsigned = release("unsigned", bundle)
+    var r = install("file://\(unsigned.path)")
+    check("install.sh refuses an unsigned app, and installs nothing", r.0 == 1 && untouched()
+          && r.1.contains("error: the downloaded spacebar.app is not signed, or its signature is broken (code object is not signed at all)" + refusal))
+
+    let adhoc = release("ad-hoc", bundle + " && codesign -s - --force spacebar.app")
+    r = install("file://\(adhoc.path)")
+    check("install.sh refuses an ad-hoc signed app, and installs nothing", r.0 == 1 && untouched() && r.1.contains(notOurs) && !r.1.contains("broken"))
+    r = install("file://\(adhoc.path)", ["--dry-run"])
+    check("install.sh refuses it in a dry run too", r.0 == 1 && r.1.contains(notOurs) && !r.1.contains("would ") && untouched())
+    r = install("file://\(adhoc.path)", [], ["SPACEBAR_ALLOW_UNSIGNED_LOCAL_ZIP": "1"])
+    check("install.sh skips the check for no other setting", r.0 == 1 && r.1.contains(notOurs) && untouched())
+    r = install("file://\(adhoc.path)", ["--dry-run"], ["SPACEBAR_ALLOW_UNSIGNED_LOCAL_ZIP": unsignedOK])
+    check("install.sh skips it, and says so, for a zip on this Mac given the exact setting", r.0 == 0 && r.1.contains("Dry run: nothing was changed.")
+          && r.1.contains("warning: not checking the signature of file://\(adhoc.path)/spacebar.zip") && untouched())
+    check("install.sh leaves no download behind", !(((try? fm.contentsOfDirectory(atPath: dir.path)) ?? []).contains { $0.hasPrefix("spacebar-install.") }))
+
+    // Signed and notarized, by another developer: an app on this Mac with a PlugIns folder, renamed (SPACEBAR_TEST_OTHER_APP picks one).
+    let pick = "for a in /Applications/*.app; do [ -d \"$a/Contents/PlugIns\" ] || continue; "
+        + "t=$(codesign -dv \"$a\" 2>&1 | sed -n 's/^TeamIdentifier=//p'); case $t in ''|'not set'|J36XXAR4T7) continue ;; esac; "
+        + "codesign --verify --deep --strict \"$a\" 2>/dev/null && spctl --assess --type execute \"$a\" 2>/dev/null && { printf '%s' \"$a\"; break; }; done"
+    let other = ProcessInfo.processInfo.environment["SPACEBAR_TEST_OTHER_APP"] ?? sh(pick).1
+    if other.isEmpty {
+        print("SKIP install.sh refuses another developer's app: no notarized app of another developer with a PlugIns folder in /Applications")
+    } else {
+        let theirs = release("other", "ditto '\(other)' spacebar.app")
+        r = install("file://\(theirs.path)")
+        check("install.sh refuses another developer's notarized app (\(other)), and installs nothing", r.0 == 1 && untouched()
+              && r.1.contains(notOurs) && !r.1.contains("broken"))
+    }
+
+    // The published release, by dry run only: from GitHub it verifies; with one file of it changed, it does not.
+    if ProcessInfo.processInfo.environment["SPACEBAR_TEST_NETWORK"] == "1" {
+        r = install("", ["--dry-run", "--version", "v0.4.3"])
+        check("install.sh dry run: the published v0.4.3 is signed by the developer and notarized", r.0 == 0
+              && r.1.contains("Signed by the developer (J36XXAR4T7) and notarized\n") && r.1.contains("Dry run: nothing was changed.") && untouched())
+        let tampered = release("tampered", "curl -fsSL -o real.zip https://github.com/patebry/spacebar/releases/download/v0.4.3/spacebar.zip"
+            + " && ditto -x -k real.zip . && echo '# changed' >> spacebar.app/Contents/Resources/install.sh")
+        r = install("file://\(tampered.path)")
+        check("install.sh refuses v0.4.3 with one file changed, and installs nothing", r.0 == 1 && untouched()
+              && r.1.contains("error: the downloaded spacebar.app is not signed, or its signature is broken (") && r.1.contains(refusal))
+    } else {
+        print("SKIP the published v0.4.3 release: run with --network")
+    }
 }
 
 // The copy the installer and the in-app update pick, and where the uninstaller looks.

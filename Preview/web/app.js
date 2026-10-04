@@ -1596,7 +1596,7 @@ function updateStats() {
   // A short note is counted at once, so its first frame shows its own count. A long one shows the source's words at once and
   // its count later, never another file's meanwhile; the room the first took is kept, so the kind beside it does not move.
   if ((current.text || '').length <= STATS_NOW) { count(); return; }
-  show((current.text.match(/\S+/g) || []).length);
+  if (!same || !s.textContent) show((current.text.match(/\S+/g) || []).length);
   const inner = () => { const cs = getComputedStyle(s); return s.getBoundingClientRect().width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight); };
   const held = inner();
   s.style.minWidth = `${held}px`;
@@ -4357,8 +4357,11 @@ function filteredRows() {
     }
   }
   // The listing's own order: by name, folders first only where Finder puts them there.
+  // With README first it heads the files, as FolderListing pins it.
   const first = settings.listsFoldersFirst === true;
-  const order = (a, b) => (first && a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name, undefined, { numeric: true }));
+  const readme = (e) => settings.folderReadmeFirst === true && !e.dir && /^readme(\.(md|markdown|mdown|mkd|mkdn))?$/i.test(e.name);
+  const order = (a, b) => (first && a.dir !== b.dir ? (a.dir ? -1 : 1)
+    : readme(a) !== readme(b) ? (readme(a) ? -1 : 1) : a.name.localeCompare(b.name, undefined, { numeric: true }));
   const entries = (dir) => {
     const d = tree.dirs.get(dir), listed = d ? d.entries : [], extra = found.get(dir);
     if (!extra) return listed;

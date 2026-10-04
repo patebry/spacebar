@@ -3613,7 +3613,7 @@ function viewNode(p) {
   if (isMarkdown(p)) {
     const box = el('div', 'viewer viewer-code viewer-source');
     setKind(p, [fmtSize(textBytes(p.text))]);
-    box.append(codeBlock(p.text, 'markdown', false, { wrap: wrapOn(p) }));
+    box.append(codeBlock(p.text, 'markdown', p.editable === true, { wrap: wrapOn(p) }));
     return box;
   }
   switch (p.view) {
@@ -5178,7 +5178,7 @@ function rawKind(p) {
 // formatted again.
 let rawKinds = new Set();
 const rawOn = (p) => { const k = rawKind(p); return !!k && rawKinds.has(k); };
-const EDITS_IN_RAW = new Set(['json', 'notebook', 'csv', 'xml', 'css']);
+const EDITS_IN_RAW = new Set(['markdown', 'json', 'notebook', 'csv', 'xml', 'css']);
 
 function syncRaw(p) {
   const b = $('raw'), k = rawKind(p), on = rawOn(p);
@@ -6100,7 +6100,7 @@ document.addEventListener('click', (e) => {
   if (editing && el) { if (e.detail < 2) select(editorOffset(el, e.clientX, e.clientY), 0); return; }
   if (a || e.target.closest('input, button, summary, #toolbar') || getSelection().toString()) return;
   const text = e.target.closest('#doc pre.code[data-file-text]');
-  if (text && settings.inlineEditing && current.editable === true && !isMarkdown(current)) { beginTextEdit(text, e, tClick); return; }
+  if (text && settings.inlineEditing && current.editable === true && (!isMarkdown(current) || rawOn(current))) { beginTextEdit(text, e, tClick); return; }
   const block = e.target.closest('#doc > [data-src]');
   if (block && settings.inlineEditing && !current.entry) {
     // Code is selected with a double or triple click as often as it is edited: a fence's edit waits out a second click.
@@ -6126,7 +6126,7 @@ let tipTimer = 0;
 $('doc').addEventListener('mouseover', (e) => {
   if (settings.editHintShown || !settings.inlineEditing || editing || current.entry || !$('edit-tip').hidden) return;
   const t = e.target.closest('#doc > [data-src]:not(.md-editing)')
-    || (current.editable === true && !isMarkdown(current) && e.target.closest('#doc pre.code[data-file-text]'));
+    || (current.editable === true && (!isMarkdown(current) || rawOn(current)) && e.target.closest('#doc pre.code[data-file-text]'));
   if (!t) return;
   const tip = $('edit-tip'), r = t.getBoundingClientRect();
   tip.hidden = false;

@@ -425,6 +425,9 @@ class PreviewController: NSViewController {
     /// The file on screen when it is text spacebar edits as a whole (not Markdown): how its bytes read and are written back.
     /// docText and diskText then hold the text as edited (LF), and the source gives the bytes.
     private var textSource: EditableText.Source?
+    /// The current (or still-retiring) edit is a whole-file one (editText), not a Markdown block (editBlock). Markdown has no
+    /// textSource either way, so this tells editChanged/editEnded which model applies to it.
+    private var wholeEdit = false
     /// The last payload of that file's view, rendered again with docText once an edit ends.
     private var textPayload: [String: Any]?
     /// The sticky status says a save was refused: a character the encoding cannot hold, or a text file over FileTypes.maxTextBytes.
@@ -1391,6 +1394,9 @@ class PreviewController: NSViewController {
         var payload = FileView.base(path: path, root: rootDir, reason: reason)
         payload["text"] = text
         payload["view"] = "markdown"
+        // Markdown's whole file is editable the same way a click edits one of its blocks; Raw's codeBlock reads this flag like
+        // any other kind's.
+        payload["editable"] = true
         if let keyTime { payload["keyTime"] = keyTime }
         if host.remoteImages.allowedPath == path { payload[RemoteImageGate.payloadKey] = true }
         payload["ver"] = docVersion
@@ -2262,9 +2268,9 @@ class PreviewController: NSViewController {
             }
             beginEdit(m)
         case "editText":
-            // A click on the text of a code, text, JSON or CSV view: the whole file, edited in the same key panel.
-            guard SettingsStore.shared.settings.inlineEditing, let url = fileURL, fileKind != .markdown, m.string("path", max: 4096) == url.path,
-                  textSource != nil, !torn, !tornHalted, !gone else {
+            // A click on the text of a code, text, JSON, CSV or raw Markdown view: the whole file, edited in the same key panel.
+            guard SettingsStore.shared.settings.inlineEditing, let url = fileURL, m.string("path", max: 4096) == url.path,
+                  textSource != nil || fileKind == .markdown, !torn, !tornHalted, !gone else {
                 refuse("editText", "not the editable file on screen")
                 if let seq = m.int("seq") { js("sb.editEnd", ["seq": seq]) }
                 return
@@ -2891,6 +2897,7 @@ class PreviewController: NSViewController {
         let previous = edit
         stopEdit(notifyWriter: false, keepRetired: true)
         if let previous { retired.append(previous) }
+        wholeEdit = false
         let fail = { (why: String) in
             log.error("editBlock: \(why, privacy: .public)")
             // Keys already typed into the previous block (and flushed as the writer ends it) still land.
@@ -2924,7 +2931,7 @@ class PreviewController: NSViewController {
     }
 
     fileprivate func editChanged(_ id: Int, text raw: String, selStart: Int, selLen: Int, keyTime: Double) {
-        if textSource != nil { return textChanged(id, text: raw, selStart: selStart, selLen: selLen, keyTime: keyTime) }
+        if textSource != nil || wholeEdit { return textChanged(id, text: raw, selStart: selStart, selLen: selLen, keyTime: keyTime) }
         guard let text = docText else { return }
         let block = lineEnding == "\n" ? raw : raw.replacingOccurrences(of: "\r\n", with: "\n")
         var lines = text.components(separatedBy: "\n")
@@ -2961,7 +2968,7 @@ class PreviewController: NSViewController {
     /// The writer reports every session end after flushing its last text, so no more keys can arrive for `id`: an edit left
     /// with an empty block (Enter then click away, or all text deleted) takes its block out rather than leaving blank lines.
     fileprivate func editEnded(_ id: Int, reason: String) {
-        if textSource != nil { return textEditEnded(id, reason: reason) }
+        if textSource != nil || wholeEdit { return textEditEnded(id, reason: reason) }
         if let i = retired.firstIndex(where: { $0.id == id }) {
             let r = retired.remove(at: i)
             dropIfEmpty(start: r.start, lines: r.lines)
@@ -2990,6 +2997,7 @@ class PreviewController: NSViewController {
         let previous = edit
         stopEdit(notifyWriter: false, keepRetired: true)
         if let previous { retired.append(previous) }
+        wholeEdit = true
         let fail = { (why: String) in
             log.error("editText: \(why, privacy: .public)")
             if let p = previous { self.helper { $0.endEdit(p.id) } }
@@ -3043,7 +3051,7 @@ class PreviewController: NSViewController {
         log.info("edit \(id) ended: \(reason, privacy: .public)")
         stopEdit(notifyWriter: false)
         if reason == "not-key" { status("Inline editing unavailable") }
-        renderText("editEnd")
+        if textSource != nil { renderText("editEnd") } else if let url = fileURL, let text = docText { push(text: text, path: url.path, reason: "editEnd") }
         if FilterKeys.relists(afterEnding: reason, list: false) { wantListKeys() }
         if reason == "find" { js("sb.editFind", [:]) }
     }

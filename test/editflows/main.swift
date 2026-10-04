@@ -688,6 +688,15 @@ edit("txt: Esc, then a click back in, keeps typing", file: "esc.txt", md("abc\n"
 edit("csv: Enter adds a row in the raw text", file: "a.csv", md("a,b\n1,2\n"), prepare: raw, click: code, at: "start", want: md("a,b\n1,2\n3,4\n")) {
     keys([k("down", "command"), t("3,4\n")])
 }
+edit("md raw: typing in the source; Raw off ends the edit and renders it", file: "raw.md", md("Body\n"), prepare: raw, click: code, at: "start",
+     want: md("pre Body\n")) {
+    keys([t("pre ")])
+    _ = js("document.getElementById('raw').click(); 0")
+    spin(until: 3) { (js("!!editing") as? Bool) == false }
+    check("md raw: Raw off ends the whole edit", (js("!!editing") as? Bool) == false)
+    check("md raw: Raw off shows the rendered paragraph", (js("document.querySelector('#doc p')?.textContent") as? String) == "pre Body")
+    check("md raw: Raw off leaves the raw view", (js("rawOn(current)") as? Bool) == false)
+}
 
 // Near the 2 MB cap: typing up to it is saved; past it the save is refused and said so, and nothing is lost on disk.
 let bigLine = String(repeating: "x", count: 99) + "\n"

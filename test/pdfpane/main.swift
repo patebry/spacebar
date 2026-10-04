@@ -34,6 +34,9 @@ func openDescriptors(_ path: String) -> Int {
 
 _ = NSApplication.shared
 OffScreen.install()
+// run.sh runs the checks again as a GitHub runner draws them: at 1x, with scroll bars always shown.
+let forcedScale = UserDefaults.standard.double(forKey: "backingScale")
+if forcedScale > 0 { OffScreen.backingScale(forcedScale) }
 let dir = URL(fileURLWithPath: CommandLine.arguments[1]).resolvingSymlinksInPath()
 let a = dir.appendingPathComponent("a.pdf"), b = dir.appendingPathComponent("b.pdf"), bad = dir.appendingPathComponent("bad.pdf")
 makePDF(a, pages: 3)
@@ -274,6 +277,12 @@ func drag(from p: NSPoint, by d: NSPoint) -> [NSEvent] {
 let page0 = docC.page(at: 0)!
 func onPage(_ p: NSPoint) -> NSPoint { pane.view.convert(pane.view.convert(p, from: page0), to: nil) }
 let clip = pane.view.documentView!.enclosingScrollView!.contentView
+/// Whether the document is where it was at `o`, to a device pixel: at 1x, PDFKit's own selection tracking (its autoscroll)
+/// snaps a scroll position that falls between two pixels onto one.
+func unmoved(since o: NSPoint) -> Bool {
+    let d = clip.convertToBacking(NSSize(width: clip.bounds.origin.x - o.x, height: clip.bounds.origin.y - o.y))
+    return abs(d.width) <= 1.01 && abs(d.height) <= 1.01
+}
 let margin = onPage(NSPoint(x: 60, y: 450))
 var origin = clip.bounds.origin
 input(drag(from: margin, by: NSPoint(x: 0, y: 120)))
@@ -288,7 +297,7 @@ spin(0.1)
 let text0 = onPage(NSPoint(x: 260, y: 450))
 origin = clip.bounds.origin
 input(drag(from: text0, by: NSPoint(x: 120, y: -30)))
-check("drag: from text it selects and does not move the document", (pane.selectedText?.count ?? 0) > 10 && clip.bounds.origin == origin,
+check("drag: from text it selects and does not move the document", (pane.selectedText?.count ?? 0) > 10 && unmoved(since: origin) && !closedHandShown,
       "\(pane.selectedText ?? "nil") \(origin) -> \(clip.bounds.origin)")
 let line = page0.selectionForLine(at: NSPoint(x: 260, y: 450))!.bounds(for: page0)
 for (label, from, to) in [("from 12 pt left of a line", NSPoint(x: line.minX - 12, y: line.midY), NSPoint(x: line.midX, y: line.midY)),
@@ -296,11 +305,12 @@ for (label, from, to) in [("from 12 pt left of a line", NSPoint(x: line.minX - 1
     pane.view.clearSelection()
     let a = onPage(from), b = onPage(to)
     input(drag(from: a, by: NSPoint(x: b.x - a.x, y: b.y - a.y)))
-    check("drag: \(label) selects and does not move the document", (pane.selectedText?.count ?? 0) > 5 && clip.bounds.origin == origin && !closedHandShown,
+    check("drag: \(label) selects and does not move the document", (pane.selectedText?.count ?? 0) > 5 && unmoved(since: origin) && !closedHandShown,
           "\(line) \(pane.selectedText ?? "nil") \(origin) -> \(clip.bounds.origin)")
 }
 input([mouse(.leftMouseDown, onPage(NSPoint(x: 60, y: 450))), mouse(.leftMouseUp, onPage(NSPoint(x: 60, y: 450)))])
-check("click: in the margin it clears the selection and moves nothing", pane.selectedText == nil && clip.bounds.origin == origin)
+check("click: in the margin it clears the selection and moves nothing", pane.selectedText == nil && unmoved(since: origin),
+      "\(pane.selectedText ?? "nil") \(origin) -> \(clip.bounds.origin)")
 let word = onPage(NSPoint(x: 215, y: 450))
 input([mouse(.leftMouseDown, word), mouse(.leftMouseUp, word), mouse(.leftMouseDown, word, clicks: 2), mouse(.leftMouseUp, word, clicks: 2)])
 check("double-click: on text it selects the word", pane.selectedText?.trimmingCharacters(in: .whitespaces) == "Lorem", pane.selectedText ?? "nil")
@@ -332,5 +342,5 @@ check("close: no descriptor left on either file", openDescriptors(a.path) == 0 &
 pane.place(message: ["path": b.path, "x": 0, "y": 0, "w": 100, "h": 100], in: web)
 check("close: a late message does not bring it back", pane.view.superview == nil && pane.view.isHidden)
 
-print("\n\(failures == 0 ? "all" : "\(failures) FAILED of the") PDF view checks")
+print("\n\(failures == 0 ? "all" : "\(failures) FAILED of the") PDF view checks at \(window.backingScaleFactor)x, \(NSScroller.preferredScrollerStyle == .legacy ? "legacy" : "overlay") scroll bars")
 exit(failures == 0 ? 0 : 1)

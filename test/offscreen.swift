@@ -53,6 +53,16 @@ enum OffScreen {
         RunLoop.main.add(timer, forMode: .common)
     }
 
+    /// Gives every window and screen `scale` as its backing scale, whatever the displays are, so a 2x Mac can check what a 1x
+    /// display (a GitHub runner's) does: AppKit aligns scroll positions to backing pixels. Call it before any window exists.
+    static func backingScale(_ scale: CGFloat) {
+        let fixed: @convention(block) (AnyObject) -> CGFloat = { _ in scale }
+        for (cls, sel) in [(NSWindow.self as AnyClass, #selector(getter: NSWindow.backingScaleFactor)),
+                           (NSScreen.self as AnyClass, #selector(getter: NSScreen.backingScaleFactor))] {
+            method_setImplementation(class_getInstanceMethod(cls, sel)!, imp_implementationWithBlock(fixed))
+        }
+    }
+
     /// A web view in a window off every screen counts as occluded, and WebKit then stops requestAnimationFrame (the page's
     /// "rendered" message, a PDF's placement, mermaid): it is told to draw as a visible one would (WKWebView SPI, harness only).
     static func keepDrawing(_ web: NSView) {

@@ -697,6 +697,72 @@ edit("md raw: typing in the source; Raw off ends the edit and renders it", file:
     check("md raw: Raw off shows the rendered paragraph", (js("document.querySelector('#doc p')?.textContent") as? String) == "pre Body")
     check("md raw: Raw off leaves the raw view", (js("rawOn(current)") as? Bool) == false)
 }
+edit("md raw: a CRLF file keeps CRLF", file: "crlfraw.md", md("Para\r\n\r\nNext\r\n"), prepare: raw, click: code, at: "start",
+     want: md("X\r\nPara\r\n\r\nNext\r\n")) {
+    keys([t("X\n")])
+}
+
+// A block edit retiring (into `retired`) right as Raw begins a whole edit on the same file, and a whole edit retiring right as
+// a click begins a block edit: both dispatch by the id each session began with, not by whichever kind is active when the
+// retired session's last flush lands, so neither clobbers the file with the wrong session's text.
+if only == nil || only!.contains(where: { "md raw: a block edit retiring while Raw begins a whole edit keeps the block's text".contains($0) }) {
+    caseN += 1
+    let dir = docs.appendingPathComponent("c\(caseN)")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let url = dir.appendingPathComponent("racea.md")
+    try! md("Para\n\nNext\n").write(to: url)
+    open(url)
+    let c0 = click("#doc > p")
+    if c0["editing"] as? Bool != true {
+        check("md raw: a block edit retiring while Raw begins a whole edit keeps the block's text", false, "block edit did not start: \(c0)")
+    } else {
+        keys([t("A")])
+        // Raw on ends the block edit (editStop); the retired block session's writer confirmation is still a round trip away
+        // when the very next click asks to begin a whole edit, so it usually finds `retired` non-empty and is refused.
+        _ = js("document.getElementById('raw').click(); 0")
+        let c1 = click(code, at: "start")
+        if c1["editing"] as? Bool == true { escape() }
+        let want = md("ParaA\n\nNext\n")
+        let got = settled(url, want, timeout: 4)
+        check("md raw: a block edit retiring while Raw begins a whole edit keeps the block's text", got == want,
+              "file is \(show(String(data: got, encoding: .utf8) ?? "<\(got.count) bytes>")), want \(show("ParaA\n\nNext\n"))")
+        if got == want {
+            let after = settled(url, want, timeout: 1.5)
+            check("md raw: a block edit retiring while Raw begins a whole edit: the file stays so", after == want,
+                  show(String(data: after, encoding: .utf8) ?? "?"))
+        }
+    }
+    if (js("!!editing") as? Bool) == true { escape() }
+    closeHost()
+}
+if only == nil || only!.contains(where: { "md raw: a whole edit retiring while a block edit begins causes no duplication".contains($0) }) {
+    caseN += 1
+    let dir = docs.appendingPathComponent("c\(caseN)")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let url = dir.appendingPathComponent("raceb.md")
+    try! md("Para\n\nNext\n").write(to: url)
+    open(url)
+    raw()
+    let c0 = click(code, at: "start")
+    if c0["editing"] as? Bool != true {
+        check("md raw: a whole edit retiring while a block edit begins causes no duplication", false, "whole edit did not start: \(c0)")
+    } else {
+        keys([t("Z")])
+        // Raw off ends the whole edit; unlike beginTextEdit, beginEdit has no "retired is empty" guard, so the block click
+        // below reliably succeeds while the old whole session's confirmation is still in flight.
+        _ = js("document.getElementById('raw').click(); 0")
+        let c1 = click("#doc > p", at: "start")
+        if c1["editing"] as? Bool == true { keys([t("Q")]) }
+        if (js("!!editing") as? Bool) == true { escape() }
+        spin(0.5)
+        let got = (try? Data(contentsOf: url)) ?? Data()
+        let text = String(data: got, encoding: .utf8) ?? "<\(got.count) bytes>"
+        // Whichever session's save lands last, the file must not gain a second copy of either paragraph.
+        let noDup = text.components(separatedBy: "Next").count == 2 && text.components(separatedBy: "Para").count == 2
+        check("md raw: a whole edit retiring while a block edit begins causes no duplication", noDup, "file is \(show(text))")
+    }
+    closeHost()
+}
 
 // Near the 2 MB cap: typing up to it is saved; past it the save is refused and said so, and nothing is lost on disk.
 let bigLine = String(repeating: "x", count: 99) + "\n"

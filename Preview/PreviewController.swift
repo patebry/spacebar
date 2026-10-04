@@ -425,9 +425,10 @@ class PreviewController: NSViewController {
     /// The file on screen when it is text spacebar edits as a whole (not Markdown): how its bytes read and are written back.
     /// docText and diskText then hold the text as edited (LF), and the source gives the bytes.
     private var textSource: EditableText.Source?
-    /// The current (or still-retiring) edit is a whole-file one (editText), not a Markdown block (editBlock). Markdown has no
-    /// textSource either way, so this tells editChanged/editEnded which model applies to it.
-    private var wholeEdit = false
+    /// Ids (edit's or retired's) of a whole-file edit (editText), not a Markdown block (editBlock): Markdown has no textSource
+    /// either way, so this tells editChanged/editEnded which model applies to a given id. Per id, not a single flag, because a
+    /// retired session's late keys must still dispatch by how *that* session began, whatever kind the next one is.
+    private var wholeIds = Set<Int>()
     /// The last payload of that file's view, rendered again with docText once an edit ends.
     private var textPayload: [String: Any]?
     /// The sticky status says a save was refused: a character the encoding cannot hold, or a text file over FileTypes.maxTextBytes.
@@ -569,6 +570,7 @@ class PreviewController: NSViewController {
             // A writer that never reports an edit's end (hung, not crashed) must not keep the panel on this document.
             log.error("switch: writer did not end the edit within 2s")
             self.retired = []
+            self.wholeIds.removeAll()
             self.runPending()
         }
     }
@@ -1305,6 +1307,7 @@ class PreviewController: NSViewController {
         if let t = lines.targets { targetsMemo = (text, t) }
         // Ranges of ended sessions refer to the old text; their late keys must not land in the new one.
         retired = []
+        wholeIds.removeAll()
         if edit != nil {
             log.info("file changed on disk during edit; stopping edit")
             stopEdit(notifyWriter: true)
@@ -1394,9 +1397,11 @@ class PreviewController: NSViewController {
         var payload = FileView.base(path: path, root: rootDir, reason: reason)
         payload["text"] = text
         payload["view"] = "markdown"
-        // Markdown's whole file is editable the same way a click edits one of its blocks; Raw's codeBlock reads this flag like
-        // any other kind's.
-        payload["editable"] = true
+        // Raw's whole-file edit (editText) runs through the writer's TypedTexts like any other kind's, which only knows a file
+        // up to maxTextBytes and a text that round-trips as is (not one a leading BOM would make mismatch what it reads fresh
+        // from disk): past either, the writer would refuse and leave the tooltip's promise broken. A block click (editBlock)
+        // takes neither path, so it stays available either way.
+        payload["editable"] = EditableText.allowed(path: path) && text.utf8.count <= FileTypes.maxTextBytes && text.first != "\u{FEFF}"
         if let keyTime { payload["keyTime"] = keyTime }
         if host.remoteImages.allowedPath == path { payload[RemoteImageGate.payloadKey] = true }
         payload["ver"] = docVersion
@@ -1585,6 +1590,7 @@ class PreviewController: NSViewController {
         }
         if same {
             retired = []
+            wholeIds.removeAll()
             if let d = docText, !matchesDisk(d) { displace(d) }
             if edit != nil {
                 log.info("file changed on disk during edit; stopping edit")
@@ -2630,6 +2636,7 @@ class PreviewController: NSViewController {
         if torn, let url = fileURL { retryTorn(url) }
         // No more keys will arrive for ended sessions.
         retired = []
+        wholeIds.removeAll()
         if lostWrite { cancelPending("save failed; edit again to retry") } else { runPending() }
     }
 
@@ -2897,7 +2904,6 @@ class PreviewController: NSViewController {
         let previous = edit
         stopEdit(notifyWriter: false, keepRetired: true)
         if let previous { retired.append(previous) }
-        wholeEdit = false
         let fail = { (why: String) in
             log.error("editBlock: \(why, privacy: .public)")
             // Keys already typed into the previous block (and flushed as the writer ends it) still land.
@@ -2931,7 +2937,7 @@ class PreviewController: NSViewController {
     }
 
     fileprivate func editChanged(_ id: Int, text raw: String, selStart: Int, selLen: Int, keyTime: Double) {
-        if textSource != nil || wholeEdit { return textChanged(id, text: raw, selStart: selStart, selLen: selLen, keyTime: keyTime) }
+        if textSource != nil || wholeIds.contains(id) { return textChanged(id, text: raw, selStart: selStart, selLen: selLen, keyTime: keyTime) }
         guard let text = docText else { return }
         let block = lineEnding == "\n" ? raw : raw.replacingOccurrences(of: "\r\n", with: "\n")
         var lines = text.components(separatedBy: "\n")
@@ -2968,7 +2974,7 @@ class PreviewController: NSViewController {
     /// The writer reports every session end after flushing its last text, so no more keys can arrive for `id`: an edit left
     /// with an empty block (Enter then click away, or all text deleted) takes its block out rather than leaving blank lines.
     fileprivate func editEnded(_ id: Int, reason: String) {
-        if textSource != nil || wholeEdit { return textEditEnded(id, reason: reason) }
+        if textSource != nil || wholeIds.contains(id) { return textEditEnded(id, reason: reason) }
         if let i = retired.firstIndex(where: { $0.id == id }) {
             let r = retired.remove(at: i)
             dropIfEmpty(start: r.start, lines: r.lines)
@@ -2997,7 +3003,6 @@ class PreviewController: NSViewController {
         let previous = edit
         stopEdit(notifyWriter: false, keepRetired: true)
         if let previous { retired.append(previous) }
-        wholeEdit = true
         let fail = { (why: String) in
             log.error("editText: \(why, privacy: .public)")
             if let p = previous { self.helper { $0.endEdit(p.id) } }
@@ -3010,6 +3015,7 @@ class PreviewController: NSViewController {
         }
         editCounter += 1
         let id = editCounter
+        wholeIds.insert(id)
         edit = (id, seq, 0, 0)
         undoDue = true
         log.info("editText \(id) caret \(caret)\(self.writing ? " during a write" : "", privacy: .public)")
@@ -3042,6 +3048,7 @@ class PreviewController: NSViewController {
     }
 
     private func textEditEnded(_ id: Int, reason: String) {
+        wholeIds.remove(id)
         // An ended session's late keys reached the page with textUpdate, so its end needs no render.
         if let i = retired.firstIndex(where: { $0.id == id }) {
             retired.remove(at: i)
@@ -3260,7 +3267,7 @@ class PreviewController: NSViewController {
 
     /// `keepRetired` keeps ended sessions whose last keys may still arrive; otherwise the document is being replaced.
     private func stopEdit(notifyWriter: Bool, keepRetired: Bool = false) {
-        if !keepRetired { retired = [] }
+        if !keepRetired { retired = []; wholeIds.removeAll() }
         guard let e = edit else { return }
         edit = nil
         if notifyWriter { helper { $0.endEdit(e.id) } }

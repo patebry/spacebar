@@ -1344,10 +1344,10 @@ function headingText(h) {
 function buildToc() {
   const nav = $('toc');
   const hs = [...$('doc').querySelectorAll(':scope > h1, :scope > h2, :scope > h3')].filter((h) => !h.classList.contains('md-editing'));
-  // A note with no TOC takes the TOC's room. The heading being typed into is not an entry, but the TOC it had stays, so the
-  // column does not widen under the caret.
-  const show = settings.toc !== 'off' && (editing && !editing.whole && !nav.hidden
-    || (settings.toc === 'on' ? hs.length > 0 : settings.toc === 'auto' && hs.length >= 3));
+  // A note with no TOC takes the TOC's room. While a block is edited the TOC stays shown or hidden as it was, so the column
+  // does not change width under the caret; the draw that ends the edit decides afresh.
+  const show = settings.toc !== 'off' && (editing && !editing.whole ? !nav.hidden
+    : settings.toc === 'on' ? hs.length > 0 : settings.toc === 'auto' && hs.length >= 3);
   tocTargets = show ? hs : [];
   if (!show) { nav.hidden = true; nav.replaceChildren(); return; }
   const top = Math.min(...hs.map((h) => +h.tagName[1]));

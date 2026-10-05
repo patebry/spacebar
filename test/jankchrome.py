@@ -176,6 +176,37 @@ def toc_column(page, check, out):
     check(pre == [with_toc, True] and mid[:2] == pre and mid[2] == 'H2',
           'jank J5: a redraw while a heading is edited, in a note with just enough headings for a TOC, keeps the TOC and the column',
           json.dumps({'read [width, toc]': pre, 'editing [width, toc, tag]': mid}))
+
+    # The reverse: a heading typed into a paragraph does not bring the TOC in while a block is edited, so the column does not
+    # narrow under the caret; it comes in once the edit ends. In auto at the third heading, and in on at the first.
+    CW = "return Math.round(document.querySelector('#doc > :not(.md-editing)').getBoundingClientRect().width)"
+    typed = {}
+    for mode, note in (('auto', 'h2.md'), ('on', 'h0.md')):
+        page.apply(toc=mode)
+        page.render(P(note))
+        page.cmd('@wait:0.3')
+        pre = [page.js(CW), page.js(TOC)[0]]
+        click(page, '#doc > p')
+        page.cmd('@wait:0.3')
+        sample(page, {'col': '#doc > :not(.md-editing)', 'toc': '#toc'}, '!!editing')
+        page.cmd('@eval:sb.editUpdate({ seq: editing.seq, at: editing.start, old: editing.lines, text: "## Third", ver: docVer, selStart: 8, selLen: 0 }); 0')
+        page.cmd('@wait:0.2')
+        click(page, '#doc > p:not(.md-editing)')
+        page.cmd('@wait:0.3')
+        fr = [f for f in sampled(page) if f['extra']]
+        mid = [spread(fr, 'col'), sorted({f['toc'] is not None for f in fr}), page.js('return !!editing && editing.tag'),
+               page.js("return document.querySelectorAll('#doc > :is(h1, h2, h3)').length")]
+        page.cmd('@eval:sb.editEnd({}); 0')
+        page.cmd('@wait:0.3')
+        typed[mode] = {'read [width, toc]': pre, 'editing [cols, toc shown, tag, headings]': mid, 'ended [width, toc]': [page.js(CW), page.js(TOC)[0]]}
+    page.apply(toc='auto')
+    check(all(t['read [width, toc]'] == [no_toc, False]
+              and still(t['editing [cols, toc shown, tag, headings]'][0]) and abs(t['editing [cols, toc shown, tag, headings]'][0][0][1] - no_toc) <= 1
+              and t['editing [cols, toc shown, tag, headings]'][1:3] == [[False], 'P']
+              and t['editing [cols, toc shown, tag, headings]'][3] == {'auto': 3, 'on': 1}[m]
+              and t['ended [width, toc]'] == [with_toc, True] for m, t in typed.items()),
+          'jank J5: a heading typed while a block is edited brings no TOC and the column holds; the TOC comes in when the edit ends (auto and on)',
+          json.dumps(typed))
     page.cmd('@root:')
 
 

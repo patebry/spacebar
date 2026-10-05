@@ -3,8 +3,8 @@
 the way a person sees jank, by sampling each element's rect on every animation frame (this WebKit reports no layout-shift
 entries) and within the task that handles an input, which is what stays on screen until the next one.
 
-A click lights the row it opens at once; the Markdown column keeps its place and width between notes with and without a table of
-contents; the toolbar's buttons keep their slots in Minimal chrome and in a narrow panel; the kind line, the image zoom and the
+A click lights the row it opens at once; a Markdown note with no table of contents takes the full measure, and each note's column
+is final in its first frame; the toolbar's buttons keep their slots in Minimal chrome and in a narrow panel; the kind line, the image zoom and the
 PDF page counter keep their widths as they fill in and count; the find field stays put as the count appears; the edit gutter keeps
 its width past line 99; the overview's rows survive a listing; cut-off text has a tooltip; and the Contents search's status line
 never resizes the list. Through an edit the kind line and the code stay put and the line count stays live; a new file never shows
@@ -98,32 +98,84 @@ def toc_column(page, check, out):
     for n, t in notes.items():
         open(os.path.join(d, n), 'w').write(t)
     page.cmd('@root:' + d)
+    P = lambda n: os.path.join(d, n)
+    TOC = "const t = document.getElementById('toc'), cs = getComputedStyle(t); return [cs.display !== 'none' && cs.visibility === 'visible', t.querySelectorAll('a').length]"
+    W = "return Math.round(document.querySelector('#doc p').getBoundingClientRect().width)"
     res, tocs = {}, {}
     for size in ('1100x760', '1300x760', '1500x900'):
         page.cmd('@size:' + size)
-        page.render(os.path.join(d, 'h5.md'))
+        page.render(P('h5.md'))
         page.cmd('@wait:0.3')
-        sample(page, {'doc': '#doc', 'p': '#doc p'})
+        cols = {}
         for n in ('h0.md', 'h3.md', 'h2.md', 'h5.md', 'h0.md'):
-            page.render(os.path.join(d, n))
+            sample(page, {'p': '#doc p'}, 'current.path')
+            page.render(P(n))
             page.cmd('@wait:0.2')
-            tocs[f'{size} {n}'] = page.js("const t = document.getElementById('toc'), cs = getComputedStyle(t); return [cs.display !== 'none' && cs.visibility === 'visible', t.querySelectorAll('a').length]")
-        fr = sampled(page)
-        res[size] = [spread(fr, 'doc'), spread(fr, 'p')]
+            fr = [f for f in sampled(page) if f['extra'] == P(n)]
+            cols.setdefault(n, set()).update(spread(fr, 'p'))
+            tocs[f'{size} {n}'] = page.js(TOC)
+        res[size] = {n: sorted(v) for n, v in cols.items()}
     shown = {k: v for k, v in tocs.items()}
-    check(all(still(v[0]) and still(v[1]) for v in res.values())
+    per = {s: {n: v[0] if len(v) == 1 else None for n, v in c.items()} for s, c in res.items()}
+    check(all(None not in c.values() and c['h0.md'] == c['h2.md'] and c['h3.md'] == c['h5.md'] and c['h0.md'][1] >= c['h5.md'][1]
+              for c in per.values()) and per['1100x760']['h0.md'][1] > per['1100x760']['h5.md'][1] + 100
           and all(v[0] == (k.split()[1] in ('h3.md', 'h5.md')) and (v[1] > 0) == v[0] for k, v in shown.items()),
-          'jank J5: the Markdown column keeps one left edge and width, every frame, between notes with and without a TOC, at three panel widths',
-          json.dumps({'column [left, width] per size': res, 'toc [shown, entries]': shown}))
+          'jank J5: a note with no TOC (auto: under 3 headings) takes the full measure and a long one keeps the TOC and its narrower column; '
+          'each note\'s column is the same in every frame from its first, at three panel widths',
+          json.dumps({'column [left, width] per size and note': res, 'toc [shown, entries]': shown}))
     page.cmd('@size:1100x760')
-    page.render(os.path.join(d, 'h5.md'))
-    with_toc = page.js("return Math.round(document.querySelector('#doc p').getBoundingClientRect().width)")
-    page.apply(toc='off')
-    page.render(os.path.join(d, 'h0.md'))
+    page.render(P('h5.md'))
+    with_toc = page.js(W)
+    page.render(P('h0.md'))
     page.cmd('@wait:0.2')
-    off = page.js("return [Math.round(document.querySelector('#doc p').getBoundingClientRect().width), getComputedStyle(document.getElementById('toc')).display]")
-    page.apply(toc='auto')
-    check(off[0] > with_toc + 100 and off[1] == 'none', 'jank J5: with the TOC off no room is kept for it', json.dumps([with_toc, off]))
+    no_toc = page.js(W)
+    page.apply(toc='off')
+    page.render(P('h5.md'))
+    page.cmd('@wait:0.2')
+    off = page.js("return [" + W[7:] + ", getComputedStyle(document.getElementById('toc')).display]")
+    page.apply(toc='on')
+    page.render(P('h2.md'))
+    page.cmd('@wait:0.2')
+    on = [page.js(W), page.js(TOC)]
+    page.apply(width='narrow', toc='auto')
+    page.render(P('h0.md'))
+    page.cmd('@wait:0.2')
+    narrow = page.js(W)
+    page.apply(width='medium')
+    check(off == [no_toc, 'none'] and on == [with_toc, [True, 2]] and no_toc > with_toc + 100 and narrow < no_toc,
+          'jank J5: the TOC off gives every note the full measure, on gives a short note its TOC and column, and the Narrow width still holds',
+          json.dumps({'with toc': with_toc, 'no toc': no_toc, 'off [h5 width, toc]': off, 'on [h2 width, toc]': on, 'narrow no toc': narrow}))
+
+    # A live reload that takes the note under 3 headings widens the column and keeps the line being read.
+    long = '# A\n\n' + body * 6 + '## B\n\n' + body * 6 + '## C\n\n' + body * 6
+    open(P('live.md'), 'w').write(long)
+    page.render(P('live.md'))
+    page.cmd('@wait:0.3')
+    page.cmd('@eval:window.scrollTo(0, document.querySelectorAll("#doc h2")[0].offsetTop - 120); 0')
+    page.cmd('@wait:0.3')
+    HEAD = "const h = document.querySelectorAll('#doc h2')[0]; return [Math.round(h.getBoundingClientRect().top), " + W[7:] + "]"
+    before = page.js(HEAD)
+    page.cmd('@eval:sb.render({ ...current, text: current.text.replace("## C\\n", "C\\n") }); 0')
+    page.cmd('@wait:0.4')
+    after = page.js(HEAD) + [page.js(TOC)[0]]
+    check(abs(before[0] - after[0]) <= 2 and after[1] > before[1] + 100 and after[2] is False,
+          'jank J5: a live reload that drops the TOC widens the column and keeps the line being read',
+          json.dumps({'before [h2 top, width]': before, 'after [h2 top, width, toc]': after}))
+
+    # A redraw while a heading of a 3-heading note is being edited keeps its TOC, so the column does not widen under the caret.
+    page.render(P('h3.md'))
+    page.cmd('@wait:0.3')
+    pre = [page.js(W), page.js(TOC)[0]]
+    click(page, '#doc h2')
+    page.cmd('@wait:0.3')
+    page.cmd('@eval:draw(); 0')
+    page.cmd('@wait:0.3')
+    mid = [page.js(W), page.js(TOC)[0], page.js('return !!editing && editing.tag')]
+    page.cmd('@eval:sb.editEnd({}); 0')
+    page.cmd('@wait:0.2')
+    check(pre == [with_toc, True] and mid[:2] == pre and mid[2] == 'H2',
+          'jank J5: a redraw while a heading is edited, in a note with just enough headings for a TOC, keeps the TOC and the column',
+          json.dumps({'read [width, toc]': pre, 'editing [width, toc, tag]': mid}))
     page.cmd('@root:')
 
 

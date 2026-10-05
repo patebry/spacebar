@@ -4360,16 +4360,19 @@ function filteredRows() {
     }
   }
   // The listing's own order: by name, folders first only where Finder puts them there.
-  // With README first it heads the files, as FolderListing pins it.
+  // With README first one Markdown README heads the files, the first by name, as FolderListing pins it.
   const first = settings.listsFoldersFirst === true;
-  const readme = (e) => settings.folderReadmeFirst === true && !e.dir && /^readme(\.(md|markdown|mdown|mkd|mkdn))?$/i.test(e.name);
-  const order = (a, b) => (first && a.dir !== b.dir ? (a.dir ? -1 : 1)
-    : readme(a) !== readme(b) ? (readme(a) ? -1 : 1) : a.name.localeCompare(b.name, undefined, { numeric: true }));
+  const isReadme = (e) => settings.folderReadmeFirst === true && !e.dir && /^readme\.(md|markdown|mdown|mkd|mkdn)$/i.test(e.name);
+  const byName = (a, b) => (first && a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name, undefined, { numeric: true }));
+  let pin = null;
+  const order = (a, b) => (first && a.dir !== b.dir ? (a.dir ? -1 : 1) : (a === pin) !== (b === pin) ? (a === pin ? -1 : 1) : byName(a, b));
   const entries = (dir) => {
     const d = tree.dirs.get(dir), listed = d ? d.entries : [], extra = found.get(dir);
     if (!extra) return listed;
     const have = new Set(listed.map((e) => e.path));
-    const add = [...extra.values()].filter((e) => !have.has(e.path)).sort(order);
+    const add = [...extra.values()].filter((e) => !have.has(e.path)).sort(byName);
+    pin = listed.find(isReadme) || add.find(isReadme) || null;
+    add.sort(order);
     if (!add.length) return listed;
     // A search result has no size or date: by another sort, what was found follows what is listed.
     if ((settings.folderSort || 'name') !== 'name') return [...listed, ...add];

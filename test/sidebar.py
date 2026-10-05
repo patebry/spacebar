@@ -2834,6 +2834,26 @@ def filter_order(check):
             want = mixed if first == 'finder' else ['proj', '  b-plans', '    p.md', '  d-planning', '    q.md', '  a-plan.md', '  c-plan.md', '  e-plan.md']
             check(unlisted == listed == want, f'names filter, folders {"mixed as Finder has them" if first == "finder" else "first"}: a folder never opened '
                   'is ordered as the tree orders it once listed', json.dumps([unlisted, listed]))
+
+        # README first pins one Markdown README, the first by name, as FolderListing does: not a bare README, not a second one.
+        d = os.path.join(page.out, 'readme')
+        for n in ['x-notes.md', 'proj/README.md', 'proj/readme.markdown', 'proj/README', 'proj/a-readme.md']:
+            os.makedirs(os.path.dirname(os.path.join(d, n)), exist_ok=True)
+            open(os.path.join(d, n), 'w').write('# x\n')
+        page.apply(foldersFirst='finder', folderReadmeFirst=True)
+        page.cmd('@root:' + d)
+        page.render(os.path.join(d, 'x-notes.md'))
+        page.cmd('@wait:0.4')
+        unlisted = typed('readme', 0.8)
+        typed('', 0.3)
+        page.cmd('@eval:toggleFolder(' + json.dumps(os.path.join(d, 'proj')) + '); 0')
+        page.cmd('@wait:0.4')
+        listed = typed('readme', 0.8)
+        typed('', 0.3)
+        page.apply(folderReadmeFirst=False)
+        check(unlisted == listed == ['proj', '  readme.markdown', '  a-readme.md', '  README', '  README.md'],
+              'names filter, README first: one Markdown README is pinned in a folder never opened, as the listing pins it once opened',
+              json.dumps([unlisted, listed]))
     finally:
         page.close()
         shutil.rmtree(page.out, ignore_errors=True)

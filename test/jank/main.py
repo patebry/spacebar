@@ -3,7 +3,7 @@
 being read through a reflow and through each frame of the sidebar's animation, the folder grid's place after Back, rows and the
 edit caret clear of the toolbar row and the line numbers, the TOC's own scroll, the boxes' scroll through a redraw of the same
 file, an info card under a late thumbnail, the line being read as KaTeX draws late, and the TOC's
-column and scroll between notes with and without one. Also the line at the top of every view of text (wrapped code and text, a
+column (full measure without one) and scroll between notes with and without one. Also the line at the top of every view of text (wrapped code and text, a
 notebook, Raw Markdown, a long paragraph) through a reflow, a setting's redraw, a change on disk and Raw turned on and off; the
 caret of a Markdown block being typed into; the folder grid's selected tile through a change of width; the windowed lists and a
 fitted image's zoom label through a resize; and Raw Markdown's column. Across the anchor and the chrome's work: the line
@@ -293,7 +293,8 @@ def math_and_toc(page, check, out):
           'formulas above it; the TOC rebuilt for the drawn headings keeps the entry being read in view',
           json.dumps({'before': before, 'after': after, 'heading top spread': [min(tops), max(tops)] if tops else None}))
 
-    # J5 with J6: a TOC note, a note with none, another TOC note. The column never moves and each TOC opens at its top.
+    # J5 with J6: a TOC note, a note with none, another TOC note. Each note's column holds from its first frame, the note with
+    # none takes the full measure, and each TOC opens at its top.
     body = ('Words in a paragraph that is long enough to fill the measure. ' * 12) + '\n\n'
     toc1, toc2, plain = (os.path.join(out, n) for n in ('toc1.md', 'toc2.md', 'plain.md'))
     open(toc1, 'w').write(''.join(f'## One {i}\n\n' + body for i in range(80)))
@@ -303,20 +304,21 @@ def math_and_toc(page, check, out):
     page.cmd('@wait:0.3')
     page.cmd('@eval:window.scrollTo(0, document.scrollingElement.scrollHeight * 0.8); 0')
     page.cmd('@wait:0.3')
-    TOC = "const t = document.getElementById('toc'); return [t.scrollTop, t.querySelectorAll('a').length, getComputedStyle(t).visibility];"
+    TOC = "const t = document.getElementById('toc'), cs = getComputedStyle(t); return [t.scrollTop, t.querySelectorAll('a').length, cs.display === 'none' ? 'none' : cs.visibility];"
     scrolled = page.js(TOC)
-    JC.sample(page, {'p': '#doc p'})
+    JC.sample(page, {'p': '#doc p'}, 'current.path')
     seen = {}
     for n, p in (('plain', plain), ('toc2', toc2), ('plain again', plain), ('toc1', toc1)):
         page.render(p)
         page.cmd('@wait:0.3')
         seen[n] = page.js(TOC)
     fr = JC.sampled(page)
-    col = JC.spread(fr, 'p')
-    check(scrolled[0] > 100 and JC.still(col) and seen['plain'][1] == 0 and seen['plain'][2] == 'hidden'
+    col = {n: JC.spread([f for f in fr if f['extra'] == p], 'p') for n, p in (('toc1', toc1), ('toc2', toc2), ('plain', plain))}
+    check(scrolled[0] > 100 and all(len(v) == 1 for v in col.values()) and col['toc1'] == col['toc2'] and col['plain'][0][1] > col['toc1'][0][1]
+          and seen['plain'][1] == 0 and seen['plain'][2] == 'none'
           and all(seen[k][0] == 0 and seen[k][1] == 80 and seen[k][2] == 'visible' for k in ('toc2', 'toc1')),
-          'jank J5 + J6: between TOC notes and a note with none the column keeps its left edge and width on every frame, and each '
-          "TOC opens at its top, not the last one's scroll", json.dumps({'toc scrolled first': scrolled, 'toc [scrollTop, entries, visibility]': seen, 'column [left, width]': col}))
+          'jank J5 + J6: TOC notes share one column, a note with none takes the full measure, each column holds from its first frame, '
+          "and each TOC opens at its top, not the last one's scroll", json.dumps({'toc scrolled first': scrolled, 'toc [scrollTop, entries, visibility]': seen, 'column [left, width]': col}))
     page.cmd('@size:1100x760')
 
 

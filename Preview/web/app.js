@@ -4362,7 +4362,7 @@ function filteredRows() {
   // The listing's own order: by name, folders first only where Finder puts them there.
   // With README first one Markdown README heads the files, the first by name, as FolderListing pins it.
   const first = settings.listsFoldersFirst === true;
-  const isReadme = (e) => settings.folderReadmeFirst === true && !e.dir && /^readme\.(md|markdown|mdown|mkd|mkdn)$/i.test(e.name);
+  const isReadme = (e) => settings.folderReadmeFirst === true && !e.dir && !e.broken && /^readme\.(md|markdown|mdown|mkd|mkdn)$/i.test(e.name);
   const byName = (a, b) => (first && a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name, undefined, { numeric: true }));
   let pin = null;
   const order = (a, b) => (first && a.dir !== b.dir ? (a.dir ? -1 : 1) : (a === pin) !== (b === pin) ? (a === pin ? -1 : 1) : byName(a, b));

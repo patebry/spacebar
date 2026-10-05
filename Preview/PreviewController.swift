@@ -1299,10 +1299,10 @@ class PreviewController: NSViewController {
     /// Takes a Markdown read that is still current: `raw` is the file's text as on disk, `lines` its text as shown.
     private func apply(_ raw: String, _ lines: Lines, url: URL, reason: String) {
         clearGone()
+        editableMemo = nil
         if raw == diskText { return }
         if let d = docText, !matchesDisk(d) { displace(d) }
         resetUndo()
-        editableMemo = nil
         lineEnding = lines.crlf ? "\r\n" : "\n"
         let text = lines.text
         if let t = lines.targets { targetsMemo = (text, t) }

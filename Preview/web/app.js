@@ -3952,7 +3952,7 @@ function gridSelect(path, reveal) {
   if (gridCursor.size > 64) gridCursor.delete(gridCursor.keys().next().value);
   const i = grid.entries.findIndex((e) => e.path === path);
   if (reveal && i >= 0) {
-    const y = grid.box.getBoundingClientRect().top + Math.floor(i / grid.cols) * grid.rowH, bar = appChrome() ? 48 : 8;
+    const y = grid.box.getBoundingClientRect().top + Math.floor(i / grid.cols) * grid.rowH, bar = docRows()[0];
     if (y < bar) window.scrollBy({ top: y - bar, behavior: 'instant' });
     else if (y + grid.rowH > window.innerHeight) window.scrollBy({ top: y + grid.rowH - window.innerHeight, behavior: 'instant' });
   }
@@ -6026,7 +6026,7 @@ syncPopover();
 // A press in the editor places the caret, a second selects a word and a third a line; dragging extends the selection from the
 // press by the same unit. The page's own selection stays out of the editor.
 const EDITOR_EL = '#doc > .md-editing, #doc pre.text-editing';
-let press = null; // { el, seq, unit, from, to, down, up, x, y, scroll }
+let press = null; // { el, seq, text, unit, from, to, down, up, x, y, scroll }
 
 /** The window's rows the document shows: under the toolbar row and above the panel's bottom edge. */
 function docRows() {
@@ -6048,8 +6048,21 @@ function unitAt(unit, at) {
   return unit === 'line' ? lineAt(editing.text, at) : unit === 'word' ? wordAt(editing.text, at) : [at, at];
 }
 
+/** Ends a drag: the button may never come up where the page sees it (the window loses focus, the panel goes) and the text it
+ *  measured may have changed under it. */
+function endDrag() {
+  if (!press) return;
+  press.down = false;
+  cancelAnimationFrame(press.scroll);
+  press.scroll = 0;
+}
+window.addEventListener('blur', endDrag);
+document.addEventListener('visibilitychange', () => { if (document.hidden) endDrag(); });
+document.addEventListener('pointercancel', endDrag);
+
 function pressSelect(at) {
   if (at === null) return;
+  if (editing.text !== press.text) { endDrag(); return; }
   const [a, b] = unitAt(press.unit, at);
   const start = Math.min(a, press.from), end = Math.max(b, press.to);
   editing.anchor = start < press.from ? press.to : press.from;
@@ -6060,7 +6073,7 @@ function pressSelect(at) {
  *  selection follows the text that comes into view. */
 function dragScroll() {
   press.scroll = 0;
-  if (!press.down || !editing || editing.seq !== press.seq || !press.el.isConnected) return;
+  if (!press.down || !editing || editing.seq !== press.seq || editing.text !== press.text || !press.el.isConnected) return;
   const [top, bottom] = docRows(), d = press.y < top ? press.y - top : press.y > bottom ? press.y - bottom : 0;
   if (!d) return;
   const was = window.scrollY;
@@ -6072,7 +6085,7 @@ function dragScroll() {
 
 document.addEventListener('mousedown', (e) => {
   const el = editing && e.target.closest(EDITOR_EL);
-  if (press) cancelAnimationFrame(press.scroll);
+  endDrag();
   press = null;
   if (!el) return;
   e.preventDefault();
@@ -6084,12 +6097,12 @@ document.addEventListener('mousedown', (e) => {
     const s = editing.selStart, t = s + editing.selLen;
     from = to = editing.anchor === s || editing.anchor === t ? editing.anchor : Math.abs(at - s) > Math.abs(at - t) ? s : t;
   }
-  press = { el, seq: editing.seq, unit, from, to, down: true, up: null, x: e.clientX, y: e.clientY, scroll: 0 };
+  press = { el, seq: editing.seq, text: editing.text, unit, from, to, down: true, up: null, x: e.clientX, y: e.clientY, scroll: 0 };
   pressSelect(at);
 });
 document.addEventListener('mousemove', (e) => {
   if (!press || !press.down) return;
-  if (!(e.buttons & 1) || !editing || editing.seq !== press.seq || !press.el.isConnected) { press.down = false; return; }
+  if (!(e.buttons & 1) || !editing || editing.seq !== press.seq || editing.text !== press.text || !press.el.isConnected) { endDrag(); return; }
   Object.assign(press, { x: e.clientX, y: e.clientY });
   pressSelect(dragOffset(press.el, e.clientX, e.clientY));
   if (!press.scroll) dragScroll();

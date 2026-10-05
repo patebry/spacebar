@@ -939,6 +939,37 @@ def main():
                   f'editor select: in {kind}, a drag left of the text selects to that row, not to the end', json.dumps([a, b]))
             page.cmd('@eval:sb.editEnd({}); scrollTo(0, 0); 0')
 
+        # A release the page never sees, or a text the writer changes under the drag, ends it.
+        page.render(os.path.join(page.out, 'long.txt'))
+        page.cmd('@wait:0.3')
+        click(page, '#doc pre.code')
+        stops = {}
+        for name, end in (('blur', "window.dispatchEvent(new Event('blur'))"),
+                          ('hidden', "Object.defineProperty(document, 'hidden', { get: () => true, configurable: true }); document.dispatchEvent(new Event('visibilitychange')); delete document.hidden"),
+                          ('pointercancel', "document.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true }))")):
+            page.cmd('@eval:scrollTo(0, 1500); 0')
+            page.js("const k = __ed.mid(); __ed.fire('mousedown', k); __ed.fire('mousemove', [innerWidth / 2, innerHeight + 40]); return 0")
+            page.cmd('@wait:0.2')
+            a = page.js(end + '; return [scrollY, __ed.state()]')
+            page.cmd('@wait:0.5')
+            b = page.js('return [scrollY, __ed.state()]')
+            page.js("__ed.fire('mousemove', [innerWidth / 2, innerHeight + 40]); return 0")
+            page.cmd('@wait:0.2')
+            c = page.js("const r = [scrollY, __ed.state()]; __ed.fire('mouseup', [5, 5]); return r")
+            stops[name] = [a, b, c]
+        check(all(a[0] > 1500 and a == b == c for a, b, c in stops.values()),
+              'editor select: a drag scrolling the page stops when the window loses focus, hides, or the pointer is cancelled', json.dumps(stops)[:600])
+        page.cmd('@eval:scrollTo(0, 1500); 0')
+        r = page.js("""const k = __ed.mid(); __ed.fire('mousedown', k); __ed.fire('mousemove', [innerWidth / 2, innerHeight / 2 + 60]);
+          const n = editing.text.length;
+          sb.textUpdate({ seq: editing.seq, from: 0, to: n - 1000, insert: '', selStart: 10, selLen: 0, keyTime: 0 });
+          const after = __ed.state();
+          __ed.fire('mousemove', [innerWidth / 2, innerHeight / 2 - 60]); __ed.fire('mouseup', [5, 5]);
+          return { after, moved: __ed.state(), len: editing.text.length };""")
+        check(r['after'] == [10, 0, None] and r['moved'] == [10, 0, None] and r['len'] == 1000,
+              'editor select: the writer changing the text under a drag ends the drag, which leaves the new selection alone', json.dumps(r))
+        page.cmd('@eval:sb.editEnd({}); scrollTo(0, 0); 0')
+
         csp = [l for l in page.logs if 'csp blocked' in l]
         errs = [l for l in page.logs if l.startswith(('rejection', 'mermaid')) or ' @' in l]
         check(not csp and not errs, 'no CSP violations or page errors logged', json.dumps(csp + errs)[:300])

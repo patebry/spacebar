@@ -279,7 +279,7 @@ struct KeyRoute {
 }
 
 /// A trackpad event of the zooming kinds as the tap saw it. Type 29 is the window server's gesture event, `subtype` its HID
-/// kind (8 a pinch, 22 a two-finger double tap); 30 and 32 are a pinch and a smart zoom already typed as such.
+/// kind (8 a pinch, 22 a two-finger double tap); 30 is a pinch only with subtype 8, and 32 a smart zoom already typed as such.
 struct GestureEvent: Equatable {
     var type: Int64
     var subtype: Int64 = 0

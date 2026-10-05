@@ -1045,7 +1045,7 @@ function beginEdit(block, e, tClick) {
   afterPaint(() => post({ type: 'caretPainted', t: now() }));
 }
 
-// ---------- editing a whole text file (code, text, and the text of JSON and CSV) ----------
+// ---------- editing a whole text file (code, text, the text of JSON and CSV, and Markdown in Raw) ----------
 
 /** Offset in `code`'s text under a point. */
 function textOffset(code, x, y) {
@@ -1344,10 +1344,10 @@ function headingText(h) {
 function buildToc() {
   const nav = $('toc');
   const hs = [...$('doc').querySelectorAll(':scope > h1, :scope > h2, :scope > h3')].filter((h) => !h.classList.contains('md-editing'));
-  // A note with no TOC takes the TOC's room. The heading being typed into is not an entry, but the TOC it had stays, so the
-  // column does not widen under the caret.
-  const show = settings.toc !== 'off' && (editing && !editing.whole && !nav.hidden
-    || (settings.toc === 'on' ? hs.length > 0 : settings.toc === 'auto' && hs.length >= 3));
+  // A note with no TOC takes the TOC's room. While a block is edited the TOC stays shown or hidden as it was, so the column
+  // does not change width under the caret; the draw that ends the edit decides afresh.
+  const show = settings.toc !== 'off' && (editing && !editing.whole ? !nav.hidden
+    : settings.toc === 'on' ? hs.length > 0 : settings.toc === 'auto' && hs.length >= 3);
   tocTargets = show ? hs : [];
   if (!show) { nav.hidden = true; nav.replaceChildren(); return; }
   const top = Math.min(...hs.map((h) => +h.tagName[1]));
@@ -4360,16 +4360,19 @@ function filteredRows() {
     }
   }
   // The listing's own order: by name, folders first only where Finder puts them there.
-  // With README first it heads the files, as FolderListing pins it.
+  // With README first one Markdown README heads the files, the first by name, as FolderListing pins it.
   const first = settings.listsFoldersFirst === true;
-  const readme = (e) => settings.folderReadmeFirst === true && !e.dir && /^readme(\.(md|markdown|mdown|mkd|mkdn))?$/i.test(e.name);
-  const order = (a, b) => (first && a.dir !== b.dir ? (a.dir ? -1 : 1)
-    : readme(a) !== readme(b) ? (readme(a) ? -1 : 1) : a.name.localeCompare(b.name, undefined, { numeric: true }));
+  const isReadme = (e) => settings.folderReadmeFirst === true && !e.dir && !e.broken && /^readme\.(md|markdown|mdown|mkd|mkdn)$/i.test(e.name);
+  const byName = (a, b) => (first && a.dir !== b.dir ? (a.dir ? -1 : 1) : a.name.localeCompare(b.name, undefined, { numeric: true }));
+  let pin = null;
+  const order = (a, b) => (first && a.dir !== b.dir ? (a.dir ? -1 : 1) : (a === pin) !== (b === pin) ? (a === pin ? -1 : 1) : byName(a, b));
   const entries = (dir) => {
     const d = tree.dirs.get(dir), listed = d ? d.entries : [], extra = found.get(dir);
     if (!extra) return listed;
     const have = new Set(listed.map((e) => e.path));
-    const add = [...extra.values()].filter((e) => !have.has(e.path)).sort(order);
+    const add = [...extra.values()].filter((e) => !have.has(e.path)).sort(byName);
+    pin = listed.find(isReadme) || add.find(isReadme) || null;
+    add.sort(order);
     if (!add.length) return listed;
     // A search result has no size or date: by another sort, what was found follows what is listed.
     if ((settings.folderSort || 'name') !== 'name') return [...listed, ...add];
@@ -5159,7 +5162,7 @@ if (HOST === 'panel') {
 
 // ---------- the toolbar's tools: Formatted or Raw, Find and Copy, each shown only for the views they apply to ----------
 
-// Raw is always the file's own text, in the code view: read only for Markdown, XML and CSS, editable for JSON and CSV.
+// Raw is always the file's own text, in the code view, and editable wherever the file is.
 // One name per kind whatever the state: aria-pressed says whether it is on.
 const RAW_NAMES = { markdown: 'Markdown source', json: 'Raw JSON', notebook: 'Raw JSON', csv: 'Raw text', xml: 'Raw XML', css: 'Raw CSS' };
 const XML_FILES = /\.(xml|plist|xsd|xslt?)$/i;

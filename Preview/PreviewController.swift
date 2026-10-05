@@ -1299,6 +1299,7 @@ class PreviewController: NSViewController {
     /// Takes a Markdown read that is still current: `raw` is the file's text as on disk, `lines` its text as shown.
     private func apply(_ raw: String, _ lines: Lines, url: URL, reason: String) {
         clearGone()
+        editableMemo = nil
         if raw == diskText { return }
         if let d = docText, !matchesDisk(d) { displace(d) }
         resetUndo()
@@ -1391,6 +1392,25 @@ class PreviewController: NSViewController {
         }
     }
 
+    /// EditableText.allowed(path:) for the file being pushed: it stats and resolves the path, so it is asked once per path.
+    private var editableMemo: (path: String, ok: Bool)?
+    private func editableName(_ path: String) -> Bool {
+        if let m = editableMemo, m.path == path { return m.ok }
+        let ok = EditableText.allowed(path: path)
+        editableMemo = (path, ok)
+        return ok
+    }
+
+    /// onDisk(text).utf8.count <= maxTextBytes without building onDisk(text): a CRLF file adds one byte per line break.
+    private func diskBytesFit(_ text: String) -> Bool {
+        let n = text.utf8.count
+        if n > FileTypes.maxTextBytes { return false }
+        if lineEnding == "\n" || n * 2 <= FileTypes.maxTextBytes { return true }
+        var breaks = 0
+        for b in text.utf8 where b == 0x0A { breaks += 1 }
+        return n + breaks <= FileTypes.maxTextBytes
+    }
+
     private func push(text: String, path: String, reason: String, keyTime: Double? = nil) {
         closePDF()
         unavailablePath = nil
@@ -1401,7 +1421,7 @@ class PreviewController: NSViewController {
         // up to maxTextBytes and a text that round-trips as is (not one a leading BOM would make mismatch what it reads fresh
         // from disk): past either, the writer would refuse and leave the tooltip's promise broken. A block click (editBlock)
         // takes neither path, so it stays available either way.
-        payload["editable"] = EditableText.allowed(path: path) && onDisk(text).utf8.count <= FileTypes.maxTextBytes && text.first != "\u{FEFF}"
+        payload["editable"] = editableName(path) && diskBytesFit(text) && text.first != "\u{FEFF}"
         if let keyTime { payload["keyTime"] = keyTime }
         if host.remoteImages.allowedPath == path { payload[RemoteImageGate.payloadKey] = true }
         payload["ver"] = docVersion

@@ -993,6 +993,12 @@ function wordAt(text, i) {
   return w && w.isWordLike ? [w.index, w.index + w.segment.length] : [i, i];
 }
 
+/** The line holding offset `i`, with its line break, as a triple-click in a text view selects it. */
+function lineAt(text, i) {
+  const j = text.indexOf('\n', i);
+  return [i > 0 ? text.lastIndexOf('\n', i - 1) + 1 : 0, j < 0 ? text.length : j + 1];
+}
+
 function select(start, len) {
   Object.assign(editing, { selStart: start, selLen: len });
   const el = editorEl();
@@ -6016,13 +6022,58 @@ document.addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !pop.hidden) { showPopover(false); e.preventDefault(); } });
 syncPopover();
 
-// Clicks in the editor move the caret and double-clicks select a word; the page's own selection stays out of the editor.
-document.addEventListener('mousedown', (e) => { if (editing && e.target.closest('#doc > .md-editing, #doc pre.text-editing')) e.preventDefault(); });
+// A press in the editor places the caret, a second selects a word and a third a line; dragging extends the selection from the
+// press by the same unit. The page's own selection stays out of the editor.
+const EDITOR_EL = '#doc > .md-editing, #doc pre.text-editing';
+let press = null; // { el, seq, unit, from, to, down, clicked }
+
+/** The editor's offset under a point, held inside the editor while a drag is above, below or beside it. */
+function dragOffset(el, x, y) {
+  const r = el.getBoundingClientRect();
+  if (y < r.top) return 0;
+  if (y >= r.bottom) return editing.text.length;
+  return editorOffset(el, Math.min(Math.max(x, r.left + 1), r.right - 1), y);
+}
+
+function unitAt(unit, at) {
+  return unit === 'line' ? lineAt(editing.text, at) : unit === 'word' ? wordAt(editing.text, at) : [at, at];
+}
+
+function pressSelect(at) {
+  const [a, b] = unitAt(press.unit, at);
+  const start = Math.min(a, press.from), end = Math.max(b, press.to);
+  if (start !== editing.selStart || end - start !== editing.selLen) select(start, end - start);
+}
+
+document.addEventListener('mousedown', (e) => {
+  const el = editing && e.target.closest(EDITOR_EL);
+  press = null;
+  if (!el) return;
+  e.preventDefault();
+  if (e.button !== 0) return;
+  const at = editorOffset(el, e.clientX, e.clientY);
+  const unit = e.detail >= 3 ? 'line' : e.detail === 2 ? 'word' : 'char';
+  let [from, to] = unitAt(unit, at);
+  if (e.shiftKey && unit === 'char') {
+    const s = editing.selStart, t = s + editing.selLen;
+    from = to = editing.anchor === s || editing.anchor === t ? editing.anchor : Math.abs(at - s) > Math.abs(at - t) ? s : t;
+  }
+  editing.anchor = from;
+  press = { el, seq: editing.seq, unit, from, to, down: true, clicked: false };
+  pressSelect(at);
+});
+document.addEventListener('mousemove', (e) => {
+  if (!press || !press.down) return;
+  if (!(e.buttons & 1) || !editing || editing.seq !== press.seq || !press.el.isConnected) { press.down = false; return; }
+  pressSelect(dragOffset(press.el, e.clientX, e.clientY));
+});
+document.addEventListener('mouseup', () => { if (press) press.down = false; });
 
 document.addEventListener('dblclick', (e) => {
   const gt = e.target.closest('#doc a.gt');
   if (gt && gridShown()) { e.preventDefault(); gridOpen(gt.dataset.path); return; }
-  const el = e.target.closest('#doc > .md-editing, #doc pre.text-editing');
+  if (press && press.unit !== 'char') { e.preventDefault(); return; }
+  const el = e.target.closest(EDITOR_EL);
   if (!editing || !el) return;
   e.preventDefault();
   const [a, b] = wordAt(editing.text, editorOffset(el, e.clientX, e.clientY));
@@ -6032,6 +6083,8 @@ document.addEventListener('dblclick', (e) => {
 document.addEventListener('click', (e) => {
   const tClick = performance.timeOrigin + e.timeStamp;
   clearTimeout(fenceTimer);
+  // The press already placed the caret or selection, and a drag out of the editor ends wherever the pointer is let go.
+  if (press && !press.clicked) { press.clicked = true; if (editing && editing.seq === press.seq) return; }
   // The chrome around the document ends an edit like a click on the page's margin does; hiding or resizing the sidebar
   // only changes the layout, so the edit stays open.
   if (editing && e.target.closest('#sidebar, #crumbs, #toolbar, #toc') && !e.target.closest('#side-resize')) stopEditing();
@@ -6102,7 +6155,7 @@ document.addEventListener('click', (e) => {
   if (a && href && href.length > 1 && a.closest('#doc')) { e.preventDefault(); inPageLink(href.slice(1)); return; }
   // An embedded note is another file: it is read here, never edited.
   if (e.target.closest('#doc .wl-embed')) return;
-  const el = e.target.closest('#doc > .md-editing, #doc pre.text-editing');
+  const el = e.target.closest(EDITOR_EL);
   if (editing && el) { if (e.detail < 2) select(editorOffset(el, e.clientX, e.clientY), 0); return; }
   if (a || e.target.closest('input, button, summary, #toolbar') || getSelection().toString()) return;
   const text = e.target.closest('#doc pre.code[data-file-text]');

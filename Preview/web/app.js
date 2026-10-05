@@ -972,10 +972,11 @@ function sourceOffset(block, src, x, y) {
   return i;
 }
 
-/** Offset in the edit buffer under a point in the editor, which shows the buffer verbatim plus a caret marker. */
-function editorOffset(el, x, y) {
+/** Offset in the edit buffer under a point in the editor, which shows the buffer verbatim plus a caret marker; `miss` where the
+ *  point is on no text of the editor. */
+function editorOffset(el, x, y, miss = editing.text.length) {
   const r = document.caretRangeFromPoint(x, y);
-  if (!r || !el.contains(r.startContainer)) return editing.text.length;
+  if (!r || !el.contains(r.startContainer)) return miss;
   const pre = document.createRange();
   pre.selectNodeContents(el);
   pre.setEnd(r.startContainer, r.startOffset);
@@ -6025,14 +6026,22 @@ syncPopover();
 // A press in the editor places the caret, a second selects a word and a third a line; dragging extends the selection from the
 // press by the same unit. The page's own selection stays out of the editor.
 const EDITOR_EL = '#doc > .md-editing, #doc pre.text-editing';
-let press = null; // { el, seq, unit, from, to, down, clicked }
+let press = null; // { el, seq, unit, from, to, down, up, x, y, scroll }
 
-/** The editor's offset under a point, held inside the editor while a drag is above, below or beside it. */
+/** The window's rows the document shows: under the toolbar row and above the panel's bottom edge. */
+function docRows() {
+  return [appChrome() ? 48 : 8, window.innerHeight - 8];
+}
+
+/** The editor's offset under a point held inside the editor's visible part, or null where no text is under it. Past an end of
+ *  the editor that is on screen, that end; past the window's rows with more editor beyond, the edge row's text. */
 function dragOffset(el, x, y) {
-  const r = el.getBoundingClientRect();
-  if (y < r.top) return 0;
-  if (y >= r.bottom) return editing.text.length;
-  return editorOffset(el, Math.min(Math.max(x, r.left + 1), r.right - 1), y);
+  const r = el.getBoundingClientRect(), [top, bottom] = docRows();
+  if (y < r.top && r.top >= top) return 0;
+  if (y >= r.bottom && r.bottom <= bottom) return editing.text.length;
+  const g = el.matches('pre') && el.parentElement.querySelector(':scope > .gutter');
+  const left = Math.max(r.left, g ? g.getBoundingClientRect().right : 0, 0), right = Math.min(r.right, window.innerWidth);
+  return editorOffset(el, Math.min(Math.max(x, left + 1), right - 1), Math.min(Math.max(y, Math.max(r.top, top) + 1), Math.min(r.bottom, bottom) - 1), null);
 }
 
 function unitAt(unit, at) {
@@ -6040,34 +6049,52 @@ function unitAt(unit, at) {
 }
 
 function pressSelect(at) {
+  if (at === null) return;
   const [a, b] = unitAt(press.unit, at);
   const start = Math.min(a, press.from), end = Math.max(b, press.to);
+  editing.anchor = start < press.from ? press.to : press.from;
   if (start !== editing.selStart || end - start !== editing.selLen) select(start, end - start);
+}
+
+/** While the button is held past the top or bottom row, the page scrolls toward the pointer, faster the farther it is, and the
+ *  selection follows the text that comes into view. */
+function dragScroll() {
+  press.scroll = 0;
+  if (!press.down || !editing || editing.seq !== press.seq || !press.el.isConnected) return;
+  const [top, bottom] = docRows(), d = press.y < top ? press.y - top : press.y > bottom ? press.y - bottom : 0;
+  if (!d) return;
+  const was = window.scrollY;
+  window.scrollBy({ top: Math.sign(d) * Math.min(60, 2 + Math.abs(d) / 2), behavior: 'instant' });
+  if (window.scrollY === was) return;
+  pressSelect(dragOffset(press.el, press.x, press.y));
+  press.scroll = requestAnimationFrame(() => press && dragScroll());
 }
 
 document.addEventListener('mousedown', (e) => {
   const el = editing && e.target.closest(EDITOR_EL);
+  if (press) cancelAnimationFrame(press.scroll);
   press = null;
   if (!el) return;
   e.preventDefault();
-  if (e.button !== 0) return;
+  if (e.button !== 0 || e.ctrlKey) return;
   const at = editorOffset(el, e.clientX, e.clientY);
   const unit = e.detail >= 3 ? 'line' : e.detail === 2 ? 'word' : 'char';
   let [from, to] = unitAt(unit, at);
-  if (e.shiftKey && unit === 'char') {
+  if (e.shiftKey) {
     const s = editing.selStart, t = s + editing.selLen;
     from = to = editing.anchor === s || editing.anchor === t ? editing.anchor : Math.abs(at - s) > Math.abs(at - t) ? s : t;
   }
-  editing.anchor = from;
-  press = { el, seq: editing.seq, unit, from, to, down: true, clicked: false };
+  press = { el, seq: editing.seq, unit, from, to, down: true, up: null, x: e.clientX, y: e.clientY, scroll: 0 };
   pressSelect(at);
 });
 document.addEventListener('mousemove', (e) => {
   if (!press || !press.down) return;
   if (!(e.buttons & 1) || !editing || editing.seq !== press.seq || !press.el.isConnected) { press.down = false; return; }
+  Object.assign(press, { x: e.clientX, y: e.clientY });
   pressSelect(dragOffset(press.el, e.clientX, e.clientY));
+  if (!press.scroll) dragScroll();
 });
-document.addEventListener('mouseup', () => { if (press) press.down = false; });
+document.addEventListener('mouseup', (e) => { if (press && press.down) Object.assign(press, { down: false, up: e.timeStamp }); });
 
 document.addEventListener('dblclick', (e) => {
   const gt = e.target.closest('#doc a.gt');
@@ -6084,7 +6111,7 @@ document.addEventListener('click', (e) => {
   const tClick = performance.timeOrigin + e.timeStamp;
   clearTimeout(fenceTimer);
   // The press already placed the caret or selection, and a drag out of the editor ends wherever the pointer is let go.
-  if (press && !press.clicked) { press.clicked = true; if (editing && editing.seq === press.seq) return; }
+  if (press && press.up !== null && e.timeStamp - press.up < 500) { press.up = null; if (editing && editing.seq === press.seq) return; }
   // The chrome around the document ends an edit like a click on the page's margin does; hiding or resizing the sidebar
   // only changes the layout, so the edit stays open.
   if (editing && e.target.closest('#sidebar, #crumbs, #toolbar, #toc') && !e.target.closest('#side-resize')) stopEditing();
@@ -6156,7 +6183,7 @@ document.addEventListener('click', (e) => {
   // An embedded note is another file: it is read here, never edited.
   if (e.target.closest('#doc .wl-embed')) return;
   const el = e.target.closest(EDITOR_EL);
-  if (editing && el) { if (e.detail < 2) select(editorOffset(el, e.clientX, e.clientY), 0); return; }
+  if (editing && el) { if (e.detail < 2 && !e.ctrlKey) select(editorOffset(el, e.clientX, e.clientY), 0); return; }
   if (a || e.target.closest('input, button, summary, #toolbar') || getSelection().toString()) return;
   const text = e.target.closest('#doc pre.code[data-file-text]');
   if (text && settings.inlineEditing && current.editable === true && (!isMarkdown(current) || rawOn(current))) { beginTextEdit(text, e, tClick); return; }

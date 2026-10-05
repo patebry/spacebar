@@ -214,12 +214,13 @@ MOUSE = """window.__ed = (() => {
   const fire = (type, k, detail = 1, o = {}) => {
     const [x, y] = typeof k === 'number' ? at(k) : k;
     (document.elementFromPoint(x, y) || document.body).dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window,
-      clientX: x, clientY: y, detail, buttons: type === 'mousedown' || type === 'mousemove' ? 1 : 0, shiftKey: !!o.shift }));
+      clientX: x, clientY: y, detail, buttons: o.buttons ?? (type === 'mousedown' || type === 'mousemove' ? 1 : 0), shiftKey: !!o.shift, ctrlKey: !!o.ctrl }));
   };
   const up = (k, d, o) => { fire('mouseup', k, d, o); fire('click', k, d, o); if (d === 2) fire('dblclick', k, d, o); };
   const state = () => { const e = ed(); return e && editing ? [editing.selStart, editing.selLen, (e.querySelector('.sel') || {}).textContent || null] : null; };
   return {
-    state,
+    state, fire,
+    mid(dy = 0) { const r = ed().getBoundingClientRect(); return editorOffset(ed(), r.left + 120, innerHeight / 2 + dy); },
     click(k, n = 1, o = {}) { for (let d = 1; d <= n; d++) { fire('mousedown', k, d, o); up(k, d, o); } return state(); },
     drag(a, b, n = 1, o = {}) {
       for (let d = 1; d < n; d++) { fire('mousedown', a, d); up(a, d); }
@@ -881,6 +882,62 @@ def main():
         check(whole and r[1] and r[1][:2] == [at('pha'), at('psilon') - at('pha')] and r3 and r3[:2] == [at('delta'), len('delta epsilon\n')],
               'editor select: in a whole-file edit, a drag across lines and a triple-click select as in a block', json.dumps([whole, r, r3]))
         page.cmd('@eval:sb.editEnd({}); 0')
+
+        # ---- the editor's selection with the mouse: what a drag past the visible text or a stray click must not do ----
+        page.render(sel_md)
+        click(page, '#doc > p')
+        ed(f'click({at("beta")})')
+        r = ed(f'click({at("gamma")}, 1, {{ ctrl: true }})')
+        ed(f'drag({at("gamma")}, {at("delta")})')
+        r2 = page.js(f"__ed.fire('mousedown', {at('beta')}, 1, {{ ctrl: true }}); __ed.fire('mouseup', {at('beta')}, 1, {{ ctrl: true }}); return __ed.state()")
+        check(r == [at('beta'), 0, None] and r2 == [at('gamma'), at('delta') - at('gamma'), SRC[at('gamma'):at('delta')]],
+              'editor select: a control-click (the context menu) leaves the caret and selection alone', json.dumps([r, r2]))
+        r = ed(f'drag({at("psilon")}, {at("lpha")}, 2)')
+        r2 = ed(f'click({at("beta")}, 1, {{ shift: true }})')
+        check(r[1] and r[1][:2] == [0, at('epsilon') + 7] and r2[:2] == [at('beta'), at('epsilon') + 7 - at('beta')],
+              'editor select: after a drag backward by words, a shift-click keeps the far end of the first word', json.dumps([r, r2]))
+        ed(f'click({at("beta")})')
+        r = ed(f'click({at("psilon")}, 2, {{ shift: true }})')
+        check(r[:2] == [at('beta'), at('epsilon') + 7 - at('beta')], 'editor select: a shift-double-click extends by whole words', json.dumps(r))
+        r = page.js(f"""__ed.fire('mousedown', {at('beta')}); __ed.fire('mousemove', {at('gamma')}, 1, {{ buttons: 0 }});
+          __ed.fire('click', {at('delta')}); return __ed.state()""")
+        check(r == [at('delta'), 0, None], 'editor select: a click after a press whose release was lost still places the caret', json.dumps(r))
+        page.cmd('@eval:sb.editEnd({}); 0')
+
+        PAST = """const k = __ed.mid(), y0 = scrollY; __ed.fire('mousedown', k); __ed.fire('mousemove', [__X__, __Y__]);
+          return { k, y0, now: __ed.state(), len: editing.text.length };"""
+        LATER = "const s = __ed.state(), y = scrollY; __ed.fire('mouseup', [5, 5]); __ed.fire('click', [5, 5]); return { s, y, editing: !!editing };"
+        def past(x, y, wait=0.4):
+            a = page.js(PAST.replace('__X__', x).replace('__Y__', y))
+            page.cmd(f'@wait:{wait}')
+            return a, page.js(LATER)
+        LONG = ''.join(f'line {i:03} alpha beta\n' for i in range(200))
+        for kind, path, body, sel in (('a whole-file edit', 'long.txt', LONG, '#doc pre.code'),
+                                      ('a block taller than the window', 'tall.md', '\n'.join(f'row {i:03} alpha beta' for i in range(200)) + '\n', '#doc > p')):
+            f = os.path.join(page.out, path)
+            open(f, 'w').write(body)
+            page.render(f)
+            page.cmd('@wait:0.3')
+            click(page, sel)
+            page.cmd('@eval:scrollTo(0, 1500); 0')
+            a, b = past('innerWidth / 2', '5')
+            ok_up = a['now'] and 0 < a['now'][0] < a['k'] and a['now'][0] + a['now'][1] == a['k'] and b['y'] < a['y0'] and 0 <= b['s'][0] < a['now'][0] and b['editing']
+            check(ok_up, f'editor select: in {kind}, a drag up over the toolbar row extends to the top row shown and scrolls up, the selection following', json.dumps([a, b]))
+            page.cmd('@eval:scrollTo(0, 1500); 0')
+            a, b = past('innerWidth / 2', '-5')
+            check(a['now'] and 0 < a['now'][0] < a['k'] and b['y'] < a['y0'] and b['editing'],
+                  f'editor select: in {kind}, a drag above the window does not jump to the start', json.dumps([a, b]))
+            page.cmd('@eval:scrollTo(0, 1500); 0')
+            a, b = past('innerWidth / 2', 'innerHeight + 10')
+            e1, e2 = (a['now'][0] + a['now'][1]) if a['now'] else -1, (b['s'][0] + b['s'][1]) if b['s'] else -1
+            check(a['now'] and a['now'][0] == a['k'] and a['k'] < e1 < a['len'] and b['y'] > a['y0'] and e1 < e2 <= a['len'] and b['editing'],
+                  f'editor select: in {kind}, a drag below the window extends to the bottom row shown and scrolls down, not to the end', json.dumps([a, b]))
+            page.cmd('@eval:scrollTo(0, 1500); 0')
+            a, b = past('-5', 'innerHeight / 2 + 60', 0.1)
+            e1 = (a['now'][0] + a['now'][1]) if a['now'] else -1
+            check(a['now'] and a['now'][0] == a['k'] and a['k'] < e1 < a['k'] + 200 and b['y'] == a['y0'],
+                  f'editor select: in {kind}, a drag left of the text selects to that row, not to the end', json.dumps([a, b]))
+            page.cmd('@eval:sb.editEnd({}); scrollTo(0, 0); 0')
 
         csp = [l for l in page.logs if 'csp blocked' in l]
         errs = [l for l in page.logs if l.startswith(('rejection', 'mermaid')) or ' @' in l]

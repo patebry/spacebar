@@ -1045,7 +1045,7 @@ function beginEdit(block, e, tClick) {
   afterPaint(() => post({ type: 'caretPainted', t: now() }));
 }
 
-// ---------- editing a whole text file (code, text, and the text of JSON and CSV) ----------
+// ---------- editing a whole text file (code, text, the text of JSON and CSV, and Markdown in Raw) ----------
 
 /** Offset in `code`'s text under a point. */
 function textOffset(code, x, y) {
@@ -5162,7 +5162,7 @@ if (HOST === 'panel') {
 
 // ---------- the toolbar's tools: Formatted or Raw, Find and Copy, each shown only for the views they apply to ----------
 
-// Raw is always the file's own text, in the code view: read only for Markdown, XML and CSS, editable for JSON and CSV.
+// Raw is always the file's own text, in the code view, and editable wherever the file is.
 // One name per kind whatever the state: aria-pressed says whether it is on.
 const RAW_NAMES = { markdown: 'Markdown source', json: 'Raw JSON', notebook: 'Raw JSON', csv: 'Raw text', xml: 'Raw XML', css: 'Raw CSS' };
 const XML_FILES = /\.(xml|plist|xsd|xslt?)$/i;

@@ -404,7 +404,7 @@ Tests that run off screen, without Quick Look (the test builds target Apple sili
 
 ```sh
 for t in settings scheme linkpolicy cas dataless editkeys filterkeys pdfpane htmlpane mediapane qlpane imagepane diskimage richtext encoding archive claims rivals updates report welcome helper helperlink viewerlatency bigfiles; do test/$t/run.sh; done
-python3 test/webcheck.py && python3 test/webthemes.py && python3 test/remoteimages.py && python3 test/sidebar.py
+python3 test/webcheck.py && python3 test/webthemes.py && python3 test/remoteimages.py && python3 test/htmlscripts.py && python3 test/sidebar.py
 ```
 
 The other scripts in `test/` drive real Quick Look windows and synthetic input; run them on a machine you are not using.
@@ -416,7 +416,7 @@ the helper's and viewer's logs. It sends no input itself.
 ```
 spacebar.app                         settings window (SwiftUI)
 └─ PlugIns/SpacebarPreview.appex     sandboxed Quick Look preview: WKWebView + markdown-it, KaTeX, highlight.js,
-   │                                 Mermaid, DOMPurify, all bundled; no network code of its own
+   │                                 Mermaid, DOMPurify, all bundled; fetches only remote images you allow
    └─ XPCServices/…writer.xpc        small unsandboxed helper: saves edits, opens links and files, owns the key panel for
                                      inline editing and the sidebar's keys, lists archives, checks for and starts updates
 └─ PlugIns/SpacebarFolders.appex     the same preview for folders (on by default; turn off in Settings)
@@ -437,7 +437,8 @@ disk, the external change wins.
   opens a new GitHub issue in your browser with your versions, Mac model and the end of the update log filled in; nothing is
   sent unless you submit it there. Settings are a JSON file in `~/Library/Application Support/spacebar`.
 - Remote images are off by default (fetching one tells its server when you opened the document). A blocked image offers a
-  one-time load for that document.
+  one-time load for that document. The page's Content Security Policy allows no remote image itself: an allowed one is
+  fetched by the extension, which checks again that remote images are allowed for the document on screen.
 - A Markdown file is treated as hostile. The page runs under a strict Content Security Policy (bundled scripts only, no
   inline scripts, frames, forms or connections), and DOMPurify sanitizes everything before it reaches the page.
 - The writer only writes to the file on screen, and only to a type spacebar edits (Markdown, code, text, JSON, CSV, dotfile
@@ -452,11 +453,13 @@ disk, the external change wins.
   that lead out of it resolve to nothing. Nothing in a Markdown file is ever run, and scripts are shown as source, SVG only
   as an image, a PDF by PDFKit (which runs no PDF scripts; the PDF is parsed in the sandboxed preview extension itself), and
   the page loads files only as images.
-- An HTML file is shown in a web view of its own that shares nothing with the preview's page. By default its scripts run and
-  it may load from the web, unless your browser, Mail or AirDrop marked it as downloaded (the quarantine flag). Files from
-  `git clone`, `curl`, `unzip` or a USB drive are not marked, so their pages run their scripts and may load from the web too;
-  **Settings, Advanced, Scripts in HTML files: Never** turns that off for every HTML file. A marked file always opens with
-  scripts off and no network at all, resource hints included, and only files beside it load. A link in an HTML file is
+- An HTML file is shown in a web view of its own that shares nothing with the preview's page. One your browser, Mail or
+  AirDrop marked as downloaded (the quarantine flag) always opens with scripts off and no network at all, resource hints
+  included, and only files beside it load. Files from `git clone`, `curl`, `unzip` or a USB drive are not marked: by default
+  (**Settings, Advanced, Scripts in HTML files: Ask**) such a page opens without its scripts, and a bar above it asks
+  whether to run them, for files made on this Mac, or never. **Files made on this Mac** runs them and lets the page load
+  from the web; **Never** turns both off for every HTML file. A page's scripts cannot fetch or frame the files beside it,
+  though they can use one as their own script, stylesheet or image, as in a browser. A link in an HTML file is
   followed only when you click it, through the same policy as everywhere else.
 - An archive is listed, never extracted, by `/usr/bin/bsdtar` under a `sandbox-exec` profile that lets it read only the
   archive (through a descriptor the helper opened) and system files, with no writes and no network, for at most 5 seconds.
@@ -476,8 +479,9 @@ disk, the external change wins.
   hardened runtime. The viewer that renders files is sandboxed like the preview extension and never sees a key the helper
   did not send it.
 - The preview extension has the `com.apple.security.network.client` entitlement. WKWebView's helper processes crash-loop
-  in a sandboxed extension without it. spacebar has no network code of its own; the only requests the page can make are
-  remote images, which are blocked unless you allow them.
+  in a sandboxed extension without it. Besides the update check, spacebar's only network code of its own fetches a remote
+  image the page shows, and only while you allow remote images for that document; the page itself can make no request to
+  the web.
 
 Found a security problem? Please report it privately as described in [SECURITY.md](SECURITY.md), not in a public issue.
 

@@ -114,6 +114,16 @@ Each release's notes on GitHub also list its commits. This file keeps what chang
 - Welcome explains both macOS prompts and links SECURITY.md; the sample folder is `~/spacebar Sample Folder`, with a picture
   and a PDF.
 - Focus rings and labels throughout for keyboard and VoiceOver users.
+- **Scripts in HTML files: Ask** is the new default. An HTML file made on this Mac opens without its scripts, and a bar
+  above it offers **Run for files made on this Mac** or **Never**; a page with no scripts shows no bar. A setting left at
+  the old default becomes Ask; one you chose stays. Downloaded files still never run scripts.
+- A page's scripts cannot fetch or frame the files beside it (now checked by a test); they can still use one as their own
+  script, stylesheet or image, as a browser allows.
+- Remote images reach the preview only through spacebar, which checks each one against the setting or the one-time load;
+  the page's Content Security Policy no longer allows any image from the web itself. A background image a custom theme or
+  `custom.css` loads from the web no longer shows.
+- The Space helper's description says plainly that it sees every key press while it runs, what it acts on, and that it
+  never keeps what you type or sends it off this Mac; Settings and the welcome sheet link to **How the Space helper works**.
 
 ## 0.3.0 (unreleased)
 

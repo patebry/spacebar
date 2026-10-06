@@ -11,7 +11,7 @@ within a week. Fixes ship in the next release, and the advisory is published onc
 Only the latest release is supported. [FINDINGS.md](FINDINGS.md#security-model) describes the threat model: a Markdown file,
 and whatever sits beside it, is treated as hostile.
 
-Nine features reach further than a rendered page, and are in scope:
+Eleven features reach further than a rendered page, and are in scope:
 
 - **Editing files in place.** The unsandboxed writer saves what is typed. It writes only to an existing regular file whose
   name, and the name of the file it resolves to, is of a type spacebar edits: Markdown, the code, JSON, CSV and text types
@@ -39,17 +39,34 @@ Nine features reach further than a rendered page, and are in scope:
   resolved path: shell startup files (`.zshrc`, `.bash_profile`, `.profile` and the rest), `.gitconfig`, `.npmrc`, `.yarnrc`,
   `.command` and `.tool` scripts, anything in a `LaunchAgents` or `LaunchDaemons` folder, and git hooks. Other code pasted
   this way would still run only when the user runs it.
-- **HTML files** open in a separate web view with no message handler, no `spacebar:` scheme and no stored data. By default
-  a file without the quarantine flag runs its scripts and may load from the web, like a browser would; only files a
-  browser, Mail or AirDrop marked as downloaded are held back. Files from `git clone`, `curl`, `unzip` or a USB drive are
-  not marked, so their pages run too; "Scripts in HTML files: Never" (Settings, Advanced) turns scripts and web loads off
-  for every HTML file. A flag that cannot be read counts as downloaded. A downloaded file is served to its view through a
+- **HTML files** open in a separate web view with no message handler, no `spacebar:` scheme and no stored data. Files a
+  browser, Mail or AirDrop marked as downloaded never run scripts or load from the web; a flag that cannot be read counts as
+  downloaded. Files from `git clone`, `curl`, `unzip` or a USB drive are not marked. By default ("Scripts in HTML files:
+  Ask", Settings, Advanced) such a file is shown without its scripts, still loading from the web as it would with them,
+  and when its first 8 MB hold a script element, an event attribute or a `javascript:` URL the preview's own page shows a
+  bar above it: "Run for files made on this Mac" sets the setting to run them, "Never" turns scripts and web loads off for
+  every HTML file. The bar is the page's, outside the file's web view, so the file can neither draw over nor press it;
+  its buttons take only a real click that went down on them, the extension takes an answer only for the file it asked
+  about, and the writer writes it only while the setting is still Ask, so the preview can never turn scripts back on.
+  With scripts on, the view gets read access to the file's folder, so the page's own images, stylesheets and scripts load,
+  but its scripts cannot read other files: WebKit gives each file URL its own origin, so `fetch` and `XMLHttpRequest` of
+  a sibling (or any `file:` URL) fail, a sibling in a frame is cross-origin, and a canvas a sibling image was drawn on is
+  tainted (`test/htmlpane` checks each of these). What a script can still do is what any page can with its folder: load a
+  file there as its own `<script>` (and read what that defines), apply one as a stylesheet (and read its computed style),
+  and learn whether a file of a given name loads as an image, and its size. A downloaded file is served to its view through a
   scheme handler: the file is the only document, decoded and sent as UTF-8 with every `<link>` element (any prefix or case)
   made inert and the stylesheets beside it inlined; other files in its folder load only as stylesheets, images and fonts; no
   frame of any kind loads; a CSP with no scripts, frames or anything from outside the folder; and every http(s), ws(s) and
   ftp load blocked. Resource hints such as preconnect are not governed by CSP or content rules, which is why no `<link>` is
   kept at all. A link
   leaves the view only within a second of the user's click in it, one per click, and through the link policy.
+- **Remote images** are off by default, and the preview page's CSP allows none at all: `img-src` has no `https:`, so an
+  image put into the page by any means is blocked whatever the setting. While remote images are on, or for the one
+  document whose placeholder was clicked, the page asks for `spacebar://remote/?u=<https URL>` instead, and the extension
+  fetches it only while that holds for the document on screen, checked when the image is asked for and again when it
+  arrives: an ephemeral session with no cookies, credentials or disk cache, https only (redirects included), and only a
+  2xx answer typed as an image, at most 20 MB, within 20 seconds. A content rule list also blocks every http(s) image
+  while remote images are off. This is spacebar's only network code of its own besides the daily version check.
 - **Large text** (over 256 KB) reaches the preview page as a body the page reads once from `spacebar://body/<random token>`,
   not inside its render script. The body is the text already read for that render, held in memory: the handler reads
   nothing from disk, and serves it only at its exact URL, once, while its file is still the one on screen, as `text/plain`

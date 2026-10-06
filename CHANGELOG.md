@@ -108,6 +108,11 @@ Each release's notes on GitHub also list its commits. This file keeps what chang
 
 ### Settings and first run
 
+- **Opened from spacebar.dmg, spacebar offers to move itself to Applications**, as it does when macOS runs a downloaded copy
+  from a temporary place: **Move to Applications** copies it where the installer would (`~/Applications`, or the copy only in
+  `/Applications`), checks the copy's signature, opens it and ejects the disk image. A copy already there goes to the Trash; a
+  newer one is opened instead. Until then nothing is saved or registered from the image.
+- spacebar.dmg opens on a window with spacebar, an arrow and Applications: drag one onto the other.
 - The hint when Space reaches Quick Look says why: the Space helper is not running, or is paused while a named app holds
   secure input.
 - "Space helper" everywhere; Settings has an About section with the version and Check Now, and a Quick Look status row.

@@ -26,10 +26,40 @@ check("scripts: on for a file made on this Mac under \"local\"", HTMLPane.runsSc
 check("scripts: off for a downloaded file, whatever the setting", !HTMLPane.runsScripts(downloaded, setting: "local") && !HTMLPane.runsScripts(downloaded, setting: "off"))
 check("scripts: off everywhere under \"off\"", !HTMLPane.runsScripts(local, setting: "off"))
 check("scripts: an unknown setting is off", !HTMLPane.runsScripts(local, setting: "on") && !HTMLPane.runsScripts(local, setting: ""))
+check("mode: under \"ask\" a file made on this Mac is asked about, a downloaded one is offline",
+      HTMLPane.mode(local, setting: "ask") == .asking && HTMLPane.mode(downloaded, setting: "ask") == .offline && !HTMLPane.runsScripts(local, setting: "ask"))
+check("mode: \"local\" runs a file made here, \"off\" and an unknown setting are offline; a downloaded file is offline under each",
+      HTMLPane.mode(local, setting: "local") == .scripts && HTMLPane.mode(local, setting: "off") == .offline && HTMLPane.mode(local, setting: "on") == .offline
+        && ["local", "ask", "off"].allSatisfy { HTMLPane.mode(downloaded, setting: $0) == .offline })
 removexattr(downloaded.path, "com.apple.quarantine", 0)
 check("the flag removed: the file counts as made here again", !HTMLPane.isDownloaded(downloaded) && HTMLPane.runsScripts(downloaded, setting: "local"))
 check("fails closed: a file whose flag cannot be read (missing here) counts as downloaded", HTMLPane.isDownloaded(dir.appendingPathComponent("nope.html"))
       && !HTMLPane.runsScripts(dir.appendingPathComponent("nope.html"), setting: "local"))
+
+// ---- whether a file has scripts to ask about: only decides the question, never whether they run ----
+check("scripts found: a script element, an event attribute, a javascript: URL",
+      ["<p>x</p><SCRIPT src=a.js></SCRIPT>", "<svg><script>1</script></svg>", "<img src=x onerror=alert(1)>", "<body\nonload = \"f()\">",
+       "<a href=\"javascript:void(0)\">x</a>", "<a href='  JavaScript:x'>", "<div title=\"a\" onclick=f>"].allSatisfy(HTMLPane.hasScripts))
+check("no scripts: text that only mentions them",
+      ["<p>no scripts here</p>", "<p>one = 1, onion = 2</p>", "<p>javascript: the good parts</p>", "<p>a <b>description</b> of onload</p>",
+       "<pre>&lt;script&gt;</pre>"].allSatisfy { !HTMLPane.hasScripts($0) })
+do {
+    // Inputs that took a backtracking pattern minutes: each must be one quick pass.
+    let hostile = [String(repeating: "<a", count: 4 << 20), String(repeating: "<a on", count: 400) + String(repeating: "x", count: 1 << 20),
+                   "<a href=\"" + String(repeating: "j", count: 4 << 20), String(repeating: "<p a=b c=d ", count: 400_000)]
+    let t0 = Date()
+    let found = hostile.map(HTMLPane.hasScripts)
+    let took = Date().timeIntervalSince(t0)
+    check("scripts scan: 16 MB of hostile markup in one quick pass", found == [false, false, false, false] && took < 5, "\(found) \(took)s")
+    check("scripts found: whitespace inside a javascript: URL, and an event attribute after a quoted >",
+          HTMLPane.hasScripts("<a href=\"java\tscript:x\">") && HTMLPane.hasScripts("<a title=\"a>b\" onclick=f>")
+          && !HTMLPane.hasScripts("<a href=\"/javascript:x\">") && !HTMLPane.hasScripts("<a onclick>"))
+}
+do {
+    let utf16 = dir.appendingPathComponent("utf16-script.html")
+    try! "<p>x</p><script>1</script>".data(using: .utf16)!.write(to: utf16)
+    check("scripts found in a UTF-16 file", HTMLPane.hasScripts(utf16) && !HTMLPane.hasScripts(dir.appendingPathComponent("nope.html")))
+}
 
 // ---- links: one per real click in the pane, within a second ----
 do {
@@ -126,6 +156,128 @@ spin(1)
 check("downloaded: shown, with scripts off and nothing loaded from the web",
       !closed.scripts && closed.view.url?.path == downloaded.path && text(closed.view) == "static" && downloadedServer.hits == 0,
       "\(text(closed.view) ?? "nil") hits \(downloadedServer.hits)")
+
+// ---- asked about: shown as it would look, from the web too, with no script run until the question is answered ----
+do {
+    let server = Server()
+    let asked = dir.appendingPathComponent("asked.html")
+    try! page(server).write(to: asked)
+    let pane = HTMLPane(HTMLPane.mode(asked, setting: "ask"))
+    pane.show(asked, over: web)
+    for _ in 0..<150 where server.hits == 0 { spin(0.02) }
+    spin(0.3)
+    check("asking: no script runs, and the page loads from the web as it would with them", pane.mode == .asking && !pane.scripts
+          && text(pane.view) == "static" && server.hits > 0, "\(text(pane.view) ?? "nil") hits \(server.hits)")
+    pane.close()
+}
+// A frame's script, from the web or inline, is off too until the question is answered.
+do {
+    let server = Server(), framed = Server()
+    let asked = dir.appendingPathComponent("asked-frames.html")
+    let beacon = "new Image().src='http://127.0.0.1:\(framed.port)/beacon'"
+    try! Data(#"<p id=p>static</p><iframe src="http://127.0.0.1:\#(server.port)/frame"></iframe><iframe srcdoc="<script>\#(beacon)</script>"></iframe><iframe src="data:text/html,%3Cscript%3E\#(beacon.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "")%3C/script%3E"></iframe>"#.utf8).write(to: asked)
+    let pane = HTMLPane(.asking)
+    pane.show(asked, over: web)
+    for _ in 0..<150 where server.hits == 0 { spin(0.02) }
+    spin(1)
+    let asking = framed.hits
+    pane.close()
+    // The control: the same page with scripts on does reach the server from its frames.
+    let on = HTMLPane(.scripts)
+    on.show(asked, over: web)
+    for _ in 0..<150 where framed.hits == 0 { spin(0.02) }
+    check("asking: a frame's script runs no more than the page's (srcdoc and data: frames reach no server; with scripts on they do)",
+          server.hits > 0 && asking == 0 && framed.hits > 0, "frame loads \(server.hits) beacons asking \(asking), with scripts \(framed.hits)")
+    on.close()
+}
+
+// Every other way found to run script from an asked-about page, each with its own counting server: no beacon while it asks;
+// the same page with scripts on, the control, reaches it.
+do {
+    let probes: [(String, (String) -> String, [(String, (String) -> String)])] = [
+        ("a sibling .html in a frame", { _ in #"<iframe src="P.html"></iframe>"# }, [("P.html", { "<script>\($0)</script>" })]),
+        ("an SVG with a script as an object", { _ in #"<object data="P.svg" type="image/svg+xml"></object>"# },
+         [("P.svg", { #"<svg xmlns="http://www.w3.org/2000/svg"><script>\#($0)</script></svg>"# })]),
+        ("an SVG with a script as an embed", { _ in #"<embed src="P.svg" type="image/svg+xml">"# },
+         [("P.svg", { #"<svg xmlns="http://www.w3.org/2000/svg"><script>\#($0)</script></svg>"# })]),
+        ("an SVG with a script in a frame", { _ in #"<iframe src="P.svg"></iframe>"# },
+         [("P.svg", { #"<svg xmlns="http://www.w3.org/2000/svg"><script>\#($0)</script></svg>"# })]),
+        ("a javascript: frame", { b in "<iframe src=\"javascript:\(b.replacingOccurrences(of: "'", with: "%27"))\"></iframe>" }, []),
+        ("an img onerror", { b in "<img src=nope.png onerror=\"\(b)\">" }, []),
+        ("an XHTML sibling in a frame", { _ in #"<iframe src="P.xhtml"></iframe>"# },
+         [("P.xhtml", { #"<html xmlns="http://www.w3.org/1999/xhtml"><body><script>\#($0)</script></body></html>"# })]),
+        ("an object of type text/html", { _ in #"<object type="text/html" data="P.html"></object>"# }, [("P.html", { "<script>\($0)</script>" })]),
+        ("a srcdoc nested in a sibling frame", { _ in #"<iframe src="P.html"></iframe>"# },
+         [("P.html", { "<iframe srcdoc=\"<script>\($0.replacingOccurrences(of: "'", with: "&#39;"))</script>\"></iframe>" })]),
+        ("a srcdoc meta refresh to a scripted sibling", { _ in #"<iframe srcdoc="<meta http-equiv=refresh content='0;url=P-target.html'>"></iframe>"# },
+         [("P-target.html", { "<script>\($0)</script>" })]),
+    ]
+    for (i, probe) in probes.enumerated() {
+        let server = Server()
+        let beacon = "new Image().src='http://127.0.0.1:\(server.port)/b'"
+        let prefix = "probe\(i)"
+        for (name, body) in probe.2 { try! Data(body(beacon).utf8).write(to: dir.appendingPathComponent(name.replacingOccurrences(of: "P", with: prefix))) }
+        let f = dir.appendingPathComponent("\(prefix)-page.html")
+        try! Data(("<p id=p>static</p>" + probe.1(beacon).replacingOccurrences(of: "P", with: prefix)).utf8).write(to: f)
+        let asking = HTMLPane(.asking)
+        asking.show(f, over: web)
+        spin(1.5)
+        let askHits = server.hits
+        asking.close()
+        let on = HTMLPane(.scripts)
+        on.show(f, over: web)
+        for _ in 0..<100 where server.hits == askHits { spin(0.02) }
+        let onHits = server.hits - askHits
+        on.close()
+        check("asking, no script: \(probe.0) (with scripts on, it runs)", askHits == 0 && onHits > 0, "beacons asking \(askHits), with scripts \(onHits)")
+    }
+}
+
+// ---- a page's scripts cannot read the files beside it: read access to the folder loads them, WebKit's file origins keep
+// scripts out of them ----
+do {
+    let folder = dir.appendingPathComponent("siblings")
+    try! FileManager.default.createDirectory(at: folder.appendingPathComponent("sub"), withIntermediateDirectories: true)
+    try! Data("SECRET-SIBLING".utf8).write(to: folder.appendingPathComponent("secret.txt"))
+    try! Data("SECRET-SUB".utf8).write(to: folder.appendingPathComponent("sub/secret.txt"))
+    try! Data("<p id=s>SECRET-HTML</p>".utf8).write(to: folder.appendingPathComponent("other.html"))
+    try! FileManager.default.copyItem(at: URL(fileURLWithPath: "test/fixtures/img.png"), to: folder.appendingPathComponent("pic.png"))
+    let reader = folder.appendingPathComponent("reader.html")
+    try! Data(#"""
+    <iframe id=f src="other.html"></iframe><iframe id=g src="secret.txt"></iframe><img id=i src="pic.png">
+    <script>
+    window.R = {};
+    const t = (k, p) => p.then((v) => { R[k] = 'read ' + String(v).slice(0, 20); }, (e) => { R[k] = 'refused ' + e; });
+    t('fetch', fetch('secret.txt').then((r) => r.text()));
+    t('fetchSub', fetch('sub/secret.txt').then((r) => r.text()));
+    t('fetchAbs', fetch('file:///etc/hosts').then((r) => r.text()));
+    t('xhr', new Promise((res, rej) => { const x = new XMLHttpRequest(); x.open('GET', 'secret.txt'); x.onload = () => res(x.responseText); x.onerror = () => rej('error'); x.send(); }));
+    addEventListener('load', () => {
+      for (const id of ['f', 'g']) try { R[id] = 'read ' + document.getElementById(id).contentDocument.body.textContent; } catch (e) { R[id] = 'refused ' + e; }
+      const i = document.getElementById('i'), c = document.createElement('canvas');
+      R.img = i.naturalWidth;
+      try { c.getContext('2d').drawImage(i, 0, 0); R.canvas = 'read ' + c.toDataURL().length; } catch (e) { R.canvas = 'refused ' + e; }
+      setTimeout(() => { R.done = true; }, 300);
+    });
+    </script>
+    """#.utf8).write(to: reader)
+    let pane = HTMLPane(scripts: true)
+    pane.show(reader, over: web)
+    var r: [String: Any] = [:]
+    for _ in 0..<150 where r["done"] == nil {
+        spin(0.05)
+        var done = false
+        pane.view.evaluateJavaScript("JSON.stringify(window.R || {})") { v, _ in
+            r = ((try? JSONSerialization.jsonObject(with: Data(((v as? String) ?? "{}").utf8))) as? [String: Any]) ?? [:]
+            done = true
+        }
+        for _ in 0..<50 where !done { spin(0.02) }
+    }
+    let reads = ["fetch", "fetchSub", "fetchAbs", "xhr", "f", "g", "canvas"]
+    check("scripts: a picture beside the page loads, but fetch, XMLHttpRequest, a frame's document and a canvas read none of the files beside it",
+          (r["img"] as? Int ?? 0) > 0 && reads.allSatisfy { (r[$0] as? String)?.hasPrefix("refused") == true }, "\(r)")
+    pane.close()
+}
 
 // ---- no connection at all from a downloaded file: resource hints included (content rules do not see them) ----
 func hintPage(_ s: Server) -> Data {

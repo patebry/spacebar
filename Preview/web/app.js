@@ -3646,6 +3646,7 @@ function pdfView(p) {
     $('kind').append(b);
   }
   box.append(viewHead(p));
+  if (p.view === 'html' && p.scriptsAsk === true) box.append(scriptsBar());
   const area = el('div', 'pdf-area');
   area.setAttribute('role', 'document');
   area.setAttribute('aria-label', plainName(p.name));
@@ -3655,6 +3656,39 @@ function pdfView(p) {
   // Shown over a narrow page, the sidebar animates its width without moving the area.
   pdfObserver.observe($('sidebar'));
   return box;
+}
+
+// An HTML file made on this Mac, shown without its scripts while the setting asks. The bar is the page's own, above the area the
+// file's view is laid over, so nothing in the file can draw over it or press it; its buttons are made here and remembered, as
+// the load button is, and take only a real click that went down on them.
+const scriptButtons = new WeakSet();
+function scriptsBar() {
+  const bar = el('div', 'scripts-ask');
+  bar.setAttribute('role', 'group');
+  bar.setAttribute('aria-label', 'Scripts in this page');
+  bar.append(el('span', 'scripts-ask-text', 'This page has scripts. Run them?'));
+  for (const [label, run, title] of [
+    ['Run for files made on this Mac', true, 'Runs the scripts of every HTML file made on this Mac, this one now. Scripts can reach the network. Change this in Settings, Advanced.'],
+    ['Never', false, 'Shows HTML files without scripts and without loading from the web. Change this in Settings, Advanced.']]) {
+    const b = el('button', 'scripts-ask-btn', label);
+    b.type = 'button';
+    b.title = title;
+    scriptButtons.add(b);
+    b.addEventListener('pointerdown', (e) => { armed = e.isTrusted ? b : null; });
+    b.addEventListener('click', (e) => answerScripts(e, run));
+    bar.append(b);
+  }
+  return bar;
+}
+
+function answerScripts(e, run) {
+  e.preventDefault();
+  e.stopPropagation();
+  const b = e.currentTarget, pressed = armed === b, bar = b.closest('.scripts-ask');
+  armed = null;
+  if (!e.isTrusted || !pressed || !scriptButtons.has(b) || !bar || !current.path || current.view !== 'html') return;
+  bar.hidden = true;
+  post({ type: 'answerScripts', path: current.path, run });
 }
 
 // Where the native PDF view goes, in CSS pixels of the viewport, posted whenever it moves or changes size (the sidebar's

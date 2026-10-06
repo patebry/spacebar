@@ -288,6 +288,8 @@ class PreviewController: NSViewController {
     private var pdfPane: PDFPane?
     /// The HTML file on screen, rendered natively over the same reserved area; nil for every other view.
     private var htmlPane: HTMLPane?
+    /// The HTML file on screen while the page offers to run its scripts (htmlScripts "ask"): the only file an answer is taken for.
+    private var scriptsAsked: String?
     /// The video or audio file on screen, played natively over the same reserved area; nil for every other view.
     private var mediaPane: MediaPane?
     /// A file Apple's Quick Look previews (Office, iWork, fonts, 3D), in its QLPreviewView over the same reserved area; nil for every other view.
@@ -1017,6 +1019,9 @@ class PreviewController: NSViewController {
         if let w = listedWith, w != o {
             for dir in Set(listings.keys).union(dirWatches.keys) { refreshListing(dir) }
         }
+        // Scripts in HTML files changed elsewhere: the file on screen is shown again under it at once, so Never or Ask stops
+        // its scripts and a question already answered goes.
+        if shownView == "html", let url = fileURL, let pane = htmlPane, HTMLPane.mode(url, setting: htmlScripts(for: url)) != pane.mode { reshow() }
     }
 
     /// Watches `dir` (the root, or a folder expanded in the sidebar) and re-lists it when it changes.
@@ -1516,6 +1521,7 @@ class PreviewController: NSViewController {
         // scan a large or damaged file to rebuild it. A newer show or open supersedes this one.
         let gen = pdfGen, kind = fileKind, root = rootDir, canOpen = LinkPolicy.fileRefusal(url, allowArchives: kind == .archive) == nil, epoch = writeEpoch
         let noQuickLook = quickLookFailed.map { $0.path == url.path && $0.stamp == Self.stamp(url) } ?? false
+        let askScripts = kind == .html && HTMLPane.mode(url, setting: htmlScripts(for: url)) == .asking
         let cloud = FileTypes.isDataless(url.path)
         // Only a download times out: PDFKit rebuilding a large local PDF may take longer, and is still shown when done.
         let id = loader.load(timesOut: cloud, { () -> (payload: [String: Any], pdf: Result<PDFDocument, PDFPane.LoadError>?,
@@ -1551,6 +1557,7 @@ class PreviewController: NSViewController {
                 p["width"] = Int(s.width)
                 p["height"] = Int(s.height)
             }
+            if askScripts, p["view"] as? String == "html", HTMLPane.hasScripts(url) { p["scriptsAsk"] = true }
             // Only what FileView downloads counts: an evicted archive is its info card without a download.
             let fetched = ["pdf", "image", "bitmap", "html", "video", "audio", "rtf", "quicklook"].contains(p["view"] as? String)
                 || ([.code, .json, .csv, .text].contains(kind) && (p["size"] as? Int64 ?? .max) <= FolderListing.maxDocumentBytes)
@@ -1700,9 +1707,11 @@ class PreviewController: NSViewController {
             pane.show(url, audio: view == "audio", over: host.web)
             mediaPane = pane
         }
+        scriptsAsked = nil
         if view == "html" {
-            let scripts = HTMLPane.runsScripts(url, setting: htmlScripts(for: url))
-            if htmlPane?.scripts != scripts { htmlPane?.close(); htmlPane = HTMLPane(scripts: scripts) }
+            let mode = HTMLPane.mode(url, setting: htmlScripts(for: url))
+            if mode == .asking, p["scriptsAsk"] as? Bool == true { scriptsAsked = url.path } else { p["scriptsAsk"] = nil }
+            if htmlPane?.mode != mode { htmlPane?.close(); htmlPane = HTMLPane(mode) }
             if htmlPane?.path != url.path { htmlPane?.view.pageZoom = 1 }
             htmlPane?.onLink = { [weak self] in self?.htmlLink($0) }
             htmlPane?.show(url, over: host.web)
@@ -2381,6 +2390,28 @@ class PreviewController: NSViewController {
             log.info("remote images loaded once for the previewed file")
             if let e = edit { stopEdit(notifyWriter: true, keepRetired: true); retired.append(e) }
             if let url = fileURL, let text = docText { push(text: text, path: url.path, reason: "remoteImages") }
+        case "answerScripts":
+            // The "Run scripts?" bar over an HTML file: its answer becomes the setting (the writer takes it only while it asks),
+            // and the file is shown again under it.
+            guard let url = fileURL, fileKind == .html, shownView == "html", scriptsAsked == url.path, m.string("path", max: 4096) == url.path,
+                  let run = m.bool("run") else {
+                // The page hid its bar: the file is shown again as the setting now has it.
+                if fileKind == .html, shownView == "html" { reshow() }
+                return refuse("answerScripts", "no question on screen for this file")
+            }
+            scriptsAsked = nil
+            helper(onError: { self.reshow() }) {
+                $0.answerScripts(run ? "local" : "off") { ok in
+                    DispatchQueue.main.async {
+                        SettingsStore.shared.checkNow(reason: "scripts")
+                        if !ok {
+                            self.status(SettingsStore.shared.settings.htmlScripts == "ask" ? "Couldn’t update settings.json"
+                                        : "Scripts in HTML files was changed in Settings")
+                        }
+                        self.reshow()
+                    }
+                }
+            }
         case "imageStatus":
             // The document's images that failed: why, for their placeholders.
             guard let url = fileURL, fileKind == .markdown, m.string("doc", max: 4096) == url.path,

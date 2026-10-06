@@ -83,11 +83,11 @@ struct WelcomeView: View {
             }
             Text("Space in Finder can open spacebar for any file you select, images, PDFs and video included, not only the types Quick Look hands it.")
                 .fixedSize(horizontal: false, vertical: true)
-            Text("The Space helper needs Accessibility, listed there as \(HelperCopy.accessibilityName), which lets spacebar notice when you press Space in Finder and read which file is selected. It never reads what you type anywhere else. You can turn it off in Settings.")
+            Text(HelperCopy.keys + " You can turn it off in Settings.")
                 .foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
             Text("macOS will ask you to allow it in two places: Login Items, then Accessibility.")
                 .foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
-            Link("How spacebar uses this", destination: HelperCopy.securityURL)
+            Link(HelperCopy.howItWorks, destination: HelperCopy.securityURL)
             if turnedOn { progress }
             if let problem { Text(problem).foregroundColor(.red).fixedSize(horizontal: false, vertical: true) }
             HStack {

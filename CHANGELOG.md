@@ -102,6 +102,9 @@ Each release's notes on GitHub also list its commits. This file keeps what chang
 - **Text a change on disk would have replaced is kept** behind a banner (Keep Mine for Markdown, Use Disk Version, Copy My
   Text) until you choose; leaving the file waits for that.
 - Raw lasts while the preview is open instead of becoming a saved setting.
+- **Select as in any Mac text view:** drag to select, double-click for a word, triple-click for the line, then drag to
+  extend by that unit; Shift-click extends. A drag past the top or bottom scrolls the page and never selects text off
+  screen. ↑ and ↓ (and with Shift) move by the line as wrapped on screen, keeping the column.
 
 ### Settings and first run
 

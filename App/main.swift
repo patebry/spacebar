@@ -35,6 +35,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        // First: a copy on spacebar.dmg or translocated writes no settings and registers nothing before it is moved.
+        if MoveToApplications.offerIfNeeded() { return }
         store.start()
         // Queued before the settings window's first refresh, which then shows the extensions registered.
         system.registerIfNew()
@@ -71,10 +73,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showSettingsWindow(_ sender: Any?) { showSettings() }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { !MoveToApplications.active }
 
     func applicationShouldHandleReopen(_ app: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        if !hasVisibleWindows { showSettings() }
+        if !hasVisibleWindows, !MoveToApplications.active { showSettings() }
         return true
     }
 

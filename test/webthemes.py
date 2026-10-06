@@ -235,6 +235,21 @@ MOUSE = """window.__ed = (() => {
   };
 })(); 0"""
 
+# ↑/↓ as the writer asks for them: the page's answer (sb.editMove's verticalMove), then the selection the writer echoes back.
+ARROWS = """window.__mv = (down, extend = false, n = 1) => {
+  for (let i = 0; i < n; i++) {
+    const r = verticalMove({ seq: editing.seq, down, extend, start: editing.selStart, length: editing.selLen });
+    if (!r) return null;
+    Object.assign(editing, { selStart: r[0], selLen: r[1] });
+    keepGoal();
+    if (editing.whole) paintTextEditor(true); else { editorEl().innerHTML = editorHTML(); revealCaret(); }
+  }
+  return [editing.selStart, editing.selLen];
+};
+window.__box = (k) => { const el = document.querySelector(EDITOR_EL), b = caretBox(el, k), r = el.getBoundingClientRect();
+  return [Math.round(b.x - r.left), Math.round((b.top + b.bottom) / 2 - r.top)]; };
+window.__lh = () => parseFloat(getComputedStyle(document.querySelector(EDITOR_EL)).lineHeight); 0"""
+
 def click(page, sel):
     return page.cmd('@eval:(' + CLICK + ')(' + json.dumps(sel) + ')')
 
@@ -969,6 +984,102 @@ def main():
         check(r['after'] == [10, 0, None] and r['moved'] == [10, 0, None] and r['len'] == 1000,
               'editor select: the writer changing the text under a drag ends the drag, which leaves the new selection alone', json.dumps(r))
         page.cmd('@eval:sb.editEnd({}); scrollTo(0, 0); 0')
+
+        # ---- ↑ and ↓ in the editor move by the lines as wrapped on screen, as in a text view ----
+        words = ' '.join(f'word{i}' for i in range(60))
+        WR = words + '\nab\n' + words
+        wrap_md = os.path.join(page.out, 'wrap.md')
+        open(wrap_md, 'w').write(WR + '\n')
+        page.render(wrap_md)
+        page.cmd('@eval:' + MOUSE)
+        page.cmd('@eval:' + ARROWS)
+        click(page, '#doc > p')
+        mv = lambda js: page.js('return ' + js)
+        lh = mv('__lh()')
+        k = WR.index('word5')
+        mv(f'__ed.click({k})')
+        b0 = mv(f'__box({k})')
+        r = mv('__mv(true)')
+        b1 = mv(f'__box({r[0]})')
+        check(r and r[1] == 0 and 0 < r[0] < len(words) and abs(b1[1] - b0[1] - lh) < 2 and abs(b1[0] - b0[0]) < 12,
+              'editor arrows: ↓ in a wrapped paragraph goes to the next line on screen at the same x, not the next line of text',
+              json.dumps([k, b0, r, b1, lh]))
+        r2 = mv('__mv(false)')
+        check(r2 == [k, 0], 'editor arrows: ↑ comes back to where ↓ started', json.dumps([k, r2]))
+        r = mv('__mv(true, true)')
+        b2 = mv(f'__box({r[0] + r[1]})')
+        check(r and r[0] == k and abs(b2[1] - b0[1] - lh) < 2 and abs(b2[0] - b0[0]) < 12,
+              'editor arrows: ⇧↓ extends the selection by one line on screen', json.dumps([r, b0, b2]))
+        r = mv('__mv(false, true)')
+        check(r == [k, 0], 'editor arrows: ⇧↑ then takes it back, the start held', json.dumps(r))
+        r = mv(f'(__ed.click({k}), __mv(false, true))')
+        check(r == [0, k], 'editor arrows: ⇧↑ on the first line on screen selects to the start', json.dumps(r))
+        r = mv(f'(__ed.click({k}), __mv(false))')
+        check(r == [0, 0], 'editor arrows: ↑ on the first line on screen goes to the start of the text', json.dumps(r))
+        k3 = len(WR) - 3
+        r = mv(f'(__ed.click({k3}), __mv(true))')
+        check(r == [len(WR), 0], 'editor arrows: ↓ on the last line on screen goes to the end of the text', json.dumps(r))
+        # The goal x: through the short line "ab" and on into the long one below, ↓ comes back to the x it started at.
+        last1 = mv(f"""(() => {{ const el = document.querySelector(EDITOR_EL); let k = {len(words)};
+          const top = caretBox(el, k - 1).top; while (k > 0 && caretBox(el, k - 1).top === top) k--; return k; }})()""")
+        kx = last1 + 2
+        bx = mv(f'(__ed.click({kx}), __box({kx}))')
+        ra = mv('__mv(true)')
+        rb = mv('__mv(true)')
+        bb = mv(f'__box({rb[0]})')
+        check(ra and ra[1] == 0 and len(words) + 1 <= ra[0] <= len(words) + 3,
+              'editor arrows: ↓ onto a short line goes to the nearest place on it', json.dumps([kx, bx, ra]))
+        check(rb and len(words) + 3 < rb[0] and abs(bb[0] - bx[0]) < 12, 'editor arrows: a second ↓ keeps the x the first started from, past the short line',
+              json.dumps([bx, ra, rb, bb]))
+        # Past the end of a wrapped line: the caret stays on the line below, and the next ↓ goes one line further, not two.
+        e1 = mv(f"""(() => {{ const el = document.querySelector(EDITOR_EL); let k = 1; const top = caretBox(el, 0).top;
+          while (caretBox(el, k + 1).top === top) k++; return k; }})()""")
+        ys = mv(f'(__ed.click({e1}), [__box({e1}), __box(__mv(true)[0]), __box(__mv(true)[0])])')
+        check(ys and abs(ys[1][1] - ys[0][1] - lh) < 2 and abs(ys[2][1] - ys[1][1] - lh) < 2 and ys[1][0] > ys[0][0] - 40,
+              'editor arrows: from the end of a wrapped line, ↓ goes to the end of each next line on screen, one at a time', json.dumps([e1, ys, lh]))
+        mv('__mv(false)')
+        page.js("Object.assign(editing, { selStart: editing.selStart + 1 }); keepGoal(); return 0")
+        g = mv('editing.goal')
+        check(g is None, 'editor arrows: a move across (or a click, or typing) forgets the x a run of ↑ and ↓ kept', json.dumps(g))
+        r = page.cmd('@eval:sb.editMove({ seq: editing.seq, down: true, extend: false, start: 0, length: 0 }); sb.editMove({ seq: -5, down: true, extend: false, start: 0, length: 0 }); 0')
+        sent = [[int(m['start']), int(m['length'])] for m in r['messages'] if m.get('type') == 'editMoved']
+        check(len(sent) == 2 and 0 < sent[0][0] < len(words) and sent[1] == [-1, 0],
+              'editor arrows: the page answers the writer with the selection, or -1 (the writer moves itself) for an edit not on screen', json.dumps(sent))
+        page.cmd('@eval:sb.editEnd({}); 0')
+
+        for kind, path, settings, raw in (('a whole-file edit with wrapped lines', 'wrap.txt', {'wrapText': True}, False),
+                                          ('the Raw view of Markdown, wrapped', 'wrap-raw.md', {'wrapMarkdown': True}, True)):
+            f = os.path.join(page.out, path)
+            open(f, 'w').write(WR + '\n')
+            page.apply(**settings)
+            page.render(f)
+            page.cmd('@wait:0.3')
+            if raw:
+                # The harness renders Markdown without the extension's editable flag, which Raw's code view needs to be edited.
+                page.cmd("@eval:current.editable = true; document.getElementById('raw').click(); 0")
+                page.cmd('@wait:0.3')
+            click(page, '#doc pre.code')
+            whole = mv('!!(editing && editing.whole)')
+            lh = mv('__lh()')
+            b0 = mv(f'(__ed.click({k}), __box({k}))') if whole else None
+            r = mv('__mv(true)') if whole else None
+            b1 = mv(f'__box({r[0]})') if r else None
+            check(whole and r and 0 < r[0] < len(words) and abs(b1[1] - b0[1] - lh) < 2 and abs(b1[0] - b0[0]) < 12,
+                  f'editor arrows: in {kind}, ↓ goes to the next line on screen', json.dumps([whole, b0, r, b1, lh]))
+            page.cmd('@eval:sb.editEnd({}); 0')
+            if raw:
+                page.cmd("@eval:document.getElementById('raw').click(); 0")
+            page.apply(**{key: False for key in settings})
+        CODE = 'first line of code\nab\nthird line of code\n'
+        f = os.path.join(page.out, 'nowrap.txt')
+        open(f, 'w').write(CODE)
+        page.render(f)
+        page.cmd('@wait:0.3')
+        click(page, '#doc pre.code')
+        r = mv('(__ed.click(9), [__mv(true), __mv(true), __mv(false, false, 2), __mv(true, true)])')
+        check(r == [[21, 0], [31, 0], [9, 0], [9, 12]],
+              'editor arrows: lines that do not wrap keep the column, through a short line, and ⇧↓ selects to the same column below', json.dumps(r))
+        page.cmd('@eval:sb.editEnd({}); 0')
 
         csp = [l for l in page.logs if 'csp blocked' in l]
         errs = [l for l in page.logs if l.startswith(('rejection', 'mermaid')) or ' @' in l]

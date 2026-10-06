@@ -28,6 +28,7 @@ final class StubWriter: NSObject, SpacebarWriterProtocol, NSXPCListenerDelegate 
     func beginTextEdit(_ session: Int, path: String, text: String, caret: Int, clickX: Double, clickY: Double, width: Double, height: Double,
                        reply: @escaping (Bool) -> Void) { reply(false) }
     func setSelection(_ session: Int, start: Int, length: Int) {}
+    func moveEdit(_ session: Int, start: Int, length: Int) {}
     func resetEdit(_ session: Int, text: String?, caret: Int) {}
     func endEdit(_ session: Int) {}
     func beginFilter(_ session: Int, text: String, clickX: Double, clickY: Double, fieldWidth: Double, fieldHeight: Double, reply: @escaping (Bool) -> Void) { reply(false) }

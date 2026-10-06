@@ -559,6 +559,53 @@ edit("md: after Enter, a click in the new paragraph moves the caret there", file
     keys([t("X")])
 }
 
+// ================= ↑ and ↓ by the lines on screen =================
+/// A paragraph that wraps to many lines on screen: ↓ and ⇧↓ in the writer go one wrapped line down at the same x (the page,
+/// which lays the text out, answers the writer), and what is typed next lands there.
+func wrappedArrows(_ name: String, file: String, click sel: String, wrap: String? = nil) {
+    if let only, !only.contains(where: { name.contains($0) }) { return }
+    caseN += 1
+    let dir = docs.appendingPathComponent("c\(caseN)")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let url = dir.appendingPathComponent(file)
+    let words = (0..<60).map { "word\($0)" }.joined(separator: " ")
+    let text = words + "\nab\n" + words + "\n"
+    try! md(text).write(to: url)
+    misrouted = []
+    rec.messages.removeAll()
+    if let wrap { _ = js("settings.\(wrap) = true; 0") }
+    open(url)
+    defer {
+        if (js("!!editing") as? Bool) == true { escape() }
+        if let wrap { _ = js("settings.\(wrap) = false; 0") }
+        closeHost()
+    }
+    guard click(sel, at: "start")["editing"] as? Bool == true else { return check(name, false, "the click did not start an edit") }
+    func box(_ k: Int) -> [String: Any] {
+        jsJSON("const el = document.querySelector(EDITOR_EL), b = caretBox(el, \(k)), r = el.getBoundingClientRect(); return { x: b.x - r.left, y: (b.top + b.bottom) / 2 - r.top, lh: parseFloat(getComputedStyle(el).lineHeight) }")
+    }
+    func near(_ a: [String: Any], _ b: [String: Any], lines: Double) -> Bool {
+        guard let ax = a["x"] as? Double, let ay = a["y"] as? Double, let bx = b["x"] as? Double, let by = b["y"] as? Double, let lh = a["lh"] as? Double else { return false }
+        return abs(by - ay - lines * lh) < 2 && abs(bx - ax) < 12
+    }
+    keys([k("right", times: 30)])
+    let b0 = box(30)
+    keys([k("down")])
+    let p1 = pageEdit(), s1 = p1["sel"] as? Int ?? -1
+    check("\(name): ↓ goes one line down on screen, at the same x", 30 < s1 && s1 < words.count && p1["len"] as? Int == 0 && near(b0, box(s1), lines: 1),
+          "caret \(s1), from \(b0) to \(box(s1))")
+    keys([k("down", "shift")])
+    let p2 = pageEdit(), s2 = p2["sel"] as? Int ?? -1, l2 = p2["len"] as? Int ?? -1
+    check("\(name): ⇧↓ extends the selection one more line down", s2 == s1 && l2 > 0 && near(b0, box(s1 + l2), lines: 2), "selection \(s2)+\(l2)")
+    keys([t("X")])
+    let want = md(String(text.prefix(s1)) + "X" + String(text.dropFirst(s1 + max(l2, 0))))
+    let got = settled(url, want)
+    check("\(name): what is typed next replaces that selection", got == want, show(String(data: got, encoding: .utf8) ?? "?"))
+    if !misrouted.isEmpty { check("\(name): the helper passes every key to the edit", false, misrouted.joined(separator: ", ")) }
+}
+wrappedArrows("md: ↑↓ by wrapped lines", file: "wrapped.md", click: "#doc > p")
+wrappedArrows("txt: ↑↓ by wrapped lines", file: "wrapped.txt", click: code, wrap: "wrapText")
+
 // ================= whole text files (plain mode) =================
 edit("txt: Enter at the end of a line", file: "a.txt", md("line1\nline2\n"), click: code, at: "start", want: md("line1\nnew\nline2\n")) {
     keys([k("right", "command"), t("\nnew")])

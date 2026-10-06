@@ -396,6 +396,13 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         }
     }
 
+    func moveEdit(_ session: Int, start: Int, length: Int) {
+        DispatchQueue.main.async {
+            guard EditSession.find(owner: self, session: session) != nil else { return }
+            EditSurface.shared.textView.finishMove(start < 0 ? nil : NSRange(location: start, length: max(0, length)))
+        }
+    }
+
     func resetEdit(_ session: Int, text: String?, caret: Int) {
         DispatchQueue.main.async { EditSession.find(owner: self, session: session)?.reset(text: text, caret: caret) }
     }
@@ -595,6 +602,12 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
             self.flush(force: true)
             self.host.editUndo(self.id, redo: redo)
         }
+        textView.onVerticalMove = { [weak self] down, extend in
+            guard let self, !self.ended else { return }
+            self.flush(force: true)
+            let sel = self.textView.selectedRange()
+            self.host.editMove(self.id, down: down, extend: extend, start: sel.location, length: sel.length)
+        }
         panel.delegate = self
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(textView)
@@ -679,6 +692,7 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
             textView.onMergeBackward = nil
             textView.onSplit = nil
             textView.onUndoPastStart = nil
+            textView.onVerticalMove = nil
             textView.onHoldTimeout = {}
             textView.dropHeld()
         }
@@ -730,6 +744,7 @@ final class FilterSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
         textView.onMergeBackward = nil
         textView.onSplit = nil
         textView.onUndoPastStart = nil
+        textView.onVerticalMove = nil
         textView.delegate = self
         textView.onEscape = { [weak self] in self?.escape() }
         textView.onHoldTimeout = {}

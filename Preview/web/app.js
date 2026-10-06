@@ -1000,12 +1000,78 @@ function lineAt(text, i) {
   return [i > 0 ? text.lastIndexOf('\n', i - 1) + 1 : 0, j < 0 ? text.length : j + 1];
 }
 
+/** A run of ↑ and ↓ keeps its x only while the selection is the one the last of them made. */
+function keepGoal() {
+  const g = editing.goal;
+  if (g && (g.text !== editing.text || g.at[0] !== editing.selStart || g.at[1] !== editing.selLen)) editing.goal = null;
+}
+
 function select(start, len) {
-  Object.assign(editing, { selStart: start, selLen: len });
+  Object.assign(editing, { selStart: start, selLen: len, goal: null });
   const el = editorEl();
   if (editing.whole) paintTextEditor();
   else if (el) el.innerHTML = editorHTML();
   post({ type: 'editSelect', seq: editing.seq, start, length: len });
+}
+
+/** Where offset `k` of the editor's text is drawn: the caret's x and its line's top and bottom, in the window. */
+function caretBox(el, k) {
+  const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let node = null, off = 0;
+  for (let n, pos = 0; (n = w.nextNode()); pos += n.length) {
+    if (k > pos + n.length) continue;
+    node = n;
+    off = k - pos;
+    if (k < pos + n.length) break;
+  }
+  if (!node) return null;
+  const r = document.createRange();
+  r.setStart(node, off);
+  const q = r.getClientRects()[0] || r.getBoundingClientRect();
+  return { x: q.left, top: q.top, bottom: q.bottom };
+}
+
+/** The selection after ↑ or ↓ (`m.extend`: with ⇧) from [m.start, m.start + m.length), as a text view moves: by the lines
+ *  as wrapped on screen, to the x the first of a run of such moves started at, and from the first or last line to the text's
+ *  start or end. Lines that do not wrap keep the column instead. */
+function verticalMove(m) {
+  const el = document.querySelector(EDITOR_EL), text = editing.text, s = m.start, t = m.start + m.length;
+  const fixed = m.extend ? (m.length && editing.anchor === t ? t : m.length && editing.anchor === s ? s : m.down ? s : t) : null;
+  const from = fixed === null ? (m.down ? t : s) : fixed === s ? t : s;
+  const g = editing.goal && editing.goal.text === text && editing.goal.at[0] === s && editing.goal.at[1] === m.length ? editing.goal : null;
+  let to, goal;
+  if (!/wrap|break/.test(getComputedStyle(el).whiteSpace)) {
+    const [ls, le] = lineAt(text, from), col = g ? g.col : from - ls;
+    const [ns, ne] = m.down ? lineAt(text, le) : lineAt(text, ls - 1);
+    if (m.down) to = le === text.length && text[le - 1] !== '\n' ? text.length : Math.min(ns + col, text[ne - 1] === '\n' ? ne - 1 : ne);
+    else to = ls === 0 ? 0 : Math.min(ns + col, ls - 1);
+    goal = { col };
+  } else {
+    let er = el.getBoundingClientRect();
+    const b = caretBox(el, from), first = caretBox(el, 0), last = caretBox(el, text.length);
+    if (!b || !first || !last) return null;
+    const lh = parseFloat(getComputedStyle(el).lineHeight) || b.bottom - b.top;
+    const x = g ? g.x : b.x - er.left, y = g ? g.y : (b.top + b.bottom) / 2 - er.top;
+    if (!m.down && y - lh / 2 < first.bottom - er.top - 1) to = 0;
+    else if (m.down && y + lh / 2 > last.top - er.top + 1) to = text.length;
+    else {
+      const ty = y + (m.down ? lh : -lh), [top, bottom] = docRows();
+      // The line must be on screen to find the text on it.
+      const at = er.top + ty, d = at - lh < top ? at - lh - top : at + lh > bottom ? at + lh - bottom : 0;
+      if (d) { window.scrollBy({ top: d, behavior: 'instant' }); er = el.getBoundingClientRect(); }
+      to = editorOffset(el, Math.min(Math.max(er.left + x, er.left + 1), er.right - 1), er.top + ty, null);
+      if (to === null) return null;
+      // Past the end of a wrapped line the point is at the start of the next one; the caret stays on this one.
+      const c = caretBox(el, to);
+      if (to > 0 && text[to - 1] !== '\n' && c && c.top - er.top > ty) to--;
+      goal = { x, y: ty };
+    }
+    goal = goal || { x, y };
+  }
+  const [a, z] = fixed === null ? [to, to] : [Math.min(fixed, to), Math.max(fixed, to)];
+  if (fixed !== null) editing.anchor = fixed;
+  editing.goal = { ...goal, text, at: [a, z - a] };
+  return [a, z - a];
 }
 
 /** Replaces lines [at, at+old) of current.text and shifts the edit ranges below them. */
@@ -1761,6 +1827,7 @@ window.sb = {
     splice(u.at, u.old, next, u.ver);
     if (editing && editing.seq === u.seq) {
       Object.assign(editing, { lines: next.length, text: u.text, selStart: u.selStart, selLen: u.selLen });
+      keepGoal();
       const el = editorEl();
       if (el) el.innerHTML = editorHTML();
       revealCaret();
@@ -1769,6 +1836,11 @@ window.sb = {
       if (retired && retired.seq === u.seq) retired.lines = next.length;
       draw();
     }
+  },
+  /** ↑ or ↓ in the writer: the selection it moves to, or -1 for the writer to move by its own lines. */
+  editMove(m) {
+    const r = editing && editing.seq === m.seq && document.querySelector(EDITOR_EL) ? verticalMove(m) : null;
+    post({ type: 'editMoved', seq: m.seq, start: r ? r[0] : -1, length: r ? r[1] : 0 });
   },
   /** Backspace at the start of the block: name the block above so the native side can join the two. */
   prevBlock(q) {
@@ -1815,6 +1887,7 @@ window.sb = {
     if (editing && editing.whole && editing.seq === u.seq) {
       if (changed) editing.text = current.text = apply(editing.text);
       Object.assign(editing, { selStart: u.selStart, selLen: u.selLen });
+      keepGoal();
       paintTextEditor(true, changed ? { from: u.from, to: u.to, length: u.insert.length } : null);
       if (changed) jsonCheckSoon();
       requestAnimationFrame(() => post({ type: 'editPainted', keyTime: u.keyTime }));

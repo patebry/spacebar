@@ -385,6 +385,7 @@ function render(text, depth = 0) {
   if (depth === 0 && !current.entry) fences(frag);
   if (!settings.taskToggles || current.entry) frag.querySelectorAll('input[type=checkbox]').forEach((n) => { n.disabled = true; });
   if (settings.remoteImages !== true && current.remoteImagesOnce !== true) blockRemoteImages(frag);
+  else proxyRemoteImages(frag);
   if (depth === 0) frag.querySelectorAll('img').forEach(watchImage);
   const head = fm && frontMatterNode(fm);
   if (head) frag.prepend(head);
@@ -518,6 +519,23 @@ function blockRemoteImages(frag) {
   });
 }
 
+// The page's CSP has no https:, so an allowed remote image is loaded through the extension (spacebar://remote), which checks
+// again that remote images are allowed for the document on screen. A protocol-relative URL is taken as https; http stays blocked.
+const remoteSrc = (v) => {
+  const m = /^\s*((https:)?\/\/\S*?)\s*$/i.exec(v || '');
+  return m ? `spacebar://remote/?u=${encodeURIComponent(m[2] ? m[1] : `https:${m[1]}`)}` : v;
+};
+function proxyRemoteImages(root) {
+  // Each candidate's URL runs to the next space, commas and all, as the srcset grammar reads it.
+  const srcset = (v) => v.replace(/(^|,)(\s*)(\S+)/g, (_, c, sp, u) => c + sp + remoteSrc(u));
+  root.querySelectorAll('img[src]').forEach((n) => n.setAttribute('src', remoteSrc(n.getAttribute('src'))));
+  root.querySelectorAll('img[srcset], source[srcset]').forEach((n) => n.setAttribute('srcset', srcset(n.getAttribute('srcset'))));
+  root.querySelectorAll('image, feImage').forEach((n) => {
+    for (const a of ['href', 'xlink:href']) if (n.hasAttribute(a)) n.setAttribute(a, remoteSrc(n.getAttribute(a)));
+  });
+  for (const a of ['background', 'poster']) root.querySelectorAll(`[${a}]`).forEach((n) => n.setAttribute(a, remoteSrc(n.getAttribute(a))));
+}
+
 /** Only a real click on one of the page's own load buttons: never a script-made event, never a button from the document, and
  *  never a click forwarded from elsewhere (a label's activation is trusted too), so the pointer must have gone down on it. */
 let armed = null;
@@ -549,7 +567,8 @@ function watchImage(img) { img.addEventListener('error', () => imageFailed(img),
 
 function imageFailed(img) {
   if (!img.parentNode) return;
-  const src = img.getAttribute('src') || '';
+  let src = img.getAttribute('src') || '';
+  try { const r = new URL(src); if (r.protocol === 'spacebar:' && r.host === 'remote') src = r.searchParams.get('u') || src; } catch { /* not a remote one */ }
   let url = null, written = img.classList.contains('wl-img') ? img.dataset.wl || '' : src;
   try { url = new URL(src, document.baseURI); } catch { /* shown as written */ }
   try { written = decodeURI(written); } catch { /* kept encoded */ }
@@ -624,6 +643,7 @@ function revealImageFolder(e) {
 function tameMermaid(nodes, blocked = mermaidBlocked()) {
   for (const n of nodes) {
     if (blocked) n.querySelectorAll('img, image, feImage').forEach((i) => { if (/^\s*(https?:)?\/\//i.test(i.getAttribute('src') || i.getAttribute('href') || i.getAttribute('xlink:href') || '')) i.remove(); });
+    else proxyRemoteImages(n);
     n.querySelectorAll('a').forEach((a) => a.replaceWith(...a.childNodes));
     n.querySelectorAll('foreignObject [style]').forEach((e) => { if (/position|z-index|inset/i.test(e.getAttribute('style'))) e.removeAttribute('style'); });
   }

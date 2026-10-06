@@ -15,6 +15,8 @@ import WebKit
 ///                                  typed by FileTypes' map (raster images only), while its archive is the one on screen
 ///   spacebar://thumb/<path>?s=<px> the folder grid's thumbnail of a file the sidebar listed, made in memory by `thumbnail`
 ///                                  (which refuses any other path); a load the page drops (`dropThumbs`) is cancelled
+///   spacebar://remote/?u=<url>     a remote image (RemoteImages), fetched only while `remoteAllowed`: the page's CSP has no
+///                                  `https:`, so this is the only way a remote image reaches the page
 /// The app's live preview uses it with `fileHost: false`.
 final class SchemeHandler: NSObject, WKURLSchemeHandler {
     let webRoot: URL
@@ -62,6 +64,12 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
     private var droppedSet: Set<String> = []
     static let maxThumbPixels = 1024
     static let maxDropped = 1024
+
+    /// Whether the `remote` host may serve now: remote images are allowed for the document on screen (RemoteImageGate).
+    var remoteAllowed: () -> Bool = { false }
+    /// How the `remote` host fetches (tests inject their own): replies once, on any thread, and returns a cancel.
+    var fetchRemote: (URL, @escaping (Result<RemoteImages.Image, Error>) -> Void) -> () -> Void = RemoteImages.fetch
+    private var remoteTasks: [ObjectIdentifier: () -> Void] = [:]
 
     init(webRoot: URL, supportDir: @escaping () -> URL = { SettingsFile.supportDir }, fileHost: Bool = true) {
         self.webRoot = webRoot.standardizedFileURL
@@ -132,6 +140,7 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
         if url.host == "body" { return serveBody(task, url: url) }
         if url.host == "entry" { return serveEntry(task, url: url) }
         if url.host == "thumb" { return serveThumb(task, url: url) }
+        if url.host == "remote" { return serveRemote(task, url: url) }
         guard let fileURL = resolve(url) else {
             onRefused("refused load \(url.absoluteString)")
             return task.didFailWithError(URLError(.noPermissionsToReadFile))
@@ -171,6 +180,7 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {
         let id = ObjectIdentifier(task)
         live[id] = nil
+        remoteTasks.removeValue(forKey: id)?()
         if let url = task.request.url?.absoluteString, let t = thumbTasks[url], t.task === task {
             thumbTasks[url] = nil
             t.cancel()
@@ -234,6 +244,43 @@ final class SchemeHandler: NSObject, WKURLSchemeHandler {
             if let old = thumbTasks[key] { live[ObjectIdentifier(old.task)] = nil; old.cancel(); old.task.didFailWithError(URLError(.cancelled)) }
             thumbTasks[key] = (task, cancel)
         }
+    }
+
+    /// A remote image, while remote images are allowed for the document on screen both when it is asked for and when it
+    /// arrives; kept in memory (RemoteImages.cache), so a document drawn again does not fetch it again.
+    private func serveRemote(_ task: WKURLSchemeTask, url: URL) {
+        guard remoteAllowed(), let target = RemoteImages.target(of: url) else {
+            onRefused("refused load \(url.absoluteString)")
+            return task.didFailWithError(URLError(.noPermissionsToReadFile))
+        }
+        let key = target.absoluteString as NSString
+        if let hit = RemoteImages.cache.object(forKey: key) { return respondRemote(task, url: url, hit) }
+        tokens += 1
+        let id = ObjectIdentifier(task), token = tokens
+        live[id] = token
+        let cancel = fetchRemote(target) { [weak self] r in
+            DispatchQueue.main.async {
+                guard let self, self.live[id] == token else { return }
+                self.live[id] = nil
+                self.remoteTasks[id] = nil
+                guard self.remoteAllowed() else { return task.didFailWithError(URLError(.noPermissionsToReadFile)) }
+                switch r {
+                case .success(let image):
+                    RemoteImages.cache.setObject(image, forKey: key, cost: image.data.count)
+                    self.respondRemote(task, url: url, image)
+                case .failure(let error): task.didFailWithError(error)
+                }
+            }
+        }
+        if live[id] == token { remoteTasks[id] = cancel }
+    }
+
+    private func respondRemote(_ task: WKURLSchemeTask, url: URL, _ image: RemoteImages.Image) {
+        let headers = ["Content-Type": image.mime, "Content-Length": String(image.data.count), "Cache-Control": "no-store",
+                       "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'"]
+        task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: headers)!)
+        task.didReceive(image.data)
+        task.didFinish()
     }
 
     private func respond(_ task: WKURLSchemeTask, url: URL, file: URL, data: Data) {
@@ -527,9 +574,139 @@ enum PageSettings {
     static let remoteImageRules = #"[{"trigger":{"url-filter":"^https?://","resource-type":["image"]},"action":{"type":"block"}}]"#
 }
 
+/// Remote images for the page's `remote` host. The extension's only network code: an https GET of an image the page names,
+/// made only while RemoteImageGate allows the document on screen. No cookies, credentials or cache on disk; https only,
+/// redirects included; a 2xx answer typed as an image, at most maxBytes, within timeout, or nothing.
+enum RemoteImages {
+    final class Image {
+        let data: Data
+        let mime: String
+        init(data: Data, mime: String) { self.data = data; self.mime = mime }
+    }
+
+    static let maxBytes = 20 << 20
+    static let timeout: TimeInterval = 20
+    static let cache: NSCache<NSString, Image> = {
+        let c = NSCache<NSString, Image>()
+        c.totalCostLimit = 64 << 20
+        return c
+    }()
+
+    /// The remote URL a `remote` URL names, `spacebar://remote/?u=<an https URL>`; nil for anything else.
+    static func target(of url: URL) -> URL? {
+        guard url.host == "remote", let c = URLComponents(url: url, resolvingAgainstBaseURL: false), c.path == "/" || c.path.isEmpty,
+              let items = c.queryItems, items.count == 1, items[0].name == "u", let v = items[0].value, v.utf8.count <= 4096,
+              let t = URL(string: v), t.scheme?.lowercased() == "https", let h = t.host, !h.isEmpty, t.user == nil, t.password == nil else { return nil }
+        return t
+    }
+
+    static func fetch(_ url: URL, _ reply: @escaping (Result<Image, Error>) -> Void) -> () -> Void { loader.fetch(url, reply) }
+
+    /// The image type of bytes sent as untyped: PNG, JPEG, GIF, WebP, AVIF or HEIC; nil for anything else.
+    static func sniff(_ d: Data) -> String? {
+        let b = [UInt8](d.prefix(12))
+        func at(_ i: Int, _ s: String) -> Bool { b.count >= i + s.utf8.count && Array(b[i..<(i + s.utf8.count)]) == Array(s.utf8) }
+        if b.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return "image/png" }
+        if b.starts(with: [0xFF, 0xD8, 0xFF]) { return "image/jpeg" }
+        if at(0, "GIF8") { return "image/gif" }
+        if at(0, "RIFF"), at(8, "WEBP") { return "image/webp" }
+        if at(4, "ftypavif") { return "image/avif" }
+        if at(4, "ftypheic") || at(4, "ftypmif1") { return "image/heic" }
+        return nil
+    }
+
+    private static let loader = Loader()
+
+    private final class Loader: NSObject, URLSessionDataDelegate {
+        private let queue: OperationQueue = {
+            let q = OperationQueue()
+            q.maxConcurrentOperationCount = 1
+            return q
+        }()
+        /// Each task's bytes so far, its type and its reply; touched only on `queue`.
+        private var pending: [Int: (data: Data, mime: String, reply: (Result<Image, Error>) -> Void)] = [:]
+        private lazy var session: URLSession = {
+            let c = URLSessionConfiguration.ephemeral
+            c.httpCookieAcceptPolicy = .never
+            c.httpShouldSetCookies = false
+            c.httpCookieStorage = nil
+            c.urlCredentialStorage = nil
+            c.urlCache = nil
+            c.requestCachePolicy = .reloadIgnoringLocalCacheData
+            c.timeoutIntervalForRequest = RemoteImages.timeout
+            c.timeoutIntervalForResource = RemoteImages.timeout
+            c.httpMaximumConnectionsPerHost = 4
+            // A browser's, so the request names neither spacebar nor the system's versions.
+            c.httpAdditionalHeaders = ["Accept": "image/*", "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)"]
+            return URLSession(configuration: c, delegate: self, delegateQueue: queue)
+        }()
+
+        /// At most `maxActive` fetches at once, so a document of many large images holds at most that many buffers; the rest wait.
+        static let maxActive = 6
+        private var waiting: [URLSessionDataTask] = []
+
+        func fetch(_ url: URL, _ reply: @escaping (Result<Image, Error>) -> Void) -> () -> Void {
+            let task = session.dataTask(with: URLRequest(url: url))
+            queue.addOperation {
+                self.pending[task.taskIdentifier] = (Data(), "", reply)
+                self.waiting.append(task)
+                self.startWaiting()
+            }
+            return { task.cancel() }
+        }
+
+        private func startWaiting() {
+            while !waiting.isEmpty, pending.count - waiting.count < Self.maxActive { waiting.removeFirst().resume() }
+        }
+
+        func urlSession(_ s: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+            var mime = response.mimeType?.lowercased() ?? ""
+            // Some stores (S3, CDNs) label images as bytes; their type is then read from the bytes themselves.
+            if ["application/octet-stream", "binary/octet-stream"].contains(mime) { mime = "sniff" }
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+                  mime == "sniff" || mime.range(of: #"^image/[a-z0-9.+-]+$"#, options: .regularExpression) != nil,
+                  response.expectedContentLength <= Int64(RemoteImages.maxBytes) else { return completionHandler(.cancel) }
+            pending[dataTask.taskIdentifier]?.mime = mime
+            completionHandler(.allow)
+        }
+
+        func urlSession(_ s: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+            guard var p = pending[dataTask.taskIdentifier] else { return dataTask.cancel() }
+            p.data.append(data)
+            pending[dataTask.taskIdentifier] = p
+            if p.data.count > RemoteImages.maxBytes { dataTask.cancel() }
+        }
+
+        func urlSession(_ s: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                        completionHandler: @escaping (URLRequest?) -> Void) {
+            completionHandler(request.url?.scheme?.lowercased() == "https" ? request : nil)
+        }
+
+        func urlSession(_ s: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge,
+                        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+            let trust = challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust
+            completionHandler(trust ? .performDefaultHandling : .cancelAuthenticationChallenge, nil)
+        }
+
+        func urlSession(_ s: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+            guard let p = pending.removeValue(forKey: task.taskIdentifier) else { return }
+            waiting.removeAll { $0 === task }
+            startWaiting()
+            let mime = p.mime == "sniff" ? RemoteImages.sniff(p.data) : p.mime
+            if error == nil, let mime, !mime.isEmpty, p.data.count <= RemoteImages.maxBytes {
+                p.reply(.success(Image(data: p.data, mime: mime)))
+            } else {
+                p.reply(.failure(error ?? URLError(.badServerResponse)))
+            }
+        }
+    }
+}
+
 /// The remote-image block on one web view: a content rule list, in place while remoteImages is off. A blocked image's
 /// placeholder offers "Load images from the web", which lifts the block for the one document on screen until the preview
-/// shows another document or closes. Nothing here is saved, and the page's CSP is not involved.
+/// shows another document or closes. Nothing here is saved. The page's CSP allows no remote image at all: what the gate
+/// allows reaches the page through the scheme handler's `remote` host, which asks `allows` for every image.
 final class RemoteImageGate {
     /// The render payload key that tells the page to show this document's remote images.
     static let payloadKey = "remoteImagesOnce"

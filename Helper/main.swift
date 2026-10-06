@@ -369,7 +369,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         log.error("tap off: Accessibility revoked")
     }
 
-    private static func keyEvent(_ event: CGEvent, down: Bool) -> KeyEvent {
+    private static func keyEvent(_ event: CGEvent, down: Bool, open: Bool) -> KeyEvent {
         let f = event.flags
         var mods: HelperMods = []
         if f.contains(.maskCommand) { mods.insert(.command) }
@@ -381,7 +381,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
                          tagged: event.getIntegerValueField(.eventSourceUserData) == Decision.repostTag,
                          targetPid: Int32(truncatingIfNeeded: event.getIntegerValueField(.eventTargetUnixProcessID)))
         // Only a Command shortcut needs its character, and only while the panel could be open.
-        if down, mods.contains(.command) { e.chars = NSEvent(cgEvent: event)?.charactersIgnoringModifiers?.lowercased() ?? "" }
+        if down, open, mods.contains(.command) { e.chars = NSEvent(cgEvent: event)?.charactersIgnoringModifiers?.lowercased() ?? "" }
         return e
     }
 
@@ -399,7 +399,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
             return pass
         }
         guard type == .keyDown || type == .keyUp else { return pass }
-        let e = Self.keyEvent(event, down: type == .keyDown)
+        let e = Self.keyEvent(event, down: type == .keyDown, open: panelOpen || pending != nil)
         // A rename or the search field can open without a focus notification arriving first: read the focus now, before a key
         // that the panel would take from it. Any AX error counts as a text field, so the key stays Finder's.
         if panelOpen || pending != nil, !text.active, e.down, !e.isRepeat, !e.tagged, e.targetPid == finderPid, finderPid > 0,

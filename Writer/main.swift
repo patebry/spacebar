@@ -396,10 +396,10 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         }
     }
 
-    func moveEdit(_ session: Int, start: Int, length: Int) {
+    func moveEdit(_ session: Int, token: Int, start: Int, length: Int) {
         DispatchQueue.main.async {
             guard EditSession.find(owner: self, session: session) != nil else { return }
-            EditSurface.shared.textView.finishMove(start < 0 ? nil : NSRange(location: start, length: max(0, length)))
+            EditSurface.shared.textView.finishMove(token: token, start < 0 ? nil : NSRange(location: start, length: max(0, length)))
         }
     }
 
@@ -602,11 +602,11 @@ final class EditSession: NSObject, NSWindowDelegate, NSTextViewDelegate {
             self.flush(force: true)
             self.host.editUndo(self.id, redo: redo)
         }
-        textView.onVerticalMove = { [weak self] down, extend in
+        textView.onVerticalMove = { [weak self] down, extend, token in
             guard let self, !self.ended else { return }
             self.flush(force: true)
             let sel = self.textView.selectedRange()
-            self.host.editMove(self.id, down: down, extend: extend, start: sel.location, length: sel.length)
+            self.host.editMove(self.id, token: token, down: down, extend: extend, start: sel.location, length: sel.length)
         }
         panel.delegate = self
         panel.makeKeyAndOrderFront(nil)

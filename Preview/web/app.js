@@ -1061,9 +1061,10 @@ function verticalMove(m) {
       if (d) { window.scrollBy({ top: d, behavior: 'instant' }); er = el.getBoundingClientRect(); }
       to = editorOffset(el, Math.min(Math.max(er.left + x, er.left + 1), er.right - 1), er.top + ty, null);
       if (to === null) return null;
-      // Past the end of a wrapped line the point is at the start of the next one; the caret stays on this one.
+      // Past the end of a line wrapped at a space the point is after the space, at the start of the next line; the caret stays
+      // before it, on this one. A word broken across lines has no such place.
       const c = caretBox(el, to);
-      if (to > 0 && text[to - 1] !== '\n' && c && c.top - er.top > ty) to--;
+      if (to > 0 && /[ \t]/.test(text[to - 1]) && c && c.top - er.top > ty) to--;
       goal = { x, y: ty };
     }
     goal = goal || { x, y };
@@ -1840,7 +1841,7 @@ window.sb = {
   /** ↑ or ↓ in the writer: the selection it moves to, or -1 for the writer to move by its own lines. */
   editMove(m) {
     const r = editing && editing.seq === m.seq && document.querySelector(EDITOR_EL) ? verticalMove(m) : null;
-    post({ type: 'editMoved', seq: m.seq, start: r ? r[0] : -1, length: r ? r[1] : 0 });
+    post({ type: 'editMoved', seq: m.seq, token: m.token, start: r ? r[0] : -1, length: r ? r[1] : 0 });
   },
   /** Backspace at the start of the block: name the block above so the native side can join the two. */
   prevBlock(q) {

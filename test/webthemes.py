@@ -1070,6 +1070,22 @@ def main():
             if raw:
                 page.cmd("@eval:document.getElementById('raw').click(); 0")
             page.apply(**{key: False for key in settings})
+        # A word too long for a line breaks inside it: past the end of the line, ↓ goes to the end of the next line, not a
+        # character before it.
+        f = os.path.join(page.out, 'longword.txt')
+        open(f, 'w').write('x' * 500 + '\n')
+        page.apply(wrapText=True)
+        page.render(f)
+        page.cmd('@wait:0.3')
+        click(page, '#doc pre.code')
+        r = mv("""(() => { const el = document.querySelector(EDITOR_EL); let n = 1; const top = caretBox(el, 0).top;
+          while (caretBox(el, n).top === top) n++;
+          Object.assign(editing, { selStart: n - 1, selLen: 0 });
+          editing.goal = { x: 1e4, y: (caretBox(el, 0).top + caretBox(el, 0).bottom) / 2 - el.getBoundingClientRect().top, text: editing.text, at: [n - 1, 0] };
+          return [n, __mv(true)]; })()""")
+        check(r and r[1] == [2 * r[0], 0], 'editor arrows: past the end of a line broken inside a long word, ↓ goes to the end of the next line', json.dumps(r))
+        page.cmd('@eval:sb.editEnd({}); 0')
+        page.apply(wrapText=False)
         CODE = 'first line of code\nab\nthird line of code\n'
         f = os.path.join(page.out, 'nowrap.txt')
         open(f, 'w').write(CODE)

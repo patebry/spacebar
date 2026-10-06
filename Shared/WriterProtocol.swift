@@ -66,9 +66,9 @@ protocol SpacebarWriterProtocol {
     func beginTextEdit(_ session: Int, path: String, text: String, caret: Int, clickX: Double, clickY: Double, width: Double, height: Double,
                        reply: @escaping (Bool) -> Void)
     func setSelection(_ session: Int, start: Int, length: Int)
-    /// Answers editMove: selects [start, start+length), or with a negative start lets the panel's text view move by its own
-    /// lines, then releases the keys held since the request.
-    func moveEdit(_ session: Int, start: Int, length: Int)
+    /// Answers editMove with its `token`: selects [start, start+length), or with a negative start lets the panel's text view move
+    /// by its own lines, then releases the keys held since the request. An answer to any but the move now waiting is dropped.
+    func moveEdit(_ session: Int, token: Int, start: Int, length: Int)
     /// Answers editMergeBackward and editSplit: replaces the buffer (nil keeps it), puts the caret at `caret` (negative keeps
     /// the selection) and releases the keys held since the request.
     func resetEdit(_ session: Int, text: String?, caret: Int)
@@ -103,7 +103,7 @@ protocol SpacebarEditHostProtocol {
     func editUndo(_ session: Int, redo: Bool)
     /// ↑ or ↓ (`extend`: with ⇧) from the selection [start, start+length): the page, which lays the text out, picks the
     /// selection one wrapped line up or down. The host answers with moveEdit; the writer holds the keys after it until then.
-    func editMove(_ session: Int, down: Bool, extend: Bool, start: Int, length: Int)
+    func editMove(_ session: Int, token: Int, down: Bool, extend: Bool, start: Int, length: Int)
     /// The filter field's text (FilterKeys.clean) after each change.
     func filterChanged(_ session: Int, text: String)
     /// A key the sidebar moves with, one of FilterKeys.names (a list session: listNames and listCommands; the find field:

@@ -28,8 +28,8 @@ final class EditTextView: NSTextView {
     /// ⌘F while an edit holds the keys: the edit ends (its text is already saved) and the page opens find.
     var onFind: (() -> Void)?
     /// Set while a session is active: ↑ and ↓ (⇧ to extend) ask the host, whose page knows where its lines wrap, for the
-    /// selection to move to, and the keys after them wait for finishMove.
-    var onVerticalMove: ((_ down: Bool, _ extend: Bool) -> Void)?
+    /// selection to move to, and the keys after them wait for finishMove with the same `token`.
+    var onVerticalMove: ((_ down: Bool, _ extend: Bool, _ token: Int) -> Void)?
     /// The view's own move, if the host does not answer.
     private var nativeMove: (() -> Void)?
     var session = 0
@@ -79,7 +79,7 @@ final class EditTextView: NSTextView {
         request()
         DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { [weak self] in
             guard let self, self.holdGeneration == gen, self.held != nil else { return }
-            if self.nativeMove != nil { return self.finishMove(nil) }
+            if self.nativeMove != nil { return self.finishMove(token: gen, nil) }
             self.dropHeld()
             self.onHoldTimeout()
         }
@@ -93,12 +93,13 @@ final class EditTextView: NSTextView {
     private func vertical(down: Bool, extend: Bool, native: @escaping () -> Void) {
         guard let ask = onVerticalMove, held == nil, !hasMarkedText() else { return native() }
         nativeMove = native
-        holdKeys(timeout: 0.5) { ask(down, extend) }
+        holdKeys(timeout: 0.5) { ask(down, extend, holdGeneration) }
     }
 
-    /// Answers onVerticalMove: selects `range` (nil: the view moves by its own lines) and replays the keys held since.
-    func finishMove(_ range: NSRange?) {
-        guard let native = nativeMove else { return }
+    /// Answers onVerticalMove: selects `range` (nil: the view moves by its own lines) and replays the keys held since. An answer
+    /// to an earlier move, which the view made itself when the answer was late, is dropped.
+    func finishMove(token: Int, _ range: NSRange?) {
+        guard let native = nativeMove, token == holdGeneration, held != nil else { return }
         nativeMove = nil
         releaseHeld {
             let n = (string as NSString).length
@@ -119,10 +120,13 @@ final class EditTextView: NSTextView {
     /// Ends the hold, runs `prepare` (the new buffer and caret), then replays the held keys onto it.
     func releaseHeld(after prepare: () -> Void = {}) {
         let events = held ?? []
+        let move = nativeMove
         held = nil
         nativeMove = nil
         holdGeneration += 1
         prepare()
+        // A move still unanswered when something else releases the keys is made by the view, before the keys after it.
+        move?()
         for e in events {
             replaying = e
             if e.modifierFlags.contains(.command) { _ = performKeyEquivalent(with: e) } else { keyDown(with: e) }

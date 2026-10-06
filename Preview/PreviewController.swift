@@ -39,8 +39,8 @@ final class EditHost: NSObject, SpacebarEditHostProtocol {
     func editUndo(_ session: Int, redo: Bool) {
         DispatchQueue.main.async { self.controller?.undoRequested(session, redo: redo) }
     }
-    func editMove(_ session: Int, down: Bool, extend: Bool, start: Int, length: Int) {
-        DispatchQueue.main.async { self.controller?.moveRequested(session, down: down, extend: extend, start: start, length: length) }
+    func editMove(_ session: Int, token: Int, down: Bool, extend: Bool, start: Int, length: Int) {
+        DispatchQueue.main.async { self.controller?.moveRequested(session, token: token, down: down, extend: extend, start: start, length: length) }
     }
     func filterChanged(_ session: Int, text: String) {
         DispatchQueue.main.async { self.controller?.filterChanged(session, text: text) }
@@ -2316,8 +2316,10 @@ class PreviewController: NSViewController {
             guard let e = edit, m.int("seq") == e.seq, let start = m.int("start"), let len = m.int("length") else { return }
             helper { $0.setSelection(e.id, start: start, length: len) }
         case "editMoved":
-            guard let e = edit, m.int("seq") == e.seq, let start = m.int("start", -1...10_000_000), let len = m.int("length") else { return }
-            helper { $0.moveEdit(e.id, start: start, length: len) }
+            // -1 (no move found, or the page no longer edits that block) is passed on whatever the seq, so the keys wait no longer.
+            guard let e = edit, let token = m.int("token", 0...Int.max), let start = m.int("start", -1...10_000_000), let len = m.int("length"),
+                  start < 0 || m.int("seq") == e.seq else { return }
+            helper { $0.moveEdit(e.id, token: token, start: start, length: len) }
         case "mergePrev":
             mergeBackward(m)
         case "editCancel":
@@ -3093,9 +3095,9 @@ class PreviewController: NSViewController {
     }
 
     /// ↑ or ↓ in the writer: the page finds the wrapped line above or below and answers with "editMoved".
-    fileprivate func moveRequested(_ id: Int, down: Bool, extend: Bool, start: Int, length: Int) {
-        guard let e = edit, e.id == id else { return helper { $0.moveEdit(id, start: -1, length: 0) } }
-        js("sb.editMove", ["seq": e.seq, "down": down, "extend": extend, "start": start, "length": length])
+    fileprivate func moveRequested(_ id: Int, token: Int, down: Bool, extend: Bool, start: Int, length: Int) {
+        guard let e = edit, e.id == id else { return helper { $0.moveEdit(id, token: token, start: -1, length: 0) } }
+        js("sb.editMove", ["seq": e.seq, "token": token, "down": down, "extend": extend, "start": start, "length": length])
     }
 
     /// Backspace at the start of the block: the page names the block above (it owns the block structure), then mergeBackward joins them.

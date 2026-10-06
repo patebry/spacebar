@@ -18,6 +18,8 @@ command -v "$DMGBUILD" > /dev/null || {
   echo "  python3 -m pip install --require-hashes --only-binary :all: --no-deps -r scripts/dmg/requirements.txt" >&2
   exit 1
 }
+# dmgbuild sets the volume icon and hides files with SetFile, from the Xcode command-line tools.
+xcrun -f SetFile > /dev/null 2>&1 || { echo "no SetFile: install the Xcode command-line tools (xcode-select --install)" >&2; exit 1; }
 codesign --verify --deep --strict "$APP"
 SIGN_ID=${SIGN_ID:-$(codesign -dvv "$APP" 2>&1 | sed -n 's/^Authority=//p' | head -1)}
 if [ -z "${TIMESTAMP:-}" ]; then
@@ -32,8 +34,9 @@ case $TIMESTAMP in 1) TIMESTAMP_ARG=--timestamp ;; 0) TIMESTAMP_ARG=--timestamp=
 rm -f "$DMG"
 # hdiutil sometimes fails with "Resource busy" on a CI runner; a second try a few seconds later succeeds.
 for try in 1 2 3; do
-  "$DMGBUILD" -s scripts/dmg/settings.py -D app="$APP" -D icon=App/AppIcon.icns -D background=scripts/dmg/background.tiff \
-    spacebar "$DMG" > /dev/null && break
+  if log=$("$DMGBUILD" -s scripts/dmg/settings.py -D app="$APP" -D icon=App/AppIcon.icns -D background=scripts/dmg/background.tiff \
+    spacebar "$DMG" 2>&1); then break; fi
+  printf '%s\n' "$log" >&2
   [ "$try" = 3 ] && { echo "dmgbuild failed 3 times" >&2; exit 1; }
   rm -f "$DMG"
   sleep 5

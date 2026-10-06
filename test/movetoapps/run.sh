@@ -21,4 +21,16 @@ for kind in ro rw; do
   hdiutil attach -quiet "${flags[@]}" "$out/$kind.dmg"
   mounts+=("$out/$kind")
 done
-SPACEBAR_SUPPORT_DIR="$out/support" "$out/movetoapps" "$out/ro" "$out/rw" "$out/scratch"
+# A bundle with an app nested in it, signed ad hoc inside out, and a copy whose nested app was changed after signing.
+bundle() {
+  mkdir -p "$1/Contents/MacOS"
+  cp "$out/movetoapps" "$1/Contents/MacOS/$2"
+  printf '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleExecutable</key><string>%s</string><key>CFBundleIdentifier</key><string>test.spacebar.%s</string><key>CFBundleShortVersionString</key><string>9.9</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>\n' "$2" "$2" > "$1/Contents/Info.plist"
+}
+bundle "$out/Nested.app" Nested
+bundle "$out/Nested.app/Contents/Helpers/Inner.app" Inner
+codesign --force --sign - "$out/Nested.app/Contents/Helpers/Inner.app" 2>/dev/null
+codesign --force --sign - "$out/Nested.app" 2>/dev/null
+ditto "$out/Nested.app" "$out/Tampered.app"
+printf 'x' >> "$out/Tampered.app/Contents/Helpers/Inner.app/Contents/MacOS/Inner"
+SPACEBAR_SUPPORT_DIR="$out/support" "$out/movetoapps" "$out/ro" "$out/rw" "$out/scratch" "$out/Nested.app" "$out/Tampered.app"

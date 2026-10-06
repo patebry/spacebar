@@ -18,7 +18,7 @@ enum MoveToApplications {
         let volume = volumeFacts(original ?? path)
         let facts = InstallLocation.Facts(path: path, original: original, diskImage: volume.diskImage, readOnly: volume.readOnly,
                                           home: NSHomeDirectory(), version: version(of: Bundle.main) ?? "0")
-        let plan = { InstallLocation.plan(facts, isRunning: { !running(at: $0).isEmpty }, versionAt: { Bundle(path: $0).flatMap(version(of:)) }) }
+        let plan = { InstallLocation.plan(facts, isRunning: { !running(at: $0).isEmpty }, versionAt: version(at:)) }
         let first = plan()
         guard first != .stay else { return false }
         active = true
@@ -35,13 +35,14 @@ enum MoveToApplications {
         let chosen = plan()
         let progress = progressPanel()
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = Result { try carryOut(chosen, from: path) }
+            let result = Result { try carryOut(chosen, from: path, keep: [original].compactMap { $0 }) }
             DispatchQueue.main.async {
                 progress.orderOut(nil)
                 switch result {
                 case .success(let dest):
                     let after = InstallLocation.afterOpening(chosen, original: original, diskImage: volume.diskImage)
-                    open(dest, eject: after.eject ? volume.url : nil, trash: after.trashOriginal ? original : nil)
+                    let trash = original.flatMap { after.trashOriginal && InstallLocation.mayTrashOriginal($0, dest: dest, home: NSHomeDirectory()) ? $0 : nil }
+                    open(dest, eject: after.eject ? volume.url : nil, trash: trash)
                 case .failure(let error):
                     fail(error.localizedDescription)
                 }
@@ -72,7 +73,7 @@ enum MoveToApplications {
     }
 
     /// Puts the copy in place and returns where it is; throws, with nothing half made left behind, when it cannot.
-    private static func carryOut(_ plan: InstallLocation.Plan, from source: String) throws -> String {
+    private static func carryOut(_ plan: InstallLocation.Plan, from source: String, keep: [String]) throws -> String {
         switch plan {
         case .stay: return source
         case .openExisting(let dest): return dest
@@ -83,17 +84,23 @@ enum MoveToApplications {
             let deadline = Date().addingTimeInterval(5)
             while !running(at: dest).isEmpty, Date() < deadline { Thread.sleep(forTimeInterval: 0.1) }
             guard running(at: dest).isEmpty else { throw Failure("spacebar is open from \(shown(dest)). Quit it, then open this copy again.") }
-            return try copy(from: source, to: dest, replacing: true)
+            return try copy(from: source, to: dest, replacing: true, keep: keep)
         case .move(let dest, let replacing):
-            return try copy(from: source, to: dest, replacing: replacing)
+            return try copy(from: source, to: dest, replacing: replacing, keep: keep)
         }
     }
 
     /// ditto into .spacebar.app.new beside `dest`, without the quarantine flag (as install.sh's copy has none), checked to be
-    /// signed as this copy is; then the copy there to the Trash and the new one renamed into place, the old put back if that fails.
-    static func copy(from source: String, to dest: String, replacing: Bool) throws -> String {
+    /// signed as this copy is (or meets `requirement`); then the copy there to the Trash and the new one renamed into place, the
+    /// old put back if that fails. Refused when `dest` is the source or one of `keep` (the original of a translocated copy), by
+    /// file, and when the copy there is open.
+    static func copy(from source: String, to dest: String, replacing: Bool, keep: [String] = [], requirement: SecRequirement? = nil,
+                     isRunning: (String) -> Bool = { !running(at: $0).isEmpty }) throws -> String {
         let fm = FileManager.default
         let dir = (dest as NSString).deletingLastPathComponent
+        guard !([source] + keep).contains(where: { InstallLocation.sameFile($0, dest) }) else {
+            throw Failure("This copy of spacebar is already at \(shown(dest)).")
+        }
         let new = dir + "/.spacebar.app.new"
         try fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
         if Updates.isThere(new) { try fm.removeItem(atPath: new) }
@@ -106,13 +113,17 @@ enum MoveToApplications {
             try? fm.removeItem(atPath: new)
             throw Failure("Copying spacebar into \(shown(dir)) failed.")
         }
-        if let problem = signatureProblem(new) {
+        if let problem = signatureProblem(new, requirement: requirement) {
             try? fm.removeItem(atPath: new)
             throw Failure("The copy in \(shown(dir)) did not verify: \(problem)")
         }
         var trashed: NSURL?
         let helpers = replacing ? running(inside: dest) : []
         if replacing {
+            guard !isRunning(dest) else {
+                try? fm.removeItem(atPath: new)
+                throw Failure("spacebar is open from \(shown(dest)). Quit it, then open this copy again.")
+            }
             do { try fm.trashItem(at: URL(fileURLWithPath: dest), resultingItemURL: &trashed) } catch {
                 try? fm.removeItem(atPath: new)
                 throw Failure("The spacebar already in \(shown(dir)) could not be moved to the Trash: \(error.localizedDescription)")
@@ -142,21 +153,22 @@ enum MoveToApplications {
         NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: dest), configuration: config) { _, error in
             DispatchQueue.main.async {
                 if let error { fail("spacebar was put in \(shown(dest)), but could not be opened: \(error.localizedDescription)"); return }
-                if let original, original != dest, Updates.canChange(original) {
+                if let original, InstallLocation.mayTrashOriginal(original, dest: dest, home: NSHomeDirectory()) {
                     try? FileManager.default.trashItem(at: URL(fileURLWithPath: original), resultingItemURL: nil)
                 }
-                if let volume { detachLater(volume) }
+                if let volume { detachLater(volume, after: getpid()) }
                 NSApp.terminate(nil)
             }
         }
     }
 
-    /// hdiutil detach from a shell that waits for this copy, which runs from the image, to quit. Not forced: an image
-    /// something else holds stays mounted.
-    private static func detachLater(_ volume: URL) {
+    /// hdiutil detach from a shell that waits up to 20 s for this copy, which runs from the image, to quit. Not forced: an
+    /// image something else holds stays mounted.
+    private static func detachLater(_ volume: URL, after pid: pid_t) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/sh")
-        p.arguments = ["-c", "sleep 2; exec /usr/bin/hdiutil detach -quiet \"$0\"", volume.path]
+        p.arguments = ["-c", "i=0; while kill -0 \"$1\" 2>/dev/null && [ $i -lt 100 ]; do sleep 0.2; i=$((i + 1)); done; "
+                       + "exec /usr/bin/hdiutil detach -quiet \"$0\"", volume.path, String(pid)]
         p.currentDirectoryURL = URL(fileURLWithPath: "/")
         p.standardInput = FileHandle.nullDevice
         p.standardOutput = FileHandle.nullDevice
@@ -209,24 +221,31 @@ enum MoveToApplications {
         bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
     }
 
-    /// spacebar itself open from `path` (not its helper or viewer, which run from inside it).
-    private static func running(at path: String) -> [NSRunningApplication] {
-        NSWorkspace.shared.runningApplications.filter { $0.bundleURL?.resolvingSymlinksInPath().path == path }
+    /// Read from the file each time: Bundle caches Info.plist, which a copy replaced meanwhile makes stale.
+    static func version(at path: String) -> String? {
+        NSDictionary(contentsOfFile: path + "/Contents/Info.plist")?["CFBundleShortVersionString"] as? String
+    }
+
+    /// spacebar itself open from `path` (not its helper or viewer, which run from inside it), compared by file.
+    static func running(at path: String) -> [NSRunningApplication] {
+        NSWorkspace.shared.runningApplications.filter { $0.bundleURL.map { InstallLocation.sameFile($0.path, path) } == true }
     }
 
     /// Apps running from inside the bundle at `path`: its Space helper and viewer.
     private static func running(inside path: String) -> [NSRunningApplication] {
-        NSWorkspace.shared.runningApplications.filter { $0.bundleURL?.resolvingSymlinksInPath().path.hasPrefix(path + "/") == true }
+        NSWorkspace.shared.runningApplications.filter { $0.bundleURL.map { InstallLocation.isInside($0.path, path) } == true }
     }
 
-    /// Why the bundle at `path` fails to verify (all architectures, nested code, strictly) against this copy's designated
-    /// requirement, so it is this same build signed by the same identity; nil when it verifies.
-    private static func signatureProblem(_ path: String) -> String? {
-        var me: SecCode?, requirement: SecRequirement?, staticMe: SecStaticCode?, copy: SecStaticCode?
-        guard SecCodeCopySelf([], &me) == errSecSuccess, let me,
-              SecCodeCopyStaticCode(me, [], &staticMe) == errSecSuccess, let staticMe,
-              SecCodeCopyDesignatedRequirement(staticMe, [], &requirement) == errSecSuccess,
-              SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &copy) == errSecSuccess, let copy else {
+    /// Why the bundle at `path` fails to verify (all architectures, nested code, strictly) against `given`, by default this
+    /// copy's designated requirement, so it is this same build signed by the same identity; nil when it verifies.
+    private static func signatureProblem(_ path: String, requirement given: SecRequirement?) -> String? {
+        var me: SecCode?, requirement = given, staticMe: SecStaticCode?, copy: SecStaticCode?
+        if requirement == nil {
+            guard SecCodeCopySelf([], &me) == errSecSuccess, let me,
+                  SecCodeCopyStaticCode(me, [], &staticMe) == errSecSuccess, let staticMe,
+                  SecCodeCopyDesignatedRequirement(staticMe, [], &requirement) == errSecSuccess else { return "its signature could not be read" }
+        }
+        guard SecStaticCodeCreateWithPath(URL(fileURLWithPath: path) as CFURL, [], &copy) == errSecSuccess, let copy else {
             return "its signature could not be read"
         }
         let flags = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSCheckNestedCode | kSecCSStrictValidate)

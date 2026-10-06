@@ -32,11 +32,28 @@ enum InstallLocation {
         case cannotChange(String)
     }
 
-    /// Only a translocated copy, or one on a disk image or read-only volume under /Volumes, is offered the move: a copy on a
-    /// writable external disk runs where it is, as does a build run from its build folder.
+    /// Only a translocated copy, or one on a read-only disk image under /Volumes (spacebar.dmg), is offered the move. A copy
+    /// on a writable image, a read-only share or an external disk runs where it is, as does a build in its build folder.
     static func offersMove(_ f: Facts) -> Bool {
         if f.original != nil { return true }
-        return f.path.hasPrefix("/Volumes/") && (f.diskImage || f.readOnly)
+        return f.path.hasPrefix("/Volumes/") && f.diskImage && f.readOnly
+    }
+
+    /// Whether two paths name the same file, links followed: the same device and inode, so paths that differ in case, or run
+    /// through a linked folder or a firmlink, match. A missing file matches nothing.
+    static func sameFile(_ a: String, _ b: String) -> Bool {
+        var sa = stat(), sb = stat()
+        return stat(a, &sa) == 0 && stat(b, &sb) == 0 && sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino
+    }
+
+    /// Whether `inner` is inside the bundle at `outer`, compared by file, not by spelling.
+    static func isInside(_ inner: String, _ outer: String, same: (String, String) -> Bool = sameFile) -> Bool {
+        var p = (inner as NSString).deletingLastPathComponent
+        while p.count > 1 {
+            if same(p, outer) { return true }
+            p = (p as NSString).deletingLastPathComponent
+        }
+        return false
     }
 
     /// The folder install.sh installs into: the copy it would update (~/Applications's, else one only in /Applications, else
@@ -46,10 +63,11 @@ enum InstallLocation {
     }
 
     static func plan(_ f: Facts, exists: (String) -> Bool = Updates.isThere, canChange: (String) -> Bool = Updates.canChange,
-                     isRunning: (String) -> Bool, versionAt: (String) -> String?) -> Plan {
+                     same: (String, String) -> Bool = sameFile, isRunning: (String) -> Bool, versionAt: (String) -> String?) -> Plan {
         guard offersMove(f) else { return .stay }
+        // Already installed, however the path is spelled: moving it would trash the only copy.
         let real = ((f.original ?? f.path) as NSString).standardizingPath
-        if Updates.installPlaces(home: f.home, system: f.system).contains(real) { return .stay }
+        if Updates.installPlaces(home: f.home, system: f.system).contains(where: { $0 == real || same(real, $0) }) { return .stay }
         let dest = destination(home: f.home, system: f.system, exists: exists)
         let dir = (dest as NSString).deletingLastPathComponent
         let there = exists(dest)
@@ -69,5 +87,13 @@ enum InstallLocation {
         case .stay, .openExisting, .cannotChange: moved = false
         }
         return (diskImage, moved && !diskImage && original != nil)
+    }
+
+    /// Whether the translocated `original` may go to the Trash once the copy at `dest` is open: never when it is that copy, or
+    /// a copy at an install place, by file rather than by spelling.
+    static func mayTrashOriginal(_ original: String, dest: String, home: String, system: String = Updates.systemApplications,
+                                 same: (String, String) -> Bool = sameFile, canChange: (String) -> Bool = Updates.canChange) -> Bool {
+        let keep = [dest] + Updates.installPlaces(home: home, system: system)
+        return canChange(original) && !keep.contains { $0 == original || same(original, $0) }
     }
 }

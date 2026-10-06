@@ -559,6 +559,98 @@ edit("md: after Enter, a click in the new paragraph moves the caret there", file
     keys([t("X")])
 }
 
+// ================= ↑ and ↓ by the lines on screen =================
+/// A paragraph that wraps to many lines on screen: ↓ and ⇧↓ in the writer go one wrapped line down at the same x (the page,
+/// which lays the text out, answers the writer), and what is typed next lands there.
+func wrappedArrows(_ name: String, file: String, click sel: String, wrap: String? = nil) {
+    if let only, !only.contains(where: { name.contains($0) }) { return }
+    caseN += 1
+    let dir = docs.appendingPathComponent("c\(caseN)")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let url = dir.appendingPathComponent(file)
+    let words = (0..<60).map { "word\($0)" }.joined(separator: " ")
+    let text = words + "\nab\n" + words + "\n"
+    try! md(text).write(to: url)
+    misrouted = []
+    rec.messages.removeAll()
+    if let wrap { _ = js("settings.\(wrap) = true; 0") }
+    open(url)
+    defer {
+        if (js("!!editing") as? Bool) == true { escape() }
+        if let wrap { _ = js("settings.\(wrap) = false; 0") }
+        closeHost()
+    }
+    guard click(sel, at: "start")["editing"] as? Bool == true else { return check(name, false, "the click did not start an edit") }
+    func box(_ k: Int) -> [String: Any] {
+        jsJSON("const el = document.querySelector(EDITOR_EL), b = caretBox(el, \(k)), r = el.getBoundingClientRect(); return { x: b.x - r.left, y: (b.top + b.bottom) / 2 - r.top, lh: parseFloat(getComputedStyle(el).lineHeight) }")
+    }
+    func near(_ a: [String: Any], _ b: [String: Any], lines: Double) -> Bool {
+        guard let ax = a["x"] as? Double, let ay = a["y"] as? Double, let bx = b["x"] as? Double, let by = b["y"] as? Double, let lh = a["lh"] as? Double else { return false }
+        return abs(by - ay - lines * lh) < 2 && abs(bx - ax) < 12
+    }
+    keys([k("right", times: 30)])
+    let b0 = box(30)
+    keys([k("down")])
+    let p1 = pageEdit(), s1 = p1["sel"] as? Int ?? -1
+    check("\(name): ↓ goes one line down on screen, at the same x", 30 < s1 && s1 < words.count && p1["len"] as? Int == 0 && near(b0, box(s1), lines: 1),
+          "caret \(s1), from \(b0) to \(box(s1))")
+    keys([k("down", "shift")])
+    let p2 = pageEdit(), s2 = p2["sel"] as? Int ?? -1, l2 = p2["len"] as? Int ?? -1
+    check("\(name): ⇧↓ extends the selection one more line down", s2 == s1 && l2 > 0 && near(b0, box(s1 + l2), lines: 2), "selection \(s2)+\(l2)")
+    keys([t("X")])
+    let want = md(String(text.prefix(s1)) + "X" + String(text.dropFirst(s1 + max(l2, 0))))
+    let got = settled(url, want)
+    check("\(name): what is typed next replaces that selection", got == want, show(String(data: got, encoding: .utf8) ?? "?"))
+    if !misrouted.isEmpty { check("\(name): the helper passes every key to the edit", false, misrouted.joined(separator: ", ")) }
+}
+/// ↓ ↓ and then typing, with the page's answers to the writer slowed by `delay` ms (nil: as fast as they come; -1: never): where
+/// the typing lands, as an offset into the file's text, and that offset's place on screen relative to where the caret began.
+func lateArrows(_ name: String, delay: Int?, gap: Double, typed: String) -> (Int, [String: Any])? {
+    caseN += 1
+    let dir = docs.appendingPathComponent("c\(caseN)")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let url = dir.appendingPathComponent("late.md")
+    let words = (0..<60).map { "word\($0)" }.joined(separator: " ")
+    let text = words + "\n"
+    try! md(text).write(to: url)
+    rec.messages.removeAll()
+    open(url)
+    defer {
+        _ = js("if (window.__editMove) sb.editMove = window.__editMove; 0")
+        if (js("!!editing") as? Bool) == true { escape() }
+        closeHost()
+    }
+    guard click("#doc > p", at: "start")["editing"] as? Bool == true else { check(name, false, "the click did not start an edit"); return nil }
+    keys([k("right", times: 30)])
+    if let delay {
+        _ = js("window.__editMove = window.__editMove || sb.editMove; sb.editMove = \(delay < 0 ? "() => {}" : "(m) => setTimeout(() => window.__editMove(m), \(delay))"); 0")
+    }
+    let b0 = jsJSON("const el = document.querySelector(EDITOR_EL), b = caretBox(el, 30), r = el.getBoundingClientRect(); return { x: b.x - r.left, y: (b.top + b.bottom) / 2 - r.top, lh: parseFloat(getComputedStyle(el).lineHeight) }")
+    keys([k("down"), k("down"), t(typed)], gap: gap, settle: 1500)
+    var at = -1
+    spin(until: 5) {
+        let s = String(data: (try? Data(contentsOf: url)) ?? Data(), encoding: .utf8) ?? ""
+        if let r = s.range(of: typed) { at = s.distance(from: s.startIndex, to: r.lowerBound) }
+        return at >= 0
+    }
+    guard at >= 0 else { check(name, false, "\(typed) never reached the file"); return nil }
+    let b = jsJSON("const el = document.querySelector(EDITOR_EL), b = caretBox(el, \(at)), r = el.getBoundingClientRect(); return { x: b.x - r.left, y: (b.top + b.bottom) / 2 - r.top }")
+    let dy = ((b["y"] as? Double ?? 0) - (b0["y"] as? Double ?? 0)) / (b0["lh"] as? Double ?? 1), dx = (b["x"] as? Double ?? 0) - (b0["x"] as? Double ?? 0)
+    return (at, ["lines": (dy * 10).rounded() / 10, "dx": dx.rounded()])
+}
+if only == nil || only!.contains(where: { "md: late ↓ answers".contains($0) }) {
+    let fast = lateArrows("md: late ↓ answers: fast", delay: nil, gap: 0, typed: "XY")
+    check("md: ↓ ↓ then typing at once lands two lines down on screen, at the same x", fast.map { $0.1["lines"] as? Double == 2 && abs($0.1["dx"] as? Double ?? 99) < 12 } == true,
+          "\(String(describing: fast))")
+    let own = lateArrows("md: late ↓ answers: never", delay: -1, gap: 600, typed: "X")
+    let slow = lateArrows("md: late ↓ answers: slow, spaced", delay: 700, gap: 600, typed: "X")
+    let burst = lateArrows("md: late ↓ answers: slow, at once", delay: 700, gap: 0, typed: "XY")
+    check("md: with the page's answers later than the writer waits, each ↓ is the writer's own move and a late answer moves nothing",
+          own != nil && slow?.0 == own?.0 && burst?.0 == own?.0, "own \(String(describing: own)), spaced \(String(describing: slow)), at once \(String(describing: burst))")
+}
+wrappedArrows("md: ↑↓ by wrapped lines", file: "wrapped.md", click: "#doc > p")
+wrappedArrows("txt: ↑↓ by wrapped lines", file: "wrapped.txt", click: code, wrap: "wrapText")
+
 // ================= whole text files (plain mode) =================
 edit("txt: Enter at the end of a line", file: "a.txt", md("line1\nline2\n"), click: code, at: "start", want: md("line1\nnew\nline2\n")) {
     keys([k("right", "command"), t("\nnew")])

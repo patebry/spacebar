@@ -2,7 +2,7 @@
 """Themes and settings in the page on its own, outside Quick Look: Preview/web in the offscreen WKWebView harness
 (test/web/main.swift, built with the extension's SchemeHandler and document-start settings script) against a scratch
 SPACEBAR_SUPPORT_DIR. Checks every built-in theme in light and dark, the no-flash document-start script, a live settings switch
-during an inline edit, the Aa popover, front matter, the table of contents, reading stats, mermaid re-theming, user themes and
+during an inline edit, selecting in the editor with the mouse (drag, double- and triple-click, shift-click), the Aa popover, front matter, the table of contents, reading stats, mermaid re-theming, user themes and
 custom.css, and that the `user` host serves nothing but those. Saves screenshots to docs/evidence/themes/."""
 import json, os, shutil, subprocess, sys, tempfile
 
@@ -199,6 +199,56 @@ CLICK = """(sel) => { const t = document.querySelector(sel); if (!t) return fals
     t.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, clientX: r.left + 3, clientY: r.top + 3, detail: 1 }));
   return true; }"""
 
+
+# Mouse input to the editor, at offsets of its text: each event is sent where that offset's character is drawn at the time.
+MOUSE = """window.__ed = (() => {
+  const ed = () => document.querySelector('#doc > .md-editing, #doc pre.text-editing');
+  const at = (k) => {
+    const w = document.createTreeWalker(ed(), NodeFilter.SHOW_TEXT);
+    for (let n, pos = 0; (n = w.nextNode()); pos += n.length) {
+      if (k >= pos + n.length) continue;
+      const r = document.createRange(); r.setStart(n, k - pos); r.setEnd(n, k - pos + 1);
+      const q = [...r.getClientRects()].find((c) => c.width > 0); return [q.left + 1, (q.top + q.bottom) / 2];
+    }
+  };
+  const fire = (type, k, detail = 1, o = {}) => {
+    const [x, y] = typeof k === 'number' ? at(k) : k;
+    (document.elementFromPoint(x, y) || document.body).dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window,
+      clientX: x, clientY: y, detail, buttons: o.buttons ?? (type === 'mousedown' || type === 'mousemove' ? 1 : 0), shiftKey: !!o.shift, ctrlKey: !!o.ctrl }));
+  };
+  const up = (k, d, o) => { fire('mouseup', k, d, o); fire('click', k, d, o); if (d === 2) fire('dblclick', k, d, o); };
+  const state = () => { const e = ed(); return e && editing ? [editing.selStart, editing.selLen, (e.querySelector('.sel') || {}).textContent || null] : null; };
+  return {
+    state, fire,
+    mid(dy = 0) { const r = ed().getBoundingClientRect(); return editorOffset(ed(), r.left + 120, innerHeight / 2 + dy); },
+    click(k, n = 1, o = {}) { for (let d = 1; d <= n; d++) { fire('mousedown', k, d, o); up(k, d, o); } return state(); },
+    drag(a, b, n = 1, o = {}) {
+      for (let d = 1; d < n; d++) { fire('mousedown', a, d); up(a, d); }
+      fire('mousedown', a, n, o);
+      const [x0, y0] = at(a), [x1, y1] = typeof b === 'number' ? at(b) : b;
+      for (const f of [0.3, 0.7]) fire('mousemove', [x0 + (x1 - x0) * f, y0 + (y1 - y0) * f], n);
+      fire('mousemove', b, n);
+      const live = state();
+      up(b, n, o);
+      return [live, state()];
+    },
+  };
+})(); 0"""
+
+# ↑/↓ as the writer asks for them: the page's answer (sb.editMove's verticalMove), then the selection the writer echoes back.
+ARROWS = """window.__mv = (down, extend = false, n = 1) => {
+  for (let i = 0; i < n; i++) {
+    const r = verticalMove({ seq: editing.seq, down, extend, start: editing.selStart, length: editing.selLen });
+    if (!r) return null;
+    Object.assign(editing, { selStart: r[0], selLen: r[1] });
+    keepGoal();
+    if (editing.whole) paintTextEditor(true); else { editorEl().innerHTML = editorHTML(); revealCaret(); }
+  }
+  return [editing.selStart, editing.selLen];
+};
+window.__box = (k) => { const el = document.querySelector(EDITOR_EL), b = caretBox(el, k), r = el.getBoundingClientRect();
+  return [Math.round(b.x - r.left), Math.round((b.top + b.bottom) / 2 - r.top)]; };
+window.__lh = () => parseFloat(getComputedStyle(document.querySelector(EDITOR_EL)).lineHeight); 0"""
 
 def click(page, sel):
     return page.cmd('@eval:(' + CLICK + ')(' + json.dumps(sel) + ')')
@@ -778,6 +828,274 @@ def main():
         page.apply(minimalChrome=False)
         check(page.js("return getComputedStyle(document.getElementById('frame')).display") == 'block', 'minimal chrome switches off live')
         page.cmd('@load:{}')
+
+        # ---- selecting in the editor with the mouse, as in a text view ----
+        sel_md = os.path.join(page.out, 'select.md')
+        SRC = 'alpha beta gamma\ndelta epsilon\nzeta eta'
+        open(sel_md, 'w').write('# Select\n\n' + SRC + '\n\nAfter.\n')
+        page.render(sel_md)
+        page.cmd('@eval:' + MOUSE)
+        click(page, '#doc > p')
+        ed = lambda js: page.js('return __ed.' + js)
+        at = SRC.index
+        check(page.js('return editing && editing.text') == SRC, 'editor select: the paragraph is edited', page.js('return editing && editing.text'))
+        r = ed(f'click({at("beta")})')
+        check(r == [at('beta'), 0, None], 'editor select: a click places the caret', json.dumps(r))
+        r = ed(f'drag({at("beta")}, {at("gamma")})')
+        check(r == [[at('beta'), 5, 'beta '], [at('beta'), 5, 'beta ']], 'editor select: a drag selects from the press to the pointer, live, and the click after it keeps it', json.dumps(r))
+        r = ed(f'drag({at("gamma")}, {at("beta")})')
+        check(r[1] == [at('beta'), 5, 'beta '], 'editor select: a drag backward selects back to the pointer', json.dumps(r))
+        r = ed(f'drag({at("pha")}, {at("psilon")})')
+        check(r[1] == [at('pha'), at('psilon') - at('pha'), SRC[at('pha'):at('psilon')]], 'editor select: a drag across lines', json.dumps(r))
+        r = ed(f'drag({at("eta", at("zeta"))}, {at("lpha")})')
+        check(r[1] == [at('lpha'), at('eta', at('zeta')) - at('lpha'), SRC[at('lpha'):at('eta', at('zeta'))]],
+              'editor select: a drag backward across lines', json.dumps(r))
+        out = page.js("const r = document.querySelector('#doc > .md-editing').getBoundingClientRect(); return [r.left + 5, r.bottom + 40]")
+        r = ed(f'drag({at("delta")}, {json.dumps(out)})')
+        still = page.js("return !!document.querySelector('#doc > .md-editing')")
+        check(r[1] and r[1][:2] == [at('delta'), len(SRC) - at('delta')] and still,
+              'editor select: a drag below the editor selects to its end, and letting go outside it keeps the edit', json.dumps([r, still]))
+        r = ed(f'click({at("epsilon") + 2}, 2)')
+        check(r == [at('epsilon'), 7, 'epsilon'], 'editor select: a double-click selects the word', json.dumps(r))
+        r = ed(f'drag({at("beta") + 1}, {at("psilon")}, 2)')
+        check(r[1] == [at('beta'), at('epsilon') + 7 - at('beta'), SRC[at('beta'):at('epsilon') + 7]],
+              'editor select: a double-click drag extends by whole words', json.dumps(r))
+        r = ed(f'drag({at("psilon")}, {at("lpha")}, 2)')
+        check(r[1] and r[1][:2] == [0, at('epsilon') + 7], 'editor select: a double-click drag backward keeps the first word whole', json.dumps(r))
+        r = ed(f'click({at("psilon")}, 3)')
+        check(r == [at('delta'), len('delta epsilon\n'), 'delta epsilon\n'], 'editor select: a triple-click selects the line with its line break', json.dumps(r))
+        r = ed(f'click({at("eta", at("zeta"))}, 3)')
+        check(r == [at('zeta'), len('zeta eta'), 'zeta eta'], 'editor select: a triple-click on the last line selects to the end', json.dumps(r))
+        r = ed(f'drag({at("lpha")}, {at("psilon")}, 3)')
+        check(r[1] and r[1][:2] == [0, at('zeta')], 'editor select: a triple-click drag extends by lines', json.dumps(r))
+        ed(f'click({at("beta")})')
+        r = ed(f'click({at("psilon")}, 1, {{ shift: true }})')
+        r2 = ed(f'click({at("lpha")}, 1, {{ shift: true }})')
+        check(r[:2] == [at('beta'), at('psilon') - at('beta')] and r2 == [at('lpha'), at('beta') - at('lpha'), 'lpha '],
+              'editor select: a shift-click extends the selection from where it was anchored, either way', json.dumps([r, r2]))
+        res = page.cmd('@eval:__ed.drag(' + str(at('beta')) + ', ' + str(at('gamma')) + '); 0')
+        sent = [m for m in res['messages'] if m.get('type') == 'editSelect']
+        check(sent and int(sent[-1]['start']) == at('beta') and int(sent[-1]['length']) == 5, 'editor select: the dragged range is sent to the writer, so typing replaces it',
+              json.dumps(sent)[:300])
+        page.cmd('@eval:sb.editEnd({}); 0')
+        page.cmd('@wait:0.3')
+        moved = page.js("""const p = document.querySelector('#doc > p'), r = p.getBoundingClientRect();
+          const ev = (t, x) => p.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, clientX: x, clientY: r.top + 4, detail: 1, buttons: t === 'mouseup' ? 0 : 1 }));
+          ev('mousedown', r.left + 2); ev('mousemove', r.left + 60);
+          getSelection().selectAllChildren(p);
+          ev('mouseup', r.left + 60); ev('click', r.left + 60);
+          const out = [!!document.querySelector('#doc > .md-editing'), !!editing]; getSelection().removeAllRanges(); return out;""")
+        check(moved == [False, False], 'editor select: a drag that selects page text starts no edit', json.dumps(moved))
+        tool = os.path.join(page.out, 'select.txt')
+        open(tool, 'w').write(SRC + '\n')
+        page.render(tool)
+        page.cmd('@wait:0.3')
+        r = click(page, '#doc pre.code')
+        whole = page.js('return !!(editing && editing.whole)')
+        r = ed(f'drag({at("pha")}, {at("psilon")})') if whole else None
+        r3 = ed(f'click({at("psilon")}, 3)') if whole else None
+        check(whole and r[1] and r[1][:2] == [at('pha'), at('psilon') - at('pha')] and r3 and r3[:2] == [at('delta'), len('delta epsilon\n')],
+              'editor select: in a whole-file edit, a drag across lines and a triple-click select as in a block', json.dumps([whole, r, r3]))
+        page.cmd('@eval:sb.editEnd({}); 0')
+
+        # ---- the editor's selection with the mouse: what a drag past the visible text or a stray click must not do ----
+        page.render(sel_md)
+        click(page, '#doc > p')
+        ed(f'click({at("beta")})')
+        r = ed(f'click({at("gamma")}, 1, {{ ctrl: true }})')
+        ed(f'drag({at("gamma")}, {at("delta")})')
+        r2 = page.js(f"__ed.fire('mousedown', {at('beta')}, 1, {{ ctrl: true }}); __ed.fire('mouseup', {at('beta')}, 1, {{ ctrl: true }}); return __ed.state()")
+        check(r == [at('beta'), 0, None] and r2 == [at('gamma'), at('delta') - at('gamma'), SRC[at('gamma'):at('delta')]],
+              'editor select: a control-click (the context menu) leaves the caret and selection alone', json.dumps([r, r2]))
+        r = ed(f'drag({at("psilon")}, {at("lpha")}, 2)')
+        r2 = ed(f'click({at("beta")}, 1, {{ shift: true }})')
+        check(r[1] and r[1][:2] == [0, at('epsilon') + 7] and r2[:2] == [at('beta'), at('epsilon') + 7 - at('beta')],
+              'editor select: after a drag backward by words, a shift-click keeps the far end of the first word', json.dumps([r, r2]))
+        ed(f'click({at("beta")})')
+        r = ed(f'click({at("psilon")}, 2, {{ shift: true }})')
+        check(r[:2] == [at('beta'), at('epsilon') + 7 - at('beta')], 'editor select: a shift-double-click extends by whole words', json.dumps(r))
+        r = page.js(f"""__ed.fire('mousedown', {at('beta')}); __ed.fire('mousemove', {at('gamma')}, 1, {{ buttons: 0 }});
+          __ed.fire('click', {at('delta')}); return __ed.state()""")
+        check(r == [at('delta'), 0, None], 'editor select: a click after a press whose release was lost still places the caret', json.dumps(r))
+        page.cmd('@eval:sb.editEnd({}); 0')
+
+        PAST = """const k = __ed.mid(), y0 = scrollY; __ed.fire('mousedown', k); __ed.fire('mousemove', [__X__, __Y__]);
+          return { k, y0, now: __ed.state(), len: editing.text.length };"""
+        LATER = "const s = __ed.state(), y = scrollY; __ed.fire('mouseup', [5, 5]); __ed.fire('click', [5, 5]); return { s, y, editing: !!editing };"
+        def past(x, y, wait=0.4):
+            a = page.js(PAST.replace('__X__', x).replace('__Y__', y))
+            page.cmd(f'@wait:{wait}')
+            return a, page.js(LATER)
+        LONG = ''.join(f'line {i:03} alpha beta\n' for i in range(200))
+        for kind, path, body, sel in (('a whole-file edit', 'long.txt', LONG, '#doc pre.code'),
+                                      ('a block taller than the window', 'tall.md', '\n'.join(f'row {i:03} alpha beta' for i in range(200)) + '\n', '#doc > p')):
+            f = os.path.join(page.out, path)
+            open(f, 'w').write(body)
+            page.render(f)
+            page.cmd('@wait:0.3')
+            click(page, sel)
+            page.cmd('@eval:scrollTo(0, 1500); 0')
+            a, b = past('innerWidth / 2', '5')
+            ok_up = a['now'] and 0 < a['now'][0] < a['k'] and a['now'][0] + a['now'][1] == a['k'] and b['y'] < a['y0'] and 0 <= b['s'][0] < a['now'][0] and b['editing']
+            check(ok_up, f'editor select: in {kind}, a drag up over the toolbar row extends to the top row shown and scrolls up, the selection following', json.dumps([a, b]))
+            page.cmd('@eval:scrollTo(0, 1500); 0')
+            a, b = past('innerWidth / 2', '-5')
+            check(a['now'] and 0 < a['now'][0] < a['k'] and b['y'] < a['y0'] and b['editing'],
+                  f'editor select: in {kind}, a drag above the window does not jump to the start', json.dumps([a, b]))
+            page.cmd('@eval:scrollTo(0, 1500); 0')
+            a, b = past('innerWidth / 2', 'innerHeight + 10')
+            e1, e2 = (a['now'][0] + a['now'][1]) if a['now'] else -1, (b['s'][0] + b['s'][1]) if b['s'] else -1
+            check(a['now'] and a['now'][0] == a['k'] and a['k'] < e1 < a['len'] and b['y'] > a['y0'] and e1 < e2 <= a['len'] and b['editing'],
+                  f'editor select: in {kind}, a drag below the window extends to the bottom row shown and scrolls down, not to the end', json.dumps([a, b]))
+            page.cmd('@eval:scrollTo(0, 1500); 0')
+            a, b = past('-5', 'innerHeight / 2 + 60', 0.1)
+            e1 = (a['now'][0] + a['now'][1]) if a['now'] else -1
+            check(a['now'] and a['now'][0] == a['k'] and a['k'] < e1 < a['k'] + 200 and b['y'] == a['y0'],
+                  f'editor select: in {kind}, a drag left of the text selects to that row, not to the end', json.dumps([a, b]))
+            page.cmd('@eval:sb.editEnd({}); scrollTo(0, 0); 0')
+
+        # A release the page never sees, or a text the writer changes under the drag, ends it.
+        page.render(os.path.join(page.out, 'long.txt'))
+        page.cmd('@wait:0.3')
+        click(page, '#doc pre.code')
+        stops = {}
+        for name, end in (('blur', "window.dispatchEvent(new Event('blur'))"),
+                          ('hidden', "Object.defineProperty(document, 'hidden', { get: () => true, configurable: true }); document.dispatchEvent(new Event('visibilitychange')); delete document.hidden"),
+                          ('pointercancel', "document.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true }))")):
+            page.cmd('@eval:scrollTo(0, 1500); 0')
+            page.js("const k = __ed.mid(); __ed.fire('mousedown', k); __ed.fire('mousemove', [innerWidth / 2, innerHeight + 40]); return 0")
+            page.cmd('@wait:0.2')
+            a = page.js(end + '; return [scrollY, __ed.state()]')
+            page.cmd('@wait:0.5')
+            b = page.js('return [scrollY, __ed.state()]')
+            page.js("__ed.fire('mousemove', [innerWidth / 2, innerHeight + 40]); return 0")
+            page.cmd('@wait:0.2')
+            c = page.js("const r = [scrollY, __ed.state()]; __ed.fire('mouseup', [5, 5]); return r")
+            stops[name] = [a, b, c]
+        check(all(a[0] > 1500 and a == b == c for a, b, c in stops.values()),
+              'editor select: a drag scrolling the page stops when the window loses focus, hides, or the pointer is cancelled', json.dumps(stops)[:600])
+        page.cmd('@eval:scrollTo(0, 1500); 0')
+        r = page.js("""const k = __ed.mid(); __ed.fire('mousedown', k); __ed.fire('mousemove', [innerWidth / 2, innerHeight / 2 + 60]);
+          const n = editing.text.length;
+          sb.textUpdate({ seq: editing.seq, from: 0, to: n - 1000, insert: '', selStart: 10, selLen: 0, keyTime: 0 });
+          const after = __ed.state();
+          __ed.fire('mousemove', [innerWidth / 2, innerHeight / 2 - 60]); __ed.fire('mouseup', [5, 5]);
+          return { after, moved: __ed.state(), len: editing.text.length };""")
+        check(r['after'] == [10, 0, None] and r['moved'] == [10, 0, None] and r['len'] == 1000,
+              'editor select: the writer changing the text under a drag ends the drag, which leaves the new selection alone', json.dumps(r))
+        page.cmd('@eval:sb.editEnd({}); scrollTo(0, 0); 0')
+
+        # ---- ↑ and ↓ in the editor move by the lines as wrapped on screen, as in a text view ----
+        words = ' '.join(f'word{i}' for i in range(60))
+        WR = words + '\nab\n' + words
+        wrap_md = os.path.join(page.out, 'wrap.md')
+        open(wrap_md, 'w').write(WR + '\n')
+        page.render(wrap_md)
+        page.cmd('@eval:' + MOUSE)
+        page.cmd('@eval:' + ARROWS)
+        click(page, '#doc > p')
+        mv = lambda js: page.js('return ' + js)
+        lh = mv('__lh()')
+        k = WR.index('word5')
+        mv(f'__ed.click({k})')
+        b0 = mv(f'__box({k})')
+        r = mv('__mv(true)')
+        b1 = mv(f'__box({r[0]})')
+        check(r and r[1] == 0 and 0 < r[0] < len(words) and abs(b1[1] - b0[1] - lh) < 2 and abs(b1[0] - b0[0]) < 12,
+              'editor arrows: ↓ in a wrapped paragraph goes to the next line on screen at the same x, not the next line of text',
+              json.dumps([k, b0, r, b1, lh]))
+        r2 = mv('__mv(false)')
+        check(r2 == [k, 0], 'editor arrows: ↑ comes back to where ↓ started', json.dumps([k, r2]))
+        r = mv('__mv(true, true)')
+        b2 = mv(f'__box({r[0] + r[1]})')
+        check(r and r[0] == k and abs(b2[1] - b0[1] - lh) < 2 and abs(b2[0] - b0[0]) < 12,
+              'editor arrows: ⇧↓ extends the selection by one line on screen', json.dumps([r, b0, b2]))
+        r = mv('__mv(false, true)')
+        check(r == [k, 0], 'editor arrows: ⇧↑ then takes it back, the start held', json.dumps(r))
+        r = mv(f'(__ed.click({k}), __mv(false, true))')
+        check(r == [0, k], 'editor arrows: ⇧↑ on the first line on screen selects to the start', json.dumps(r))
+        r = mv(f'(__ed.click({k}), __mv(false))')
+        check(r == [0, 0], 'editor arrows: ↑ on the first line on screen goes to the start of the text', json.dumps(r))
+        k3 = len(WR) - 3
+        r = mv(f'(__ed.click({k3}), __mv(true))')
+        check(r == [len(WR), 0], 'editor arrows: ↓ on the last line on screen goes to the end of the text', json.dumps(r))
+        # The goal x: through the short line "ab" and on into the long one below, ↓ comes back to the x it started at.
+        last1 = mv(f"""(() => {{ const el = document.querySelector(EDITOR_EL); let k = {len(words)};
+          const top = caretBox(el, k - 1).top; while (k > 0 && caretBox(el, k - 1).top === top) k--; return k; }})()""")
+        kx = last1 + 2
+        bx = mv(f'(__ed.click({kx}), __box({kx}))')
+        ra = mv('__mv(true)')
+        rb = mv('__mv(true)')
+        bb = mv(f'__box({rb[0]})')
+        check(ra and ra[1] == 0 and len(words) + 1 <= ra[0] <= len(words) + 3,
+              'editor arrows: ↓ onto a short line goes to the nearest place on it', json.dumps([kx, bx, ra]))
+        check(rb and len(words) + 3 < rb[0] and abs(bb[0] - bx[0]) < 12, 'editor arrows: a second ↓ keeps the x the first started from, past the short line',
+              json.dumps([bx, ra, rb, bb]))
+        # Past the end of a wrapped line: the caret stays on the line below, and the next ↓ goes one line further, not two.
+        e1 = mv(f"""(() => {{ const el = document.querySelector(EDITOR_EL); let k = 1; const top = caretBox(el, 0).top;
+          while (caretBox(el, k + 1).top === top) k++; return k; }})()""")
+        ys = mv(f'(__ed.click({e1}), [__box({e1}), __box(__mv(true)[0]), __box(__mv(true)[0])])')
+        check(ys and abs(ys[1][1] - ys[0][1] - lh) < 2 and abs(ys[2][1] - ys[1][1] - lh) < 2 and ys[1][0] > ys[0][0] - 40,
+              'editor arrows: from the end of a wrapped line, ↓ goes to the end of each next line on screen, one at a time', json.dumps([e1, ys, lh]))
+        mv('__mv(false)')
+        page.js("Object.assign(editing, { selStart: editing.selStart + 1 }); keepGoal(); return 0")
+        g = mv('editing.goal')
+        check(g is None, 'editor arrows: a move across (or a click, or typing) forgets the x a run of ↑ and ↓ kept', json.dumps(g))
+        r = page.cmd('@eval:sb.editMove({ seq: editing.seq, down: true, extend: false, start: 0, length: 0 }); sb.editMove({ seq: -5, down: true, extend: false, start: 0, length: 0 }); 0')
+        sent = [[int(m['start']), int(m['length'])] for m in r['messages'] if m.get('type') == 'editMoved']
+        check(len(sent) == 2 and 0 < sent[0][0] < len(words) and sent[1] == [-1, 0],
+              'editor arrows: the page answers the writer with the selection, or -1 (the writer moves itself) for an edit not on screen', json.dumps(sent))
+        page.cmd('@eval:sb.editEnd({}); 0')
+
+        for kind, path, settings, raw in (('a whole-file edit with wrapped lines', 'wrap.txt', {'wrapText': True}, False),
+                                          ('the Raw view of Markdown, wrapped', 'wrap-raw.md', {'wrapMarkdown': True}, True)):
+            f = os.path.join(page.out, path)
+            open(f, 'w').write(WR + '\n')
+            page.apply(**settings)
+            page.render(f)
+            page.cmd('@wait:0.3')
+            if raw:
+                # The harness renders Markdown without the extension's editable flag, which Raw's code view needs to be edited.
+                page.cmd("@eval:current.editable = true; document.getElementById('raw').click(); 0")
+                page.cmd('@wait:0.3')
+            click(page, '#doc pre.code')
+            whole = mv('!!(editing && editing.whole)')
+            lh = mv('__lh()')
+            b0 = mv(f'(__ed.click({k}), __box({k}))') if whole else None
+            r = mv('__mv(true)') if whole else None
+            b1 = mv(f'__box({r[0]})') if r else None
+            check(whole and r and 0 < r[0] < len(words) and abs(b1[1] - b0[1] - lh) < 2 and abs(b1[0] - b0[0]) < 12,
+                  f'editor arrows: in {kind}, ↓ goes to the next line on screen', json.dumps([whole, b0, r, b1, lh]))
+            page.cmd('@eval:sb.editEnd({}); 0')
+            if raw:
+                page.cmd("@eval:document.getElementById('raw').click(); 0")
+            page.apply(**{key: False for key in settings})
+        # A word too long for a line breaks inside it: past the end of the line, ↓ goes to the end of the next line, not a
+        # character before it.
+        f = os.path.join(page.out, 'longword.txt')
+        open(f, 'w').write('x' * 500 + '\n')
+        page.apply(wrapText=True)
+        page.render(f)
+        page.cmd('@wait:0.3')
+        click(page, '#doc pre.code')
+        r = mv("""(() => { const el = document.querySelector(EDITOR_EL); let n = 1; const top = caretBox(el, 0).top;
+          while (caretBox(el, n).top === top) n++;
+          Object.assign(editing, { selStart: n - 1, selLen: 0 });
+          editing.goal = { x: 1e4, y: (caretBox(el, 0).top + caretBox(el, 0).bottom) / 2 - el.getBoundingClientRect().top, text: editing.text, at: [n - 1, 0] };
+          return [n, __mv(true)]; })()""")
+        check(r and r[1] == [2 * r[0], 0], 'editor arrows: past the end of a line broken inside a long word, ↓ goes to the end of the next line', json.dumps(r))
+        page.cmd('@eval:sb.editEnd({}); 0')
+        page.apply(wrapText=False)
+        CODE = 'first line of code\nab\nthird line of code\n'
+        f = os.path.join(page.out, 'nowrap.txt')
+        open(f, 'w').write(CODE)
+        page.render(f)
+        page.cmd('@wait:0.3')
+        click(page, '#doc pre.code')
+        r = mv('(__ed.click(9), [__mv(true), __mv(true), __mv(false, false, 2), __mv(true, true)])')
+        check(r == [[21, 0], [31, 0], [9, 0], [9, 12]],
+              'editor arrows: lines that do not wrap keep the column, through a short line, and ⇧↓ selects to the same column below', json.dumps(r))
+        page.cmd('@eval:sb.editEnd({}); 0')
 
         csp = [l for l in page.logs if 'csp blocked' in l]
         errs = [l for l in page.logs if l.startswith(('rejection', 'mermaid')) or ' @' in l]

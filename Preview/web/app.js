@@ -972,10 +972,11 @@ function sourceOffset(block, src, x, y) {
   return i;
 }
 
-/** Offset in the edit buffer under a point in the editor, which shows the buffer verbatim plus a caret marker. */
-function editorOffset(el, x, y) {
+/** Offset in the edit buffer under a point in the editor, which shows the buffer verbatim plus a caret marker; `miss` where the
+ *  point is on no text of the editor. */
+function editorOffset(el, x, y, miss = editing.text.length) {
   const r = document.caretRangeFromPoint(x, y);
-  if (!r || !el.contains(r.startContainer)) return editing.text.length;
+  if (!r || !el.contains(r.startContainer)) return miss;
   const pre = document.createRange();
   pre.selectNodeContents(el);
   pre.setEnd(r.startContainer, r.startOffset);
@@ -993,12 +994,85 @@ function wordAt(text, i) {
   return w && w.isWordLike ? [w.index, w.index + w.segment.length] : [i, i];
 }
 
+/** The line holding offset `i`, with its line break, as a triple-click in a text view selects it. */
+function lineAt(text, i) {
+  const j = text.indexOf('\n', i);
+  return [i > 0 ? text.lastIndexOf('\n', i - 1) + 1 : 0, j < 0 ? text.length : j + 1];
+}
+
+/** A run of ↑ and ↓ keeps its x only while the selection is the one the last of them made. */
+function keepGoal() {
+  const g = editing.goal;
+  if (g && (g.text !== editing.text || g.at[0] !== editing.selStart || g.at[1] !== editing.selLen)) editing.goal = null;
+}
+
 function select(start, len) {
-  Object.assign(editing, { selStart: start, selLen: len });
+  Object.assign(editing, { selStart: start, selLen: len, goal: null });
   const el = editorEl();
   if (editing.whole) paintTextEditor();
   else if (el) el.innerHTML = editorHTML();
   post({ type: 'editSelect', seq: editing.seq, start, length: len });
+}
+
+/** Where offset `k` of the editor's text is drawn: the caret's x and its line's top and bottom, in the window. */
+function caretBox(el, k) {
+  const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let node = null, off = 0;
+  for (let n, pos = 0; (n = w.nextNode()); pos += n.length) {
+    if (k > pos + n.length) continue;
+    node = n;
+    off = k - pos;
+    if (k < pos + n.length) break;
+  }
+  if (!node) return null;
+  const r = document.createRange();
+  r.setStart(node, off);
+  const q = r.getClientRects()[0] || r.getBoundingClientRect();
+  return { x: q.left, top: q.top, bottom: q.bottom };
+}
+
+/** The selection after ↑ or ↓ (`m.extend`: with ⇧) from [m.start, m.start + m.length), as a text view moves: by the lines
+ *  as wrapped on screen, to the x the first of a run of such moves started at, and from the first or last line to the text's
+ *  start or end. Lines that do not wrap keep the column instead. */
+function verticalMove(m) {
+  const el = document.querySelector(EDITOR_EL), text = editing.text, s = m.start, t = m.start + m.length;
+  const fixed = m.extend ? (m.length && editing.anchor === t ? t : m.length && editing.anchor === s ? s : m.down ? s : t) : null;
+  const from = fixed === null ? (m.down ? t : s) : fixed === s ? t : s;
+  const g = editing.goal && editing.goal.text === text && editing.goal.at[0] === s && editing.goal.at[1] === m.length ? editing.goal : null;
+  let to, goal;
+  if (!/wrap|break/.test(getComputedStyle(el).whiteSpace)) {
+    const [ls, le] = lineAt(text, from), col = g ? g.col : from - ls;
+    const [ns, ne] = m.down ? lineAt(text, le) : lineAt(text, ls - 1);
+    if (m.down) to = le === text.length && text[le - 1] !== '\n' ? text.length : Math.min(ns + col, text[ne - 1] === '\n' ? ne - 1 : ne);
+    else to = ls === 0 ? 0 : Math.min(ns + col, ls - 1);
+    goal = { col };
+  } else {
+    let er = el.getBoundingClientRect();
+    const b = caretBox(el, from), first = caretBox(el, 0), last = caretBox(el, text.length);
+    if (!b || !first || !last) return null;
+    const lh = parseFloat(getComputedStyle(el).lineHeight) || b.bottom - b.top;
+    const x = g ? g.x : b.x - er.left, y = g ? g.y : (b.top + b.bottom) / 2 - er.top;
+    if (!m.down && y - lh / 2 < first.bottom - er.top - 1) to = 0;
+    else if (m.down && y + lh / 2 > last.top - er.top + 1) to = text.length;
+    else {
+      const ty = y + (m.down ? lh : -lh), [top, bottom] = docRows();
+      // The line must be on screen to find the text on it.
+      const at = er.top + ty, d = at - lh < top ? at - lh - top : at + lh > bottom ? at + lh - bottom : 0;
+      if (d) { window.scrollBy({ top: d, behavior: 'instant' }); er = el.getBoundingClientRect(); }
+      to = editorOffset(el, Math.min(Math.max(er.left + x, er.left + 1), er.right - 1), er.top + ty, null);
+      if (to === null) return null;
+      // Past the end of a line wrapped at a space the point is after the space, at the start of the next line; the caret stays
+      // before it, on this one. A word broken across lines has no such place.
+      const c = caretBox(el, to);
+      if (to > 0 && /[ \t]/.test(text[to - 1]) && c && c.top - er.top > ty) to--;
+      goal = { x, y: ty };
+    }
+    goal = goal || { x, y };
+  }
+  const [a, z] = fixed === null ? [to, to] : [Math.min(fixed, to), Math.max(fixed, to)];
+  if (fixed !== null) editing.anchor = fixed;
+  editing.goal = { ...goal, text, at: [a, z - a] };
+  return [a, z - a];
 }
 
 /** Replaces lines [at, at+old) of current.text and shifts the edit ranges below them. */
@@ -1754,6 +1828,7 @@ window.sb = {
     splice(u.at, u.old, next, u.ver);
     if (editing && editing.seq === u.seq) {
       Object.assign(editing, { lines: next.length, text: u.text, selStart: u.selStart, selLen: u.selLen });
+      keepGoal();
       const el = editorEl();
       if (el) el.innerHTML = editorHTML();
       revealCaret();
@@ -1762,6 +1837,11 @@ window.sb = {
       if (retired && retired.seq === u.seq) retired.lines = next.length;
       draw();
     }
+  },
+  /** ↑ or ↓ in the writer: the selection it moves to, or -1 for the writer to move by its own lines. */
+  editMove(m) {
+    const r = editing && editing.seq === m.seq && document.querySelector(EDITOR_EL) ? verticalMove(m) : null;
+    post({ type: 'editMoved', seq: m.seq, token: m.token, start: r ? r[0] : -1, length: r ? r[1] : 0 });
   },
   /** Backspace at the start of the block: name the block above so the native side can join the two. */
   prevBlock(q) {
@@ -1808,6 +1888,7 @@ window.sb = {
     if (editing && editing.whole && editing.seq === u.seq) {
       if (changed) editing.text = current.text = apply(editing.text);
       Object.assign(editing, { selStart: u.selStart, selLen: u.selLen });
+      keepGoal();
       paintTextEditor(true, changed ? { from: u.from, to: u.to, length: u.insert.length } : null);
       if (changed) jsonCheckSoon();
       requestAnimationFrame(() => post({ type: 'editPainted', keyTime: u.keyTime }));
@@ -3945,7 +4026,7 @@ function gridSelect(path, reveal) {
   if (gridCursor.size > 64) gridCursor.delete(gridCursor.keys().next().value);
   const i = grid.entries.findIndex((e) => e.path === path);
   if (reveal && i >= 0) {
-    const y = grid.box.getBoundingClientRect().top + Math.floor(i / grid.cols) * grid.rowH, bar = appChrome() ? 48 : 8;
+    const y = grid.box.getBoundingClientRect().top + Math.floor(i / grid.cols) * grid.rowH, bar = docRows()[0];
     if (y < bar) window.scrollBy({ top: y - bar, behavior: 'instant' });
     else if (y + grid.rowH > window.innerHeight) window.scrollBy({ top: y + grid.rowH - window.innerHeight, behavior: 'instant' });
   }
@@ -6016,13 +6097,97 @@ document.addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !pop.hidden) { showPopover(false); e.preventDefault(); } });
 syncPopover();
 
-// Clicks in the editor move the caret and double-clicks select a word; the page's own selection stays out of the editor.
-document.addEventListener('mousedown', (e) => { if (editing && e.target.closest('#doc > .md-editing, #doc pre.text-editing')) e.preventDefault(); });
+// A press in the editor places the caret, a second selects a word and a third a line; dragging extends the selection from the
+// press by the same unit. The page's own selection stays out of the editor.
+const EDITOR_EL = '#doc > .md-editing, #doc pre.text-editing';
+let press = null; // { el, seq, text, unit, from, to, down, up, x, y, scroll }
+
+/** The window's rows the document shows: under the toolbar row and above the panel's bottom edge. */
+function docRows() {
+  return [appChrome() ? 48 : 8, window.innerHeight - 8];
+}
+
+/** The editor's offset under a point held inside the editor's visible part, or null where no text is under it. Past an end of
+ *  the editor that is on screen, that end; past the window's rows with more editor beyond, the edge row's text. */
+function dragOffset(el, x, y) {
+  const r = el.getBoundingClientRect(), [top, bottom] = docRows();
+  if (y < r.top && r.top >= top) return 0;
+  if (y >= r.bottom && r.bottom <= bottom) return editing.text.length;
+  const g = el.matches('pre') && el.parentElement.querySelector(':scope > .gutter');
+  const left = Math.max(r.left, g ? g.getBoundingClientRect().right : 0, 0), right = Math.min(r.right, window.innerWidth);
+  return editorOffset(el, Math.min(Math.max(x, left + 1), right - 1), Math.min(Math.max(y, Math.max(r.top, top) + 1), Math.min(r.bottom, bottom) - 1), null);
+}
+
+function unitAt(unit, at) {
+  return unit === 'line' ? lineAt(editing.text, at) : unit === 'word' ? wordAt(editing.text, at) : [at, at];
+}
+
+/** Ends a drag: the button may never come up where the page sees it (the window loses focus, the panel goes) and the text it
+ *  measured may have changed under it. */
+function endDrag() {
+  if (!press) return;
+  press.down = false;
+  cancelAnimationFrame(press.scroll);
+  press.scroll = 0;
+}
+window.addEventListener('blur', endDrag);
+document.addEventListener('visibilitychange', () => { if (document.hidden) endDrag(); });
+document.addEventListener('pointercancel', endDrag);
+
+function pressSelect(at) {
+  if (at === null) return;
+  if (editing.text !== press.text) { endDrag(); return; }
+  const [a, b] = unitAt(press.unit, at);
+  const start = Math.min(a, press.from), end = Math.max(b, press.to);
+  editing.anchor = start < press.from ? press.to : press.from;
+  if (start !== editing.selStart || end - start !== editing.selLen) select(start, end - start);
+}
+
+/** While the button is held past the top or bottom row, the page scrolls toward the pointer, faster the farther it is, and the
+ *  selection follows the text that comes into view. */
+function dragScroll() {
+  press.scroll = 0;
+  if (!press.down || !editing || editing.seq !== press.seq || editing.text !== press.text || !press.el.isConnected) return;
+  const [top, bottom] = docRows(), d = press.y < top ? press.y - top : press.y > bottom ? press.y - bottom : 0;
+  if (!d) return;
+  const was = window.scrollY;
+  window.scrollBy({ top: Math.sign(d) * Math.min(60, 2 + Math.abs(d) / 2), behavior: 'instant' });
+  if (window.scrollY === was) return;
+  pressSelect(dragOffset(press.el, press.x, press.y));
+  press.scroll = requestAnimationFrame(() => press && dragScroll());
+}
+
+document.addEventListener('mousedown', (e) => {
+  const el = editing && e.target.closest(EDITOR_EL);
+  endDrag();
+  press = null;
+  if (!el) return;
+  e.preventDefault();
+  if (e.button !== 0 || e.ctrlKey) return;
+  const at = editorOffset(el, e.clientX, e.clientY);
+  const unit = e.detail >= 3 ? 'line' : e.detail === 2 ? 'word' : 'char';
+  let [from, to] = unitAt(unit, at);
+  if (e.shiftKey) {
+    const s = editing.selStart, t = s + editing.selLen;
+    from = to = editing.anchor === s || editing.anchor === t ? editing.anchor : Math.abs(at - s) > Math.abs(at - t) ? s : t;
+  }
+  press = { el, seq: editing.seq, text: editing.text, unit, from, to, down: true, up: null, x: e.clientX, y: e.clientY, scroll: 0 };
+  pressSelect(at);
+});
+document.addEventListener('mousemove', (e) => {
+  if (!press || !press.down) return;
+  if (!(e.buttons & 1) || !editing || editing.seq !== press.seq || editing.text !== press.text || !press.el.isConnected) { endDrag(); return; }
+  Object.assign(press, { x: e.clientX, y: e.clientY });
+  pressSelect(dragOffset(press.el, e.clientX, e.clientY));
+  if (!press.scroll) dragScroll();
+});
+document.addEventListener('mouseup', (e) => { if (press && press.down) Object.assign(press, { down: false, up: e.timeStamp }); });
 
 document.addEventListener('dblclick', (e) => {
   const gt = e.target.closest('#doc a.gt');
   if (gt && gridShown()) { e.preventDefault(); gridOpen(gt.dataset.path); return; }
-  const el = e.target.closest('#doc > .md-editing, #doc pre.text-editing');
+  if (press && press.unit !== 'char') { e.preventDefault(); return; }
+  const el = e.target.closest(EDITOR_EL);
   if (!editing || !el) return;
   e.preventDefault();
   const [a, b] = wordAt(editing.text, editorOffset(el, e.clientX, e.clientY));
@@ -6032,6 +6197,8 @@ document.addEventListener('dblclick', (e) => {
 document.addEventListener('click', (e) => {
   const tClick = performance.timeOrigin + e.timeStamp;
   clearTimeout(fenceTimer);
+  // The press already placed the caret or selection, and a drag out of the editor ends wherever the pointer is let go.
+  if (press && press.up !== null && e.timeStamp - press.up < 500) { press.up = null; if (editing && editing.seq === press.seq) return; }
   // The chrome around the document ends an edit like a click on the page's margin does; hiding or resizing the sidebar
   // only changes the layout, so the edit stays open.
   if (editing && e.target.closest('#sidebar, #crumbs, #toolbar, #toc') && !e.target.closest('#side-resize')) stopEditing();
@@ -6102,8 +6269,8 @@ document.addEventListener('click', (e) => {
   if (a && href && href.length > 1 && a.closest('#doc')) { e.preventDefault(); inPageLink(href.slice(1)); return; }
   // An embedded note is another file: it is read here, never edited.
   if (e.target.closest('#doc .wl-embed')) return;
-  const el = e.target.closest('#doc > .md-editing, #doc pre.text-editing');
-  if (editing && el) { if (e.detail < 2) select(editorOffset(el, e.clientX, e.clientY), 0); return; }
+  const el = e.target.closest(EDITOR_EL);
+  if (editing && el) { if (e.detail < 2 && !e.ctrlKey) select(editorOffset(el, e.clientX, e.clientY), 0); return; }
   if (a || e.target.closest('input, button, summary, #toolbar') || getSelection().toString()) return;
   const text = e.target.closest('#doc pre.code[data-file-text]');
   if (text && settings.inlineEditing && current.editable === true && (!isMarkdown(current) || rawOn(current))) { beginTextEdit(text, e, tClick); return; }

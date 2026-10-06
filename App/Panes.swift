@@ -285,11 +285,14 @@ struct SettingsPane: View {
         } header: {
             Text("Space Helper")
         } footer: {
-            if HelperAgent.available {
-                Text(HelperCopy.privacy).settingsFooter()
-                    .background(Color.clear.onAppear { system.watchHelper() }.onDisappear { system.unwatchHelper() })
-            } else {
-                Text(HelperCopy.unavailable).settingsFooter()
+            VStack(alignment: .leading, spacing: 6) {
+                if HelperAgent.available {
+                    Text(HelperCopy.privacy).settingsFooter()
+                        .background(Color.clear.onAppear { system.watchHelper() }.onDisappear { system.unwatchHelper() })
+                } else {
+                    Text(HelperCopy.unavailable).settingsFooter()
+                }
+                Link(HelperCopy.howItWorks, destination: HelperCopy.securityURL).font(.footnote)
             }
         }
     }
@@ -351,6 +354,7 @@ struct SettingsPane: View {
     @ViewBuilder private var advanced: some View {
         Section {
             Picker("Scripts in HTML files", selection: store.binding(\.htmlScripts, "htmlScripts")) {
+                Text("Ask").tag("ask")
                 Text("Files made on this Mac").tag("local")
                 Text("Never").tag("off")
             }
@@ -363,7 +367,7 @@ struct SettingsPane: View {
         } header: {
             Text("Web Content")
         } footer: {
-            Text("An HTML file your browser, Mail or AirDrop marked as downloaded always opens with scripts off and nothing loaded from the web. Files from git clone, curl, unzip or a USB drive are not marked, so with Files made on this Mac their pages run their scripts and may load from the web; with Never, no HTML file does either. Sanitized HTML in Markdown keeps formatting tags but never runs scripts. Remote images are off by default: fetching one lets its server see when the document was opened. A blocked image offers to load that document's images once.")
+            Text("An HTML file your browser, Mail or AirDrop marked as downloaded always opens with scripts off and nothing loaded from the web. Files from git clone, curl, unzip or a USB drive are not marked: with Ask, such a page opens without its scripts and asks whether to run them; with Files made on this Mac they run and may load from the web; with Never, no HTML file does either. Scripts can reach the network, so a page that runs them can tell a server it was opened and send what it shows. Sanitized HTML in Markdown keeps formatting tags but never runs scripts. Remote images are off by default: fetching one lets its server see when the document was opened. A blocked image offers to load that document's images once.")
                 .settingsFooter()
         }
 
@@ -504,7 +508,10 @@ enum HelperCopy {
     static let what = "Space opens spacebar for any file you select in Finder, images, PDFs and video included, not only the types Quick Look hands it. Space or Esc closes it."
     /// The name System Settings lists the helper under in Accessibility: the bundle's file name, not its display name.
     static let accessibilityName = "spacebar Helper"
-    static let privacy = "The Space helper uses Accessibility, listed there as \(accessibilityName), to notice when you press Space in Finder and read which file is selected. It never reads what you type anywhere else. Turning it off removes spacebar from Login Items; Quick Look then previews as before."
+    /// What the helper sees and does with it; every claim is in SECURITY.md's "The Space helper".
+    static let keys = "To catch Space in Finder, the Space helper uses Accessibility, listed there as \(accessibilityName), so it sees every key you press while it runs. It acts only on Space while Finder is in front, when it reads which file is selected, and on the arrows and a few other keys while spacebar's panel is open. It never keeps what you type or sends it off this Mac, and secure input, as in a password field, hides your keys from it."
+    static let privacy = keys + " Turning it off removes spacebar from Login Items; Quick Look then previews as before."
+    static let howItWorks = "How the Space helper works"
     static let unavailable = "This copy of spacebar has no Space helper it can run: it needs a signed copy installed with spacebar.dmg or the install command."
     static let securityURL = URL(string: "https://github.com/patebry/spacebar/blob/main/SECURITY.md#the-space-helper")!
 

@@ -403,8 +403,8 @@ sandbox container after each rebuild. Other options are documented at the top of
 Tests that run off screen, without Quick Look (the test builds target Apple silicon):
 
 ```sh
-for t in settings scheme linkpolicy cas dataless editkeys filterkeys pdfpane htmlpane mediapane qlpane imagepane diskimage richtext encoding archive claims rivals updates report welcome helper helperlink viewerlatency bigfiles; do test/$t/run.sh; done
-python3 test/webcheck.py && python3 test/webthemes.py && python3 test/remoteimages.py && python3 test/sidebar.py
+for t in settings scheme linkpolicy cas dataless editkeys filterkeys pdfpane htmlpane mediapane qlpane imagepane diskimage richtext encoding archive claims rivals updates report welcome movetoapps helper helperlink viewerlatency bigfiles; do test/$t/run.sh; done
+python3 test/webcheck.py && python3 test/webthemes.py && python3 test/remoteimages.py && python3 test/htmlscripts.py && python3 test/sidebar.py
 ```
 
 The other scripts in `test/` drive real Quick Look windows and synthetic input; run them on a machine you are not using.
@@ -452,11 +452,13 @@ disk, the external change wins.
   that lead out of it resolve to nothing. Nothing in a Markdown file is ever run, and scripts are shown as source, SVG only
   as an image, a PDF by PDFKit (which runs no PDF scripts; the PDF is parsed in the sandboxed preview extension itself), and
   the page loads files only as images.
-- An HTML file is shown in a web view of its own that shares nothing with the preview's page. By default its scripts run and
-  it may load from the web, unless your browser, Mail or AirDrop marked it as downloaded (the quarantine flag). Files from
-  `git clone`, `curl`, `unzip` or a USB drive are not marked, so their pages run their scripts and may load from the web too;
-  **Settings, Advanced, Scripts in HTML files: Never** turns that off for every HTML file. A marked file always opens with
-  scripts off and no network at all, resource hints included, and only files beside it load. A link in an HTML file is
+- An HTML file is shown in a web view of its own that shares nothing with the preview's page. One your browser, Mail or
+  AirDrop marked as downloaded (the quarantine flag) always opens with scripts off and no network at all, resource hints
+  included, and only files beside it load. Files from `git clone`, `curl`, `unzip` or a USB drive are not marked: by default
+  (**Settings, Advanced, Scripts in HTML files: Ask**) such a page opens without its scripts, and a bar above it asks
+  whether to run them, for files made on this Mac, or never. **Files made on this Mac** runs them and lets the page load
+  from the web; **Never** turns both off for every HTML file. A page's scripts cannot fetch or frame the files beside it,
+  though they can use one as their own script, stylesheet or image, as in a browser. A link in an HTML file is
   followed only when you click it, through the same policy as everywhere else.
 - An archive is listed, never extracted, by `/usr/bin/bsdtar` under a `sandbox-exec` profile that lets it read only the
   archive (through a descriptor the helper opened) and system files, with no writes and no network, for at most 5 seconds.

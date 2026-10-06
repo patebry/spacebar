@@ -108,12 +108,25 @@ Each release's notes on GitHub also list its commits. This file keeps what chang
 
 ### Settings and first run
 
+- **Opened from spacebar.dmg, spacebar offers to move itself to Applications**, as it does when macOS runs a downloaded copy
+  from a temporary place: **Move to Applications** copies it where the installer would (`~/Applications`, or the copy only in
+  `/Applications`), checks the copy's signature, opens it and ejects the disk image. A copy already there goes to the Trash; a
+  newer one is opened instead. Until then nothing is saved or registered from the image.
+- spacebar.dmg opens on a window with spacebar, an arrow and Applications: drag one onto the other.
 - The hint when Space reaches Quick Look says why: the Space helper is not running, or is paused while a named app holds
   secure input.
 - "Space helper" everywhere; Settings has an About section with the version and Check Now, and a Quick Look status row.
 - Welcome explains both macOS prompts and links SECURITY.md; the sample folder is `~/spacebar Sample Folder`, with a picture
   and a PDF.
 - Focus rings and labels throughout for keyboard and VoiceOver users.
+- **Scripts in HTML files: Ask** is the new default. An HTML file made on this Mac opens without its scripts, and a bar
+  above it offers **Run for files made on this Mac** or **Never**; a page with no scripts shows no bar. Off stays; Files
+  made on this Mac becomes Ask once. Downloaded files still never run scripts. An older build reads Ask as its default,
+  Files made on this Mac, so going back to one runs scripts again.
+- A page's scripts cannot fetch or frame the files beside it (now checked by a test); they can still use one as their own
+  script, stylesheet or image, as a browser allows.
+- The Space helper's description says plainly that it sees every key press while it runs, what it acts on, and that it
+  never keeps what you type or sends it off this Mac; Settings and the welcome sheet link to **How the Space helper works**.
 
 ## 0.3.0 (unreleased)
 

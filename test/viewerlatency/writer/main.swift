@@ -18,6 +18,7 @@ final class StubWriter: NSObject, SpacebarWriterProtocol, NSXPCListenerDelegate 
     func readArchiveEntry(_ path: String, entry: String, reply: @escaping (Data?, String?) -> Void) { reply(nil, "unreadable") }
     func ensureSupportDir(reply: @escaping (Bool) -> Void) { reply(true) }
     func updateSettings(_ patch: Data, reply: @escaping (Bool) -> Void) { reply(false) }
+    func answerScripts(_ value: String, reply: @escaping (Bool) -> Void) { reply(false) }
     func openSettings(_ tab: String, reply: @escaping (Bool) -> Void) { reply(false) }
     func updateOffer(reply: @escaping (Data?) -> Void) { reply(nil) }
     func copyInstallCommand(reply: @escaping (Bool) -> Void) { reply(false) }

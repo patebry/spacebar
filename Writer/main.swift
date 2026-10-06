@@ -224,6 +224,20 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         }
     }
 
+    func answerScripts(_ value: String, reply: @escaping (Bool) -> Void) {
+        switch SettingsFile.answerScripts(value) {
+        case nil:
+            log.error("refused htmlScripts answer: not asking, or not local/off")
+            reply(false)
+        case .success:
+            log.info("htmlScripts answered \(value, privacy: .public)")
+            reply(true)
+        case .failure(let f):
+            log.error("htmlScripts answer failed: \(String(describing: f), privacy: .public)")
+            reply(false)
+        }
+    }
+
     func openSettings(_ tab: String, reply: @escaping (Bool) -> Void) {
         guard let url = SettingsTab.url(tab) else { return reply(false) }
         // The app that contains this service, not whichever app claims the scheme.

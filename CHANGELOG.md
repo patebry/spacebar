@@ -115,8 +115,9 @@ Each release's notes on GitHub also list its commits. This file keeps what chang
   and a PDF.
 - Focus rings and labels throughout for keyboard and VoiceOver users.
 - **Scripts in HTML files: Ask** is the new default. An HTML file made on this Mac opens without its scripts, and a bar
-  above it offers **Run for files made on this Mac** or **Never**; a page with no scripts shows no bar. A setting left at
-  the old default becomes Ask; one you chose stays. Downloaded files still never run scripts.
+  above it offers **Run for files made on this Mac** or **Never**; a page with no scripts shows no bar. Off stays; Files
+  made on this Mac becomes Ask once. Downloaded files still never run scripts. An older build reads Ask as its default,
+  Files made on this Mac, so going back to one runs scripts again.
 - A page's scripts cannot fetch or frame the files beside it (now checked by a test); they can still use one as their own
   script, stylesheet or image, as a browser allows.
 - The Space helper's description says plainly that it sees every key press while it runs, what it acts on, and that it

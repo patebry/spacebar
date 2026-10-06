@@ -1019,6 +1019,9 @@ class PreviewController: NSViewController {
         if let w = listedWith, w != o {
             for dir in Set(listings.keys).union(dirWatches.keys) { refreshListing(dir) }
         }
+        // Scripts in HTML files changed elsewhere: the file on screen is shown again under it at once, so Never or Ask stops
+        // its scripts and a question already answered goes.
+        if shownView == "html", let url = fileURL, let pane = htmlPane, HTMLPane.mode(url, setting: htmlScripts(for: url)) != pane.mode { reshow() }
     }
 
     /// Watches `dir` (the root, or a folder expanded in the sidebar) and re-lists it when it changes.
@@ -2392,6 +2395,8 @@ class PreviewController: NSViewController {
             // and the file is shown again under it.
             guard let url = fileURL, fileKind == .html, shownView == "html", scriptsAsked == url.path, m.string("path", max: 4096) == url.path,
                   let run = m.bool("run") else {
+                // The page hid its bar: the file is shown again as the setting now has it.
+                if fileKind == .html, shownView == "html" { reshow() }
                 return refuse("answerScripts", "no question on screen for this file")
             }
             scriptsAsked = nil

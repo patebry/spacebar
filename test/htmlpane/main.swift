@@ -191,6 +191,48 @@ do {
     on.close()
 }
 
+// Every other way found to run script from an asked-about page, each with its own counting server: no beacon while it asks;
+// the same page with scripts on, the control, reaches it.
+do {
+    let probes: [(String, (String) -> String, [(String, (String) -> String)])] = [
+        ("a sibling .html in a frame", { _ in #"<iframe src="P.html"></iframe>"# }, [("P.html", { "<script>\($0)</script>" })]),
+        ("an SVG with a script as an object", { _ in #"<object data="P.svg" type="image/svg+xml"></object>"# },
+         [("P.svg", { #"<svg xmlns="http://www.w3.org/2000/svg"><script>\#($0)</script></svg>"# })]),
+        ("an SVG with a script as an embed", { _ in #"<embed src="P.svg" type="image/svg+xml">"# },
+         [("P.svg", { #"<svg xmlns="http://www.w3.org/2000/svg"><script>\#($0)</script></svg>"# })]),
+        ("an SVG with a script in a frame", { _ in #"<iframe src="P.svg"></iframe>"# },
+         [("P.svg", { #"<svg xmlns="http://www.w3.org/2000/svg"><script>\#($0)</script></svg>"# })]),
+        ("a javascript: frame", { b in "<iframe src=\"javascript:\(b.replacingOccurrences(of: "'", with: "%27"))\"></iframe>" }, []),
+        ("an img onerror", { b in "<img src=nope.png onerror=\"\(b)\">" }, []),
+        ("an XHTML sibling in a frame", { _ in #"<iframe src="P.xhtml"></iframe>"# },
+         [("P.xhtml", { #"<html xmlns="http://www.w3.org/1999/xhtml"><body><script>\#($0)</script></body></html>"# })]),
+        ("an object of type text/html", { _ in #"<object type="text/html" data="P.html"></object>"# }, [("P.html", { "<script>\($0)</script>" })]),
+        ("a srcdoc nested in a sibling frame", { _ in #"<iframe src="P.html"></iframe>"# },
+         [("P.html", { "<iframe srcdoc=\"<script>\($0.replacingOccurrences(of: "'", with: "&#39;"))</script>\"></iframe>" })]),
+        ("a srcdoc meta refresh to a scripted sibling", { _ in #"<iframe srcdoc="<meta http-equiv=refresh content='0;url=P-target.html'>"></iframe>"# },
+         [("P-target.html", { "<script>\($0)</script>" })]),
+    ]
+    for (i, probe) in probes.enumerated() {
+        let server = Server()
+        let beacon = "new Image().src='http://127.0.0.1:\(server.port)/b'"
+        let prefix = "probe\(i)"
+        for (name, body) in probe.2 { try! Data(body(beacon).utf8).write(to: dir.appendingPathComponent(name.replacingOccurrences(of: "P", with: prefix))) }
+        let f = dir.appendingPathComponent("\(prefix)-page.html")
+        try! Data(("<p id=p>static</p>" + probe.1(beacon).replacingOccurrences(of: "P", with: prefix)).utf8).write(to: f)
+        let asking = HTMLPane(.asking)
+        asking.show(f, over: web)
+        spin(1.5)
+        let askHits = server.hits
+        asking.close()
+        let on = HTMLPane(.scripts)
+        on.show(f, over: web)
+        for _ in 0..<100 where server.hits == askHits { spin(0.02) }
+        let onHits = server.hits - askHits
+        on.close()
+        check("asking, no script: \(probe.0) (with scripts on, it runs)", askHits == 0 && onHits > 0, "beacons asking \(askHits), with scripts \(onHits)")
+    }
+}
+
 // ---- a page's scripts cannot read the files beside it: read access to the folder loads them, WebKit's file origins keep
 // scripts out of them ----
 do {

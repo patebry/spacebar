@@ -891,6 +891,46 @@ edit("txt: past the 2 MB cap the save is refused and the file kept", file: "big2
     keys([t("y")])
 }
 
+// ================= Scripts in HTML files: Ask =================
+// The real controller and writer: the question only for the file on screen, answered once; a change made elsewhere shows the
+// file again at once. Space opens an HTML file with scripts off, so the panel never asks.
+do {
+    let dir = docs.appendingPathComponent("html")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let page = dir.appendingPathComponent("scripted.html")
+    try! Data("<p>x</p><script>document.title = 'ran'</script>".utf8).write(to: page)
+    _ = SettingsFile.update(["htmlScripts": "ask"])
+    SettingsStore.shared.checkNow(reason: "test")
+    let bar = "const b = document.querySelector('#doc .scripts-ask'); return { bar: !!b && !b.hidden, path: current.path }"
+    func asked() -> Bool { jsJSON(bar)["bar"] as? Bool == true }
+    func answer(_ path: String, _ run: Bool) -> String {
+        let p = String(data: try! JSONSerialization.data(withJSONObject: path, options: [.fragmentsAllowed]), encoding: .utf8)!
+        return "window.webkit.messageHandlers.sb.postMessage({ type: 'answerScripts', path: \(p), run: \(run) });"
+    }
+    func setting() -> String { SettingsFile.load().htmlScripts }
+    open(page)
+    spin(until: 3) { asked() }
+    if host == "panel" {
+        check("html: a file Space opened never asks (its scripts stay off)", !asked() && setting() == "ask", "\(jsJSON(bar))")
+    } else {
+        check("html: a file made on this Mac with scripts asks about them", asked(), "\(jsJSON(bar))")
+        _ = js(answer("/etc/other.html", true) + " 0")
+        spin(1)
+        check("html: an answer naming another file is refused, and the question stays", setting() == "ask" && asked(), "\(setting()) \(jsJSON(bar))")
+        _ = SettingsFile.update(["htmlScripts": "off"])
+        spin(until: 3) { !asked() }
+        check("html: Never chosen elsewhere shows the file again at once, without the question", !asked() && setting() == "off")
+        _ = SettingsFile.update(["htmlScripts": "ask"])
+        spin(until: 3) { asked() }
+        check("html: back to Ask elsewhere asks again", asked())
+        _ = js(answer(page.path, true) + answer(page.path, false) + " 0")
+        spin(until: 3) { setting() != "ask" }
+        spin(1)
+        check("html: answered once (Run), and a second answer is refused", setting() == "local" && !asked(), "\(setting()) \(jsJSON(bar))")
+    }
+    _ = SettingsFile.update(["htmlScripts": "ask"])
+}
+
 if failures > 0 { print("\n\(failures) FAILED, \(passes) passed [\(host)]") } else { print("\nall \(passes) edit flow checks passed [\(host)]") }
 closeHost()
 exit(failures == 0 ? 0 : 1)

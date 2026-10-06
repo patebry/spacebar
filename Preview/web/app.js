@@ -3660,7 +3660,7 @@ function pdfView(p) {
 
 // An HTML file made on this Mac, shown without its scripts while the setting asks. The bar is the page's own, above the area the
 // file's view is laid over, so nothing in the file can draw over it or press it; its buttons are made here and remembered, as
-// the load button is, and take only a real click that went down on them, or a real key press on them.
+// the load button is, and take only a real click that went down on them.
 const scriptButtons = new WeakSet();
 function scriptsBar() {
   const bar = el('div', 'scripts-ask');
@@ -3675,8 +3675,6 @@ function scriptsBar() {
     b.title = title;
     scriptButtons.add(b);
     b.addEventListener('pointerdown', (e) => { armed = e.isTrusted ? b : null; });
-    // Return or Space on the focused button arms it too, so the keyboard and VoiceOver can answer.
-    b.addEventListener('keydown', (e) => { if (e.isTrusted && (e.key === 'Enter' || e.key === ' ')) armed = b; });
     b.addEventListener('click', (e) => answerScripts(e, run));
     bar.append(b);
   }

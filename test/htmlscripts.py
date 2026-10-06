@@ -48,6 +48,9 @@ def main():
         r = page.cmd("@eval:(() => { for (const b of document.querySelectorAll('#doc .scripts-ask button')) { b.click();"
                      " b.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); b.dispatchEvent(new MouseEvent('click', { bubbles: true })); } return 0; })()")
         check(not answers(r) and not page.js(BAR)['hidden'], 'a script-made press or click on its buttons posts nothing', json.dumps(r['messages'])[:200])
+        r = page.cmd("@eval:(() => { for (const b of document.querySelectorAll('#doc .scripts-ask button')) { b.focus();"
+                     " for (const key of ['Enter', ' ']) b.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })); b.click(); } return 0; })()")
+        check(not answers(r) and not page.js(BAR)['hidden'], 'a script-made key press does not arm its buttons', json.dumps(r['messages'])[:200])
         r = page.cmd('@nativeclick:#doc .scripts-ask button:last-of-type')
         posted = answers(r)
         check(len(posted) == 1 and posted[0].get('path') == f and posted[0].get('run') in (False, 'false', '0') and page.js(BAR)['hidden'],

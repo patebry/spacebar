@@ -1,7 +1,10 @@
 #!/bin/bash
 # Makes build/spacebar.dmg from build/spacebar.app (./build.sh --no-install first): a compressed image holding the app and a
-# link to /Applications, signed with the identity that signed the app. Not notarized: the release workflow notarizes and
-# staples it. Changes nothing outside build/.
+# link to /Applications, laid out for dragging one onto the other (scripts/dmg/settings.py), signed with the identity that
+# signed the app. Not notarized: the release workflow notarizes and staples it. Changes nothing outside build/.
+# The layout is written by dmgbuild, without Finder:
+#   python3 -m pip install --require-hashes --only-binary :all: --no-deps -r scripts/dmg/requirements.txt
+#   DMGBUILD=...       the dmgbuild command (default: dmgbuild on PATH)
 #   SIGN_ID=...        identity to sign the image with (default the app's signer; an ad-hoc app leaves the image unsigned)
 #   SIGN_KEYCHAIN=...  TIMESTAMP=1|0   as build.sh (TIMESTAMP default: 1 for a Developer ID identity)
 set -euo pipefail
@@ -9,6 +12,12 @@ cd "$(dirname "$0")/.."
 APP=build/spacebar.app
 DMG=build/spacebar.dmg
 [ -d "$APP" ] || { echo "no $APP: run ./build.sh --no-install first" >&2; exit 1; }
+DMGBUILD=${DMGBUILD:-dmgbuild}
+command -v "$DMGBUILD" > /dev/null || {
+  echo "no dmgbuild: install it, in a venv if your python3 is externally managed, with" >&2
+  echo "  python3 -m pip install --require-hashes --only-binary :all: --no-deps -r scripts/dmg/requirements.txt" >&2
+  exit 1
+}
 codesign --verify --deep --strict "$APP"
 SIGN_ID=${SIGN_ID:-$(codesign -dvv "$APP" 2>&1 | sed -n 's/^Authority=//p' | head -1)}
 if [ -z "${TIMESTAMP:-}" ]; then
@@ -20,16 +29,12 @@ if [ -z "${TIMESTAMP:-}" ]; then
 fi
 case $TIMESTAMP in 1) TIMESTAMP_ARG=--timestamp ;; 0) TIMESTAMP_ARG=--timestamp=none ;; *) echo "TIMESTAMP must be 1 or 0" >&2; exit 2 ;; esac
 
-stage=$(mktemp -d)
-trap 'rm -rf "$stage"' EXIT
-chmod 755 "$stage"
-ditto "$APP" "$stage/spacebar.app"
-ln -s /Applications "$stage/Applications"
 rm -f "$DMG"
 # hdiutil sometimes fails with "Resource busy" on a CI runner; a second try a few seconds later succeeds.
 for try in 1 2 3; do
-  hdiutil create -quiet -volname spacebar -srcfolder "$stage" -fs HFS+ -format UDZO -imagekey zlib-level=9 "$DMG" && break
-  [ "$try" = 3 ] && { echo "hdiutil create failed 3 times" >&2; exit 1; }
+  "$DMGBUILD" -s scripts/dmg/settings.py -D app="$APP" -D icon=App/AppIcon.icns -D background=scripts/dmg/background.tiff \
+    spacebar "$DMG" > /dev/null && break
+  [ "$try" = 3 ] && { echo "dmgbuild failed 3 times" >&2; exit 1; }
   rm -f "$DMG"
   sleep 5
 done

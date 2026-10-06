@@ -196,6 +196,15 @@ jobs:
           shasum -a 256 spacebar.zip > spacebar.zip.sha256
           cat spacebar.zip.sha256
 
+      # scripts/dmg.sh lays out the .dmg's window with dmgbuild, pinned by hash, in a venv off the runner's Python.
+      - name: dmgbuild (v0.3 and later)
+        if: env.NOTARIZE == '1'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/dmgbuild"
+          "$RUNNER_TEMP/dmgbuild/bin/python" -m pip install --quiet --require-hashes --only-binary :all: --no-deps \
+            -r scripts/dmg/requirements.txt
+          echo "$RUNNER_TEMP/dmgbuild/bin" >> "$GITHUB_PATH"
+
       # The zip is notarized and the app stapled; the zip is made again from the stapled app, and the .dmg from it, which is
       # signed, notarized and stapled in turn. Without the credentials, or if Apple refuses either, the release fails here.
       - name: Notarize, staple and make the .dmg (v0.3 and later)

@@ -285,11 +285,14 @@ struct SettingsPane: View {
         } header: {
             Text("Space Helper")
         } footer: {
-            if HelperAgent.available {
-                Text(HelperCopy.privacy).settingsFooter()
-                    .background(Color.clear.onAppear { system.watchHelper() }.onDisappear { system.unwatchHelper() })
-            } else {
-                Text(HelperCopy.unavailable).settingsFooter()
+            VStack(alignment: .leading, spacing: 6) {
+                if HelperAgent.available {
+                    Text(HelperCopy.privacy).settingsFooter()
+                        .background(Color.clear.onAppear { system.watchHelper() }.onDisappear { system.unwatchHelper() })
+                } else {
+                    Text(HelperCopy.unavailable).settingsFooter()
+                }
+                Link(HelperCopy.howItWorks, destination: HelperCopy.securityURL).font(.footnote)
             }
         }
     }
@@ -505,7 +508,10 @@ enum HelperCopy {
     static let what = "Space opens spacebar for any file you select in Finder, images, PDFs and video included, not only the types Quick Look hands it. Space or Esc closes it."
     /// The name System Settings lists the helper under in Accessibility: the bundle's file name, not its display name.
     static let accessibilityName = "spacebar Helper"
-    static let privacy = "The Space helper uses Accessibility, listed there as \(accessibilityName), to notice when you press Space in Finder and read which file is selected. It never reads what you type anywhere else. Turning it off removes spacebar from Login Items; Quick Look then previews as before."
+    /// What the helper sees and does with it; every claim is in SECURITY.md's "The Space helper".
+    static let keys = "To catch Space in Finder, the Space helper uses Accessibility, listed there as \(accessibilityName), so it sees every key you press while it runs. It acts only on Space while Finder is in front, when it reads which file is selected, and on the arrows and a few other keys while spacebar's panel is open. It never keeps what you type or sends it off this Mac, and secure input, as in a password field, hides your keys from it."
+    static let privacy = keys + " Turning it off removes spacebar from Login Items; Quick Look then previews as before."
+    static let howItWorks = "How the Space helper works"
     static let unavailable = "This copy of spacebar has no Space helper it can run: it needs a signed copy installed with spacebar.dmg or the install command."
     static let securityURL = URL(string: "https://github.com/patebry/spacebar/blob/main/SECURITY.md#the-space-helper")!
 

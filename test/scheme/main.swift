@@ -225,21 +225,5 @@ check("code fence: CRLF line ends count as one line, an indented fence's indenta
 check("code fence: a line that opens no fence copies nothing", CodeFence.code("text\n```\nx\n```\n", start: 0, end: 4) == nil
       && CodeFence.code("    ```\nx\n", start: 0, end: 2) == nil && CodeFence.code("```\nx\n```", start: 0, end: 9) == nil)
 
-// The remote host: one https URL, named by its only query item; nothing else.
-let remote = { (s: String) in URL(string: s).flatMap(RemoteImages.target(of:))?.absoluteString }
-check("remote: an https image is named by u", remote("spacebar://remote/?u=https%3A%2F%2Fexample.com%2Fa.png%3Fx%3D1") == "https://example.com/a.png?x=1")
-check("remote: http, data, file and a scheme-less URL are refused",
-      ["http%3A%2F%2Fexample.com%2Fa.png", "data%3Aimage%2Fpng%2Cx", "file%3A%2F%2F%2Fetc%2Fhosts", "%2F%2Fexample.com%2Fa.png", "spacebar%3A%2F%2Ffile%2Fx.png"]
-        .allSatisfy { remote("spacebar://remote/?u=\($0)") == nil })
-check("remote: credentials, a second item, a path or another host are refused",
-      remote("spacebar://remote/?u=https%3A%2F%2Fu%3Ap%40example.com%2Fa.png") == nil && remote("spacebar://remote/?u=https%3A%2F%2Fa.com%2Fx&u=https%3A%2F%2Fb.com%2Fy") == nil
-        && remote("spacebar://remote/x?u=https%3A%2F%2Fa.com%2Fx") == nil && remote("spacebar://file/?u=https%3A%2F%2Fa.com%2Fx") == nil
-        && remote("spacebar://remote/?v=https%3A%2F%2Fa.com%2Fx") == nil)
-
-let png = (try? Data(contentsOf: URL(fileURLWithPath: "test/fixtures/img.png"))) ?? Data()
-check("remote: untyped bytes are typed by their own header, and only as an image",
-      RemoteImages.sniff(png) == "image/png" && RemoteImages.sniff(Data([0xFF, 0xD8, 0xFF, 0xE0])) == "image/jpeg" && RemoteImages.sniff(Data("GIF89a".utf8)) == "image/gif"
-        && RemoteImages.sniff(Data("RIFF\0\0\0\0WEBPVP8 ".utf8)) == "image/webp" && RemoteImages.sniff(Data("<svg>".utf8)) == nil && RemoteImages.sniff(Data("<html>".utf8)) == nil)
-
 print("\n\(failures == 0 ? "all" : "\(failures) FAILED of") scheme checks")
 exit(failures == 0 ? 0 : 1)

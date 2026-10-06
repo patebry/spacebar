@@ -11,7 +11,7 @@ within a week. Fixes ship in the next release, and the advisory is published onc
 Only the latest release is supported. [FINDINGS.md](FINDINGS.md#security-model) describes the threat model: a Markdown file,
 and whatever sits beside it, is treated as hostile.
 
-Eleven features reach further than a rendered page, and are in scope:
+Ten features reach further than a rendered page, and are in scope:
 
 - **Editing files in place.** The unsandboxed writer saves what is typed. It writes only to an existing regular file whose
   name, and the name of the file it resolves to, is of a type spacebar edits: Markdown, the code, JSON, CSV and text types
@@ -60,13 +60,6 @@ Eleven features reach further than a rendered page, and are in scope:
   ftp load blocked. Resource hints such as preconnect are not governed by CSP or content rules, which is why no `<link>` is
   kept at all. A link
   leaves the view only within a second of the user's click in it, one per click, and through the link policy.
-- **Remote images** are off by default, and the preview page's CSP allows none at all: `img-src` has no `https:`, so an
-  image put into the page by any means is blocked whatever the setting. While remote images are on, or for the one
-  document whose placeholder was clicked, the page asks for `spacebar://remote/?u=<https URL>` instead, and the extension
-  fetches it only while that holds for the document on screen, checked when the image is asked for and again when it
-  arrives: an ephemeral session with no cookies, credentials or disk cache, https only (redirects included), and only a
-  2xx answer typed as an image, at most 20 MB, within 20 seconds. A content rule list also blocks every http(s) image
-  while remote images are off. This is spacebar's only network code of its own besides the daily version check.
 - **Large text** (over 256 KB) reaches the preview page as a body the page reads once from `spacebar://body/<random token>`,
   not inside its render script. The body is the text already read for that render, held in memory: the handler reads
   nothing from disk, and serves it only at its exact URL, once, while its file is still the one on screen, as `text/plain`

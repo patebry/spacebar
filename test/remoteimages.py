@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
 """Remote images, off by default, in the offscreen harness (test/web/main.swift) with the extension's RemoteImageGate: the
 content rule list blocks them, a blocked image's placeholder offers "Load images from the web", and only a real click on
-that button loads the document's remote images, once, without touching settings.json. The page's CSP allows no remote image
-at all: an allowed one comes through spacebar://remote, which the scheme handler serves only while the gate allows the file
-on screen. remote.test is answered by the harness with a fixture picture; one real fetch (an https image from GitHub)
-needs the network, and is reported as skipped without it."""
+that button loads the document's remote images, once, without touching settings.json or the CSP. The load itself needs the
+network (an https image from apple.com); without it those two checks are reported as skipped."""
 import json, os, shutil, sys, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webthemes import Page, ROOT
 
-REMOTE = 'https://remote.test/pic.png'
-NET_IMAGE = 'https://github.githubassets.com/favicons/favicon.png'
+REMOTE = 'https://www.apple.com/favicon.ico'
 DOC = f"""# Remote
 
 ![a remote picture]({REMOTE})
@@ -42,33 +39,26 @@ LABEL = f"""<label>
 
 STATE = """
   const doc = document.getElementById('doc');
-  const remote = (v) => /https:|spacebar:\\/\\/remote\\//.test(v || '');
   return { buttons: doc.querySelectorAll('.img-blocked > button.img-load').length,
-    remote: [...doc.querySelectorAll('img, source')].filter((n) => remote(n.getAttribute('src')) || remote(n.getAttribute('srcset'))).length,
-    direct: [...doc.querySelectorAll('img, source, image, feImage, [background], [poster]')].filter((n) =>
-      ['src', 'srcset', 'href', 'xlink:href', 'background', 'poster'].some((a) => /^\\s*(https?:)?\\/\\//.test(n.getAttribute(a) || ''))).length,
+    remote: [...doc.querySelectorAll('img, source')].filter((n) => /https:/.test((n.getAttribute('src') || '') + (n.getAttribute('srcset') || ''))).length,
     local: [...doc.querySelectorAll('img')].filter((n) => /img\\.png/.test(n.getAttribute('src') || '')).map((n) => n.naturalWidth),
-    remoteLoaded: [...doc.querySelectorAll('img')].filter((n) => /^spacebar:\\/\\/remote\\//.test(n.currentSrc || n.src || '')).map((n) => n.naturalWidth),
+    remoteLoaded: [...doc.querySelectorAll('img')].filter((n) => /^https:/.test(n.currentSrc || n.src || '')).map((n) => n.naturalWidth),
     other: doc.querySelectorAll('[background], [poster], feImage, label').length,
     root: document.documentElement.dataset.remoteImages,
     csp: document.querySelector('meta[http-equiv=Content-Security-Policy]').content };
 """
 
-# An <img> put straight into the DOM, past the page's own placeholders and its rewriting: the CSP stops a remote one whatever
-# the setting (a securitypolicyviolation for img-src), and the scheme handler serves a spacebar://remote one only while the gate
-# allows the file on screen.
+# An <img> put straight into the DOM, past the page's own placeholders: only the content rule list can stop it.
 PROBE = """
-  window.__img = 'pending'; window.__csp = null; const i = new Image();
-  if (!window.__cspSeen) { window.__cspSeen = true;
-    document.addEventListener('securitypolicyviolation', (e) => { if (e.blockedURI.includes('probe')) window.__csp = e.violatedDirective; }); }
+  window.__img = 'pending'; const i = new Image();
   i.onload = () => { window.__img = 'loaded ' + i.naturalWidth; }; i.onerror = () => { window.__img = 'blocked'; };
-  i.src = SRC; return 0;
+  i.src = SRC + '&n=' + Math.random(); return 0;
 """
 
 
 def online():
     try:
-        return urllib.request.urlopen(NET_IMAGE, timeout=5).status == 200
+        return urllib.request.urlopen(REMOTE, timeout=5).status == 200
     except Exception:
         return False
 
@@ -88,17 +78,11 @@ def main():
     open(other, 'w').write(f'![another]({REMOTE}?other)\n')
     shutil.copy(os.path.join(ROOT, 'test', 'fixtures', 'img.png'), page.out)
     settings_file = os.path.join(page.support, 'settings.json')
-    probes = [0]
 
-    def probe(proxied=False):
-        """[what the image did, the CSP directive it violated, the remote images the scheme handler fetched]"""
-        probes[0] += 1
-        url = f'{REMOTE}?probe{probes[0]}'
-        src = 'spacebar://remote/?u=' + urllib.request.quote(url, safe='') if proxied else url
-        r = page.cmd('@eval:(() => { ' + PROBE.replace('SRC', json.dumps(src)) + ' })()')
-        r2 = page.cmd('@wait:1.5')
-        fetched = [m['url'] for m in r['messages'] + r2['messages'] if m.get('type') == '_remoteFetch']
-        return [page.js('return window.__img'), page.js('return window.__csp'), fetched]
+    def probe():
+        page.cmd('@eval:(() => { ' + PROBE.replace('SRC', json.dumps(REMOTE + '?probe')) + ' })()')
+        page.cmd('@wait:3')
+        return page.js('return window.__img')
 
     def messages(r, t):
         return [m for m in r['messages'] if m.get('type') == t]
@@ -110,13 +94,8 @@ def main():
         s = page.js(STATE)
         check(s['root'] == 'off' and s['buttons'] == 3 and s['remote'] == 0 and s['other'] == 0 and s['local'] and all(w > 0 for w in s['local']),
               'off by default: every remote <img> (src or srcset) is a placeholder with a load button, a remote <source> is dropped; local images load', json.dumps(s))
-        check("https:" not in s['csp'] and "spacebar://remote" in s['csp'] and "default-src 'none'" in s['csp'],
-              "the page's CSP allows no remote image itself, only the remote host", s['csp'])
-        direct = probe()
-        check(direct[0] == 'blocked' and direct[1] == 'img-src' and not direct[2],
-              'off: a remote image put in the page past its own code is blocked by the CSP (securitypolicyviolation img-src)', json.dumps(direct))
-        proxied = probe(proxied=True)
-        check(proxied[0] == 'blocked' and not proxied[2], 'off: the remote host fetches nothing and serves nothing', json.dumps(proxied))
+        blocked = probe()
+        check(blocked == 'blocked', 'the content rule list blocks a remote image the page did not replace', blocked)
 
         # Script-made clicks, on the real button and on the document's look-alike, ask for nothing.
         r = page.cmd("@eval:(() => { document.querySelector('.img-blocked > button.img-load').click();"
@@ -150,23 +129,24 @@ def main():
         refused = messages(r, '_remoteRefused') + messages(r2, '_remoteRefused')
         check(refused and page.js(STATE)['buttons'] == 3, 'a request naming a file other than the one on screen is refused', json.dumps(refused))
 
-        # The real button, really clicked: a message, a re-render with the images through the remote host, the setting untouched.
+        # The real button, really clicked: a message, a re-render with the images, the setting untouched.
         before = open(settings_file).read() if os.path.exists(settings_file) else None
         r = page.cmd('@nativeclick:.img-blocked > button.img-load')
-        page.cmd('@wait:2')
+        page.cmd('@wait:3')
         s = page.js(STATE)
         posted = messages(r, 'loadRemoteImages')
         check(len(posted) == 1 and posted[0].get('path') == doc and not messages(r, 'editBlock') and not messages(r, 'link'),
               'a real click on the load button posts loadRemoteImages for this file, and no edit or link', json.dumps(r['messages'])[:300])
-        check(s['buttons'] == 0 and s['remote'] >= 3 and s['direct'] == 0, "after it, the document's remote images are in the page, each through the remote host",
-              json.dumps(s))
-        check(s['remoteLoaded'] and all(w > 0 for w in s['remoteLoaded']), 'and they load', json.dumps(s['remoteLoaded']))
+        check(s['buttons'] == 0 and s['remote'] >= 3, "after it, the document's remote images are in the page", json.dumps(s))
         after = open(settings_file).read() if os.path.exists(settings_file) else None
         check(after == before and s['root'] == 'off', 'the setting is not saved or changed', f'settings.json {before!r} -> {after!r}')
-        direct = probe()
-        check(direct[0] == 'blocked' and direct[1] == 'img-src', 'allowed once: a remote image past the page\'s code is still blocked by the CSP', json.dumps(direct))
-        proxied = probe(proxied=True)
-        check(proxied[0].startswith('loaded') and len(proxied[2]) == 1, 'allowed once: the remote host serves this document', json.dumps(proxied))
+        check("img-src spacebar://bundle spacebar://file spacebar://user spacebar://entry spacebar://thumb https: data: blob:" in s['csp'] and "default-src 'none'" in s['csp'], 'the CSP is unchanged', s['csp'])
+        if net:
+            check(s['remoteLoaded'] and all(w > 0 for w in s['remoteLoaded']), 'the remote images load', json.dumps(s['remoteLoaded']))
+            loaded = probe()
+            check(loaded.startswith('loaded'), 'the rule list is lifted for this document', loaded)
+        else:
+            print('SKIP remote images load (offline)')
 
         # Live reload keeps them for this document; another document, or a new preview, is blocked again.
         page.render(doc)
@@ -176,46 +156,30 @@ def main():
         page.render(other)
         page.cmd('@wait:0.5')
         s = page.js(STATE)
-        again = probe(proxied=True)
-        check(s['buttons'] == 1 and s['remote'] == 0 and again[0] == 'blocked' and not again[2], 'the next document is blocked again, by the remote host too',
-              f'{json.dumps(s)} probe {again}')
+        again = probe()
+        check(s['buttons'] == 1 and s['remote'] == 0 and again == 'blocked', 'the next document is blocked again', f'{json.dumps(s)} probe {again}')
         page.cmd('@remotereset')
         page.render(doc)
         page.cmd('@wait:0.5')
         check(page.js(STATE)['buttons'] == 3, 'the same document in a new preview is blocked again')
 
-        # remoteImages on: no placeholders; the images come through the remote host, and the CSP still allows nothing else.
+        # remoteImages on: no placeholders, no block.
         page.apply(remoteImages=True)
         page.render(doc)
-        page.cmd('@wait:1')
-        s = page.js(STATE)
-        check(s['root'] == 'on' and s['buttons'] == 0 and s['remote'] >= 3 and s['direct'] == 0 and s['remoteLoaded'] and all(w > 0 for w in s['remoteLoaded']),
-              'remoteImages on shows them without a placeholder, through the remote host', json.dumps(s))
-        on = probe(proxied=True)
-        check(on[0].startswith('loaded'), 'remoteImages on: the remote host serves', json.dumps(on))
-        direct = probe()
-        check(direct[0] == 'blocked' and direct[1] == 'img-src', 'remoteImages on: a remote image past the page\'s code is still blocked by the CSP',
-              json.dumps(direct))
-        if net:
-            real = os.path.join(page.out, 'real.md')
-            open(real, 'w').write(f'![apple]({NET_IMAGE})\n')
-            page.render(real)
-            page.cmd('@wait:4')
-            s = page.js(STATE)
-            check(s['remoteLoaded'] and all(w > 0 for w in s['remoteLoaded']), 'a real remote image loads through the remote host', json.dumps(s))
-        else:
-            print('SKIP a real remote image loads (offline)')
-        page.apply(remoteImages=False)
-        page.render(doc)
         page.cmd('@wait:0.5')
-        off = probe(proxied=True)
-        check(off[0] == 'blocked' and not off[2], 'turning it off again: the remote host serves nothing', json.dumps(off))
+        s = page.js(STATE)
+        check(s['root'] == 'on' and s['buttons'] == 0 and s['remote'] >= 3, 'remoteImages on shows them without a placeholder', json.dumps(s))
+        if net:
+            on = probe()
+            check(on.startswith('loaded'), 'remoteImages on lifts the rule list', on)
+        page.apply(remoteImages=False)
+        check(probe() == 'blocked', 'turning it off again blocks them')
 
-        csp = [l for l in page.logs if 'csp blocked' in l and 'probe' not in l]
-        check(not csp, "no CSP violations but the probes'", json.dumps(csp)[:300])
+        csp = [l for l in page.logs if 'csp blocked' in l]
+        check(not csp, 'no CSP violations', json.dumps(csp)[:300])
     finally:
         page.close()
-    print(f'\n{sum(results)}/{len(results)} remote image checks passed' + ('' if net else ' (offline: the real fetch skipped)'))
+    print(f'\n{sum(results)}/{len(results)} remote image checks passed' + ('' if net else ' (offline: load checks skipped)'))
     sys.exit(0 if all(results) else 1)
 
 

@@ -416,7 +416,7 @@ the helper's and viewer's logs. It sends no input itself.
 ```
 spacebar.app                         settings window (SwiftUI)
 └─ PlugIns/SpacebarPreview.appex     sandboxed Quick Look preview: WKWebView + markdown-it, KaTeX, highlight.js,
-   │                                 Mermaid, DOMPurify, all bundled; fetches only remote images you allow
+   │                                 Mermaid, DOMPurify, all bundled; no network code of its own
    └─ XPCServices/…writer.xpc        small unsandboxed helper: saves edits, opens links and files, owns the key panel for
                                      inline editing and the sidebar's keys, lists archives, checks for and starts updates
 └─ PlugIns/SpacebarFolders.appex     the same preview for folders (on by default; turn off in Settings)
@@ -437,8 +437,7 @@ disk, the external change wins.
   opens a new GitHub issue in your browser with your versions, Mac model and the end of the update log filled in; nothing is
   sent unless you submit it there. Settings are a JSON file in `~/Library/Application Support/spacebar`.
 - Remote images are off by default (fetching one tells its server when you opened the document). A blocked image offers a
-  one-time load for that document. The page's Content Security Policy allows no remote image itself: an allowed one is
-  fetched by the extension, which checks again that remote images are allowed for the document on screen.
+  one-time load for that document.
 - A Markdown file is treated as hostile. The page runs under a strict Content Security Policy (bundled scripts only, no
   inline scripts, frames, forms or connections), and DOMPurify sanitizes everything before it reaches the page.
 - The writer only writes to the file on screen, and only to a type spacebar edits (Markdown, code, text, JSON, CSV, dotfile
@@ -479,9 +478,8 @@ disk, the external change wins.
   hardened runtime. The viewer that renders files is sandboxed like the preview extension and never sees a key the helper
   did not send it.
 - The preview extension has the `com.apple.security.network.client` entitlement. WKWebView's helper processes crash-loop
-  in a sandboxed extension without it. Besides the update check, spacebar's only network code of its own fetches a remote
-  image the page shows, and only while you allow remote images for that document; the page itself can make no request to
-  the web.
+  in a sandboxed extension without it. spacebar has no network code of its own; the only requests the page can make are
+  remote images, which are blocked unless you allow them.
 
 Found a security problem? Please report it privately as described in [SECURITY.md](SECURITY.md), not in a public issue.
 

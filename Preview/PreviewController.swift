@@ -75,10 +75,6 @@ final class WebHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         remoteImages = RemoteImageGate(config.userContentController)
         super.init()
         scheme.thumbnail = { [weak self] path, px, reply in self?.controller?.thumbnail(path, px: px, reply) }
-        scheme.remoteAllowed = { [weak self] in
-            guard let self else { return false }
-            return self.remoteImages.allows(self.controller?.documentPath ?? "")
-        }
         remoteImages.onError = { log.error("\($0, privacy: .public)") }
         config.userContentController.add(self, name: "sb")
         web.navigationDelegate = self
@@ -732,9 +728,6 @@ class PreviewController: NSViewController {
 
     /// The writer's key panel took the keyboard for an edit, the filter or the find field, or let it go.
     func writerKeysChanged(_ held: Bool) {}
-
-    /// The file on screen, for the remote-image gate.
-    var documentPath: String? { fileURL?.path }
 
     /// The htmlScripts setting that applies to `url`, an HTML file about to be shown.
     func htmlScripts(for url: URL) -> String { SettingsStore.shared.settings.htmlScripts }

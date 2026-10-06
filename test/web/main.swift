@@ -59,7 +59,7 @@
 //                      autoScales, continuous, bg [r, g, b], dark, docAlive (a weak reference to the last document), fds (open
 //                      descriptors on that file), pixel [r, g, b] at the pane's centre as the window draws it}
 // The page's "loadRemoteImages" message goes to the real RemoteImageGate, as the extension routes it, and a granted request
-// re-renders the current file with the gate's payload flag. "_remoteFetch" names each remote image the `remote` host fetched.
+// re-renders the current file with the gate's payload flag.
 // The non-file commands print {cmd, result, messages}; messages are those posted while the command ran, plus "_refused" for
 // every URL the scheme handler refused.
 import AppKit
@@ -126,17 +126,6 @@ config.userContentController.add(rec, name: "sb")
 let gate = RemoteImageGate(config.userContentController)
 var currentFile: String?
 scheme.bodyCurrent = { $0 == currentFile }
-// As the extension: the `remote` host serves while the gate allows the file on screen. A host of remote.test is answered with
-// the fixture picture, so the checks need no network; any other goes to the real fetch.
-scheme.remoteAllowed = { gate.allows(currentFile ?? "") }
-let realFetch = scheme.fetchRemote
-let fixturePicture = (try? Data(contentsOf: webRoot.appendingPathComponent("../../test/fixtures/img.png"))) ?? Data()
-scheme.fetchRemote = { url, reply in
-    rec.messages.append(["type": "_remoteFetch", "url": url.absoluteString])
-    guard url.host == "remote.test" else { return realFetch(url, reply) }
-    reply(.success(RemoteImages.Image(data: fixturePicture, mime: "image/png")))
-    return {}
-}
 /// As the extension: the archive on screen as listed, and the file of it on screen.
 typealias EntryInfo = (size: Int64?, modified: Double?, link: Bool)
 var archiveState: (path: String, payload: [String: Any], files: [String: EntryInfo])?

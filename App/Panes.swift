@@ -351,6 +351,7 @@ struct SettingsPane: View {
     @ViewBuilder private var advanced: some View {
         Section {
             Picker("Scripts in HTML files", selection: store.binding(\.htmlScripts, "htmlScripts")) {
+                Text("Ask").tag("ask")
                 Text("Files made on this Mac").tag("local")
                 Text("Never").tag("off")
             }
@@ -363,7 +364,7 @@ struct SettingsPane: View {
         } header: {
             Text("Web Content")
         } footer: {
-            Text("An HTML file your browser, Mail or AirDrop marked as downloaded always opens with scripts off and nothing loaded from the web. Files from git clone, curl, unzip or a USB drive are not marked, so with Files made on this Mac their pages run their scripts and may load from the web; with Never, no HTML file does either. Sanitized HTML in Markdown keeps formatting tags but never runs scripts. Remote images are off by default: fetching one lets its server see when the document was opened. A blocked image offers to load that document's images once.")
+            Text("An HTML file your browser, Mail or AirDrop marked as downloaded always opens with scripts off and nothing loaded from the web. Files from git clone, curl, unzip or a USB drive are not marked: with Ask, such a page opens without its scripts and asks whether to run them; with Files made on this Mac they run and may load from the web; with Never, no HTML file does either. Scripts can reach the network, so a page that runs them can tell a server it was opened and send what it shows. Sanitized HTML in Markdown keeps formatting tags but never runs scripts. Remote images are off by default: fetching one lets its server see when the document was opened. A blocked image offers to load that document's images once.")
                 .settingsFooter()
         }
 

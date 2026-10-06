@@ -406,6 +406,13 @@
   #doc .viewer-pdf .viewer-head { padding: 0 40px; }
   #doc .pdf-area { flex: 1 1 auto; min-height: 0; border-top: 1px solid var(--border); }
   @media (max-width: 560px) { #doc .viewer-pdf .viewer-head { padding: 0 20px; } }
+  /* An HTML file's "Run them?" bar: the page's own, above the area the file's view is laid over. */
+  #doc .scripts-ask { flex: none; display: flex; flex-wrap: wrap; align-items: baseline; gap: .3em 1em; padding: 7px 40px; font-size: 13px;
+    color: var(--muted); border-top: 1px solid var(--border); }
+  #doc .scripts-ask[hidden] { display: none; }
+  #doc .scripts-ask > button { font: inherit; color: var(--link); background: none; border: 0; padding: 0; cursor: pointer; }
+  #doc .scripts-ask > button:hover { text-decoration: underline; text-underline-offset: 2px; }
+  #doc .scripts-ask > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   /* Audio: a player of its own height, centred in the space under the toolbar. */
   :root[data-view=audio] #doc .viewer-audio .pdf-area { flex: none; box-sizing: border-box; width: min(560px, calc(100% - 40px)); height: 220px;
     max-height: 100%; margin: auto; border: 1px solid var(--border); border-radius: 8px; }
@@ -773,6 +780,7 @@
     :root:not([data-chrome=minimal]):is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=quicklook], [data-view=rtf], [data-view=bitmap]) #main { height: calc(100vh - var(--gap) - 1px); }
     :root:not([data-chrome=minimal]):is([data-view=pdf], [data-view=html], [data-view=video], [data-view=audio], [data-view=quicklook], [data-view=rtf], [data-view=bitmap]) #doc { padding-top: calc(var(--bar-h) + 1px); }
     :root:not([data-chrome=minimal]) #doc .pdf-area { margin: 0 calc(var(--gap) + 1px) 0 calc(var(--frame-inset) + 1px); border-top: 0; }
+    :root:not([data-chrome=minimal]) #doc .scripts-ask { margin: 0 calc(var(--gap) + 1px) 0 calc(var(--frame-inset) + 1px); padding: 6px 12px; border-top: 0; }
     /* The viewer's Open button moves up into the toolbar row, and a head with nothing else in it goes. */
     :root:not([data-chrome=minimal]) #doc :is(.viewer-head, .info-card) > .viewer-open:not(.viewer-privacy) { display: none; }
     :root:not([data-chrome=minimal]) #doc .viewer-head.bare { display: none; }

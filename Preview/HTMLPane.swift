@@ -5,16 +5,24 @@ import WebKit
 /// An HTML file on screen, rendered as a page in its own WKWebView laid over the part of the panel the page reserves for it,
 /// like PDFPane. It shares nothing with the preview's web view: no message handler, no `spacebar` scheme, no stored data.
 ///
-/// Scripts run only in a file made on this Mac (no quarantine flag) while the htmlScripts setting allows it; a downloaded file
-/// renders with scripts off and nothing loaded from the web: it is served through OfflineFiles, with every `<link>` made inert
-/// (its sibling stylesheets inlined), no frames at all, and a CSP that allows nothing but its own folder. Every navigation away from the file goes to `onLink`, so the pane
-/// only ever shows the file it was given.
+/// Scripts run only in a file made on this Mac (no quarantine flag) while the htmlScripts setting is "local"; under "ask" such
+/// a file is shown as it would be with scripts, but without them, until the preview's bar is answered. A downloaded file, or
+/// any file under "off", renders with scripts off and nothing loaded from the web: it is served through OfflineFiles, with
+/// every `<link>` made inert (its sibling stylesheets inlined), no frames at all, and a CSP that allows nothing but its own
+/// folder. Every navigation away from the file goes to `onLink`, so the pane only ever shows the file it was given.
+///
+/// A page with scripts is loaded from its file URL with read access to its folder, so its images, stylesheets and scripts
+/// beside it load; its scripts still cannot read those files: WebKit gives each file URL an origin of its own, so fetch and
+/// XMLHttpRequest of another file fail, a frame of one is cross-origin, and a canvas an image beside it was drawn on is
+/// tainted (test/htmlpane).
 final class HTMLPane: NSObject, WKNavigationDelegate, WKUIDelegate {
     let view: WKWebView
     private(set) var path: String?
     private(set) var placed = false
-    /// Whether this view runs scripts; fixed when it is made, so a file needing the other mode gets a new pane.
+    /// Whether this view runs scripts, and whether it is served without web access (OfflineFiles); fixed when it is made, so a
+    /// file needing another mode gets a new pane.
     let scripts: Bool
+    var mode: Mode { scripts ? .scripts : offline != nil ? .offline : .asking }
     var onLink: (URL) -> Void = { _ in }
     private var file: URL?
     private static var offlineRules: WKContentRuleList?
@@ -25,19 +33,21 @@ final class HTMLPane: NSObject, WKNavigationDelegate, WKUIDelegate {
         #"{"trigger":{"url-filter":"\#($0)"},"action":{"type":"block"}}"#
     }.joined(separator: ",") + "]"
 
-    /// Serves a pane without web access; nil for one that runs scripts, which loads the file itself.
+    /// Serves a pane without web access; nil for one with it, which loads the file itself.
     private let offline: OfflineFiles?
     /// Links a page's own script follows without a click are dropped: see LinkClickGate.
     private var gate = LinkClickGate()
     private var monitor: Any?
 
-    init(scripts: Bool) {
-        self.scripts = scripts
+    convenience init(scripts: Bool) { self.init(scripts ? .scripts : .offline) }
+
+    init(_ mode: Mode) {
+        scripts = mode == .scripts
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         // Content rules block loads but not the connections `<link rel=preconnect>` and friends open, and a data store's
         // proxy settings did not hold them either (tested on macOS 15): the markup itself is served without them.
-        offline = scripts ? nil : OfflineFiles()
+        offline = mode == .offline ? OfflineFiles() : nil
         if let offline { config.setURLSchemeHandler(offline, forURLScheme: OfflineFiles.scheme) }
         config.defaultWebpagePreferences.allowsContentJavaScript = scripts
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
@@ -73,6 +83,70 @@ final class HTMLPane: NSObject, WKNavigationDelegate, WKUIDelegate {
     /// Whether a pane for `url` runs scripts under `setting` (Settings.htmlScripts).
     static func runsScripts(_ url: URL, setting: String) -> Bool { setting == "local" && !isDownloaded(url) }
 
+    /// How a pane shows `url` under `setting`: with scripts (and the web), without scripts while the setting asks (still with
+    /// the web, as it would look once they run), or offline.
+    enum Mode: Equatable { case scripts, asking, offline }
+    static func mode(_ url: URL, setting: String) -> Mode {
+        if isDownloaded(url) { return .offline }
+        return setting == "local" ? .scripts : setting == "ask" ? .asking : .offline
+    }
+
+    static let scanBytes = 8 << 20
+
+    /// Whether an HTML file's text has anything that runs as script: a `<script>` element, an `on…` event attribute, or a
+    /// `javascript:` URL in an attribute. A cheap look at its first `scanBytes`, not a parse: it decides only whether the
+    /// preview offers to run scripts, never whether they run. Something it misses stays off. One pass, never stepping back,
+    /// so no file can make it slow.
+    static func hasScripts(_ html: String) -> Bool {
+        let s = Array(html.utf8), n = s.count
+        var i = 0
+        func lower(_ c: UInt8) -> UInt8 { c >= 65 && c <= 90 ? c + 32 : c }
+        func space(_ c: UInt8) -> Bool { c == 32 || (9...13).contains(c) }
+        func skipSpace() { while i < n, space(s[i]) { i += 1 } }
+        let script = Array("script".utf8), js = Array("javascript:".utf8)
+        while i < n {
+            guard s[i] == UInt8(ascii: "<") else { i += 1; continue }
+            i += 1
+            guard i < n, (97...122).contains(lower(s[i])) else { continue }
+            let name = i
+            while i < n, !space(s[i]), s[i] != UInt8(ascii: ">"), s[i] != UInt8(ascii: "/") { i += 1 }
+            if i - name == script.count, zip(s[name..<i], script).allSatisfy({ lower($0) == $1 }) { return true }
+            while i < n, s[i] != UInt8(ascii: ">") {
+                if space(s[i]) || s[i] == UInt8(ascii: "/") || s[i] == UInt8(ascii: "=") { i += 1; continue }
+                let a = i
+                while i < n, !space(s[i]), s[i] != UInt8(ascii: "="), s[i] != UInt8(ascii: ">"), s[i] != UInt8(ascii: "/") { i += 1 }
+                let event = i - a > 2 && lower(s[a]) == UInt8(ascii: "o") && lower(s[a + 1]) == UInt8(ascii: "n")
+                skipSpace()
+                guard i < n, s[i] == UInt8(ascii: "=") else { continue }
+                if event { return true }
+                i += 1
+                skipSpace()
+                guard i < n else { break }
+                var value: [UInt8] = []
+                if s[i] == UInt8(ascii: "\"") || s[i] == UInt8(ascii: "'") {
+                    let q = s[i]
+                    i += 1
+                    while i < n, s[i] != q { if value.count < 64 { value.append(s[i]) }; i += 1 }
+                    i += 1
+                } else {
+                    while i < n, !space(s[i]), s[i] != UInt8(ascii: ">") { if value.count < 64 { value.append(s[i]) }; i += 1 }
+                }
+                // As a browser reads a URL: leading spaces and any tab or newline inside the scheme do not count.
+                let v = value.filter { !space($0) }.map(lower)
+                if v.starts(with: js) { return true }
+            }
+        }
+        return false
+    }
+
+    static func hasScripts(_ url: URL) -> Bool {
+        let fd = open(url.path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { return false }
+        let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        guard let data = try? h.read(upToCount: scanBytes) else { return false }
+        return hasScripts(OfflineFiles.decode(data))
+    }
+
     /// Shows `url` above `web`. The same file again (a change on disk) reloads it.
     func show(_ url: URL, over web: NSView) {
         guard web.superview != nil else { return }
@@ -85,7 +159,7 @@ final class HTMLPane: NSObject, WKNavigationDelegate, WKUIDelegate {
             if self.offline != nil { self.view.load(URLRequest(url: OfflineFiles.url(for: url))); return }
             self.view.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
         }
-        if scripts { return load() }
+        if offline == nil { return load() }
         if let r = Self.offlineRules {
             view.configuration.userContentController.add(r)
             return load()

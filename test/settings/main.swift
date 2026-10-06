@@ -669,13 +669,14 @@ withExtendedLifetime(watch) {}
 let migDir = FileManager.default.temporaryDirectory.appendingPathComponent("spacebar-migrate-\(UUID().uuidString)")
 try! FileManager.default.createDirectory(at: migDir, withIntermediateDirectories: true)
 let migFile = migDir.appendingPathComponent("settings.json")
-check("defaults: folder previews on, reading stats off, README first off, version 5", Settings().folderMode && !Settings().stats && !Settings().folderReadmeFirst && Settings().version == 5)
+check("defaults: folder previews on, reading stats off, README first off, HTML scripts asked about, version 6",
+      Settings().folderMode && !Settings().stats && !Settings().folderReadmeFirst && Settings().htmlScripts == "ask" && Settings().version == 6)
 try! Data(#"{"version": 1, "folderMode": false, "theme": "nord"}"#.utf8).write(to: migFile)
 check("a version-1 file reads as folder previews on", SettingsFile.load(at: migFile).folderMode)
 SettingsFile.migrate(at: migFile)
 let migrated = (try! JSONSerialization.jsonObject(with: Data(contentsOf: migFile))) as! [String: Any]
-check("migrate turns folder previews on once and writes version 5, keeping other keys",
-      migrated["folderMode"] as? Bool == true && (migrated["version"] as? NSNumber)?.intValue == 5 && migrated["theme"] as? String == "nord")
+check("migrate turns folder previews on once and writes the current version, keeping other keys",
+      migrated["folderMode"] as? Bool == true && (migrated["version"] as? NSNumber)?.intValue == Settings.currentVersion && migrated["theme"] as? String == "nord")
 _ = SettingsFile.update(["folderMode": false], at: migFile)
 SettingsFile.migrate(at: migFile)
 check("turned off after the migration stays off", SettingsFile.load(at: migFile).folderMode == false)
@@ -692,8 +693,8 @@ check("a version-2 file without the key reads with reading stats off", SettingsF
 try! Data(#"{"version": 3, "stats": true, "theme": "nord", "futureKey": 7}"#.utf8).write(to: migFile)
 SettingsFile.migrate(at: migFile)
 let v4 = (try! JSONSerialization.jsonObject(with: Data(contentsOf: migFile))) as! [String: Any]
-check("migrate writes reading stats off and version 5, keeping other keys",
-      v4["stats"] as? Bool == false && (v4["version"] as? NSNumber)?.intValue == 5 && v4["theme"] as? String == "nord" && v4["futureKey"] as? Int == 7)
+check("migrate writes reading stats off and the current version, keeping other keys",
+      v4["stats"] as? Bool == false && (v4["version"] as? NSNumber)?.intValue == Settings.currentVersion && v4["theme"] as? String == "nord" && v4["futureKey"] as? Int == 7)
 _ = SettingsFile.update(["stats": true], at: migFile)
 SettingsFile.migrate(at: migFile)
 check("turned on in settings.json after the migration stays on", SettingsFile.load(at: migFile).stats)
@@ -708,14 +709,48 @@ try! Data(#"{"version": 4, "folderReadmeFirst": true, "stats": true, "theme": "n
 check("a version-4 file's reading stats on reads on", SettingsFile.load(at: migFile).stats)
 SettingsFile.migrate(at: migFile)
 let v5 = (try! JSONSerialization.jsonObject(with: Data(contentsOf: migFile))) as! [String: Any]
-check("migrate writes README first off and version 5, keeping a version-4 file's reading stats and other keys",
-      v5["folderReadmeFirst"] as? Bool == false && (v5["version"] as? NSNumber)?.intValue == 5 && v5["stats"] as? Bool == true && v5["theme"] as? String == "nord")
+check("migrate writes README first off and the current version, keeping a version-4 file's reading stats and other keys",
+      v5["folderReadmeFirst"] as? Bool == false && (v5["version"] as? NSNumber)?.intValue == Settings.currentVersion && v5["stats"] as? Bool == true && v5["theme"] as? String == "nord")
 _ = SettingsFile.update(["folderReadmeFirst": true], at: migFile)
 SettingsFile.migrate(at: migFile)
 check("README first turned on in settings.json after the migration stays on", SettingsFile.load(at: migFile).folderReadmeFirst)
 try! Data(#"{"version": 3, "stats": true}"#.utf8).write(to: migFile)
 _ = SettingsFile.update(["stats": true], at: migFile)
 check("an old file's on in the same write as the migration is kept", SettingsFile.load(at: migFile).stats)
+// Version 6: HTML scripts are asked about by default; a file from before that stores "local", the old default, reads and is
+// rewritten as "ask". "off" stays, and so does a "local" chosen since.
+for v in 1...5 {
+    try! Data(#"{"version": \#(v), "htmlScripts": "local"}"#.utf8).write(to: migFile)
+    check("a version-\(v) file with HTML scripts on reads as ask", SettingsFile.load(at: migFile).htmlScripts == "ask")
+}
+try! Data(#"{"version": 5, "htmlScripts": "off", "theme": "nord"}"#.utf8).write(to: migFile)
+check("a version-5 file with HTML scripts off stays off", SettingsFile.load(at: migFile).htmlScripts == "off")
+try! Data(#"{"version": 5, "htmlScripts": "local", "theme": "nord"}"#.utf8).write(to: migFile)
+SettingsFile.migrate(at: migFile)
+let v6 = (try! JSONSerialization.jsonObject(with: Data(contentsOf: migFile))) as! [String: Any]
+check("migrate writes HTML scripts ask and version 6, keeping other keys",
+      v6["htmlScripts"] as? String == "ask" && (v6["version"] as? NSNumber)?.intValue == 6 && v6["theme"] as? String == "nord")
+_ = SettingsFile.update(["htmlScripts": "local"], at: migFile)
+SettingsFile.migrate(at: migFile)
+check("Files made on this Mac chosen after the migration stays", SettingsFile.load(at: migFile).htmlScripts == "local")
+try! Data(#"{"version": 5, "htmlScripts": "local"}"#.utf8).write(to: migFile)
+_ = SettingsFile.update(["htmlScripts": "local"], at: migFile)
+check("an old file's local in the same write as the migration is kept", SettingsFile.load(at: migFile).htmlScripts == "local")
+check("a new settings.json asks about HTML scripts", { try? FileManager.default.removeItem(at: migFile); return SettingsFile.ensure(at: migDir) == nil }()
+      && SettingsFile.load(at: migFile).htmlScripts == "ask")
+// The preview's "Run them?" bar: an answer is taken only while the setting asks, and only local or off.
+check("the preview's answer: refused for anything but local or off", SettingsFile.answerScripts("on", at: migFile) == nil && SettingsFile.answerScripts("ask", at: migFile) == nil
+      && SettingsFile.load(at: migFile).htmlScripts == "ask")
+if case .success(let s)? = SettingsFile.answerScripts("local", at: migFile) {
+    check("the preview's answer: Run sets local while it asks", s.htmlScripts == "local" && SettingsFile.load(at: migFile).htmlScripts == "local")
+} else { check("the preview's answer: Run sets local while it asks", false) }
+_ = SettingsFile.update(["htmlScripts": "off"], at: migFile)
+check("the preview's answer: refused once the setting no longer asks, so it can never turn scripts back on",
+      SettingsFile.answerScripts("local", at: migFile) == nil && SettingsFile.load(at: migFile).htmlScripts == "off")
+_ = SettingsFile.update(["htmlScripts": "ask"], at: migFile)
+if case .success(let s)? = SettingsFile.answerScripts("off", at: migFile) {
+    check("the preview's answer: Never sets off", s.htmlScripts == "off")
+} else { check("the preview's answer: Never sets off", false) }
 // Settings the window no longer shows keep what the user chose, through the migration.
 let hiddenValues: [String: Any] = ["monoFont": "menlo", "lineHeight": 1.8, "codeTheme": "nord", "minimalChrome": true, "toc": "off", "frontMatter": "raw",
                              "math": false, "mermaid": false, "mdLinks": "editor", "folderReadmeFirst": false, "sidebarKeys": false, "folderMode": false]
@@ -764,7 +799,7 @@ try! JSONSerialization.data(withJSONObject: resetRaw).write(to: resetFile)
 if case .success(let r) = SettingsFile.update(Settings.resetPatch(), at: resetFile) {
     var expected = Settings(); expected.spaceHelper = true; expected.welcomeShown = true; expected.helperOffered = true
     check("Reset to Defaults resets every key, the settings.json-only ones too, and keeps the helper and the welcome sheet's state", r == expected)
-    check("Reset to Defaults turns inline editing back on and remote images off", r.inlineEditing && !r.remoteImages && r.htmlScripts == "local")
+    check("Reset to Defaults turns inline editing back on, remote images off and HTML scripts back to asking", r.inlineEditing && !r.remoteImages && r.htmlScripts == "ask")
 } else { check("Reset to Defaults writes", false) }
 let afterReset = (try! JSONSerialization.jsonObject(with: Data(contentsOf: resetFile))) as! [String: Any]
 check("Reset to Defaults keeps keys a newer version wrote", afterReset["futureKey"] as? String == "kept")

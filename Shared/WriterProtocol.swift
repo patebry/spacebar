@@ -37,6 +37,9 @@ protocol SpacebarWriterProtocol {
     func ensureSupportDir(reply: @escaping (Bool) -> Void)
     /// Merges a JSON object of settings into settings.json atomically. Only Settings.panelKeys are taken, each sanitized.
     func updateSettings(_ patch: Data, reply: @escaping (Bool) -> Void)
+    /// The preview's "Run scripts?" bar for an HTML file: `value` "local" or "off" into htmlScripts, taken only while the setting
+    /// is "ask" (SettingsFile.answerScripts).
+    func answerScripts(_ value: String, reply: @escaping (Bool) -> Void)
     /// Opens the host app's settings window on `tab` (one of SettingsTab.all).
     func openSettings(_ tab: String, reply: @escaping (Bool) -> Void)
     /// What to offer for the newest release (an Updates.Offer as JSON), or nil when the update check is off: the version is

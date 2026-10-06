@@ -42,7 +42,9 @@ struct Settings: Codable, Equatable {
     var mermaid = true
     var rawHTML = "sanitized"
     var remoteImages = false
-    var htmlScripts = "local"
+    /// Scripts in an HTML file made on this Mac: "ask" shows it without them and offers to run them, "local" runs them, "off"
+    /// never does. A downloaded file never runs them.
+    var htmlScripts = "ask"
     var checkUpdates = true
     var welcomeShown = false
     /// Space in Finder opens spacebar's own panel through the helper (Settings, or the welcome sheet).
@@ -71,7 +73,9 @@ struct Settings: Codable, Equatable {
     /// always the old default, which the window could no longer turn off.
     /// 5: README first became off by default, so the sidebar lists a folder as Finder does; a file from before is read and
     /// rewritten with it off, its "on" being the old default.
-    static let currentVersion = 5
+    /// 6: HTML scripts became "ask" by default; a file from before that stores "local", the old default, is read and rewritten
+    /// as "ask". A "local" chosen afterwards stays.
+    static let currentVersion = 6
     static func fileVersion(_ raw: [String: Any]) -> Int { (raw["version"] as? NSNumber)?.intValue ?? 1 }
 
     static let themes = ["apple", "github", "paper", "solarized", "nord", "contrast"]
@@ -92,7 +96,7 @@ struct Settings: Codable, Equatable {
         "mdLinks": ["preview", "editor"],
         "webLinks": ["browser"],
         "rawHTML": ["off", "sanitized"],
-        "htmlScripts": ["local", "off"],
+        "htmlScripts": ["ask", "local", "off"],
     ]
     static let intRanges: [String: ClosedRange<Int>] = ["fontSize": 12...24, "sidebarWidth": 160...480]
     static let doubleRanges: [String: ClosedRange<Double>] = ["lineHeight": 1.2...2.0]
@@ -182,6 +186,7 @@ struct Settings: Codable, Equatable {
         if !raw.isEmpty, Self.fileVersion(raw) < 2 { d["folderMode"] = true }
         if !raw.isEmpty, Self.fileVersion(raw) < 4 { d["stats"] = false }
         if !raw.isEmpty, Self.fileVersion(raw) < 5 { d["folderReadmeFirst"] = false }
+        if !raw.isEmpty, Self.fileVersion(raw) < 6, d["htmlScripts"] as? String == "local" { d["htmlScripts"] = "ask" }
         let data = try! JSONSerialization.data(withJSONObject: d)
         self = (try? JSONDecoder().decode(Settings.self, from: data)) ?? Settings()
     }
@@ -317,9 +322,11 @@ enum SettingsFile {
     }
 
     /// Merges `patch` (only keys in `allowed`, each sanitized) into the file and writes it atomically. Keys the patch does not
-    /// name, known or not, are kept as they are. Returns the settings now on disk.
+    /// name, known or not, are kept as they are. `when`, checked on the settings read under the lock, must hold for the patch
+    /// to be taken. Returns the settings now on disk.
     @discardableResult
-    static func update(_ patch: [String: Any], allowed: Set<String> = Settings.allKeys, at url: URL = url) -> Result<Settings, Failure> {
+    static func update(_ patch: [String: Any], allowed: Set<String> = Settings.allKeys, at url: URL = url,
+                       when: ((Settings) -> Bool)? = nil) -> Result<Settings, Failure> {
         // The host app and each extension's writer update the same file; the lock keeps one read-merge-write from losing another's.
         let lockFD = open(url.deletingLastPathComponent().appendingPathComponent(".settings.lock").path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
         if lockFD >= 0 { flock(lockFD, LOCK_EX) }
@@ -335,11 +342,13 @@ enum SettingsFile {
             // No file yet: nothing was written under an older default.
             if !obj.isEmpty, Settings.fileVersion(obj) < 4, obj["stats"] as? Bool == true { obj["stats"] = false }
             if !obj.isEmpty, Settings.fileVersion(obj) < 5, obj["folderReadmeFirst"] as? Bool == true { obj["folderReadmeFirst"] = false }
+            if !obj.isEmpty, Settings.fileVersion(obj) < 6, obj["htmlScripts"] as? String == "local" { obj["htmlScripts"] = "ask" }
             if Settings.fileVersion(obj) < 2 { obj["folderMode"] = true }
             obj["version"] = Settings.currentVersion
             changed = true
         }
-        for (k, v) in patch where allowed.contains(k) {
+        let take = when?(Settings(dictionary: obj)) ?? true
+        for (k, v) in patch where take && allowed.contains(k) {
             guard let clean = Settings.sanitize(k, v) else { continue }
             obj[k] = clean
             changed = true
@@ -365,6 +374,15 @@ enum SettingsFile {
     static func updateFromPanel(_ patch: Data, at url: URL = url) -> Result<Settings, Failure>? {
         guard patch.count <= 4096, let obj = (try? JSONSerialization.jsonObject(with: patch)) as? [String: Any] else { return nil }
         return update(obj, allowed: Settings.panelKeys, at: url)
+    }
+
+    /// The writer's `answerScripts`: the preview's "Run scripts?" bar sets htmlScripts to "local" or "off", and only while it is
+    /// "ask", so the preview can answer the question once but never turn scripts back on. Nil when refused.
+    static func answerScripts(_ value: String, at url: URL = url) -> Result<Settings, Failure>? {
+        guard ["local", "off"].contains(value) else { return nil }
+        let r = update(["htmlScripts": value], at: url, when: { $0.htmlScripts == "ask" })
+        if case .success(let s) = r, s.htmlScripts != value { return nil }
+        return r
     }
 
     /// Creates the support folder, themes/, and a settings.json of defaults when none exists. An existing file is never touched.

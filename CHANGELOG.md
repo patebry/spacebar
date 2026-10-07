@@ -119,6 +119,9 @@ Each release's notes on GitHub also list its commits. This file keeps what chang
 - Welcome explains both macOS prompts and links SECURITY.md; the sample folder is `~/spacebar Sample Folder`, with a picture
   and a PDF.
 - Focus rings and labels throughout for keyboard and VoiceOver users.
+- **Settings scrolls again.** With Advanced open the page was taller than the screen and the window grew past its
+  bottom, so the last settings could not be reached. The window now stops at its height limit, stays on screen, and the
+  page scrolls.
 - **Scripts in HTML files: Ask** is the new default. An HTML file made on this Mac opens without its scripts, and a bar
   above it offers **Run for files made on this Mac** or **Never**; a page with no scripts shows no bar. Off stays; Files
   made on this Mac becomes Ask once. Downloaded files still never run scripts. An older build reads Ask as its default,

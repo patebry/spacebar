@@ -204,6 +204,8 @@ cp "$WRITER_BIN" "$VIEWER_XPC/Contents/MacOS/$WRITER_EXE"
 cp -R Preview/web "$VIEWER_DIR/Contents/Resources/web"
 # What spacebar claims: Apple's previews in the panel are never asked for these (FileTypes.appleQuickLookType).
 cp LICENSE THIRD_PARTY_NOTICES.md scripts/quicklook-types.txt "$VIEWER_DIR/Contents/Resources/"
+# Its windows put it in the Dock and the app switcher.
+if [ -f App/AppIcon.icns ]; then cp App/AppIcon.icns "$VIEWER_DIR/Contents/Resources/AppIcon.icns"; fi
 plist Viewer/Info.plist "$VIEWER_DIR/Contents/Info.plist" "$VIEWER_ID" "$VIEWER_EXE" "$APP_NAME"
 plist Writer/Info.plist "$VIEWER_XPC/Contents/Info.plist" "$VIEWER_ID"
 codesign "${SIGN_ARGS[@]}" "$VIEWER_XPC"

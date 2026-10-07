@@ -26,6 +26,10 @@ Markdown is rendered properly (tables, task lists, highlighted code, math and Me
 vaults read as they do in Obsidian. Word, Keynote and other Office and iWork files show in Apple's own preview inside the
 panel. Apps and packages stay with Apple's Quick Look, and ⌘Y still opens it.
 
+Guides: [Markdown in Quick Look](https://spacebar.patebryant.com/quick-look-markdown/), [folder preview](https://spacebar.patebryant.com/quick-look-folder/),
+[Obsidian vaults](https://spacebar.patebryant.com/obsidian-quick-look/), [HTML files](https://spacebar.patebryant.com/preview-html-mac/), [Mermaid](https://spacebar.patebryant.com/mermaid-preview-mac/),
+[CSV](https://spacebar.patebryant.com/quick-look-csv/), [HEIC and RAW photos](https://spacebar.patebryant.com/preview-heic-raw-mac/) and [every file type](https://spacebar.patebryant.com/file-types/).
+
 ### What Space opens in spacebar
 
 In Finder, Space opens spacebar for Markdown, folders, code and scripts, JSON, YAML, XML, TOML, property lists, logs,

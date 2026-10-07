@@ -118,7 +118,8 @@ enum Decision {
     /// An app came forward. Another app hides an open panel, as it hides Apple's Quick Look, and closes a show still on its way.
     /// Finder coming back within `suspendLimit` has its selection read (`resumes`) before anything comes back.
     static func activated(isFinder: Bool, open: Bool, pending: Bool, suspendedFor age: TimeInterval?) -> ActivationAction {
-        if !isFinder { return pending ? .close : open ? .suspend : .none }
+        // The window stays, as an app's window does, when another app comes forward; a show still on its way is dropped.
+        if !isFinder { return pending ? .close : .none }
         guard let age, !open, !pending else { return .none }
         return age < suspendLimit ? .check : .forget
     }
@@ -231,15 +232,10 @@ struct KeyRoute {
             return .swallow
         }
         // Only a Space on its way to Finder: a non-activating panel of another app (a launcher, a password manager) can have
-        // the keys while Finder stays frontmost.
-        guard panel.open else { return Decision.wantsSpace(e) && e.targetPid == panel.finderPid && e.targetPid > 0 ? .space : .pass }
-        guard mine, !(panel.textFocus && e.targetPid == panel.finderPid) else { return .pass }
-        if Self.closes(e) {
-            held.insert(e.code)
-            return panel.popover && e.code == KeyCode.escape ? .forward(HelperKeys.escape) : .close
-        }
-        if let name = Self.forwarded(e, sidebarKeys: panel.sidebarKeys) { held.insert(e.code); return .forward(name) }
-        return .pass
+        // the keys while Finder stays frontmost. The viewer's windows are ordinary windows: Finder keeps every other key (its
+        // arrows move the selection, which the newest window follows), and a window clicked into takes its own keys.
+        guard Decision.wantsSpace(e), e.targetPid == panel.finderPid, e.targetPid > 0, !(panel.open && panel.textFocus) else { return .pass }
+        return .space
     }
 
     /// Space, Esc, ⌘W and ⌘. close the panel in one press; Esc closes a popover of the page first, while one is open.

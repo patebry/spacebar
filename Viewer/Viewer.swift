@@ -4,16 +4,15 @@ import os
 
 let vlog = Logger(subsystem: logSubsystem, category: "viewer")
 
-/// Floats over Finder without taking the keyboard: Finder stays key, and the helper routes its keys here.
+/// An ordinary window: it opens over Finder without taking the keyboard, so Finder's arrows move the selection it follows,
+/// and once clicked into it is the active app's key window and takes its own keys (`keyDown` → `Viewer.route`).
 /// Its traffic lights sit centred in the page's top row beside the sidebar button, as Finder's sit in its toolbar; AppKit lays
 /// them out for a 28 pt title bar, so they are moved after each of its layouts. The web view takes every click in the title
 /// bar and never moves the window, so the page says when the pointer is over empty chrome (`dragZone`), and a press there
 /// drags the panel.
 final class ViewerPanel: NSPanel {
-    override var canBecomeKey: Bool { false }
-    override var canBecomeMain: Bool { false }
-    /// Drawn as the window the user is looking at, coloured traffic lights included, though Finder keeps the keyboard.
-    @objc func hasKeyAppearance() -> Bool { true }
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
     /// The page's top row: `--bar-h` in base.css.
     static let rowHeight: CGFloat = 40
     static let lightsLeft: CGFloat = 12
@@ -33,8 +32,6 @@ final class ViewerPanel: NSPanel {
                 DispatchQueue.main.async { self?.placeLights() }
             }
         }
-        // The panel cannot minimize: no dead yellow button, and zoom takes its place.
-        standardWindowButton(.miniaturizeButton)?.isHidden = true
         placeLights()
     }
 
@@ -48,9 +45,7 @@ final class ViewerPanel: NSPanel {
                 b.setFrameOrigin(NSPoint(x: b.frame.minX + dx, y: b.frame.minY + (b.superview?.isFlipped == true ? -dy : dy)))
             }
         }
-        if let zoom = standardWindowButton(.zoomButton), abs(zoom.frame.minX - mini.frame.minX) > 0.5 {
-            zoom.setFrameOrigin(NSPoint(x: mini.frame.minX, y: zoom.frame.minY))
-        }
+        _ = mini
     }
 
     /// A plain press on the page's empty chrome: not on a traffic light, a native pane over the page, or the window's edges,
@@ -63,14 +58,29 @@ final class ViewerPanel: NSPanel {
     }
 
     override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown, isKeyWindow, let name = Self.keyName(event), Viewer.shared.windowKey(name, isRepeat: event.isARepeat) { return }
         guard drags(event) else { return super.sendEvent(event) }
         if event.clickCount == 2 {
-            // As a title bar: the double-click action in Desktop & Dock settings. The panel cannot minimize.
+            // As a title bar: the double-click action in Desktop & Dock settings.
             let action = UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") ?? "Maximize"
-            if action == "Maximize" || action == "Fill" { zoom(nil) }
+            if action == "Maximize" || action == "Fill" { zoom(nil) } else if action == "Minimize" { miniaturize(nil) }
         } else if event.clickCount < 2 {
             performDrag(with: event)
         }
+    }
+
+    /// The name the helper would have sent for this key (`KeyRoute`), so a key typed in the window does what it did when the
+    /// helper routed it from Finder. Esc and ⌘W are the window's: Esc closes a popover, ⌘W the window.
+    static func keyName(_ e: NSEvent) -> String? {
+        var mods: HelperMods = []
+        if e.modifierFlags.contains(.command) { mods.insert(.command) }
+        if e.modifierFlags.contains(.option) { mods.insert(.option) }
+        if e.modifierFlags.contains(.control) { mods.insert(.control) }
+        if e.modifierFlags.contains(.shift) { mods.insert(.shift) }
+        let k = KeyEvent(code: Int64(e.keyCode), chars: (e.charactersIgnoringModifiers ?? "").lowercased(), isRepeat: e.isARepeat, mods: mods)
+        if mods.isEmpty, k.code == KeyCode.escape { return HelperKeys.escape }
+        if mods == .command, k.chars == "w" { return "closeWindow" }
+        return KeyRoute.forwarded(k, sidebarKeys: true)
     }
 
     override func orderOut(_ sender: Any?) {
@@ -176,15 +186,15 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
 
     override init() {
         panel = ViewerPanel(contentRect: NSRect(x: 0, y: 0, width: 900, height: 640),
-                            styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel], backing: .buffered, defer: false)
+                            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         super.init()
         panel.titlebarAppearsTransparent = true
         panel.titleVisibility = .hidden
-        panel.level = .floating
+        panel.level = .normal
         panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace, .transient, .ignoresCycle]
+        panel.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
         panel.isReleasedWhenClosed = false
-        panel.becomesKeyOnlyIfNeeded = true
+        panel.becomesKeyOnlyIfNeeded = false
         panel.minSize = NSSize(width: 480, height: 320)
         panel.delegate = self
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
@@ -273,6 +283,28 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
         DispatchQueue.main.async { if self.open { self.route(name, isRepeat: isRepeat) } }
     }
 
+    func focus() {
+        DispatchQueue.main.async {
+            guard self.open else { return }
+            if self.panel.isMiniaturized { self.panel.deminiaturize(nil) }
+            NSApp.activate(ignoringOtherApps: true)
+            self.panel.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    /// A key typed in the window, which is key: what the helper would have routed from Finder. False leaves it to the page.
+    func windowKey(_ name: String, isRepeat: Bool) -> Bool {
+        guard open, !textSession else { return false }
+        if name == "closeWindow" { panel.performClose(nil); return true }
+        if name == HelperKeys.escape {
+            guard popover else { return false }
+            route(name, isRepeat: isRepeat)
+            return true
+        }
+        route(name, isRepeat: isRepeat)
+        return true
+    }
+
     func close() {
         DispatchQueue.main.async {
             self.hide(tell: true)
@@ -339,6 +371,10 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
         controller.spaced = Set(urls.map { $0.resolvingSymlinksInPath().path })
         controller.onReady = { [weak self] _ in self?.ready(id) }
         controller.onDecline = { [weak self] why in self?.decline(id, why) }
+        if open, !panel.isVisible || panel.isMiniaturized {
+            if panel.isMiniaturized { panel.deminiaturize(nil) }
+            panel.orderFrontRegardless()
+        }
         if !open {
             place()
             // In the window but invisible until the page has painted, so WebKit draws and nothing flashes.
@@ -363,6 +399,8 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
 
     /// Makes the panel, already ordered in, visible and tells the helper once the window server has it.
     private func reveal(_ id: Int) {
+        // In the Dock and ⌘Tab while a window is open, as an app is.
+        NSApp.setActivationPolicy(.regular)
         controller.hostWillAppear()
         panel.alphaValue = 1
         panel.ignoresMouseEvents = false
@@ -414,6 +452,7 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
             panel.orderOut(nil)
         }
         if tell && was { helper()?.panelState(false, requestID: id, windowNumber: 0) }
+        if was { NSApp.setActivationPolicy(.accessory) }
         armIdle()
     }
 

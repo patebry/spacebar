@@ -183,6 +183,8 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
     var textSession = false
     /// One of the page's popovers is open, as the page last said: Esc closes it.
     private(set) var popover = false
+    /// Gestures the helper handed over that reached this window while open.
+    private(set) var gesturesSent = 0
 
     override init() {
         panel = ViewerPanel(contentRect: NSRect(x: 0, y: 0, width: 900, height: 640),
@@ -386,6 +388,7 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
     /// Rebuilds a gesture the helper handed over for this window, at the pointer's place in it, and hands it to the window,
     /// which gives it to the view under the pointer: NSApp.sendEvent would drop it while the viewer is not active.
     func sendGesture(_ data: Data) {
+        gesturesSent += 1
         guard let cg = CGEvent(withDataAllocator: nil, data: data as CFData), [29, 30, 32].contains(cg.type.rawValue),
               let place = Self.setWindowLocation, let top = NSScreen.screens.first?.frame.maxY else { return }
         let at = cg.location, f = panel.frame
@@ -524,7 +527,7 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
     // MARK: Windows
 
     /// A closed window to reuse, else a new one.
-    private func freshWindow() -> ViewerWindow {
+    func freshWindow() -> ViewerWindow {
         if let w = windows.first(where: { !$0.open && $0.request == 0 && !$0.suspended }) { return w }
         let w = ViewerWindow()
         windows.append(w)

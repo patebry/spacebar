@@ -23,11 +23,13 @@ NSApp.setActivationPolicy(.accessory)
 let first = NSRect(x: -20000, y: -20000, width: 1000, height: 600)
 Viewer.parkedFrame = first
 let viewer = Viewer.shared
-let panel = viewer.panel
-OffScreen.keepDrawing(WebHost.shared.web)
+/// The spare a Space opens in, kept first among the spares, so every Space here reuses it.
+let win = viewer.freshWindow()
+let panel = win.panel
+OffScreen.keepDrawing(win.host.web)
 
-spin(until: 15) { WebHost.shared.ready }
-guard WebHost.shared.ready else { print("FAIL window: the page never became ready"); exit(1) }
+spin(until: 15) { win.host.ready }
+guard win.host.ready else { print("FAIL window: the page never became ready"); exit(1) }
 
 let dir = URL(fileURLWithPath: CommandLine.arguments[1])
 let notes = dir.appendingPathComponent("Notes.md"), other = dir.appendingPathComponent("Other.md")
@@ -38,7 +40,8 @@ var shown = 0
 func show(_ url: URL) {
     shown += 1
     let id = shown
-    viewer.show([url.path], requestID: id) { _ in }
+    // A Space when closed; with the window open, Finder's selection moving to the file, which it follows.
+    if viewer.current === win, win.open { viewer.show([url.path], requestID: id) { _ in } } else { viewer.open([url.path], requestID: id) { _ in } }
     spin(until: 5) { panel.isVisible && panel.alphaValue == 1 }
     spin(0.5)
 }
@@ -49,12 +52,14 @@ let sizing = (panel.contentView?.constraints ?? []).filter { ($0.identifier ?? "
 check("the content view has no preferred-size constraints", sizing.isEmpty, sizing)
 check("the window is named for VoiceOver by the file shown", panel.title == "Notes.md", panel.title)
 let closeB = panel.standardWindowButton(.closeButton)!, mini = panel.standardWindowButton(.miniaturizeButton)!, zoom = panel.standardWindowButton(.zoomButton)!
-check("minimize, which the panel cannot do, is hidden", mini.isHidden && !closeB.isHidden && !zoom.isHidden)
-check("zoom sits where minimize was", abs(zoom.frame.minX - mini.frame.minX) < 0.5 && zoom.frame.minX > closeB.frame.maxX, (closeB.frame, zoom.frame))
+check("close, minimize and zoom are all shown", !mini.isHidden && !closeB.isHidden && !zoom.isHidden)
+check("the lights in order: close, minimize, zoom", mini.frame.minX > closeB.frame.maxX && zoom.frame.minX > mini.frame.maxX, (closeB.frame, mini.frame, zoom.frame))
 if let img = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(panel.windowNumber), [.boundsIgnoreFraming]) {
     let rep = NSBitmapImageRep(cgImage: img), c = closeB.convert(closeB.bounds, to: nil), scale = CGFloat(rep.pixelsWide) / panel.frame.width
     let px = rep.colorAt(x: Int(c.midX * scale), y: Int((panel.frame.height - c.midY) * scale))?.usingColorSpace(.sRGB)
-    check("the close button is drawn red, not inactive grey", px.map { $0.redComponent > 0.7 && $0.greenComponent < 0.55 } == true, px ?? "no pixel")
+    // Opened by a Space, the window is not key (Finder keeps the keyboard), so its lights are drawn inactive, as any
+    // background window's are.
+    check("not key: the close button is drawn inactive grey", !panel.isKeyWindow && px.map { abs($0.redComponent - $0.greenComponent) < 0.1 } == true, px ?? "no pixel")
 } else {
     print("SKIP window: no window image (screen recording not allowed?): light colour not checked")
 }
@@ -87,7 +92,7 @@ spin(0.3)
 // gesture events, at a global point over the panel, never through NSApp.sendEvent, which drops them in an app that is not active.
 func js(_ source: String) -> Any? {
     var out: Any?, done = false
-    WebHost.shared.web.evaluateJavaScript(source) { r, _ in out = r; done = true }
+    win.host.web.evaluateJavaScript(source) { r, _ in out = r; done = true }
     spin(until: 3) { done }
     return out
 }
@@ -158,7 +163,7 @@ func anchored(_ n: String, _ before: CGPoint?, _ after: CGPoint?) {
 // The page's own image view: the point under the pointer as a fraction of the <img>'s box.
 show(png)
 spin(until: 3) { zoomLabel() > 0 }
-let web = WebHost.shared.web
+let web = win.host.web
 func imgBox() -> CGRect? {
     guard let r = js("(() => { const i = document.querySelector('#doc .img-stage img'); if (!i) return null; const b = i.getBoundingClientRect(); return [b.left, b.top, b.width, b.height]; })()") as? [Double], r.count == 4 else { return nil }
     return CGRect(x: r[0], y: r[1], width: r[2], height: r[3])
@@ -178,10 +183,10 @@ func imgFraction(_ p: NSPoint) -> CGPoint? {
 }
 if let box = imgBox() {
     let at = windowPoint(css: CGPoint(x: box.minX + box.width * 0.25, y: box.minY + box.height * 0.25))
-    let before = zoomLabel(), sent = viewer.gesturesSent, under = imgFraction(at)
+    let before = zoomLabel(), sent = win.gesturesSent, under = imgFraction(at)
     pinchIn(at: at)
     check("a pinch handed over by the helper zooms a PNG (the page's own image view)", before > 0 && zoomLabel() > before, "\(before)% -> \(zoomLabel())%")
-    check("each event of the pinch reached the open panel", viewer.gesturesSent - sent == 7, "\(viewer.gesturesSent - sent)")
+    check("each event of the pinch reached the open panel", win.gesturesSent - sent == 7, "\(win.gesturesSent - sent)")
     anchored("a PNG", under, imgFraction(at))
 } else {
     check("a PNG: the image's box", false, "no #doc .img-stage img")
@@ -218,10 +223,10 @@ if let pv {
 }
 viewer.close()
 spin(0.5)
-let sentClosed = viewer.gesturesSent
+let sentClosed = win.gesturesSent
 pinchIn(at: NSPoint(x: panel.frame.width / 2, y: panel.frame.height / 2))
-check("a gesture with the panel closed reaches nothing", viewer.gesturesSent == sentClosed && (pv?.scaleFactor ?? 0) == scaleOpen,
-      "\(viewer.gesturesSent - sentClosed) sent, scale \(scaleOpen) -> \(pv?.scaleFactor ?? 0)")
+check("a gesture with the panel closed reaches nothing", win.gesturesSent == sentClosed && (pv?.scaleFactor ?? 0) == scaleOpen,
+      "\(win.gesturesSent - sentClosed) sent, scale \(scaleOpen) -> \(pv?.scaleFactor ?? 0)")
 
 print(failures == 0 ? "panel window: all passed" : "panel window: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

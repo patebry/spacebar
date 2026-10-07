@@ -97,13 +97,15 @@ OffScreen.install()
 NSApp.setActivationPolicy(.accessory)
 Viewer.parkedFrame = NSRect(x: -20000, y: -20000, width: 1100, height: 760)
 let viewer = Viewer.shared
+/// The spare a Space opens in, kept first among the spares, so every Space here reuses it and its hooked page.
+let win = viewer.freshWindow()
 
 /// Stands between the page and WebHost on the "sb" handler: when each render's DOM is drawn ("painted") and drawn to a frame
 /// ("rendered", from requestAnimationFrame, which a locked screen may never run).
 final class Recorder: NSObject, WKScriptMessageHandler {
     var painted: UInt64?, rendered: UInt64?
     func userContentController(_ ucc: WKUserContentController, didReceive m: WKScriptMessage) {
-        WebHost.shared.userContentController(ucc, didReceive: m)
+        win.host.userContentController(ucc, didReceive: m)
         guard let b = m.body as? [String: Any], let type = b["type"] as? String else { return }
         if type == "painted" {
             // "Loading…" is drawn for a slow read; only the file's own view counts.
@@ -114,10 +116,10 @@ final class Recorder: NSObject, WKScriptMessageHandler {
     }
 }
 let rec = Recorder()
-let web = WebHost.shared.web
+let web = win.host.web
 OffScreen.keepDrawing(web)
-spin(until: 15) { WebHost.shared.ready }
-guard WebHost.shared.ready else { print("FAIL the page never became ready"); exit(1) }
+spin(until: 15) { win.host.ready }
+guard win.host.ready else { print("FAIL the page never became ready"); exit(1) }
 web.evaluateJavaScript("sb.warm && sb.warm(); 0")
 web.configuration.userContentController.removeScriptMessageHandler(forName: "sb")
 web.configuration.userContentController.add(rec, name: "sb")
@@ -131,7 +133,7 @@ func js(_ src: String, timeout: Double = 10) -> Any? {
 }
 
 func nativeUp() -> Bool {
-    var stack = viewer.panel.contentView.map { [$0] } ?? []
+    var stack = win.panel.contentView.map { [$0] } ?? []
     while let v = stack.popLast() {
         stack += v.subviews
         if v.isHidden || v.superview == nil { continue }
@@ -194,7 +196,7 @@ func show(_ c: Case) -> Sample {
     let base = footprint()
     watch.start()
     let t0 = now()
-    DispatchQueue.global(qos: .userInteractive).async { viewer.show([url.path], requestID: id) { _ in } }
+    DispatchQueue.global(qos: .userInteractive).async { viewer.open([url.path], requestID: id) { _ in } }
     var upAt: UInt64?
     var asking = false, lastAsk: UInt64 = 0
     spin(until: 20) {
@@ -214,6 +216,7 @@ func show(_ c: Case) -> Sample {
         }
         return upAt != nil
     }
+    if viewer.current !== win { print("FAIL \(c.name): the Space opened in another window than the hooked one"); exit(1) }
     // The writer's listing failed: the archive's card.
     let unlisted = upAt == nil && (js("document.getElementById('doc').textContent.includes('contents can’t be listed')") as? Bool ?? false)
     if upAt == nil, env["DEBUG"] != nil {
@@ -280,12 +283,12 @@ if env["ONLY"].map({ $0 == "pairs" }) ?? true {
         if busy {
             // The page's thread is held for 4 s; each show's render waits behind it, as behind a slow render or a page load.
             web.evaluateJavaScript("(() => { const end = Date.now() + 4000; while (Date.now() < end); })(); 0")
-            DispatchQueue.global(qos: .userInteractive).async { viewer.show([first.path], requestID: id - 1) { _ in } }
+            DispatchQueue.global(qos: .userInteractive).async { viewer.open([first.path], requestID: id - 1) { _ in } }
             spin(1.5)
             DispatchQueue.global(qos: .userInteractive).async { viewer.show([second.path], requestID: id) { _ in } }
         } else {
             DispatchQueue.global(qos: .userInteractive).async {
-                viewer.show([first.path], requestID: id - 1) { _ in }
+                viewer.open([first.path], requestID: id - 1) { _ in }
                 viewer.show([second.path], requestID: id) { _ in }
             }
         }
@@ -298,6 +301,7 @@ if env["ONLY"].map({ $0 == "pairs" }) ?? true {
             return shown
         }
         check("\(a), then \(b)\(busy ? " while the page is busy" : " at once"): \(b) is drawn", shown)
+        check("\(a), then \(b): one window, the one the Space opened", viewer.current === win && viewer.windows.filter(\.open).count == 1)
         viewer.close()
         spin(0.8)
     }

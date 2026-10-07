@@ -192,7 +192,8 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
         panel.titleVisibility = .hidden
         panel.level = .normal
         panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
+        // The green button takes it full screen, in its own space, as Preview's windows do.
+        panel.collectionBehavior = [.fullScreenPrimary]
         panel.isReleasedWhenClosed = false
         panel.becomesKeyOnlyIfNeeded = false
         panel.minSize = NSSize(width: 480, height: 320)

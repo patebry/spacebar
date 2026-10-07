@@ -222,8 +222,6 @@ struct KeyRoute {
     mutating func route(_ e: KeyEvent, panel: PanelContext) -> Route {
         if e.tagged { return .pass }
         if !e.down { return held.remove(e.code) != nil ? .swallow : .pass }
-        // Every key is the typing's, Esc too: the session ends itself, and the next Esc or Space closes.
-        if panel.open, panel.textSession { held.remove(e.code); return .pass }
         let mine = panel.open && (e.targetPid == panel.finderPid || (panel.viewerPid > 0 && e.targetPid == panel.viewerPid))
         // A fresh press of a held key means its key-up was missed: route it as new.
         if held.contains(e.code), !e.isRepeat { held.remove(e.code) }

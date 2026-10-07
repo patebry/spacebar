@@ -557,6 +557,11 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private func fail(_ id: Int, _ why: String) {
         guard let p = pending, p.id == id else { return }
         pending = nil
+        // A Space brought a window forward (minimized, full screen, on another space) and the check ran mid-animation: the
+        // window is the user's now, so nothing is closed and Space is not handed to Quick Look.
+        if viewerPid > 0, NSWorkspace.shared.frontmostApplication?.processIdentifier == viewerPid {
+            return log.info("show \(id) not confirmed (\(why, privacy: .public)): viewer in front, left open")
+        }
         if !panelOpen { text.clear(); pagePopover.clear() }
         log.info("show \(id) failed: \(why, privacy: .public)")
         if id == restoring {

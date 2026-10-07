@@ -135,7 +135,7 @@ final class PanelController: PreviewController {
 
     override func writerKeysChanged(_ held: Bool) {
         owner?.textSession = held
-        Viewer.shared.tellTextSession(held)
+        if owner === Viewer.shared.current { Viewer.shared.tellTextSession(held) }
     }
 
     override func handle(_ type: String, _ body: [String: Any]) {
@@ -214,7 +214,7 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
 
     /// The selection this window was opened for, resolved as `spaced` holds it.
     func shows(_ urls: [URL]) -> Bool {
-        open && !controller.spaced.isEmpty && controller.spaced == Set(urls.map { $0.resolvingSymlinksInPath().path })
+        (open || request != 0) && !controller.spaced.isEmpty && controller.spaced == Set(urls.map { $0.resolvingSymlinksInPath().path })
     }
 
     func focus() {
@@ -279,7 +279,9 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
     /// Takes request `id` for a window already showing its file: the helper's following moves to it.
     func adopt(_ id: Int) {
         request = id
-        announce(id)
+        controller.onReady = { [weak self] _ in self?.ready(id) }
+        controller.onDecline = { [weak self] why in self?.decline(id, why) }
+        if open { announce(id) }
     }
 
     private func decline(_ id: Int, _ why: String) {
@@ -314,6 +316,8 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
         request = 0
         if blank, open || suspended { controller.hostDisappearing() }
         let was = open || panel.isVisible
+        // A window kept for reuse must not come back as an empty full-screen space.
+        if panel.styleMask.contains(.fullScreen) { panel.toggleFullScreen(nil) }
         open = false
         popover = false
         textSession = false
@@ -491,12 +495,13 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
         conn = nil
         current = nil
         retries += 1
-        guard retries <= 5 else {
-            if windows.contains(where: { $0.open }) { return vlog.info("helper unreachable: windows stay open") }
+        // Open windows keep the viewer going, and it keeps trying, so Space reaches it again once the helper is back.
+        let windowsOpen = windows.contains { $0.open }
+        guard retries <= 5 || windowsOpen else {
             vlog.info("helper unreachable: exiting")
             exit(0)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + Double(retries)) { self.connect() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double(min(retries, 5))) { self.connect() }
     }
 
     func helper() -> SpacebarHelperProtocol? {
@@ -530,6 +535,8 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
     /// loaded for the next Space.
     func windowsChanged() {
         let any = windows.contains { $0.open || $0.request != 0 }
+        // The last window closed while the viewer was active: the app behind it, Finder usually, gets the keyboard back.
+        if !any, NSApp.isActive { NSApp.hide(nil) }
         NSApp.setActivationPolicy(any ? .regular : .accessory)
         if any { idle?.cancel() } else { armIdle() }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
@@ -545,11 +552,12 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
             popoverTold = false
             if tell { helper()?.panelState(false, requestID: request, windowNumber: w.panel.windowNumber) }
         }
-        let spares = windows.filter { !$0.open && $0.request == 0 && !$0.suspended }
-        if spares.count > Self.spareLimit, let drop = spares.first(where: { $0 !== w }) ?? spares.first {
-            // After its blanking has been drawn and it has been ordered out.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                guard let self, !drop.open, drop.request == 0 else { return }
+        // After its blanking has been drawn and it has been ordered out; counted again then, so two closes drop two.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self else { return }
+            let spares = self.windows.filter { !$0.open && $0.request == 0 && !$0.suspended }
+            for drop in spares.dropFirst(Self.spareLimit) {
+                drop.host.tearDown()
                 self.windows.removeAll { $0 === drop }
             }
         }
@@ -563,10 +571,9 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
         // Answered from the main thread: a reply proves a window can be drawn now, not just that the process is alive.
         DispatchQueue.main.async {
             reply(true)
-            let urls = Self.urls(paths)
-            let w = self.current.flatMap { $0.open || $0.request != 0 ? $0 : nil } ?? self.freshWindow()
-            self.current = w
-            w.present(urls, id: requestID)
+            // The window it followed closed meanwhile: the selection change opens nothing.
+            guard let w = self.current, w.open || w.request != 0 else { return self.helper()?.declined(requestID) ?? () }
+            w.present(Self.urls(paths), id: requestID)
             self.windowsChanged()
         }
     }
@@ -580,7 +587,7 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
             if let w = self.windows.first(where: { $0.shows(urls) }) {
                 self.current = w
                 w.adopt(requestID)
-                w.focus()
+                if w.open { w.focus() }
                 return
             }
             let w = self.freshWindow()

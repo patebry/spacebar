@@ -109,6 +109,14 @@ final class WebHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
     func resendSettings() { settingsChanged(SettingsStore.shared.settings) }
 
+    /// Lets go of the page for good: the content controller holds this host as its message handler, a cycle that would keep
+    /// the web view and its content process alive. Only the viewer, which makes a host per window, lets one go.
+    func tearDown() {
+        web.configuration.userContentController.removeScriptMessageHandler(forName: "sb")
+        web.navigationDelegate = nil
+        web.stopLoading()
+    }
+
     /// Runs `f` once the page is loaded and the remote-image block is in place.
     func whenReady(_ f: @escaping () -> Void) { ready ? remoteImages.whenInPlace(f) : onReady.append { self.remoteImages.whenInPlace(f) } }
 

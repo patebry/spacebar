@@ -262,7 +262,10 @@ class PreviewController: NSViewController {
     var onDecline: (String) -> Void = { _ in }
     lazy var keySource: KeySource = WriterKeySource(controller: self)
 
-    private let host = WebHost.shared
+    /// The page this controller shows in, set before its view loads: the viewer gives each window its own. The Quick Look
+    /// extension uses the process's one.
+    var webHost: WebHost?
+    private lazy var host: WebHost = webHost ?? WebHost.shared
     private var fileURL: URL?
     /// The folder of the item Quick Look asked for (the folder itself in folder mode), symlinks resolved. Markdown links open in
     /// the panel, where they can be edited, only inside it; others open in the default app like any other document. The

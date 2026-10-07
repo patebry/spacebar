@@ -42,6 +42,8 @@ enum HelperIDs {
 @objc(SpacebarViewerProtocol) protocol SpacebarViewerProtocol {
     /// Show `paths` (Finder's selection). The reply only acknowledges; a decline comes back through `declined`.
     func show(_ paths: [String], requestID: Int, reply: @escaping (Bool) -> Void)
+    /// A Space in Finder: a window already showing `paths` comes forward, else a new window opens; `show` follows the selection.
+    func open(_ paths: [String], requestID: Int, reply: @escaping (Bool) -> Void)
     /// A key the helper took from Finder while the panel is open, by its name in `HelperKeys`.
     func key(_ name: String, isRepeat: Bool)
     func close()

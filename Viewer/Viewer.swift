@@ -19,6 +19,7 @@ final class ViewerPanel: NSPanel {
     /// A press this far below the top never drags, whatever the page last said.
     static let dragDepth: CGFloat = 96
     var dragZone = false
+    weak var owner: ViewerWindow?
 
     override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing: NSWindow.BackingStoreType, defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: style, backing: backing, defer: flag)
@@ -54,11 +55,11 @@ final class ViewerPanel: NSPanel {
         let p = event.locationInWindow, edge: CGFloat = 4
         return event.type == .leftMouseDown && dragZone && !event.modifierFlags.contains(.control)
             && p.y > frame.height - Self.dragDepth && p.y < frame.height - edge && p.x > edge && p.x < frame.width - edge
-            && contentView?.superview?.hitTest(p)?.isDescendant(of: WebHost.shared.web) == true
+            && owner.map { contentView?.superview?.hitTest(p)?.isDescendant(of: $0.controller.webView) == true } == true
     }
 
     override func sendEvent(_ event: NSEvent) {
-        if event.type == .keyDown, isKeyWindow, let name = Self.keyName(event), Viewer.shared.windowKey(name, isRepeat: event.isARepeat) { return }
+        if event.type == .keyDown, isKeyWindow, let name = Self.keyName(event), owner?.windowKey(name, isRepeat: event.isARepeat) == true { return }
         guard drags(event) else { return super.sendEvent(event) }
         if event.clickCount == 2 {
             // As a title bar: the double-click action in Desktop & Dock settings.
@@ -85,7 +86,7 @@ final class ViewerPanel: NSPanel {
 
     override func orderOut(_ sender: Any?) {
         dragZone = false
-        WebHost.shared.web.evaluateJavaScript("window.sb && sb.dragReset && sb.dragReset(); 0")
+        owner?.controller.webView.evaluateJavaScript("window.sb && sb.dragReset && sb.dragReset(); 0")
         super.orderOut(sender)
     }
 }
@@ -116,10 +117,11 @@ final class TapKeySource: KeySource {
 final class PanelController: PreviewController {
     /// What Space opened: an HTML file among them never runs scripts, whatever the setting says for one reached in the sidebar.
     var spaced: Set<String> = []
+    weak var owner: ViewerWindow?
 
     override var preferredSize: NSSize? { nil }
 
-    /// Named for VoiceOver and window lists; the title itself is never drawn.
+    /// Named for VoiceOver, the Window menu and Mission Control; the title itself is never drawn.
     override func pageRendered() {
         super.pageRendered()
         view.window?.title = shownName
@@ -131,16 +133,19 @@ final class PanelController: PreviewController {
 
     override func copyFileAndText(_ url: URL, _ text: String) -> Bool { FinderCopy.write(file: url, text: text) }
 
-    override func writerKeysChanged(_ held: Bool) { Viewer.shared.tellTextSession(held) }
+    override func writerKeysChanged(_ held: Bool) {
+        owner?.textSession = held
+        Viewer.shared.tellTextSession(held)
+    }
 
     override func handle(_ type: String, _ body: [String: Any]) {
         switch type {
         case "popover":
-            Viewer.shared.tellPopover(PageMessage(body: body).bool("open") == true)
+            owner?.setPopover(PageMessage(body: body).bool("open") == true)
         case "dragZone":
             (view.window as? ViewerPanel)?.dragZone = PageMessage(body: body).bool("on") == true
         case "dragOut":
-            // A file dragged out of the panel: only one the page may open (dragOutFile), from a press the user is still making.
+            // A file dragged out of the window: only one the page may open (dragOutFile), from a press the user is still making.
             guard let url = dragOutFile(body), let web = webView as? PreviewWebView else {
                 return vlog.error("refused dragOut: not a listed file")
             }
@@ -162,27 +167,22 @@ extension PanelController: NSDraggingSource {
     }
 }
 
-final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
-    static let shared = Viewer()
-    static let idleExit: TimeInterval = 30 * 60
-
-    private var conn: NSXPCConnection?
-    private var retries = 0
+/// One window: its own page (WebHost), controller and list keys. The helper's requests reach the one it last opened
+/// (`Viewer.current`); the others keep their files.
+final class ViewerWindow: NSObject, NSWindowDelegate {
     let panel: ViewerPanel
     let controller = PanelController()
     let keys = TapKeySource()
-    /// Where the panel opens instead of over Finder's window (a harness parks it off screen).
-    static var parkedFrame: NSRect?
+    let host = WebHost()
     /// The request on screen, or on its way there; 0 when closed.
-    private var request = 0
-    private var open = false
+    private(set) var request = 0
+    private(set) var open = false
     /// Ordered out while another app is in front, keeping what it shows until Finder comes back (`restore`).
-    private var suspended = false
-    private var idle: DispatchWorkItem?
-    /// The writer's key panel holds the keyboard; the helper is told, so it passes the typing's keys.
-    private(set) var textSession = false
-    /// One of the page's popovers is open, as the page last said; the helper is told, so Esc closes it rather than the panel.
-    private var popover = false
+    var suspended = false
+    /// The writer's key panel holds the keyboard for this window.
+    var textSession = false
+    /// One of the page's popovers is open, as the page last said: Esc closes it.
+    private(set) var popover = false
 
     override init() {
         panel = ViewerPanel(contentRect: NSRect(x: 0, y: 0, width: 900, height: 640),
@@ -195,21 +195,268 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
         // The green button takes it full screen, in its own space, as Preview's windows do.
         panel.collectionBehavior = [.fullScreenPrimary]
         panel.isReleasedWhenClosed = false
-        panel.becomesKeyOnlyIfNeeded = false
         panel.minSize = NSSize(width: 480, height: 320)
         panel.delegate = self
-        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.screensChanged = Date()
-        }
+        panel.owner = self
+        controller.webHost = host
+        controller.owner = self
         keys.controller = controller
         controller.keySource = keys
         panel.contentViewController = controller
+        host.whenReady { [host] in host.web.evaluateJavaScript("sb.warm && sb.warm(); 0") }
+    }
+
+    func setPopover(_ on: Bool) {
+        guard on != popover else { return }
+        popover = on
+        if self === Viewer.shared.current { Viewer.shared.tellPopover(on) }
+    }
+
+    /// The selection this window was opened for, resolved as `spaced` holds it.
+    func shows(_ urls: [URL]) -> Bool {
+        open && !controller.spaced.isEmpty && controller.spaced == Set(urls.map { $0.resolvingSymlinksInPath().path })
+    }
+
+    func focus() {
+        if panel.isMiniaturized { panel.deminiaturize(nil) }
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    func present(_ urls: [URL], id: Int) {
+        guard !urls.isEmpty else { return decline(id, "no paths") }
+        if suspended { hide(tell: false) }
+        suspended = false
+        request = id
+        controller.spaced = Set(urls.map { $0.resolvingSymlinksInPath().path })
+        controller.onReady = { [weak self] _ in self?.ready(id) }
+        controller.onDecline = { [weak self] why in self?.decline(id, why) }
+        if open, !panel.isVisible || panel.isMiniaturized {
+            if panel.isMiniaturized { panel.deminiaturize(nil) }
+            panel.orderFrontRegardless()
+        }
+        if !open {
+            place()
+            // In the window but invisible until the page has painted, so WebKit draws and nothing flashes.
+            panel.alphaValue = 0
+            panel.ignoresMouseEvents = true
+            panel.orderFrontRegardless()
+        }
+        controller.start(selection: urls, reason: "space")
+        // The controller reports ready within 3 s even for a slow file; past that something is stuck, and Apple takes over.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            guard let self, self.request == id, !self.open else { return }
+            self.decline(id, "not ready in 4 s")
+        }
+    }
+
+    private func ready(_ id: Int) {
+        guard id == request, panel.isVisible else { return }
+        // A show that replaced an open window's file is answered too, or the helper holds it pending until its 5 s check.
+        if open { return announce(id) }
+        reveal(id)
+    }
+
+    private func reveal(_ id: Int) {
+        controller.hostWillAppear()
+        panel.alphaValue = 1
+        panel.ignoresMouseEvents = false
+        open = true
+        controller.hostAppeared()
+        Viewer.shared.windowsChanged()
+        announce(id)
+    }
+
+    /// Tells the helper this window is up for request `id`, once the window server has its first visible frame.
+    func announce(_ id: Int) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.open, self.request == id, self === Viewer.shared.current else { return }
+            Viewer.shared.helper()?.panelState(true, requestID: id, windowNumber: self.panel.windowNumber)
+            if self.popover { Viewer.shared.helper()?.popover(true) }
+        }
+    }
+
+    /// Takes request `id` for a window already showing its file: the helper's following moves to it.
+    func adopt(_ id: Int) {
+        request = id
+        announce(id)
+    }
+
+    private func decline(_ id: Int, _ why: String) {
+        guard id == request else { return }
+        vlog.info("declined \(id): \(why, privacy: .public)")
+        if self === Viewer.shared.current { Viewer.shared.helper()?.declined(id) }
+        hide(tell: open)
+    }
+
+    func restore(_ id: Int) {
+        suspended = false
+        request = id
+        panel.alphaValue = 1
+        panel.ignoresMouseEvents = false
+        panel.orderFrontRegardless()
+        open = true
+        controller.hostAppeared()
+        announce(id)
+    }
+
+    func suspend() {
+        guard open else { return }
+        controller.hostSuspending()
+        hide(tell: false, blank: false)
+        suspended = true
+    }
+
+    /// `blank`: the page is emptied, and drawn so, before the window is ordered out, so a reused window never shows the last
+    /// file's content for a frame. A window suspended for `restore` keeps its content.
+    func hide(tell: Bool, blank: Bool = true) {
+        let id = request
+        request = 0
+        if blank, open || suspended { controller.hostDisappearing() }
+        let was = open || panel.isVisible
+        open = false
+        popover = false
+        textSession = false
+        panel.ignoresMouseEvents = true
+        if blank, was || suspended {
+            panel.alphaValue = 0
+            if !panel.isVisible { panel.orderFrontRegardless() }
+            let out = { [weak self] in
+                guard let self, self.request == 0, !self.open else { return }
+                self.panel.orderOut(nil)
+            }
+            controller.webView.callAsyncJavaScript("if (window.sb && sb.blank) sb.blank(); await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)))",
+                                                   arguments: [:], in: nil, in: .page) { _ in out() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: out)
+        } else {
+            panel.orderOut(nil)
+        }
+        Viewer.shared.closed(self, request: id, tell: tell && was)
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        hide(tell: true)
+        return false
+    }
+
+    /// A key typed in the window, which is key: what the helper would have routed from Finder. False leaves it to the page.
+    func windowKey(_ name: String, isRepeat: Bool) -> Bool {
+        guard open, !textSession else { return false }
+        if name == "closeWindow" { panel.performClose(nil); return true }
+        if name == HelperKeys.escape {
+            guard popover else { return false }
+            route(name, isRepeat: isRepeat)
+            return true
+        }
+        route(name, isRepeat: isRepeat)
+        return true
+    }
+
+    func route(_ name: String, isRepeat: Bool) {
+        if keys.key(name, isRepeat: isRepeat) { return }
+        if name == "open" { return controller.openOnScreen() }
+        if name == "copy" {
+            if controller.copyNativeSelection() { return }
+            controller.armCopy()
+        }
+        if controller.zoomKey(name) || controller.scrollKey(name) { return }
+        let web = controller.webView
+        let arg = String(data: try! JSONSerialization.data(withJSONObject: ["key": name]), encoding: .utf8)!
+        web.evaluateJavaScript("sb.hostKey && sb.hostKey(\(arg))") { r, _ in
+            guard (r as? Bool) != true else { return }
+            switch name {
+            case "zoomIn": web.pageZoom = min(web.pageZoom * 1.1, 3)
+            case "zoomOut": web.pageZoom = max(web.pageZoom / 1.1, 0.5)
+            case "zoomReset": web.pageZoom = 1
+            // Nothing to copy as text (an image, a PDF): the file itself, as Finder's ⌘C would have.
+            case "copy": self.controller.copyFileOnScreen()
+            default: break
+            }
+        }
+    }
+
+    private typealias SetWindowLocation = @convention(c) (CGEvent, CGPoint) -> Void
+    private static let setWindowLocation = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGEventSetWindowLocation")
+        .map { unsafeBitCast($0, to: SetWindowLocation.self) }
+
+    /// Rebuilds a gesture the helper handed over for this window, at the pointer's place in it, and hands it to the window,
+    /// which gives it to the view under the pointer: NSApp.sendEvent would drop it while the viewer is not active.
+    func sendGesture(_ data: Data) {
+        guard let cg = CGEvent(withDataAllocator: nil, data: data as CFData), [29, 30, 32].contains(cg.type.rawValue),
+              let place = Self.setWindowLocation, let top = NSScreen.screens.first?.frame.maxY else { return }
+        let at = cg.location, f = panel.frame
+        cg.setIntegerValueField(CGEventField(rawValue: 51)!, value: Int64(panel.windowNumber))
+        place(cg, CGPoint(x: at.x - f.minX, y: at.y - (top - f.maxY)))
+        guard let e = NSEvent(cgEvent: cg) else { return }
+        panel.sendEvent(e)
+    }
+
+    /// On the screen Finder's front window is on: where a window last was on that screen, else `PanelFrame`'s default, moved
+    /// down and right of any open window already there so each new one shows.
+    private func place() {
+        if let f = Viewer.parkedFrame { return panel.setFrame(f, display: false) }
+        guard let screen = Viewer.finderScreen() ?? NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main
+        else { return }
+        let saved = PanelFrame.key(for: screen).flatMap { PanelFrame.load($0) }.map { $0.offsetBy(dx: screen.frame.minX, dy: screen.frame.minY) }
+        var frame = PanelFrame.placement(saved: saved, visible: screen.visibleFrame, minSize: panel.minSize)
+        let taken = Viewer.shared.windows.filter { $0 !== self && $0.open }.map { $0.panel.frame.origin }
+        while taken.contains(where: { abs($0.x - frame.minX) < 2 && abs($0.y - frame.minY) < 2 }) {
+            let next = frame.offsetBy(dx: 24, dy: -24)
+            guard screen.visibleFrame.contains(next) else { break }
+            frame = next
+        }
+        panel.setFrame(frame, display: false)
+    }
+
+    /// A move or resize the user made, kept for the screen it ended on, relative to that screen so a rearrangement of the
+    /// displays does not strand it. AppKit moving the window off a display that went away is not kept.
+    private func remember() {
+        guard open, Viewer.parkedFrame == nil, !panel.inLiveResize, -Viewer.shared.screensChanged.timeIntervalSinceNow > 2,
+              let screen = panel.screen, let key = PanelFrame.key(for: screen) else { return }
+        PanelFrame.save(panel.frame.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY), key)
+    }
+
+    func windowDidMove(_ notification: Notification) { remember(); reportFrame() }
+    func windowDidResize(_ notification: Notification) { remember(); reportFrame() }
+    func windowDidEndLiveResize(_ notification: Notification) { remember() }
+
+    /// So the helper places a pinch by where the window it follows is now, not where its last check found it.
+    private func reportFrame() {
+        guard open, self === Viewer.shared.current, let top = NSScreen.screens.first?.frame.maxY else { return }
+        let f = panel.frame
+        Viewer.shared.helper()?.panelMoved(x: f.minX, y: top - f.maxY, width: f.width, height: f.height, windowNumber: panel.windowNumber)
+    }
+}
+
+final class Viewer: NSObject, SpacebarViewerProtocol {
+    static let shared = Viewer()
+    static let idleExit: TimeInterval = 30 * 60
+    /// Where a window opens instead of over Finder's window (a harness parks it off screen).
+    static var parkedFrame: NSRect?
+
+    private var conn: NSXPCConnection?
+    private var retries = 0
+    /// Every window made, open or kept closed for reuse (`spareLimit`).
+    private(set) var windows: [ViewerWindow] = []
+    /// The window the helper's requests go to: the one it last opened, which follows Finder's selection until clicked into.
+    private(set) var current: ViewerWindow?
+    /// Closed windows kept with their page loaded, so the next Space opens as fast as the first.
+    private static let spareLimit = 1
+    private var idle: DispatchWorkItem?
+    private var popoverTold = false
+    fileprivate var screensChanged = Date.distantPast
+
+    override init() {
+        super.init()
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.screensChanged = Date()
+        }
     }
 
     func start() {
+        windows = [ViewerWindow()]
         connect()
         armIdle()
-        WebHost.shared.whenReady { WebHost.shared.web.evaluateJavaScript("sb.warm && sb.warm(); 0") }
     }
 
     // MARK: The helper
@@ -236,297 +483,162 @@ final class Viewer: NSObject, SpacebarViewerProtocol, NSWindowDelegate {
         }
     }
 
-    /// Without the helper nothing can ask for a panel: a few tries (launchd may be restarting it), then exit.
+    /// Without the helper nothing can ask for a window: a few tries (launchd may be restarting it), then exit. Open windows
+    /// stay; the helper just no longer follows Finder for them.
     private func lost() {
         guard conn != nil else { return }
         conn?.invalidate()
         conn = nil
-        if open || suspended { hide(tell: false) }
-        suspended = false
+        current = nil
         retries += 1
         guard retries <= 5 else {
+            if windows.contains(where: { $0.open }) { return vlog.info("helper unreachable: windows stay open") }
             vlog.info("helper unreachable: exiting")
             exit(0)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + Double(retries)) { self.connect() }
     }
 
-    private func helper() -> SpacebarHelperProtocol? {
+    func helper() -> SpacebarHelperProtocol? {
         conn?.remoteObjectProxyWithErrorHandler { err in vlog.error("helper call failed: \(err.localizedDescription, privacy: .public)") } as? SpacebarHelperProtocol
     }
 
     func tellTextSession(_ held: Bool) {
-        textSession = held
         helper()?.textSession(held) { ok in
             if !ok { vlog.error("helper refused text session \(held)") }
         }
     }
 
-    /// The helper forgets the popover whenever the panel closes; `announce` tells it again for a panel that shows one.
+    /// The helper forgets the popover whenever its window closes; `announce` tells it again for a window that shows one.
     func tellPopover(_ open: Bool) {
-        guard open != popover else { return }
-        popover = open
+        guard open != popoverTold else { return }
+        popoverTold = open
         helper()?.popover(open)
+    }
+
+    // MARK: Windows
+
+    /// A closed window to reuse, else a new one.
+    private func freshWindow() -> ViewerWindow {
+        if let w = windows.first(where: { !$0.open && $0.request == 0 && !$0.suspended }) { return w }
+        let w = ViewerWindow()
+        windows.append(w)
+        return w
+    }
+
+    /// Dock and ⌘Tab while any window is open, as an app is; the idle exit only once none is. One closed window is kept
+    /// loaded for the next Space.
+    func windowsChanged() {
+        let any = windows.contains { $0.open || $0.request != 0 }
+        NSApp.setActivationPolicy(any ? .regular : .accessory)
+        if any { idle?.cancel() } else { armIdle() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, !self.windows.contains(where: { !$0.open && $0.request == 0 && !$0.suspended }) else { return }
+            self.windows.append(ViewerWindow())
+        }
+    }
+
+    /// A window closed: the helper is told only for the one it follows; spares past `spareLimit` are let go.
+    func closed(_ w: ViewerWindow, request: Int, tell: Bool) {
+        if w === current {
+            current = nil
+            popoverTold = false
+            if tell { helper()?.panelState(false, requestID: request, windowNumber: w.panel.windowNumber) }
+        }
+        let spares = windows.filter { !$0.open && $0.request == 0 && !$0.suspended }
+        if spares.count > Self.spareLimit, let drop = spares.first(where: { $0 !== w }) ?? spares.first {
+            // After its blanking has been drawn and it has been ordered out.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, !drop.open, drop.request == 0 else { return }
+                self.windows.removeAll { $0 === drop }
+            }
+        }
+        windowsChanged()
     }
 
     // MARK: SpacebarViewerProtocol
 
+    /// Finder's selection changed under the window that follows it: that window shows it (a new one when none follows).
     func show(_ paths: [String], requestID: Int, reply: @escaping (Bool) -> Void) {
-        // Answered from the main thread: a reply proves the panel can be drawn now, not just that the process is alive.
+        // Answered from the main thread: a reply proves a window can be drawn now, not just that the process is alive.
         DispatchQueue.main.async {
             reply(true)
-            self.present(paths.filter { $0.hasPrefix("/") }.prefix(1000).map { URL(fileURLWithPath: $0) }, id: requestID)
+            let urls = Self.urls(paths)
+            let w = self.current.flatMap { $0.open || $0.request != 0 ? $0 : nil } ?? self.freshWindow()
+            self.current = w
+            w.present(urls, id: requestID)
+            self.windowsChanged()
         }
+    }
+
+    /// A Space in Finder: a window already showing the selection comes forward; otherwise a new window opens for it, and the
+    /// window that followed Finder before keeps its file.
+    func open(_ paths: [String], requestID: Int, reply: @escaping (Bool) -> Void) {
+        DispatchQueue.main.async {
+            reply(true)
+            let urls = Self.urls(paths)
+            if let w = self.windows.first(where: { $0.shows(urls) }) {
+                self.current = w
+                w.adopt(requestID)
+                w.focus()
+                return
+            }
+            let w = self.freshWindow()
+            self.current = w
+            w.present(urls, id: requestID)
+            self.windowsChanged()
+        }
+    }
+
+    private static func urls(_ paths: [String]) -> [URL] {
+        paths.filter { $0.hasPrefix("/") }.prefix(1000).map { URL(fileURLWithPath: $0) }
     }
 
     func key(_ name: String, isRepeat: Bool) {
         guard HelperKeys.all.contains(name) else { return }
-        DispatchQueue.main.async { if self.open { self.route(name, isRepeat: isRepeat) } }
+        DispatchQueue.main.async { if let w = self.current, w.open { w.route(name, isRepeat: isRepeat) } }
     }
 
     func focus() {
-        DispatchQueue.main.async {
-            guard self.open else { return }
-            if self.panel.isMiniaturized { self.panel.deminiaturize(nil) }
-            NSApp.activate(ignoringOtherApps: true)
-            self.panel.makeKeyAndOrderFront(nil)
-        }
-    }
-
-    /// A key typed in the window, which is key: what the helper would have routed from Finder. False leaves it to the page.
-    func windowKey(_ name: String, isRepeat: Bool) -> Bool {
-        guard open, !textSession else { return false }
-        if name == "closeWindow" { panel.performClose(nil); return true }
-        if name == HelperKeys.escape {
-            guard popover else { return false }
-            route(name, isRepeat: isRepeat)
-            return true
-        }
-        route(name, isRepeat: isRepeat)
-        return true
+        DispatchQueue.main.async { if let w = self.current, w.open { w.focus() } }
     }
 
     func close() {
         DispatchQueue.main.async {
-            self.hide(tell: true)
-            self.suspended = false
+            guard let w = self.current else { return }
+            w.hide(tell: true)
+            w.suspended = false
         }
     }
 
     func suspend() {
-        DispatchQueue.main.async {
-            guard self.open else { return }
-            self.controller.hostSuspending()
-            self.hide(tell: false, blank: false)
-            self.suspended = true
-        }
+        DispatchQueue.main.async { self.current?.suspend() }
     }
 
     func restore(_ requestID: Int, reply: @escaping (Bool) -> Void) {
         DispatchQueue.main.async {
-            guard self.suspended, !self.open, self.request == 0 else { return reply(false) }
+            guard let w = self.current, w.suspended, !w.open, w.request == 0 else { return reply(false) }
             reply(true)
-            self.suspended = false
-            self.idle?.cancel()
-            self.request = requestID
-            self.panel.alphaValue = 1
-            self.panel.ignoresMouseEvents = false
-            self.panel.orderFrontRegardless()
-            self.open = true
-            self.controller.hostAppeared()
-            self.announce(requestID)
+            w.restore(requestID)
+            self.windowsChanged()
         }
     }
 
     func gesture(_ data: Data) {
-        DispatchQueue.main.async { if self.open { self.sendGesture(data) } }
+        DispatchQueue.main.async { if let w = self.current, w.open { w.sendGesture(data) } }
     }
 
-    private typealias SetWindowLocation = @convention(c) (CGEvent, CGPoint) -> Void
-    /// Gestures the helper handed over that reached an open panel.
-    private(set) var gesturesSent = 0
-    private static let setWindowLocation = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGEventSetWindowLocation")
-        .map { unsafeBitCast($0, to: SetWindowLocation.self) }
-
-    /// Rebuilds the gesture for the panel's window, at the pointer's place in it, and hands it to the window, which gives it to
-    /// the view under the pointer: NSApp.sendEvent would drop it, the viewer not being active.
-    private func sendGesture(_ data: Data) {
-        gesturesSent += 1
-        guard let cg = CGEvent(withDataAllocator: nil, data: data as CFData), [29, 30, 32].contains(cg.type.rawValue),
-              let place = Self.setWindowLocation, let top = NSScreen.screens.first?.frame.maxY else { return }
-        let at = cg.location, f = panel.frame
-        cg.setIntegerValueField(CGEventField(rawValue: 51)!, value: Int64(panel.windowNumber))
-        place(cg, CGPoint(x: at.x - f.minX, y: at.y - (top - f.maxY)))
-        guard let e = NSEvent(cgEvent: cg) else { return }
-        panel.sendEvent(e)
-    }
-
-    // MARK: The panel
-
-    private func present(_ urls: [URL], id: Int) {
-        guard !urls.isEmpty else { return decline(id, "no paths") }
-        if suspended { hide(tell: false) }
-        suspended = false
-        idle?.cancel()
-        request = id
-        controller.spaced = Set(urls.map { $0.resolvingSymlinksInPath().path })
-        controller.onReady = { [weak self] _ in self?.ready(id) }
-        controller.onDecline = { [weak self] why in self?.decline(id, why) }
-        if open, !panel.isVisible || panel.isMiniaturized {
-            if panel.isMiniaturized { panel.deminiaturize(nil) }
-            panel.orderFrontRegardless()
-        }
-        if !open {
-            place()
-            // In the window but invisible until the page has painted, so WebKit draws and nothing flashes.
-            panel.alphaValue = 0
-            panel.ignoresMouseEvents = true
-            panel.orderFrontRegardless()
-        }
-        controller.start(selection: urls, reason: "space")
-        // The controller reports ready within 3 s even for a slow file; past that something is stuck, and Apple takes over.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
-            guard let self, self.request == id, !self.open else { return }
-            self.decline(id, "not ready in 4 s")
-        }
-    }
-
-    private func ready(_ id: Int) {
-        guard id == request, panel.isVisible else { return }
-        // A show that replaced an open panel's file is answered too, or the helper holds it pending until its 5 s check.
-        if open { return announce(id) }
-        reveal(id)
-    }
-
-    /// Makes the panel, already ordered in, visible and tells the helper once the window server has it.
-    private func reveal(_ id: Int) {
-        // In the Dock and ⌘Tab while a window is open, as an app is.
-        NSApp.setActivationPolicy(.regular)
-        controller.hostWillAppear()
-        panel.alphaValue = 1
-        panel.ignoresMouseEvents = false
-        open = true
-        controller.hostAppeared()
-        announce(id)
-    }
-
-    private func announce(_ id: Int) {
-        // After this turn of the run loop, once the window server has the panel's first visible frame.
-        DispatchQueue.main.async { [weak self] in
-            guard let self, self.open, self.request == id else { return }
-            self.helper()?.panelState(true, requestID: id, windowNumber: self.panel.windowNumber)
-            if self.popover { self.helper()?.popover(true) }
-        }
-    }
-
-    private func decline(_ id: Int, _ why: String) {
-        guard id == request else { return }
-        vlog.info("declined \(id): \(why, privacy: .public)")
-        helper()?.declined(id)
-        hide(tell: open)
-    }
-
-    /// `blank`: the page is emptied, and drawn so, before the panel is ordered out. The next show reveals the panel as soon as
-    /// the page has laid out, which can be a frame before WebKit's drawing of it reaches the screen: that frame is then empty,
-    /// never the last file's content. A panel suspended for `restore` keeps its content.
-    private func hide(tell: Bool, blank: Bool = true) {
-        let id = request
-        request = 0
-        // A suspend has let go of the keys already (hostSuspending) and keeps the native views for restore.
-        if blank, open || suspended { controller.hostDisappearing() }
-        let was = open || panel.isVisible
-        open = false
-        panel.ignoresMouseEvents = true
-        // A suspended panel is out of the window list: it comes back in, unseen, so that WebKit draws the empty page.
-        if blank, was || suspended {
-            panel.alphaValue = 0
-            if !panel.isVisible { panel.orderFrontRegardless() }
-            let out = { [weak self] in
-                guard let self, self.request == 0, !self.open else { return }
-                self.panel.orderOut(nil)
-            }
-            controller.webView.callAsyncJavaScript("if (window.sb && sb.blank) sb.blank(); await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)))",
-                                                   arguments: [:], in: nil, in: .page) { _ in out() }
-            // Should WebKit not draw a frame (the page still loading), the panel still goes.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: out)
-        } else {
-            panel.orderOut(nil)
-        }
-        if tell && was { helper()?.panelState(false, requestID: id, windowNumber: 0) }
-        if was { NSApp.setActivationPolicy(.accessory) }
-        armIdle()
-    }
-
-    func windowShouldClose(_ sender: NSWindow) -> Bool {
-        hide(tell: true)
-        return false
-    }
-
-    /// A viewer left closed for a while exits; the helper starts a fresh one.
+    /// A viewer left with no window for a while exits; the helper starts a fresh one.
     private func armIdle() {
         idle?.cancel()
         let w = DispatchWorkItem { [weak self] in
-            guard let self, !self.open, self.request == 0 else { return }
+            guard let self, !self.windows.contains(where: { $0.open || $0.request != 0 }) else { return }
             vlog.info("idle: exiting")
             exit(0)
         }
         idle = w
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.idleExit, execute: w)
     }
-
-    private func route(_ name: String, isRepeat: Bool) {
-        if keys.key(name, isRepeat: isRepeat) { return }
-        if name == "open" { return controller.openOnScreen() }
-        if name == "copy" {
-            if controller.copyNativeSelection() { return }
-            controller.armCopy()
-        }
-        if controller.zoomKey(name) || controller.scrollKey(name) { return }
-        let web = controller.webView
-        let arg = String(data: try! JSONSerialization.data(withJSONObject: ["key": name]), encoding: .utf8)!
-        web.evaluateJavaScript("sb.hostKey && sb.hostKey(\(arg))") { r, _ in
-            guard (r as? Bool) != true else { return }
-            switch name {
-            // No popover was open after all (the page's word was stale): Esc closes the panel, as it does otherwise.
-            case HelperKeys.escape: self.hide(tell: true)
-            case "zoomIn": web.pageZoom = min(web.pageZoom * 1.1, 3)
-            case "zoomOut": web.pageZoom = max(web.pageZoom / 1.1, 0.5)
-            case "zoomReset": web.pageZoom = 1
-            // Nothing to copy as text (an image, a PDF): the file itself, as Finder's ⌘C would have.
-            case "copy": self.controller.copyFileOnScreen()
-            default: break
-            }
-        }
-    }
-
-    /// On the screen Finder's front window is on: where the panel last was on that screen, else `PanelFrame`'s default.
-    private func place() {
-        if let f = Self.parkedFrame { return panel.setFrame(f, display: false) }
-        guard let screen = Self.finderScreen() ?? NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main
-        else { return }
-        let saved = PanelFrame.key(for: screen).flatMap { PanelFrame.load($0) }.map { $0.offsetBy(dx: screen.frame.minX, dy: screen.frame.minY) }
-        panel.setFrame(PanelFrame.placement(saved: saved, visible: screen.visibleFrame, minSize: panel.minSize), display: false)
-    }
-
-    /// A move or resize the user made while the panel is open, kept for the screen it ended on, relative to that screen so a
-    /// rearrangement of the displays does not strand it. AppKit moving the panel off a display that went away is not kept.
-    private func remember() {
-        guard open, Self.parkedFrame == nil, !panel.inLiveResize, -screensChanged.timeIntervalSinceNow > 2,
-              let screen = panel.screen, let key = PanelFrame.key(for: screen) else { return }
-        PanelFrame.save(panel.frame.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY), key)
-    }
-    private var screensChanged = Date.distantPast
-
-    func windowDidMove(_ notification: Notification) { remember(); reportFrame() }
-    func windowDidResize(_ notification: Notification) { remember(); reportFrame() }
-
-    /// So the helper places a pinch by where the panel is now, not where its last check found it.
-    private func reportFrame() {
-        guard open, let top = NSScreen.screens.first?.frame.maxY else { return }
-        let f = panel.frame
-        helper()?.panelMoved(x: f.minX, y: top - f.maxY, width: f.width, height: f.height, windowNumber: panel.windowNumber)
-    }
-    func windowDidEndLiveResize(_ notification: Notification) { remember() }
 
     /// The screen of Finder's frontmost window; nil on the Desktop, which has none.
     static func finderScreen() -> NSScreen? {

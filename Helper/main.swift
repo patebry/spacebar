@@ -279,7 +279,8 @@ final class Helper: NSObject, NSXPCListenerDelegate {
             pending = nil
             if !panelOpen { tallied = false }
             panelOpen = true
-            following = true
+            // A Space on a file whose window was open brings that window forward: clicked into, it follows nothing.
+            following = NSWorkspace.shared.frontmostApplication?.processIdentifier != viewerPid
             panelWindow = windowNumber
             offscreenMisses = 0
             syncGestureTap()
@@ -504,7 +505,9 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     /// Asks the viewer to show `paths`. A viewer that does not answer within 150 ms, or declines, hands a Space back to Finder.
     private func show(_ paths: [String], finderPid: pid_t, space: Bool) {
         if space { suspendedAt = nil }
-        request(finderPid: finderPid, space: space, paths: paths) { proxy, id, reply in proxy.show(paths, requestID: id, reply: reply) }
+        request(finderPid: finderPid, space: space, paths: paths) { proxy, id, reply in
+            if space { proxy.open(paths, requestID: id, reply: reply) } else { proxy.show(paths, requestID: id, reply: reply) }
+        }
     }
 
     /// Makes request `id` pending and sends it with `call`; one not acknowledged within 150 ms, or refused, fails.

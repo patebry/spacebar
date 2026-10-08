@@ -76,7 +76,12 @@ check("following: a repeated Esc alone passes", routeOnce(key(KeyCode.escape, re
 check("following: ⇧Esc passes", routeOnce(key(KeyCode.escape, mods: .shift), followingCtx) == .pass)
 check("following: Esc to the viewer passes", routeOnce(key(KeyCode.escape, to: viewer), followingCtx) == .pass)
 check("following: Esc in Finder's rename passes", routeOnce(key(KeyCode.escape), PanelContext(open: true, finderPid: finder, viewerPid: viewer, textFocus: true, following: true)) == .pass)
+check("following: ⌘W to Finder closes the window, not Finder's", routeOnce(key(13, "w", mods: .command), followingCtx) == .close)
+check("following: ⌘. to Finder closes the window", routeOnce(key(47, ".", mods: .command), followingCtx) == .close)
+check("following: Space still asks for the AX read", routeOnce(key(KeyCode.space), followingCtx) == .space)
+check("following: ⌘⇧W passes", routeOnce(key(13, "w", mods: [.command, .shift]), followingCtx) == .pass)
 check("clicked into: Esc to Finder passes", routeOnce(key(KeyCode.escape), open) == .pass)
+check("clicked into: ⌘W to Finder passes", routeOnce(key(13, "w", mods: .command), open) == .pass)
 check("closed: Esc passes even marked following", routeOnce(key(KeyCode.escape), PanelContext(open: false, finderPid: finder, viewerPid: viewer, following: true)) == .pass)
 
 // Closed.

@@ -235,8 +235,9 @@ struct KeyRoute {
         // the keys while Finder stays frontmost. The viewer's windows are ordinary windows: Finder keeps every other key (its
         // arrows move the selection, which the newest window follows), and a window clicked into takes its own keys.
         let toFinder = e.targetPid == panel.finderPid && e.targetPid > 0 && !(panel.open && panel.textFocus)
-        // Esc closes a window nobody has clicked into yet, as Quick Look's closes; one the user has used stays until ⌘W.
-        if toFinder, panel.open, panel.following, e.down, !e.isRepeat, e.mods.isEmpty, e.code == KeyCode.escape {
+        // Esc, ⌘W and ⌘. close a window nobody has clicked into yet, as Quick Look's close, rather than reach Finder, which
+        // still has the keyboard (⌘W would close its window). One the user has used is key and takes them itself.
+        if toFinder, panel.open, panel.following, e.down, !e.isRepeat, e.code != KeyCode.space, Self.closes(e) {
             held.insert(e.code)
             return .close
         }

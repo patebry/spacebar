@@ -64,9 +64,11 @@ enum LinkPolicy {
 
     /// The app to open a file of `type` in: `def`, its default app, unless that is spacebar (handing the file back would loop).
     /// Then Preview for an image; nil for text (textOpener falls back to a text editor); else the first `offerable` candidate.
-    static func notSpacebar(_ def: URL?, candidates: [URL], type: UTType, browsers: Set<String>? = nil,
+    static func notSpacebar(_ def: URL?, candidates candidatesNow: @autoclosure () -> [URL], type: UTType, browsers: Set<String>? = nil,
                             bundleID: (URL) -> String? = { Bundle(url: $0)?.bundleIdentifier }) -> URL? {
         if let def, !isSpacebar(bundleID(def)) { return def }
+        // Asked only now: listing every app for a type is slow, and opener runs for each file shown.
+        let candidates = candidatesNow()
         if type.conforms(to: .image), let preview = candidates.first(where: { bundleID($0) == "com.apple.Preview" }) { return preview }
         if type.conforms(to: .text) { return nil }
         let browsers = browsers ?? browserIDs()

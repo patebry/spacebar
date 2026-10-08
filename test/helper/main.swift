@@ -63,6 +63,22 @@ func key(_ code: Int64, _ chars: String = "", down: Bool = true, rep: Bool = fal
 }
 func routeOnce(_ e: KeyEvent, _ p: PanelContext) -> Route { var r = KeyRoute(); return r.route(e, panel: p) }
 
+// Esc closes a window nobody has clicked into (it follows Finder); one the user has used stays.
+let followingCtx = PanelContext(open: true, finderPid: finder, viewerPid: viewer, following: true)
+check("following: Esc to Finder closes the window", routeOnce(key(KeyCode.escape), followingCtx) == .close)
+do {
+    var r = KeyRoute()
+    _ = r.route(key(KeyCode.escape), panel: followingCtx)
+    check("following: the closing Esc's repeat and key-up are swallowed",
+          r.route(key(KeyCode.escape, rep: true), panel: followingCtx) == .swallow && r.route(key(KeyCode.escape, down: false), panel: followingCtx) == .swallow)
+}
+check("following: a repeated Esc alone passes", routeOnce(key(KeyCode.escape, rep: true), followingCtx) == .pass)
+check("following: ⇧Esc passes", routeOnce(key(KeyCode.escape, mods: .shift), followingCtx) == .pass)
+check("following: Esc to the viewer passes", routeOnce(key(KeyCode.escape, to: viewer), followingCtx) == .pass)
+check("following: Esc in Finder's rename passes", routeOnce(key(KeyCode.escape), PanelContext(open: true, finderPid: finder, viewerPid: viewer, textFocus: true, following: true)) == .pass)
+check("clicked into: Esc to Finder passes", routeOnce(key(KeyCode.escape), open) == .pass)
+check("closed: Esc passes even marked following", routeOnce(key(KeyCode.escape), PanelContext(open: false, finderPid: finder, viewerPid: viewer, following: true)) == .pass)
+
 // Closed.
 check("closed: a plain Space asks for the AX read", routeOnce(key(KeyCode.space), closed) == .space)
 check("closed: a repeated Space passes", routeOnce(key(KeyCode.space, rep: true), closed) == .pass)

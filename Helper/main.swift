@@ -416,7 +416,8 @@ final class Helper: NSObject, NSXPCListenerDelegate {
             finderTextFocus = Self.textFocus(finderPid)
         }
         let ctx = PanelContext(open: panelOpen || pending != nil, finderPid: finderPid, viewerPid: viewerPid, sidebarKeys: settings.sidebarKeys,
-                               textFocus: finderTextFocus, textSession: text.active, popover: pagePopover.active)
+                               textFocus: finderTextFocus, textSession: text.active, popover: pagePopover.active,
+                               following: panelOpen && following)
         switch route.route(e, panel: ctx) {
         case .pass: return pass
         case .swallow: return nil

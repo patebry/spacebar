@@ -183,6 +183,8 @@ struct PanelContext: Equatable {
     var textSession = false
     /// One of the page's popovers is open (`popover` from the viewer): Esc closes it instead of the panel.
     var popover = false
+    /// The open window still follows Finder's selection: nobody has clicked into it, so Esc in Finder closes it.
+    var following = false
 }
 
 /// The viewer's word that its writer's key panel holds the keyboard. Only the panel it is open for, or on its way, can have one,
@@ -232,7 +234,13 @@ struct KeyRoute {
         // Only a Space on its way to Finder: a non-activating panel of another app (a launcher, a password manager) can have
         // the keys while Finder stays frontmost. The viewer's windows are ordinary windows: Finder keeps every other key (its
         // arrows move the selection, which the newest window follows), and a window clicked into takes its own keys.
-        guard Decision.wantsSpace(e), e.targetPid == panel.finderPid, e.targetPid > 0, !(panel.open && panel.textFocus) else { return .pass }
+        let toFinder = e.targetPid == panel.finderPid && e.targetPid > 0 && !(panel.open && panel.textFocus)
+        // Esc closes a window nobody has clicked into yet, as Quick Look's closes; one the user has used stays until ⌘W.
+        if toFinder, panel.open, panel.following, e.down, !e.isRepeat, e.mods.isEmpty, e.code == KeyCode.escape {
+            held.insert(e.code)
+            return .close
+        }
+        guard Decision.wantsSpace(e), toFinder else { return .pass }
         return .space
     }
 

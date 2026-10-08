@@ -13,6 +13,9 @@ let vlog = Logger(subsystem: logSubsystem, category: "viewer")
 final class ViewerPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+    /// An NSPanel closes on Esc; a window the user has clicked into stays until ⌘W or its close button. (Esc in Finder closes
+    /// one nobody has clicked into: the helper decides that.)
+    override func cancelOperation(_ sender: Any?) {}
     /// The page's top row: `--bar-h` in base.css.
     static let rowHeight: CGFloat = 40
     static let lightsLeft: CGFloat = 12

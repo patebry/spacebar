@@ -67,6 +67,10 @@ struct SettingsPane: View {
     @State private var purge = false
     @State private var uninstallError: String?
     @StateObject private var updates = UpdateCheck()
+    @State private var defaultApps: [DefaultApps.Group: Bool] = [:]
+    @State private var partlyDefault: Set<DefaultApps.Group> = []
+    @State private var settingDefaultApps: Set<DefaultApps.Group> = []
+    @State private var defaultAppsProblem: String?
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -89,6 +93,7 @@ struct SettingsPane: View {
             quickLookStatus
             appearance
             spaceHelper
+            defaultApp
             Section {
                 Picker("Open files in", selection: store.binding(\.editorBundleID, "editorBundleID")) {
                     Text(system.defaultEditorName.map { "Default App (\($0))" } ?? "Default App").tag(String?.none)
@@ -295,6 +300,68 @@ struct SettingsPane: View {
                 Link(HelperCopy.howItWorks, destination: HelperCopy.securityURL).font(.footnote)
             }
         }
+    }
+
+    private var defaultApp: some View {
+        Section {
+            ForEach(DefaultApps.Group.allCases) { g in
+                Toggle(isOn: defaultAppToggle(g)) {
+                    Text(g.title)
+                    Text(partlyDefault.contains(g) ? "\(g.detail). Some open in another app." : g.detail)
+                }
+                .disabled(!DefaultApps.available || settingDefaultApps.contains(g))
+            }
+            if let defaultAppsProblem {
+                Text(defaultAppsProblem).foregroundColor(.red).fixedSize(horizontal: false, vertical: true)
+            }
+            Picker("Open images in", selection: store.binding(\.imageAppBundleID, "imageAppBundleID")) {
+                Text("Default App (\(system.defaultImageAppName ?? "Preview"))").tag(String?.none)
+                Divider()
+                ForEach(imageAppChoices) { app in
+                    Label { Text(app.name) } icon: { Image(nsImage: app.icon) }
+                        .tag(Optional(app.id))
+                }
+            }
+        } header: {
+            Text("Default App")
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                if !DefaultApps.available { Text("Move spacebar to Applications to use this.").settingsFooter() }
+                Text("Double-click opens these in a spacebar window, and so do links from your editor or terminal. The window's Open button sends Markdown and data files to your editor below, and images to this app.")
+                    .settingsFooter()
+            }
+        }
+        .onAppear(perform: refreshDefaultApps)
+        // Get Info in Finder can change them while the window is open.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { n in
+            if (n.object as? NSWindow)?.frameAutosaveName == "Settings" { refreshDefaultApps() }
+        }
+    }
+
+    private func defaultAppToggle(_ g: DefaultApps.Group) -> Binding<Bool> {
+        Binding(get: { defaultApps[g] ?? false }, set: { on in
+            guard settingDefaultApps.insert(g).inserted else { return }
+            defaultApps[g] = on
+            DefaultApps.set(g, on: on) { ok in
+                settingDefaultApps.remove(g)
+                refreshDefaultApps()
+                defaultAppsProblem = ok ? nil : "Couldn’t change the default app for \(g.title.lowercased()). Try again, or use Get Info in Finder."
+            }
+        })
+    }
+
+    private func refreshDefaultApps() {
+        for g in DefaultApps.Group.allCases where !settingDefaultApps.contains(g) {
+            defaultApps[g] = DefaultApps.isDefault(g)
+            if DefaultApps.isPartlyDefault(g) { partlyDefault.insert(g) } else { partlyDefault.remove(g) }
+        }
+        system.loadImageApps()
+    }
+
+    private var imageAppChoices: [EditorApp] {
+        var apps = system.imageApps
+        if let id = store.settings.imageAppBundleID, !apps.contains(where: { $0.id == id }) { apps.append(system.editor(for: id)) }
+        return apps
     }
 
     // MARK: About

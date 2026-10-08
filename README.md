@@ -5,11 +5,11 @@
 spacebar is a free, open-source replacement for Quick Look on macOS 13 and later (Apple silicon and Intel). Space in Finder
 opens Markdown, folders, code, JSON, YAML, logs and archives in spacebar. Turn on
 [**Use spacebar for every file**](#use-spacebar-for-every-file), which is optional and needs Accessibility, and Space opens
-spacebar's own panel for any file: photos and camera RAW, PDFs, video, CSV and the rest. It aims to be the best Quick Look,
+any file in a spacebar window that stays open: photos and camera RAW, PDFs, video, CSV and the rest. It aims to be the best Quick Look,
 not an IDE.
 
-- **Every file, one panel.** PDF, HEIC and RAW, video, CSV tables, JSON trees, zips without unzipping, Markdown, and the folder beside them.
-- **One press.** About 40 ms to on screen in the helper's panel, warm ([measured on one Mac](FINDINGS.md#space-helper)); Space or Esc closes it.
+- **Every file, one window.** PDF, HEIC and RAW, video, CSV tables, JSON trees, zips without unzipping, Markdown, and the folder beside them.
+- **One press.** Space opens a window that stays open, resizes, goes full screen, and sits in the Dock and ⌘Tab; ⌘W closes it.
 - **Find, copy, edit, privately.** ⌘F, Copy and Raw; a click edits text, code and data in place. Sandboxed, no telemetry, MIT.
 
 <!-- dmg: the release does not upload spacebar.dmg yet; this link works once it does -->
@@ -23,8 +23,8 @@ curl -fsSL https://spacebar.patebryant.com/install.sh | sh
 Then select a file or folder in Finder and press Space. [Install](#install) has the details.
 
 Markdown is rendered properly (tables, task lists, highlighted code, math and Mermaid diagrams, in six themes), and Obsidian
-vaults read as they do in Obsidian. Word, Keynote and other Office and iWork files show in Apple's own preview inside the
-panel. Apps and packages stay with Apple's Quick Look, and ⌘Y still opens it.
+vaults read as they do in Obsidian. Word, Keynote and other Office and iWork files show in Apple's own preview inside
+spacebar's window. Apps and packages stay with Apple's Quick Look, and ⌘Y still opens it.
 
 ### What Space opens in spacebar
 
@@ -38,17 +38,17 @@ extension, so spacebar cannot take them. Inside spacebar's sidebar every one of 
 may still win it: `install.sh` lists the ones it finds and how many of spacebar's types each claims, and Settings lists each one that is on
 with a Turn Off button.
 
-What the panel shows for each file in the sidebar, and, with **Use spacebar for every file** on, for each file you press
+What spacebar shows for each file in the sidebar, and, with **Use spacebar for every file** on, for each file you press
 Space on in Finder:
 
 | File | Shown as |
 |---|---|
 | Markdown (`.md`, `.markdown`, `.mdown`, `.mkd`, `.mkdn`) | rendered, with inline editing and task toggles; Raw shows its source, read only |
-| Images (`.png`, `.jpg`, `.gif`, `.webp`, `.bmp`, `.ico`, `.svg`) | fitted to the panel, its dimensions and zoom in the toolbar; a double-click (or, in Quick Look, a two-finger double tap) toggles fitted and actual size, a pinch zooms about the pointer in Quick Look, two fingers or a drag move it, ⌘+ ⌘− ⌘0 zoom and fit; SVG as an image only |
-| HEIC, AVIF, TIFF, camera RAW (`.dng`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.orf`, `.raf`, `.rw2`), Photoshop (`.psd`), OpenEXR, TGA, JPEG 2000, icons (`.icns`) | decoded by macOS's own ImageIO and drawn natively in the panel, turned as the camera recorded it, with the same fit, zoom and pan |
-| PDF | drawn natively by PDFKit in the panel, fitted to its width, pages in one scroll |
+| Images (`.png`, `.jpg`, `.gif`, `.webp`, `.bmp`, `.ico`, `.svg`) | fitted to the window, its dimensions and zoom in the toolbar; a double-click (or, in Quick Look, a two-finger double tap) toggles fitted and actual size, a pinch zooms about the pointer in Quick Look, two fingers or a drag move it, ⌘+ ⌘− ⌘0 zoom and fit; SVG as an image only |
+| HEIC, AVIF, TIFF, camera RAW (`.dng`, `.cr2`, `.cr3`, `.nef`, `.arw`, `.orf`, `.raf`, `.rw2`), Photoshop (`.psd`), OpenEXR, TGA, JPEG 2000, icons (`.icns`) | decoded by macOS's own ImageIO and drawn natively, turned as the camera recorded it, with the same fit, zoom and pan |
+| PDF | drawn natively by PDFKit, fitted to its width, pages in one scroll |
 | HTML (`.html`, `.htm`) | rendered in its own web view: with its scripts and web content unless it was marked as downloaded, with neither when it was (see below) |
-| Video (`.mp4`, `.m4v`, `.mov`, `.3gp`, `.mpg`, `.mpeg`, `.m2v`) | played by AVKit in the panel, paused on its first frame until you press play |
+| Video (`.mp4`, `.m4v`, `.mov`, `.3gp`, `.mpg`, `.mpeg`, `.m2v`) | played by AVKit, paused on its first frame until you press play |
 | Audio (`.mp3`, `.m4a`, `.m4b`, `.aac`, `.wav`, `.aif`, `.aiff`, `.flac`, `.caf`, `.amr`) | the same player, under the file's artwork or icon |
 | Code and config (`.js`, `.ts`, `.tsx`, `.py`, `.rb`, `.go`, `.rs`, `.swift`, `.sh`, `.c`, `.java`, `.kt`, `.css`, `.xml`, `.yaml`, `.toml`, `.sql`, `.plist`, `Makefile` and more) | highlighted source with line numbers, edited in place with a click; a binary property list is shown as XML (not editable). XML and property lists are indented, and a minified stylesheet is laid out a declaration to a line, with Raw for the file as is, where a click edits it. Dockerfiles, nginx configuration, Scala and Terraform are highlighted too. A language with no bundled grammar (`.ps1`, `.bat`, Dart, Elixir, Haskell, Zig and others) is plain text with line numbers |
 | Archives (`.zip`, `.tar`, `.tgz`, `.tar.gz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz`, `.7z`, `.rar`, `.zst`, `.tzst`) | its files and folders as a tree, with sizes and dates, sortable by any column, listed without extracting anything; a click (or ↑ ↓ and Return) opens a text, code, Markdown, JSON, CSV, image or PDF file inside it in place, read-only, still without extracting it (0.4); anything else inside says to open the archive with Archive Utility; a lone compressed file of text (`server.log.gz`) shows the text itself; Open with its default app |
@@ -56,7 +56,7 @@ Space on in Finder:
 | CSV and TSV | a table, first row as the header, up to 50,000 rows and 200 columns; Raw shows its text, and a click edits it |
 | Text (`.txt`, `.log`, `.conf`, `.env`, `LICENSE`, `.env.example`, `.strings`, `.pbxproj` and any other file macOS declares as text) | as is, with line numbers; text of a kind spacebar edits (not `.strings` or `.pbxproj`) is edited in place with a click. Text need not be UTF-8: a byte order mark (UTF-8, UTF-16, UTF-32), UTF-16 without one, and legacy encodings (Windows-1252, Latin-1, Shift JIS, GB 18030, EUC-KR, Big5, Windows-1251 and others) are detected, and the kind line names the encoding |
 | Rich text (`.rtf`, `.rtfd`) | drawn by AppKit's own text view, fonts, colours, tables and pictures as the document has them (mapped for a dark theme, as TextEdit does); never as RTF source |
-| Office, iWork, fonts, 3D, certificates, calendars, e-books and other files macOS previews (`.docx`, `.xlsx`, `.pptx`, `.pages`, `.numbers`, `.key`, `.ttf`, `.otf`, `.usdz`, `.obj`, `.stl`, `.glb`, `.cer`, `.crt`, `.p12`, `.ics`, `.epub` and any other type macOS declares, is not text, and spacebar has no view of its own for) | Apple's own Quick Look preview, inside the panel; the file's text, or the info card, when Quick Look cannot show it. A contact card (`.vcf`) is shown as its text: Apple's preview of it would read your Contacts |
+| Office, iWork, fonts, 3D, certificates, calendars, e-books and other files macOS previews (`.docx`, `.xlsx`, `.pptx`, `.pages`, `.numbers`, `.key`, `.ttf`, `.otf`, `.usdz`, `.obj`, `.stl`, `.glb`, `.cer`, `.crt`, `.p12`, `.ics`, `.epub` and any other type macOS declares, is not text, and spacebar has no view of its own for) | Apple's own Quick Look preview, inside spacebar's window; the file's text, or the info card, when Quick Look cannot show it. A contact card (`.vcf`) is shown as its text: Apple's preview of it would read your Contacts |
 | Disk images (`.dmg`) | the info card, with the image's format and whether it is encrypted, read from the file without mounting it |
 | Anything else | an info card: Finder's large thumbnail when there is one, kind, size, date modified and the folder it is in; the toolbar's Open opens it in its default app (Reveal in Finder for apps and executables) |
 
@@ -71,7 +71,7 @@ what Open allows and no more: nothing for a script, an app or an executable; bey
 script runner, a web browser, an office suite or an app outside the Applications folders, and for a text file only text
 editors.
 
-In the Space panel (Unreleased, 0.4), drag a file's row in the sidebar (a Contents search result too), the overview or the
+In a Space window (Unreleased, 0.4), drag a file's row in the sidebar (a Contents search result too), the overview or the
 grid, or its kind in the toolbar, into Finder, Mail, a chat or an editor to hand it the file, as a drag from Finder would;
 Finder copies it. A file inside an archive is not on disk and does not drag. Quick Look's own window does not offer this. `.diff` and `.patch` files and Markdown `diff` fences are
 tinted line by line: added lines green, removed lines red, hunk headers dimmed.
@@ -120,7 +120,7 @@ place in the toolbar where it does not. A button with a key gives it in its tool
 
 Quick Look gives a preview no keys of its own. There these work while spacebar holds the keys: its sidebar list takes them as
 a preview opens (`sidebarKeys` in settings.json), and the filter and find fields hold them while
-you type. In the Space helper's panel (**Use spacebar for every file**, below) they always work. The buttons work in both.
+you type. In a Space window (**Use spacebar for every file**, below) they work once you click into it. The buttons work in both.
 
 | Key | Does |
 |---|---|
@@ -128,36 +128,38 @@ you type. In the Space helper's panel (**Use spacebar for every file**, below) t
 | ⌥⌘F | The sidebar's filter (a click in the field works too) |
 | ↵, ⇧↵, ⌘G, ⇧⌘G | In the find field: the next and previous match |
 | Esc | Closes the find bar, clears the filter, or gives the keys back |
-| ⌘C | Copies the selection, or with nothing selected the whole file's text. In the Space helper's panel it copies the file too, as Finder's ⌘C does: paste in Finder for the file, in an editor for the text (an image, a PDF or another file: the file) |
+| ⌘C | Copies the selection, or with nothing selected the whole file's text. In a Space window it copies the file too, as Finder's ⌘C does: paste in Finder for the file, in an editor for the text (an image, a PDF or another file: the file) |
 | ↑ ↓ ← → Home End ↵ | Move through the sidebar, or through a folder's grid (↵ opens the picture) |
 | ← or ⌫ | Back to the grid from a picture opened in it, or to the archive from a file inside it |
-| ⌘O | Open, in the Space helper's panel |
+| ⌘O | Open, in a Space window |
 | ⌘+ ⌘− ⌘0 | Zoom |
 
 ### Use spacebar for every file
 
 Quick Look hands spacebar only the types above. Turn on **Use spacebar for every file** (Settings, or the
-second step of the welcome sheet) and Space in Finder opens spacebar for any file you select, in the same panel with the same
+second step of the welcome sheet) and Space in Finder opens spacebar for any file you select, in a spacebar window with the same
 sidebar:
 
 | You press Space in Finder on | Without it | With it |
 |---|---|---|
-| Markdown, folders, code, JSON, YAML, XML, logs, archives, `.dmg`, files with no extension | spacebar, inside Quick Look | spacebar's own panel |
-| Plain text, CSV, HTML, rich text (`.rtf`) | Apple's preview | spacebar's panel (HTML with its scripts off) |
-| PDF, images (HEIC and camera RAW too), video, audio | Apple's preview | spacebar's panel |
-| Office, iWork saved as a single file, fonts, 3D, certificates, calendars, e-books | Apple's preview | Apple's preview, inside spacebar's panel |
+| Markdown, folders, code, JSON, YAML, XML, logs, archives, `.dmg`, files with no extension | spacebar, inside Quick Look | a spacebar window |
+| Plain text, CSV, HTML, rich text (`.rtf`) | Apple's preview | a spacebar window (HTML with its scripts off) |
+| PDF, images (HEIC and camera RAW too), video, audio | Apple's preview | a spacebar window |
+| Office, iWork saved as a single file, fonts, 3D, certificates, calendars, e-books | Apple's preview | Apple's preview, inside a spacebar window |
 | Installers and binaries as single files (`.pkg`, `.mpkg`, `.exe`, `.dylib`) | Apple's preview | spacebar's info card |
 | Apps and other packages, iWork documents saved as packages, `.rtfd` packages | Apple's preview | Apple's preview: spacebar declines them and hands the Space back to Finder |
-| Several files at once | Quick Look, one at a time | spacebar's panel, with a sidebar of just those files |
+| Several files at once | Quick Look, one at a time | a spacebar window, with a sidebar of just those files |
 
 With it on:
 
-- Space, Esc, ⌘W or ⌘. close the panel in one press.
-- The panel opens where you last moved or resized it on that display, fitted to the screen if the display has changed.
-- While it is open the arrow keys move through spacebar's sidebar, or, with `sidebarKeys` off in
-  settings.json, through Finder's selection, and the panel follows.
-- Like Apple's Quick Look, it hides while another app is in front and comes back when you return to Finder, a PDF at its page
-  and a video at its time.
+- Space opens an ordinary app window: it is in the Dock and ⌘Tab, resizes, goes full screen with the green button, and
+  stays open when you switch apps.
+- Space on another file opens another window, as Finder does. Space on a file whose window is already open brings that
+  window forward.
+- New windows cascade from where you last left one on that display.
+- The newest window follows Finder's arrow keys until you click into it. After that its keys are its own.
+- While a window still follows Finder, Esc, ⌘W or ⌘. pressed in Finder close it. Once you have clicked into it, ⌘W or the
+  red button closes it, and Esc does not.
 - Space in a rename or the search field, with Apple's Quick Look already open, or in any other app is left alone. ⌘Y still
   opens Apple's Quick Look. A Space spacebar cannot answer within 150 ms is handed back to Finder.
 - While a password field or another app has secure input on (Terminal's Secure Keyboard Entry, say), macOS gives spacebar no
@@ -170,9 +172,9 @@ on asks for two things, one after the other:
 
 - **Accessibility** (System Settings, Privacy & Security, Accessibility: turn on **spacebar Helper**). This lets the helper
   notice a Space pressed in Finder and read which files are selected. It sees your key presses while it runs, but acts only
-  on a plain Space in Finder and, while spacebar's panel is open, on the keys that drive it (Esc, the arrows, Home, End, Page
-  Up and Down, Return, ⌘W, ⌘., ⌘O, ⌘F, ⌥⌘F, ⌘C and zoom). It never records what you type, and no character you type leaves it: it
-  tells the panel only a key's name, such as "down".
+  on a plain Space in Finder and, while the newest window still follows Finder, on Esc, ⌘W and ⌘. pressed in Finder, which
+  close that window. Every other key, the arrows included, goes to Finder or to the window you clicked into. It never records
+  what you type, and no character you type leaves it.
 - **Running in the background** (System Settings, General, Login Items & Extensions: **spacebar**, under Allow in the
   Background). macOS starts the helper at login and keeps it running.
 
@@ -188,6 +190,13 @@ line, once (a click opens Settings).
 Turn off **Use spacebar for every file** in Settings. The helper stops and leaves Login Items, and Space
 in Finder is Quick Look's again. Its Accessibility entry stays, unused, until you remove it in System Settings or
 [uninstall](#uninstall) spacebar, which removes it for you.
+
+### Default app
+
+spacebar can also be the app a double-click opens, for Markdown, images (PNG, JPEG, HEIC, GIF, WebP, TIFF, SVG) and data
+files (JSON, YAML, CSV, logs and property lists). Choose which in Settings, **Default App**, or in the welcome sheet. The
+window's Open button never sends a file back to spacebar: Markdown and data files go to the editor chosen in Settings (else a text editor), and
+images to the app chosen there (else your other default image app, or Preview).
 
 ### Folders and Obsidian vaults
 
@@ -237,7 +246,7 @@ such as a link's address, is not on screen to find; Raw shows it).
 
 In a vault (a folder with `.obsidian` in it), and in any other folder:
 
-- `[[Note]]`, `[[Note|alias]]`, `[[folder/Note]]` and `[[Note#Heading]]` open that note in the panel. A name is looked for
+- `[[Note]]`, `[[Note|alias]]`, `[[folder/Note]]` and `[[Note#Heading]]` open that note in the preview. A name is looked for
   anywhere under the folder the sidebar shows; a link that matches nothing is greyed out.
 - `![[image.png]]` (`![[image.png|300]]` for a width) shows the image; `![[Note]]` shows the note inline, read only, one level
   deep.
@@ -260,6 +269,8 @@ Open spacebar to change its settings. The window holds only what most people cha
   font and page width.
 - **Space Helper**: **Use spacebar for every file**, and whether the Space helper is running.
 - **Open files in**: the editor the preview's Open button uses.
+- **Default App**: which of Markdown, images and data files spacebar opens on a double-click, and the app the Open button
+  uses for images.
 - **About**: the version, with **Check Now**; **Check for updates**, **Report a Problem…** and **Uninstall spacebar…**.
 
 Anything wrong with the setup (spacebar turned off in Quick Look, another app's previewer claiming its types, folder previews
@@ -287,6 +298,7 @@ an older version's defaults are applied to it (`stats` and `folderReadmeFirst` a
 | `frontMatter` | `"table"` | `"hide"`, `"raw"` |
 | `math`, `mermaid` | `true` | |
 | `mdLinks` | `"preview"` | `"editor"` opens Markdown links in your editor |
+| `imageAppBundleID` | null | the bundle ID of the app the Open button sends images to; also in Settings, **Default App** |
 | `folderMode` | `true` | folder previews |
 | `foldersFirst` | `"finder"` (Finder's own setting) | `"always"`, `"never"`; also in the sidebar's sort menu |
 | `folderReadmeFirst` | `false` | a README at the top of the sidebar |
@@ -422,7 +434,7 @@ spacebar.app                         settings window (SwiftUI)
 └─ PlugIns/SpacebarFolders.appex     the same preview for folders (on by default; turn off in Settings)
 └─ Helpers/spacebar Helper.app       "Use spacebar for every file": a launchd agent with Accessibility and an event tap; reads
    │                                 Finder's selection, never a file; no sandbox, no entitlements
-└─ Helpers/spacebar Viewer.app       the panel it opens: the same preview code, sandboxed like the extension, with its own writer
+└─ Helpers/spacebar Viewer.app       the windows it opens: the same preview code, sandboxed like the extension, with its own writer
 ```
 
 Quick Look extensions never receive key events, so inline editing (Markdown and text files alike) uses a click-through,
@@ -468,15 +480,15 @@ disk, the external change wins.
   archive is not on disk, so it has neither Open With nor drag out.
 - Open With lists apps by the file's type, never by the file, so a per-file binding saved on a downloaded file cannot add an
   app; the writer lists them again when one is chosen and opens only an app it offers. Dragging out hands another app only a
-  file the sidebar lists (a grid tile is one), the Contents search found, the overview offers or the panel shows, and only
+  file the sidebar lists (a grid tile is one), the Contents search found, the overview offers or the window shows, and only
   while you hold the mouse button.
 - The preview extension has a read-only sandbox exception for the whole disk, so relative images beside a document load and
   the sidebar can show the folder's files.
 - The Space helper, when you turn it on, has Accessibility and sees every key event, so it is kept small: it acts only on
-  Space in Finder and on the panel's own keys while the panel is open, forwards only a fixed list of key names (never a
-  character), never opens a file, and talks only to the viewer and the settings app signed by the same certificate, under the
-  hardened runtime. The viewer that renders files is sandboxed like the preview extension and never sees a key the helper
-  did not send it.
+  Space in Finder and, while the newest window still follows Finder, on Esc, ⌘W and ⌘. there; it passes on no character you
+  type, never opens a file, and talks only to the viewer and the settings app signed by the same certificate, under the
+  hardened runtime. The viewer that renders files is sandboxed like the preview extension and gets keys of its own only
+  when you click into one of its windows.
 - The preview extension has the `com.apple.security.network.client` entitlement. WKWebView's helper processes crash-loop
   in a sandboxed extension without it. spacebar has no network code of its own; the only requests the page can make are
   remote images, which are blocked unless you allow them.

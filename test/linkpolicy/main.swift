@@ -156,5 +156,26 @@ if let first = txtApps.first {
 check("openWith: an app not listed is refused (Terminal, Script Editor, an unknown ID)", ["com.apple.Terminal", "com.apple.ScriptEditor2", "md.spacebar.none"].allSatisfy {
     LinkPolicy.openWith(file("with.txt"), app: $0) == nil })
 
+let fake: [URL: String] = [app("/Applications/Spacebar.app"): "md.spacebar.viewer", app("/Applications/Other.app"): "com.example.other",
+                           app("/System/Applications/Preview.app"): "com.apple.Preview", app("/Applications/Spacebar2.app"): "MD.Spacebar.app",
+                           app("/Applications/Chrome.app"): "com.google.Chrome", app("/Applications/Microsoft Word.app"): "com.microsoft.Word",
+                           app("/Users/x/Downloads/Evil.app"): "com.example.evil", app("/Applications/Utilities/Terminal.app"): "com.apple.Terminal"]
+let fakeID: (URL) -> String? = { fake[$0] }
+let sb = app("/Applications/Spacebar.app"), other = app("/Applications/Other.app"), preview = app("/System/Applications/Preview.app")
+let fakeBrowsers: Set<String> = ["com.google.chrome"]
+func pick(_ def: URL?, _ c: [URL], _ t: UTType) -> URL? { LinkPolicy.notSpacebar(def, candidates: c, type: t, browsers: fakeBrowsers, bundleID: fakeID) }
+check("notSpacebar: a default that is not spacebar is kept", pick(other, [preview], .png) == other)
+check("notSpacebar: spacebar as an image's default gives Preview", pick(sb, [sb, other, preview], .png) == preview)
+check("notSpacebar: a browser listed first is skipped",
+      pick(sb, [sb, app("/Applications/Chrome.app"), other], .pdf) == other && pick(sb, [app("/Applications/Chrome.app")], .png) == nil)
+check("notSpacebar: an office app, a terminal and an app outside the Applications folders are skipped",
+      pick(sb, [app("/Applications/Microsoft Word.app"), app("/Applications/Utilities/Terminal.app"), app("/Users/x/Downloads/Evil.app"), other], .pdf) == other)
+check("notSpacebar: spacebar as a text type's default gives nil (textOpener falls back to a text editor)",
+      pick(sb, [app("/Applications/Spacebar2.app"), preview, other], .json) == nil && pick(sb, [other], .plainText) == nil)
+check("notSpacebar: only spacebar candidates give nil",
+      pick(sb, [sb, app("/Applications/Spacebar2.app")], .png) == nil && pick(nil, [], .json) == nil)
+check("notSpacebar: real apps by bundle ID",
+      LinkPolicy.notSpacebar(nil, candidates: [app("/System/Applications/TextEdit.app"), app("/System/Applications/Preview.app")], type: .png)?.lastPathComponent == "Preview.app")
+
 try? FileManager.default.removeItem(at: dir)
 exit(failures == 0 ? 0 : 1)

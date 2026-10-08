@@ -54,8 +54,23 @@ enum LinkPolicy {
     /// "Open With" binding (an xattr a downloaded file can carry) is ignored, since it could name any app, an interpreter included.
     static func opener(for url: URL, allowArchives: Bool = false) -> (file: URL, app: URL)? {
         let file = url.standardizedFileURL.resolvingSymlinksInPath()
-        guard fileRefusal(file, allowArchives: allowArchives) == nil, let type = contentType(file), let app = NSWorkspace.shared.urlForApplication(toOpen: type) else { return nil }
+        guard fileRefusal(file, allowArchives: allowArchives) == nil, let type = contentType(file),
+              let app = notSpacebar(NSWorkspace.shared.urlForApplication(toOpen: type), candidates: NSWorkspace.shared.urlsForApplications(toOpen: type), type: type)
+        else { return nil }
         return (file, app)
+    }
+
+    static func isSpacebar(_ id: String?) -> Bool { id?.lowercased().hasPrefix("md.spacebar") == true }
+
+    /// The app to open a file of `type` in: `def`, its default app, unless that is spacebar (handing the file back would loop).
+    /// Then Preview for an image; nil for text (textOpener falls back to a text editor); else the first `offerable` candidate.
+    static func notSpacebar(_ def: URL?, candidates: [URL], type: UTType, browsers: Set<String>? = nil,
+                            bundleID: (URL) -> String? = { Bundle(url: $0)?.bundleIdentifier }) -> URL? {
+        if let def, !isSpacebar(bundleID(def)) { return def }
+        if type.conforms(to: .image), let preview = candidates.first(where: { bundleID($0) == "com.apple.Preview" }) { return preview }
+        if type.conforms(to: .text) { return nil }
+        let browsers = browsers ?? browserIDs()
+        return candidates.first { offerable($0, type: type, browsers: browsers, bundleID: bundleID) }
     }
 
     static func fileRefusal(_ url: URL, allowArchives: Bool = false) -> String? {
@@ -155,49 +170,62 @@ enum LinkPolicy {
          FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications").path + "/"]
     }
 
-    /// The apps the toolbar's Open With menu offers for a file `opener` allows: its type's default app first, then the others
-    /// that claim the type, by name, at most maxOpenWith. Asked by type, never by file, so a per-file binding cannot add an app.
-    /// Beyond the default, never a terminal or script runner (notEditors), spacebar itself, an app outside appFolders, an office
-    /// suite (it goes by content, not name, and runs macros or formulas), or a web browser (it sniffs a text type with no MIME
-    /// type, a .log or an .ini, as HTML and runs its scripts); for a text type, only a text editor.
+    /// The bundle IDs, lowercased, of the apps that open web pages.
+    static func browserIDs() -> Set<String> {
+        Set(NSWorkspace.shared.urlsForApplications(toOpen: URL(string: "https://example.com")!).compactMap { Bundle(url: $0)?.bundleIdentifier?.lowercased() })
+    }
+
+    /// Whether `app` may be offered for `type` when it is not the default: never a terminal or script runner (notEditors),
+    /// spacebar itself, an app outside appFolders, an office suite (it goes by content, not name, and runs macros or formulas),
+    /// or a web browser (it sniffs a text type with no MIME type, a .log or an .ini, as HTML and runs its scripts); for a text
+    /// type, only a text editor.
+    static func offerable(_ app: URL, type: UTType, browsers: Set<String>, bundleID: (URL) -> String? = { Bundle(url: $0)?.bundleIdentifier }) -> Bool {
+        let path = app.resolvingSymlinksInPath().path
+        guard let bid = bundleID(app), appFolders.contains(where: path.hasPrefix) else { return false }
+        let lower = bid.lowercased()
+        return !notEditors.contains(bid) && !lower.hasPrefix("md.spacebar") && !notEditorPrefixes.contains { lower.hasPrefix($0.lowercased()) }
+            && !browsers.contains(lower) && (!type.conforms(to: .text) || isTextEditor(app))
+    }
+
+    /// The apps the toolbar's Open With menu offers for a file `fileRefusal` allows: its type's default app first (when `opener`
+    /// gives one), then the `offerable` others that claim the type, by name, at most maxOpenWith. Asked by type, never by file,
+    /// so a per-file binding cannot add an app.
     static func openWithApps(for url: URL, allowArchives: Bool = false) -> [URL] {
-        guard let o = opener(for: url, allowArchives: allowArchives), let type = contentType(o.file) else { return [] }
-        let folders = appFolders
+        let file = url.standardizedFileURL.resolvingSymlinksInPath()
+        guard fileRefusal(file, allowArchives: allowArchives) == nil, let type = contentType(file) else { return [] }
+        let lead = opener(for: file, allowArchives: allowArchives)?.app
         var ids = Set<String>(), out: [(app: URL, name: String)] = []
-        let first = Bundle(url: o.app)?.bundleIdentifier?.lowercased()
-        if let first { ids.insert(first) }
-        let browsers = Set(NSWorkspace.shared.urlsForApplications(toOpen: URL(string: "https://example.com")!).compactMap { Bundle(url: $0)?.bundleIdentifier?.lowercased() })
+        if let first = lead.flatMap({ Bundle(url: $0)?.bundleIdentifier?.lowercased() }) { ids.insert(first) }
+        let browsers = browserIDs()
         for app in NSWorkspace.shared.urlsForApplications(toOpen: type) {
-            let path = app.resolvingSymlinksInPath().path
-            guard let bid = Bundle(url: app)?.bundleIdentifier, !ids.contains(bid.lowercased()), folders.contains(where: path.hasPrefix) else { continue }
-            let lower = bid.lowercased()
-            let office = notEditorPrefixes.contains { lower.hasPrefix($0.lowercased()) }
-            guard !notEditors.contains(bid), !lower.hasPrefix("md.spacebar"), !office, !browsers.contains(lower),
-                  !type.conforms(to: .text) || isTextEditor(app) else { continue }
-            ids.insert(lower)
+            guard let bid = Bundle(url: app)?.bundleIdentifier?.lowercased(), !ids.contains(bid), offerable(app, type: type, browsers: browsers) else { continue }
+            ids.insert(bid)
             out.append((app, FileManager.default.displayName(atPath: app.path)))
         }
         let rest = out.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }.map(\.app)
-        let lead = first.map { $0.hasPrefix("md.spacebar") } == false ? [o.app] : []
-        return Array((lead + rest).prefix(maxOpenWith))
+        return Array(((lead.map { [$0] } ?? []) + rest).prefix(maxOpenWith))
     }
 
     /// The Open With app with bundle ID `id` for `url`, only when openWithApps offers it now, and the file to open in it.
     static func openWith(_ url: URL, app id: String, allowArchives: Bool = false) -> (file: URL, app: URL)? {
-        guard let o = opener(for: url, allowArchives: allowArchives),
-              let app = openWithApps(for: o.file, allowArchives: allowArchives).first(where: { Bundle(url: $0)?.bundleIdentifier == id }) else { return nil }
-        return (o.file, app)
+        let file = url.standardizedFileURL.resolvingSymlinksInPath()
+        guard let app = openWithApps(for: file, allowArchives: allowArchives).first(where: { Bundle(url: $0)?.bundleIdentifier == id }) else { return nil }
+        return (file, app)
     }
 
     /// What the viewer's Open button does with a file it shows as text (code, JSON, CSV, text): open it in `editor` (the bundle ID
     /// chosen in the settings) when that is a text editor; else in its default app when `opener` allows that; else in the default
-    /// plain-text app when that is a text editor. `editor` true when the app is opened as an editor. Nil: nothing may open it.
+    /// plain-text app when that is a text editor, or the first text editor in appFolders. `editor` true when the app is opened as an editor. Nil: nothing may open it.
     static func textOpener(for url: URL, editor id: String?) -> (file: URL, app: URL, editor: Bool)? {
         let file = url.standardizedFileURL.resolvingSymlinksInPath()
         let ws = NSWorkspace.shared
         if let id, editorRefusal(file) == nil, let app = application(id), isTextEditor(app) { return (file, app, true) }
         if let o = opener(for: file) { return (o.file, o.app, false) }
-        if editorRefusal(file) == nil, let app = ws.urlForApplication(toOpen: .plainText), isTextEditor(app) { return (file, app, true) }
+        // isTextEditor is never spacebar.
+        if editorRefusal(file) == nil, let app = ws.urlForApplication(toOpen: .plainText).flatMap({ isTextEditor($0) ? $0 : nil })
+            ?? ws.urlsForApplications(toOpen: .plainText).first(where: { isTextEditor($0) && appFolders.contains(where: $0.resolvingSymlinksInPath().path.hasPrefix) }) {
+            return (file, app, true)
+        }
         return nil
     }
 }

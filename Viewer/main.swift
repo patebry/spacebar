@@ -4,6 +4,8 @@ WebHost.pageHost = "panel"
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ n: Notification) { Viewer.shared.start() }
+    /// May come before launching finishes.
+    func application(_ application: NSApplication, open urls: [URL]) { Viewer.shared.openDocuments(urls) }
 }
 
 /// The menu bar while a window makes the viewer an ordinary app: Quit, and the Window menu's Minimize, Zoom and Close.

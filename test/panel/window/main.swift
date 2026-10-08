@@ -22,6 +22,8 @@ OffScreen.install()
 NSApp.setActivationPolicy(.accessory)
 let first = NSRect(x: -20000, y: -20000, width: 1000, height: 600)
 Viewer.parkedFrame = first
+Viewer.activates = false
+Viewer.shared.started = true
 let viewer = Viewer.shared
 /// The spare a Space opens in, kept first among the spares, so every Space here reuses it.
 let win = viewer.freshWindow()
@@ -227,6 +229,51 @@ let sentClosed = win.gesturesSent
 pinchIn(at: NSPoint(x: panel.frame.width / 2, y: panel.frame.height / 2))
 check("a gesture with the panel closed reaches nothing", win.gesturesSent == sentClosed && (pv?.scaleFactor ?? 0) == scaleOpen,
       "\(win.gesturesSent - sentClosed) sent, scale \(scaleOpen) -> \(pv?.scaleFactor ?? 0)")
+
+// A file opened from Finder or another app (Viewer.openDocuments): its own window, which the helper never follows.
+show(notes)
+for w in viewer.windows { OffScreen.keepDrawing(w.host.web) }
+viewer.openDocuments([other])
+spin(until: 5) { viewer.windows.contains { $0.document && $0.open && $0.panel.alphaValue == 1 } }
+let docWin = viewer.windows.first { $0.document }
+check("a document opens in a window of its own", docWin.map { $0.open && $0 !== win } == true)
+check("the helper still follows the window it opened, not the document's", viewer.current === win && win.open)
+spin(0.5)
+let count = viewer.windows.count
+viewer.openDocuments([other])
+spin(0.5)
+check("the same document again reuses its window", viewer.windows.count == count && viewer.windows.filter { $0.document }.count == 1 && docWin?.open == true,
+      "\(count) -> \(viewer.windows.count)")
+viewer.openDocuments([URL(string: "https://example.com/a.md")!])
+spin(0.3)
+check("a URL that is not a file opens nothing", viewer.windows.filter { $0.document }.count == 1)
+docWin?.panel.performClose(nil)
+spin(0.5)
+check("closed, the document window is no longer one", docWin.map { !$0.open && !$0.document } == true)
+check("closing it leaves the helper's window open", viewer.current === win && win.open)
+viewer.close()
+spin(0.3)
+
+// A document the viewer declines (a package) goes to the app it would open in without spacebar, never to nothing.
+var handed: [URL] = []
+Viewer.handOff = { handed.append($0) }
+let pkg = dir.appendingPathComponent("Thing.app")
+try! FileManager.default.createDirectory(at: pkg, withIntermediateDirectories: true)
+viewer.openDocuments([pkg])
+spin(until: 5) { !handed.isEmpty }
+check("a declined document is handed to another app", handed.map(\.path) == [pkg.path], handed)
+check("and leaves no window of its own", !viewer.windows.contains { $0.document || $0.request < 0 })
+
+// Files opened together cascade, each window on a frame of its own.
+let a = dir.appendingPathComponent("A.md"), b = dir.appendingPathComponent("B.md")
+try! "# A\n".write(to: a, atomically: true, encoding: .utf8)
+try! "# B\n".write(to: b, atomically: true, encoding: .utf8)
+viewer.openDocuments([a, b])
+let pair = viewer.windows.filter { $0.request < 0 }
+check("two documents opened together get different frames", pair.count == 2 && pair[0].panel.frame.origin != pair[1].panel.frame.origin,
+      pair.map(\.panel.frame))
+for w in pair { w.panel.performClose(nil) }
+spin(0.5)
 
 print(failures == 0 ? "panel window: all passed" : "panel window: \(failures) failed")
 exit(failures == 0 ? 0 : 1)

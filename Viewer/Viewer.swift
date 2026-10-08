@@ -188,6 +188,8 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
     private(set) var popover = false
     /// Gestures the helper handed over that reached this window while open.
     private(set) var gesturesSent = 0
+    /// Opened as a document (Finder, another app), not by the helper, which never follows or closes it.
+    var document = false
 
     override init() {
         panel = ViewerPanel(contentRect: NSRect(x: 0, y: 0, width: 900, height: 640),
@@ -253,6 +255,7 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
 
     func focus() {
         if panel.isMiniaturized { panel.deminiaturize(nil) }
+        guard Viewer.activates else { return }
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
     }
@@ -283,10 +286,15 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
     }
 
     /// The controller reports ready within 3 s even for a slow file; past that something is stuck, and Apple takes over.
+    /// A document (negative id) has no Apple to fall back on and may come with a cold launch: it waits longer, then shows
+    /// whatever its page has.
     private func armTimeout(_ id: Int) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+        let doc = id < 0
+        DispatchQueue.main.asyncAfter(deadline: .now() + (doc ? 15 : 4)) { [weak self] in
             guard let self, self.request == id, !self.open else { return }
-            self.decline(id, "not ready in 4 s")
+            guard doc, self.host.ready, self.panel.isVisible else { return self.decline(id, "not ready in \(doc ? 15 : 4) s") }
+            vlog.info("document \(id) not ready in 15 s: shown as it is")
+            self.reveal(id)
         }
     }
 
@@ -306,6 +314,7 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
         controller.hostAppeared()
         Viewer.shared.windowsChanged()
         announce(id)
+        if document { focus() }
     }
 
     /// Tells the helper this window is up for request `id`, once the window server has its first visible frame.
@@ -319,6 +328,8 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
 
     /// Takes request `id` for a window already showing its file: the helper's following moves to it.
     func adopt(_ id: Int) {
+        // The helper drives it from now on, with the helper's timeout.
+        document = false
         request = id
         controller.onReady = { [weak self] _ in self?.ready(id) }
         controller.onDecline = { [weak self] why in self?.decline(id, why) }
@@ -329,13 +340,18 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
         guard id == request else { return }
         vlog.info("declined \(id): \(why, privacy: .public)")
         if self === Viewer.shared.current { Viewer.shared.helper()?.declined(id) }
+        // A document's only fallback is the app it would have opened in without spacebar.
+        let file = id < 0 ? controller.spaced.first.map { URL(fileURLWithPath: $0) } : nil
         hide(tell: open)
+        if let file { Viewer.handOff(file) }
     }
 
     func restore(_ id: Int) {
         if NSApp.isHidden { NSApp.unhideWithoutActivation() }
         suspended = false
         request = id
+        controller.onReady = { [weak self] _ in self?.ready(id) }
+        controller.onDecline = { [weak self] why in self?.decline(id, why) }
         panel.alphaValue = 1
         panel.ignoresMouseEvents = false
         panel.orderFrontRegardless()
@@ -363,6 +379,7 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
         }
         let id = request
         request = 0
+        document = false
         if blank, open || suspended { controller.hostDisappearing() }
         let was = open || panel.isVisible
         open = false
@@ -464,15 +481,21 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
     /// On the screen Finder's front window is on: where a window last was on that screen, else `PanelFrame`'s default, moved
     /// down and right of any open window already there so each new one shows.
     private func place() {
-        if let f = Viewer.parkedFrame { return panel.setFrame(f, display: false) }
-        guard let screen = Viewer.finderScreen() ?? NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main
-        else { return }
-        let saved = PanelFrame.key(for: screen).flatMap { PanelFrame.load($0) }.map { $0.offsetBy(dx: screen.frame.minX, dy: screen.frame.minY) }
-        var frame = PanelFrame.placement(saved: saved, visible: screen.visibleFrame, minSize: panel.minSize)
-        let taken = Viewer.shared.windows.filter { $0 !== self && $0.open }.map { $0.panel.frame.origin }
+        var frame: NSRect, bounds: NSRect?
+        if let f = Viewer.parkedFrame {
+            frame = f
+        } else {
+            guard let screen = Viewer.finderScreen() ?? NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main
+            else { return }
+            let saved = PanelFrame.key(for: screen).flatMap { PanelFrame.load($0) }.map { $0.offsetBy(dx: screen.frame.minX, dy: screen.frame.minY) }
+            frame = PanelFrame.placement(saved: saved, visible: screen.visibleFrame, minSize: panel.minSize)
+            bounds = screen.visibleFrame
+        }
+        // A window still on its way to the screen holds its frame too, so files opened together do not stack.
+        let taken = Viewer.shared.windows.filter { $0 !== self && ($0.open || $0.request != 0) }.map { $0.panel.frame.origin }
         while taken.contains(where: { abs($0.x - frame.minX) < 2 && abs($0.y - frame.minY) < 2 }) {
             let next = frame.offsetBy(dx: 24, dy: -24)
-            guard screen.visibleFrame.contains(next) else { break }
+            if let b = bounds, !b.contains(next) { break }
             frame = next
         }
         panel.setFrame(frame, display: false)
@@ -503,6 +526,8 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
     static let idleExit: TimeInterval = 30 * 60
     /// Where a window opens instead of over Finder's window (a harness parks it off screen).
     static var parkedFrame: NSRect?
+    /// Off in a harness, so a window never takes the focus.
+    static var activates = true
 
     private var conn: NSXPCConnection?
     private var retries = 0
@@ -525,8 +550,27 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
         }
     }
 
+    /// Set once started; a harness sets it to keep the viewer off the helper.
+    var started = false
+    /// Last id given to a document window: negative, so never one of the helper's requests.
+    private var documentID = 0
+    /// Has opened a document: without the helper it stays until idle, a warm window for the next one.
+    private var servedDocuments = false
+    /// A document's fallback: the first app other than spacebar that opens it. A harness replaces it.
+    static var handOff: (URL) -> Void = { url in
+        // The same choice as Open: never spacebar, a browser or an office suite; text goes to a text editor.
+        let app = LinkPolicy.opener(for: url)?.app ?? LinkPolicy.textOpener(for: url, editor: nil)?.app
+        guard let app else { return vlog.error("no other app opens \(url.lastPathComponent, privacy: .private)") }
+        vlog.info("handing \(url.lastPathComponent, privacy: .private) to \(app.lastPathComponent, privacy: .public)")
+        NSWorkspace.shared.open([url], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration()) { _, err in
+            if let err { vlog.error("hand-off failed: \(err.localizedDescription, privacy: .public)") }
+        }
+    }
+
     func start() {
-        windows = [ViewerWindow()]
+        guard !started else { return }
+        started = true
+        if windows.isEmpty { windows = [ViewerWindow()] }
         connect()
         armIdle()
     }
@@ -556,7 +600,7 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
     }
 
     /// Without the helper nothing can ask for a window: a few tries (launchd may be restarting it), then exit. Open windows
-    /// stay; the helper just no longer follows Finder for them.
+    /// stay; the helper just no longer follows Finder for them. A viewer that has opened documents leaves exiting to `armIdle`.
     private func lost() {
         guard conn != nil else { return }
         conn?.invalidate()
@@ -564,12 +608,12 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
         current = nil
         retries += 1
         // Open windows keep the viewer going, and it keeps trying, so Space reaches it again once the helper is back.
-        let windowsOpen = windows.contains { $0.open }
-        guard retries <= 5 || windowsOpen else {
+        let windowsOpen = windows.contains { $0.open || $0.request != 0 }
+        guard retries <= 5 || windowsOpen || servedDocuments else {
             vlog.info("helper unreachable: exiting")
             exit(0)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + Double(min(retries, 5))) { self.connect() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double(min(retries, servedDocuments ? 30 : 5))) { self.connect() }
     }
 
     func helper() -> SpacebarHelperProtocol? {
@@ -665,6 +709,33 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
             w.present(urls, id: requestID)
             self.windowsChanged()
         }
+    }
+
+    /// Files opened from Finder or another app, each in its own window, or the one already showing it. The helper never
+    /// follows these (`current` is untouched), so it never shows another file in one or closes it.
+    func openDocuments(_ urls: [URL]) {
+        start()
+        servedDocuments = true
+        for url in urls.filter(\.isFileURL).prefix(20) {
+            if let w = windows.first(where: { $0.shows([url]) }) {
+                if w.open { w.focus() }
+                continue
+            }
+            // Ordered out for the helper while another app was in front: back as a document, which the helper no longer follows.
+            if let w = windows.first(where: { $0.suspended && !$0.closing && $0.controller.spaced == [url.resolvingSymlinksInPath().path] }) {
+                if w === current { current = nil; popoverTold = false }
+                w.document = true
+                documentID -= 1
+                w.restore(documentID)
+                w.focus()
+                continue
+            }
+            let w = freshWindow()
+            w.document = true
+            documentID -= 1
+            w.present([url], id: documentID)
+        }
+        windowsChanged()
     }
 
     /// The helper follows `w` from now on: an edit in the window it followed before no longer holds its keys.

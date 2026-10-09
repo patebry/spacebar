@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   push:
     branches: ['release-*']
-    paths: ['Viewer/**', 'Preview/**', 'Helper/Decision.swift', 'test/viewerlatency/**', 'test/scenarios/**', 'test/offscreen.swift']
+    paths: ['Viewer/**', 'Preview/**', 'Helper/Decision.swift', 'test/viewerlatency/**', 'test/scenarios/**', 'test/offscreen.swift', '.github/workflows/viewer-checks.yml']
 
 permissions: {}
 

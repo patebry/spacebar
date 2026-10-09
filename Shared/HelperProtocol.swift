@@ -49,10 +49,6 @@ enum HelperIDs {
     func close()
     /// Brings the window forward and makes it key, the viewer becoming the active app.
     func focus()
-    /// Another app came forward: the panel is ordered out, keeping what it shows for `restore`.
-    func suspend()
-    /// Finder came back: the suspended panel shows again as request `requestID`. Replies false when nothing is suspended.
-    func restore(_ requestID: Int, reply: @escaping (Bool) -> Void)
     /// A pinch or smart zoom begun over the open panel, as the tap took it from Finder (`CGEvent.data`, the pointer's place
     /// included).
     func gesture(_ data: Data)

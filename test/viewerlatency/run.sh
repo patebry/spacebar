@@ -2,9 +2,9 @@
 # Times the Space helper's viewer off screen: its real Viewer and PreviewController, driven through the call the helper makes
 # over XPC (show, then key and close), with the panel parked off every display. For each kind of file: show -> the panel's
 # first visible frame in the window server, and show -> content painted (the page's render, an <img> decoded, a native view up).
-# Then an arrow key -> the next file painted, and the process's memory at idle. Then what a suspended panel shows when it is
-# restored, closed or replaced (first visible frames), and that a fallback view is rendered once. No key events, no window on
-# screen.
+# Then an arrow key -> the next file painted, and the process's memory at idle. Then that the next file's first visible frame
+# never shows the last one, that a second Space brings its window forward, and that a fallback view is rendered once. No key
+# events, no window on screen.
 #   RUNS=20 (samples per file kind)
 #   LATENCY_TARGETS=0 (CI): the timing and memory targets are printed, not graded; every other check still is
 set -euo pipefail

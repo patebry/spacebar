@@ -12,7 +12,7 @@ document-start state, the toggle and its persistence, the message gate, and that
 popover, themes and narrow panels still work with the sidebar open or collapsed, and the native PDF view: laid over the page's
 PDF area, following the sidebar and the panel, and torn down cleanly. A sandboxed copy of the harness, signed with the
 extension's entitlements, shows that a PDF and an image render under the extension's sandbox."""
-import base64, json, os, plistlib, random, shutil, struct, subprocess, sys, tempfile, urllib.parse, wave, zlib
+import base64, json, os, plistlib, random, re, shutil, struct, subprocess, sys, tempfile, time, urllib.parse, wave, zlib
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from webthemes import Page, ROOT, THEMES, HELPERS, TASK_NAMES, click
 import hostile
@@ -220,6 +220,22 @@ def shoot(page, name):
         page.cmd('@wait:0.3')
         page.cmd(f'@shot:{os.path.join(SHOTS, name)}-{mode}.png')
     page.cmd('@appearance:light')
+
+
+def poll(page, done, limit=10.0, step=0.2):
+    """Waits in steps until done() holds or the limit passes; every message that arrived meanwhile, done()'s own commands included."""
+    end, got, cmd = time.monotonic() + limit, [], page.cmd
+    def recording(c):
+        r = cmd(c)
+        got.extend(r['messages'])
+        return r
+    page.cmd = recording
+    try:
+        while not done() and time.monotonic() < end:
+            page.cmd(f'@wait:{step}')
+    finally:
+        del page.cmd
+    return got
 
 
 def dispatch_key(page, key, **mods):
@@ -3136,7 +3152,10 @@ def missing_images(page, check, out):
     types = lambda r: [m.get('type') for m in r['messages']]
     page.cmd('@root:')
     r = page.render(doc)
-    w = page.cmd('@wait:1')
+    reasons = "return [...document.querySelectorAll('#doc .img-missing-why')].filter((n) => !n.closest('.forged')).map((n) => !!n.firstChild)"
+    # The failures arrive as each image errors; settled when every placeholder has its reason and the image that is there has loaded.
+    w = {'messages': poll(page, lambda: page.js(reasons) == [True] * 5 and page.js(natural) == [['here.png', 40]])}
+    w['messages'] += page.cmd('@wait:0.5')['messages']
     b = page.js(boxes)
     check(b[:3] == [['Wispr Flow Insights', 'media/wispr-insights.png', ['Not found', 'Reveal folder'], True],
                     ['', 'nofolder/gone.png', ['Not found'], True], ['Raw', 'media/raw.png', ['Not found', 'Reveal folder'], True]],
@@ -3151,8 +3170,12 @@ def missing_images(page, check, out):
         rv = page.js(reveal)
         check(rv['ratio'] >= 4.5, f'missing image ({mode}): Reveal folder reaches 4.5:1 on the placeholder as drawn', json.dumps(rv))
     page.cmd('@appearance:light')
-    check(page.js(natural) == [['here.png', 40]] and len([t for t in types(r) + types(w) if t == 'imageStatus']) == 1,
-          'an image that is there still renders, and the page asks about the failed ones once', json.dumps([page.js(natural), types(r) + types(w)]))
+    # Failures that error in different turns are asked in separate batches; each path is asked about once.
+    # The harness passes the paths array on as its description, "(\n "/a.png",\n ...)".
+    paths = lambda v: re.findall(r'"((?:[^"\\]|\\.)*)"', v) if isinstance(v, str) else list(v)
+    asked = [p for m in r['messages'] + w['messages'] if m.get('type') == 'imageStatus' for p in paths(m.get('paths', []))]
+    check(page.js(natural) == [['here.png', 40]] and len(asked) == 5 and len(set(asked)) == 5,
+          'an image that is there still renders, and the page asks about the failed ones once', json.dumps([page.js(natural), asked]))
     check(page.js("return [...document.querySelectorAll('#doc .img-blocked')].map((n) => n.querySelector('.img-alt').textContent)") == ['Remote'],
           'remote images off: the remote image keeps its blocked placeholder and load button')
     page.js("document.querySelector('#doc .forged').scrollIntoView({ block: 'center' }); return 0")
@@ -3382,6 +3405,7 @@ def folder_grid(page, check, out):
       for (let i = 1; i <= 40; i++) { window.scrollTo(0, h * i / 41); gridWindow(); } return 0; })()""")
     page.cmd('@wait:1.0')
     s1 = page.cmd('@thumbs')['result']
+    poll(page, lambda: s1.update(page.cmd('@thumbs')['result']) or s1['pending'] == 0)
     made = s1['made'] - s0['made']
     # A load already under way when its tile went may finish: at most one round of loads more than the last screen.
     check(made <= grid()['tiles'] + 8 and s1['pending'] == 0, 'grid: scrolled through 5,000 images at once, only the last screen of thumbnails is made',

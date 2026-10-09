@@ -120,7 +120,7 @@ jobs:
           QLPANE_RENDER: '0'
         run: for t in settings scheme linkpolicy cas editkeys pdfpane htmlpane mediapane qlpane imagepane diskimage richtext encoding archive filterkeys rivals updates report welcome settingswindow movetoapps helper; do test/$t/run.sh; done
 
-      # The Space helper's viewer off screen: what a suspended, restored, closed or replaced panel shows is graded; a shared
+      # The Space helper's viewer off screen: what a closed or reused window shows, and a second Space on its file, are graded; a shared
       # runner's timings and memory are printed, not graded.
       - name: Viewer checks
         env:

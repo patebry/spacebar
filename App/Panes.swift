@@ -352,8 +352,9 @@ struct SettingsPane: View {
 
     private func refreshDefaultApps() {
         for g in DefaultApps.Group.allCases where !settingDefaultApps.contains(g) {
-            defaultApps[g] = DefaultApps.isDefault(g)
-            if DefaultApps.isPartlyDefault(g) { partlyDefault.insert(g) } else { partlyDefault.remove(g) }
+            let state = DefaultApps.state(g)
+            defaultApps[g] = state == .all
+            if state == .some { partlyDefault.insert(g) } else { partlyDefault.remove(g) }
         }
         system.loadImageApps()
     }

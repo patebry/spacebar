@@ -340,108 +340,6 @@ spin(3)
 let idleFootprint = footprint()
 print(String(format: "\nviewer idle after every run: footprint %.1f MB, resident %.1f MB", idleFootprint, resident()))
 
-// ---- a suspended window (another app came forward), then restored, closed, or left for a Space on another file, which opens
-// in another window: only a restore shows the old content ----
-func firstFrame(_ of: () -> ViewerWindow?, until: Double = 3) -> Double? {
-    var first: Double?
-    spin(until: until) {
-        if first == nil, let w = of(), w.panel.alphaValue > 0, w.panel.isVisible {
-            first = capturedRed(w)
-        }
-        return first != nil
-    }
-    return first
-}
-/// A Space on `image`, shown, then suspended as the helper suspends it: the window it opened in.
-func suspended(_ image: String, before: (ViewerWindow) -> Void = { _ in }) -> ViewerWindow? {
-    request += 1
-    let id = request
-    painted.last = nil
-    let url = files.appendingPathComponent(image)
-    openAsync(url, id)
-    var w: ViewerWindow?
-    spin(until: 5) {
-        w = w ?? landed(id)
-        guard let w else { return false }
-        return paintedIn(w, url.path) && w.panel.alphaValue > 0 && (image.hasSuffix(".png") || nativeUp(w))
-    }
-    spin(0.1)
-    if let w { before(w) }
-    DispatchQueue.global().async { viewer.suspend() }
-    spin(0.3)
-    return w
-}
-/// The helper's restore: the viewer's answer, and the request it was made for.
-func restoreReply() -> (ok: Bool?, id: Int) {
-    request += 1
-    var answer: Bool?
-    let id = request
-    DispatchQueue.global().async { viewer.restore(id) { ok in DispatchQueue.main.async { answer = ok } } }
-    spin(until: 2) { answer != nil }
-    return (answer, id)
-}
-/// Red shares; -1 when the window was never seen (or not restored), -2 when the Space opened in another window than the
-/// closed one it should have reused.
-var restored: [Double] = [], afterClose: [Double] = [], replaced: [Double] = [], closedShown = 0, closedRestored = 0, suspendedShown = 0, suspendedKept = 0
-for image in ["red.png", "red.heic"] {
-    for _ in 0..<3 {
-        let s1 = suspended(image)
-        let r1 = restoreReply()
-        if let s1, r1.ok == true, landed(r1.id) === s1 { restored.append(firstFrame({ s1 }) ?? -1) } else { restored.append(-1) }
-        viewer.close()
-        spin(settle)
-
-        let s2 = suspended(image)
-        viewer.close()
-        if s2 == nil || firstFrame({ s2 }, until: 0.5) != nil { closedShown += 1 }
-        if restoreReply().ok != false || (s2?.panel.alphaValue ?? 0) > 0 { closedRestored += 1 }
-        request += 1
-        let a = request
-        openAsync(files.appendingPathComponent("notes.md"), a)
-        let share = firstFrame({ landed(a) })
-        afterClose.append(s2 != nil && landed(a) === s2 ? share ?? -1 : -2)
-        viewer.close()
-        spin(settle)
-
-        // Finder back on another file: the helper forgets the suspended window, a Space opens in a spare, not in it, and the
-        // viewer lets the suspended one go.
-        let s3 = suspended(image)
-        request += 1
-        let b = request
-        openAsync(files.appendingPathComponent("notes.md"), b)
-        replaced.append(firstFrame({ landed(b) }) ?? -1)
-        if s3 == nil || landed(b) === s3 || viewer.current === s3 || (s3!.panel.isVisible && s3!.panel.alphaValue > 0) { suspendedShown += 1 }
-        viewer.close()
-        spin(settle)
-        if s3?.suspended == true { suspendedKept += 1 }
-    }
-}
-// A PDF keeps its page through a suspend and restore.
-func pdfView(_ w: ViewerWindow) -> PDFView? {
-    var stack = w.panel.contentView.map { [$0] } ?? []
-    while let v = stack.popLast() {
-        if let p = v as? PDFView, p.document != nil { return p }
-        stack += v.subviews
-    }
-    return nil
-}
-var pdfPage = -1
-let pdfWindow = suspended("report.pdf") { w in
-    if let p = pdfView(w), let page = p.document?.page(at: 6) { p.go(to: page) }
-    spin(0.3)
-}
-let pdfRestore = restoreReply()
-spin(0.3)
-if let w = pdfWindow, pdfRestore.ok == true, landed(pdfRestore.id) === w, w.panel.isVisible, w.panel.alphaValue > 0,
-   let p = pdfView(w), let page = p.currentPage {
-    pdfPage = p.document?.index(for: page) ?? -1
-}
-viewer.close()
-spin(settle)
-print("PDF at page 7, suspended and restored: \(pdfPage < 0 ? "not restored" : "at page \(pdfPage + 1)")")
-let shares = { (xs: [Double]) in xs.map { String(format: "%.2f", $0) }.joined(separator: " ") }
-print("suspended red image (PNG, then HEIC), red in the first visible frame: restored \(shares(restored)); closed, then Markdown \(shares(afterClose)); Markdown Spaced while suspended \(shares(replaced)), suspended window kept \(suspendedKept)")
-
 // ---- an image that fell back to its info card is rendered once, not shown again when the window appears ----
 let broken = files.appendingPathComponent("broken.heic")
 var brokenRenders: [Int] = []
@@ -553,12 +451,6 @@ target(String(format: "arrow -> next file painted p50 %.1f ms <= 50 ms", pct(key
 target(String(format: "viewer idle footprint %.1f MB <= 90 MB", idleFootprint), idleFootprint <= 90)
 check("the first visible frame of the next file never shows the last one", stale.allSatisfy { $0 == 0 })
 check(String(format: "every close orders the panel out within %.0f ms", settle * 1000), closedLeftUp == 0)
-check("a suspended panel restored shows its content again (the red check sees red)", restored.allSatisfy { $0 > 0.9 })
-check("a suspended PDF restored is still at its page", pdfPage == 6)
-check("a suspended panel closed never appears again, and a restore after the close is refused", closedShown == 0 && closedRestored == 0)
-check("a suspended panel closed, then shown for another file: the first visible frame has none of the old one", afterClose.allSatisfy { $0 == 0 })
-check("a Space on another file while a window is suspended opens another window, whose first visible frame has none of the old file, and the suspended one stays out and is let go",
-      replaced.allSatisfy { $0 == 0 } && suspendedShown == 0 && suspendedKept == 0)
 check("an image that fell back to its info card is rendered once per show", brokenRenders.allSatisfy { $0 == 1 })
 check("a second Space on the open file brings its window forward: same window, request adopted, no new window, no new render", reSpaceKept)
 check("a window a Space opened is not key, and the Space did not activate the app", notKey)

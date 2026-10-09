@@ -17,7 +17,7 @@ id=md.spacebar.test.viewerlatency
 xpc=$app/Contents/XPCServices/$id.writer.xpc
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$xpc/Contents/MacOS" "$out/support" "$out/files"
 # shellcheck disable=SC2086
-xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/viewerlatency/main.swift test/offscreen.swift test/nsevents.swift Viewer/Viewer.swift Viewer/PanelFrame.swift Viewer/FinderCopy.swift Shared/HelperProtocol.swift $PREVIEW_SRC \
+xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/viewerlatency/main.swift test/offscreen.swift test/nsevents.swift Viewer/Viewer.swift Viewer/PanelFrame.swift Viewer/FinderCopy.swift Shared/HelperProtocol.swift Helper/Decision.swift $PREVIEW_SRC \
   -framework QuickLookUI -framework WebKit -framework PDFKit -framework AVKit -framework AVFoundation -framework QuickLookThumbnailing \
   -o "$app/Contents/MacOS/viewerlatency"
 xcrun swiftc -swift-version 5 -O -target arm64-apple-macos13.0 test/viewerlatency/writer/main.swift Shared/WriterProtocol.swift -o "$xpc/Contents/MacOS/stubwriter"

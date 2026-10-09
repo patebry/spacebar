@@ -1,5 +1,5 @@
-// Drives the Space helper's viewer (Viewer/Viewer.swift) as the helper does over XPC, with its panel parked off screen, and
-// times each show. Build and run with test/viewerlatency/run.sh.
+// Drives the Space helper's viewer (Viewer/Viewer.swift) as the helper does over XPC, with its windows parked off screen, and
+// times each Space. Build and run with test/viewerlatency/run.sh.
 import AppKit
 import ImageIO
 import PDFKit
@@ -88,17 +88,23 @@ _ = NSApplication.shared
 OffScreen.install()
 NSApp.setActivationPolicy(.accessory)
 Viewer.parkedFrame = NSRect(x: -20000, y: -20000, width: 1100, height: 720)
+Viewer.activates = false
 let launched = now()
 let viewer = Viewer.shared
+viewer.started = true
+/// The spare every Space here opens in: first among the spares, so the viewer reuses it whenever it is closed.
+let win = viewer.freshWindow()
 
 /// Stands between the page and WebHost on the "sb" handler, noting when each render has been drawn (the page posts `rendered`
 /// from the animation frame after it lays out); an <img> is also waited for until it is decoded.
 final class Painted: NSObject, WKScriptMessageHandler {
+    let host: WebHost
+    init(_ host: WebHost) { self.host = host }
     var last: (path: String, view: String, at: UInt64)?
     /// Each render drawn, as "path view".
     var renders: [String] = []
     func userContentController(_ ucc: WKUserContentController, didReceive m: WKScriptMessage) {
-        WebHost.shared.userContentController(ucc, didReceive: m)
+        host.userContentController(ucc, didReceive: m)
         guard let b = m.body as? [String: Any], b["type"] as? String == "rendered" else { return }
         let at = now()
         m.webView?.evaluateJavaScript("[current.path, current.view]") { r, _ in
@@ -110,18 +116,17 @@ final class Painted: NSObject, WKScriptMessageHandler {
         }
     }
 }
-let painted = Painted()
-let web = WebHost.shared.web
+let painted = Painted(win.host)
+let web = win.host.web
 OffScreen.keepDrawing(web)
-spin(until: 10) { WebHost.shared.ready }
+spin(until: 10) { win.host.ready }
 let pageReady = now()
-if ProcessInfo.processInfo.environment["NOWARM"] == nil { web.evaluateJavaScript("sb.warm && sb.warm(); 0") }
 web.configuration.userContentController.removeScriptMessageHandler(forName: "sb")
 web.configuration.userContentController.add(painted, name: "sb")
 
 /// A native view (PDF, image) is up with its content, over the page.
 func nativeUp() -> Bool {
-    var stack = viewer.panel.contentView.map { [$0] } ?? []
+    var stack = win.panel.contentView.map { [$0] } ?? []
     while let v = stack.popLast() {
         stack += v.subviews
         if v.isHidden || v.superview == nil { continue }
@@ -157,7 +162,7 @@ var closedLeftUp = 0
 let graded = ProcessInfo.processInfo.environment["LATENCY_TARGETS"] != "0"
 let settle = graded ? 0.25 : 1.0
 
-/// One Space: the helper's show call, from an XPC thread; then the close the next Space or Esc sends.
+/// One Space: the helper's open call, from an XPC thread, into the closed spare `win`; then the close Esc sends.
 func space(_ url: URL) -> Sample {
     request += 1
     let id = request
@@ -166,10 +171,10 @@ func space(_ url: URL) -> Sample {
     var frameAt: UInt64?, frameDone = false
     lock.lock(); let wn = windowNumber; lock.unlock()
     frameWatch({ lock.lock(); defer { lock.unlock() }; return windowNumber > 0 ? windowNumber : wn }, from: t0) { t in frameAt = t; frameDone = true }
-    DispatchQueue.global(qos: .userInteractive).async { viewer.show([url.path], requestID: id) { _ in } }
+    DispatchQueue.global(qos: .userInteractive).async { viewer.open([url.path], requestID: id) { _ in } }
     var paintedAt: UInt64?
     spin(until: 5) {
-        lock.lock(); windowNumber = viewer.panel.windowNumber; lock.unlock()
+        lock.lock(); windowNumber = win.panel.windowNumber; lock.unlock()
         if paintedAt == nil, let p = painted.last, p.path == url.path {
             if ["pdf", "bitmap"].contains(p.view) { if nativeUp() { paintedAt = now() } } else { paintedAt = p.at }
         }
@@ -177,7 +182,7 @@ func space(_ url: URL) -> Sample {
     }
     viewer.close()
     spin(settle)
-    if viewer.panel.isVisible { closedLeftUp += 1 }
+    if win.panel.isVisible { closedLeftUp += 1 }
     return Sample(frame: frameAt.map { ms(t0, $0) }, painted: paintedAt.map { ms(t0, $0) })
 }
 
@@ -226,7 +231,7 @@ for (name, file) in kinds where ProcessInfo.processInfo.environment["ONLY"].map(
 print(line("ALL frame", allFrames))
 print(line("ALL painted", allPainted))
 
-// ---- the panel reused for another file never shows the last one: a red image, then Markdown, each first visible frame ----
+// ---- the window reused for another file never shows the last one: a red image, then Markdown, each first visible frame ----
 func redShare(_ img: CGImage?) -> Double {
     guard let img, let data = img.dataProvider?.data, let p = CFDataGetBytePtr(data) else { return -1 }
     let bpr = img.bytesPerRow, bpp = img.bitsPerPixel / 8
@@ -240,19 +245,19 @@ func redShare(_ img: CGImage?) -> Double {
     }
     return Double(red) / Double(max(n, 1))
 }
-/// The panel's red share as the window server has it; the capture is let go at once, so it is not counted as the viewer's memory.
-func capturedRed() -> Double {
-    autoreleasepool { redShare(CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(viewer.panel.windowNumber), [.boundsIgnoreFraming])) }
+/// A window's red share as the window server has it; the capture is let go at once, so it is not counted as the viewer's memory.
+func capturedRed(_ w: ViewerWindow = win) -> Double {
+    autoreleasepool { redShare(CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(w.panel.windowNumber), [.boundsIgnoreFraming])) }
 }
 var stale: [Double] = []
 for _ in 0..<5 {
     _ = space(files.appendingPathComponent("red.png"))
     request += 1
     let id = request
-    DispatchQueue.global().async { viewer.show([files.appendingPathComponent("notes.md").path], requestID: id) { _ in } }
+    DispatchQueue.global().async { viewer.open([files.appendingPathComponent("notes.md").path], requestID: id) { _ in } }
     var first: Double?
     spin(until: 3) {
-        if first == nil, viewer.panel.alphaValue > 0, viewer.panel.isVisible {
+        if first == nil, win.panel.alphaValue > 0, win.panel.isVisible {
             first = capturedRed()
         }
         return first != nil
@@ -266,11 +271,11 @@ print("\nred image, then Markdown: red in the middle of each first visible frame
 // ---- an arrow key: the next file in the sidebar painted ----
 print("\narrow -> next file painted (list session, warm)")
 let first = walk.appendingPathComponent(walkNames[0])
-DispatchQueue.global().async { viewer.show([first.path], requestID: 9999) { _ in } }
+DispatchQueue.global().async { viewer.open([first.path], requestID: 9999) { _ in } }
 spin(until: 5) { painted.last?.path == first.path }
-spin(until: 5) { viewer.keys.session != nil }
+spin(until: 5) { win.keys.session != nil }
 spin(0.3)
-guard viewer.keys.session != nil else { print("FAIL no list session: the sidebar never took the arrows"); exit(1) }
+guard win.keys.session != nil else { print("FAIL no list session: the sidebar never took the arrows"); exit(1) }
 var arrows: [Double?] = []
 var at = 0
 for i in 0..<(runs * 2) {
@@ -288,7 +293,7 @@ for i in 0..<(runs * 2) {
         return got != nil
     }
     arrows.append(got.map { ms(t0, $0) })
-    if got == nil, ProcessInfo.processInfo.environment["DEBUG"] != nil { print("missed \(target.lastPathComponent): last \(painted.last.map { "\($0.path) \($0.view)" } ?? "nil") session \(viewer.keys.session ?? -1)") }
+    if got == nil, ProcessInfo.processInfo.environment["DEBUG"] != nil { print("missed \(target.lastPathComponent): last \(painted.last.map { "\($0.path) \($0.view)" } ?? "nil") session \(win.keys.session ?? -1)") }
     at = next
     spin(0.15)
 }
@@ -300,12 +305,14 @@ spin(3)
 let idleFootprint = footprint()
 print(String(format: "\nviewer idle after every run: footprint %.1f MB, resident %.1f MB", idleFootprint, resident()))
 
-// ---- a suspended panel (another app came forward), then restored, closed or replaced: only a restore shows the old content ----
-func firstFrame(until: Double = 3) -> Double? {
+// ---- a suspended window (another app came forward), then restored, closed, or left for a Space on another file, which opens
+// in another window: only a restore shows the old content ----
+func firstFrame(_ of: () -> ViewerWindow = { win }, until: Double = 3) -> Double? {
     var first: Double?
     spin(until: until) {
-        if first == nil, viewer.panel.alphaValue > 0, viewer.panel.isVisible {
-            first = capturedRed()
+        let w = of()
+        if first == nil, w.panel.alphaValue > 0, w.panel.isVisible {
+            first = capturedRed(w)
         }
         return first != nil
     }
@@ -316,8 +323,8 @@ func suspended(_ image: String, before: () -> Void = {}) {
     let id = request
     painted.last = nil
     let url = files.appendingPathComponent(image)
-    DispatchQueue.global().async { viewer.show([url.path], requestID: id) { _ in } }
-    spin(until: 5) { painted.last?.path == url.path && viewer.panel.alphaValue > 0 && (image.hasSuffix(".png") || nativeUp()) }
+    DispatchQueue.global().async { viewer.open([url.path], requestID: id) { _ in } }
+    spin(until: 5) { painted.last?.path == url.path && win.panel.alphaValue > 0 && (image.hasSuffix(".png") || nativeUp()) }
     spin(0.1)
     before()
     DispatchQueue.global().async { viewer.suspend() }
@@ -331,7 +338,7 @@ func restoreReply() -> Bool? {
     spin(until: 2) { answer != nil }
     return answer
 }
-var restored: [Double] = [], afterClose: [Double] = [], replaced: [Double] = [], closedShown = 0, closedRestored = 0
+var restored: [Double] = [], afterClose: [Double] = [], replaced: [Double] = [], closedShown = 0, closedRestored = 0, suspendedShown = 0
 for image in ["red.png", "red.heic"] {
     for _ in 0..<3 {
         suspended(image)
@@ -343,26 +350,31 @@ for image in ["red.png", "red.heic"] {
         suspended(image)
         viewer.close()
         if firstFrame(until: 0.5) != nil { closedShown += 1 }
-        if restoreReply() != false || viewer.panel.alphaValue > 0 { closedRestored += 1 }
+        if restoreReply() != false || win.panel.alphaValue > 0 { closedRestored += 1 }
         request += 1
         let a = request
-        DispatchQueue.global().async { viewer.show([files.appendingPathComponent("notes.md").path], requestID: a) { _ in } }
+        DispatchQueue.global().async { viewer.open([files.appendingPathComponent("notes.md").path], requestID: a) { _ in } }
         afterClose.append(firstFrame() ?? -1)
         viewer.close()
         spin(settle)
 
+        // Finder back on another file: the helper forgets the suspended window, and a Space opens in a spare, not in it.
         suspended(image)
+        for w in viewer.windows { OffScreen.keepDrawing(w.host.web) }
         request += 1
         let b = request
-        DispatchQueue.global().async { viewer.show([files.appendingPathComponent("notes.md").path], requestID: b) { _ in } }
-        replaced.append(firstFrame() ?? -1)
+        DispatchQueue.global().async { viewer.open([files.appendingPathComponent("notes.md").path], requestID: b) { _ in } }
+        replaced.append(firstFrame({ viewer.current ?? win }) ?? -1)
+        if viewer.current === win || win.panel.isVisible { suspendedShown += 1 }
         viewer.close()
+        win.hide(tell: true)
+        win.suspended = false
         spin(settle)
     }
 }
 // A PDF keeps its page through a suspend and restore.
 func pdfView() -> PDFView? {
-    var stack = viewer.panel.contentView.map { [$0] } ?? []
+    var stack = win.panel.contentView.map { [$0] } ?? []
     while let v = stack.popLast() {
         if let p = v as? PDFView, p.document != nil { return p }
         stack += v.subviews
@@ -381,7 +393,7 @@ viewer.close()
 spin(settle)
 print("PDF at page 7, suspended and restored: at page \(pdfPage + 1)")
 let shares = { (xs: [Double]) in xs.map { String(format: "%.2f", $0) }.joined(separator: " ") }
-print("suspended red image (PNG, then HEIC), red in the first visible frame: restored \(shares(restored)); closed, then Markdown \(shares(afterClose)); replaced by Markdown \(shares(replaced))")
+print("suspended red image (PNG, then HEIC), red in the first visible frame: restored \(shares(restored)); closed, then Markdown \(shares(afterClose)); Markdown Spaced while suspended \(shares(replaced))")
 
 // ---- an image that fell back to its info card is rendered once, not shown again when the panel appears ----
 let broken = files.appendingPathComponent("broken.heic")
@@ -394,8 +406,27 @@ for _ in 0..<3 {
 }
 print("an undecodable HEIC, renders per show: \(brokenRenders.map(String.init).joined(separator: " "))")
 
-// ---- zoom in the panel as the trackpad, the mouse and the helper's keys reach it: real input's path (NSApp.sendEvent) into a
-// panel that is never key, of an app that is never active ----
+// ---- a second Space on the file a window shows brings that window forward: no new window, no new render ----
+let notesURL = files.appendingPathComponent("notes.md")
+request += 1
+let reFirst = request
+painted.last = nil
+DispatchQueue.global().async { viewer.open([notesURL.path], requestID: reFirst) { _ in } }
+spin(until: 5) { painted.last?.path == notesURL.path && win.open }
+spin(0.3)
+let windowsBefore = viewer.windows.count
+painted.renders = []
+request += 1
+let reAgain = request
+DispatchQueue.global().async { viewer.open([notesURL.path], requestID: reAgain) { _ in } }
+spin(0.5)
+let reSpaceKept = viewer.current === win && win.open && win.request == reAgain && viewer.windows.count == windowsBefore && painted.renders.isEmpty
+print("Space again on the open file: window \(viewer.current === win ? "same" : "other"), request \(win.request == reAgain ? "adopted" : "not adopted"), windows \(windowsBefore) -> \(viewer.windows.count), renders \(painted.renders.count)")
+viewer.close()
+spin(settle)
+
+// ---- zoom in the window as the trackpad, the mouse and the helper's keys reach it: real input's path (NSApp.sendEvent) into a
+// window a Space opened, so not key, of an app never activated (Viewer.activates off) ----
 func js(_ source: String) -> Any? {
     var out: Any?, done = false
     web.evaluateJavaScript(source) { r, _ in out = r; done = true }
@@ -414,27 +445,28 @@ func openImage(_ name: String) {
     request += 1
     let id = request, url = files.appendingPathComponent(name)
     painted.last = nil
-    DispatchQueue.global().async { viewer.show([url.path], requestID: id) { _ in } }
-    spin(until: 5) { painted.last?.path == url.path && viewer.panel.alphaValue > 0 && (name.hasSuffix(".png") || nativeUp()) }
+    DispatchQueue.global().async { viewer.open([url.path], requestID: id) { _ in } }
+    spin(until: 5) { painted.last?.path == url.path && win.panel.alphaValue > 0 && (name.hasSuffix(".png") || nativeUp()) }
     spin(0.4)
 }
 var zoomFailures: [String] = []
 func zoomCheck(_ name: String, _ ok: Bool) { if !ok { zoomFailures.append(name) } }
-let panelIsViewers = !NSApp.isActive && !viewer.panel.isKeyWindow && !viewer.panel.canBecomeKey
+var notKey = true
 for name in ["screen.png", "photo.heic"] {
     openImage(name)
+    if NSApp.isActive || win.panel.isKeyWindow || !win.open { notKey = false }
     let fit = zoomLabel()
     guard let mid = imageMiddle(), fit > 0, fit < 100 else { zoomFailures.append("\(name): not shown fitted (\(zoomLabel()))"); viewer.close(); spin(settle); continue }
-    Synth.send(Synth.pinch(viewer.panel, at: mid, by: 0.1), pause: 0.03)
+    Synth.send(Synth.pinch(win.panel, at: mid, by: 0.1), pause: 0.03)
     spin(0.4)
     zoomCheck("\(name): a pinch zooms (\(fit)% -> \(zoomLabel())%)", zoomLabel() > fit + 5)
     DispatchQueue.global().async { viewer.key("zoomReset", isRepeat: false) }
     spin(0.5)
     zoomCheck("\(name): ⌘0 fits (\(zoomLabel())%)", zoomLabel() == fit)
-    Synth.send([Synth.smartMagnify(viewer.panel, at: mid)])
+    Synth.send([Synth.smartMagnify(win.panel, at: mid)])
     spin(0.5)
     zoomCheck("\(name): a two-finger double tap zooms to 100% (\(zoomLabel())%)", zoomLabel() == 100)
-    Synth.send(Synth.click(viewer.panel, at: mid, 1) + Synth.click(viewer.panel, at: mid, 2), pause: 0.03)
+    Synth.send(Synth.click(win.panel, at: mid, 1) + Synth.click(win.panel, at: mid, 2), pause: 0.03)
     spin(0.5)
     zoomCheck("\(name): a double-click fits (\(zoomLabel())%)", zoomLabel() == fit)
     DispatchQueue.global().async { viewer.key("zoomIn", isRepeat: false) }
@@ -443,7 +475,7 @@ for name in ["screen.png", "photo.heic"] {
     viewer.close()
     spin(settle)
 }
-print("\nzoom in the panel (never key, app never active): " + (zoomFailures.isEmpty ? "pinch, two-finger double tap, double-click, ⌘+ and ⌘0 on a PNG and a HEIC" : zoomFailures.joined(separator: "; ")))
+print("\nzoom in the window (not key, app not active): " + (zoomFailures.isEmpty ? "pinch, two-finger double tap, double-click, ⌘+ and ⌘0 on a PNG and a HEIC" : zoomFailures.joined(separator: "; ")))
 
 // ---- the targets: Space -> frame includes the helper's own decision (7.5 ms p50 measured in Finder, FINDINGS.md), added here ----
 var failures = 0
@@ -463,9 +495,11 @@ check("a suspended panel restored shows its content again (the red check sees re
 check("a suspended PDF restored is still at its page", pdfPage == 6)
 check("a suspended panel closed never appears again, and a restore after the close is refused", closedShown == 0 && closedRestored == 0)
 check("a suspended panel closed, then shown for another file: the first visible frame has none of the old one", afterClose.allSatisfy { $0 == 0 })
-check("a suspended panel replaced by a show of another file: the first visible frame has none of the old one", replaced.allSatisfy { $0 == 0 })
+check("a Space on another file while a window is suspended opens another window, whose first visible frame has none of the old file, and the suspended one stays out",
+      replaced.allSatisfy { $0 == 0 } && suspendedShown == 0)
 check("an image that fell back to its info card is rendered once per show", brokenRenders.allSatisfy { $0 == 1 })
-check("the harness's panel is the viewer's: never key, its app not active", panelIsViewers)
+check("a second Space on the open file brings its window forward: same window, request adopted, no new window, no new render", reSpaceKept)
+check("a window a Space opened is not key and its app not active (nothing activated it)", notKey)
 check("zoom in the panel: pinch, two-finger double tap, double-click, ⌘+ and ⌘0, on <img> and ImagePane", zoomFailures.isEmpty)
 print(failures == 0 ? "viewer latency: all targets met" : "viewer latency: \(failures) targets missed")
 exit(failures == 0 ? 0 : 1)

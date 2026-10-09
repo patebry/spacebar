@@ -60,11 +60,14 @@ enum DefaultApps {
         g.types.compactMap(UTType.init).filter { isSpacebar(NSWorkspace.shared.urlForApplication(toOpen: $0)) }.count
     }
 
-    /// Every type in `g` opens in spacebar.
-    static func isDefault(_ g: Group) -> Bool { spacebarCount(g) == g.types.count }
+    /// How much of a group opens in spacebar.
+    enum State { case none, some, all }
 
-    /// Some, not all, of `g` opens in spacebar.
-    static func isPartlyDefault(_ g: Group) -> Bool { (1..<g.types.count).contains(spacebarCount(g)) }
+    /// How much of `g` opens in spacebar, from one lookup per type.
+    static func state(_ g: Group) -> State {
+        let n = spacebarCount(g)
+        return n == 0 ? .none : n == g.types.count ? .all : .some
+    }
 
     private static let previousKey = "previousDefaultApps"
 

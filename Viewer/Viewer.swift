@@ -180,8 +180,6 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
     /// The request on screen, or on its way there; 0 when closed.
     private(set) var request = 0
     private(set) var open = false
-    /// Ordered out while another app is in front, keeping what it shows until Finder comes back (`restore`).
-    var suspended = false
     /// The writer's key panel holds the keyboard for this window.
     var textSession = false
     /// One of the page's popovers is open, as the page last said: Esc closes it.
@@ -218,7 +216,7 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
     /// Has drawn a frame: WebKit's first paint in a new content process costs a Space 20 to 75 ms, so a spare pays it here.
     private var painted = false
     /// A full-screen window leaves full screen before it closes; this is the close to finish then.
-    private var hideAfterFullScreen: (tell: Bool, blank: Bool)?
+    private var hideAfterFullScreen: Bool?
 
     /// Draws the warmed page once, out of sight, while the window is still a spare.
     private func prepaint() {
@@ -240,7 +238,7 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
     }
 
     /// Closed and ready to take the next Space.
-    var isSpare: Bool { !open && request == 0 && !suspended && !closing }
+    var isSpare: Bool { !open && request == 0 && !closing }
 
     func setPopover(_ on: Bool) {
         guard on != popover else { return }
@@ -264,8 +262,6 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
         guard !urls.isEmpty else { return decline(id, "no paths") }
         // Hidden when its last window closed: shown again without taking the keyboard from Finder.
         if NSApp.isHidden { NSApp.unhideWithoutActivation() }
-        if suspended { hide(tell: false) }
-        suspended = false
         request = id
         controller.spaced = Set(urls.map { $0.resolvingSymlinksInPath().path })
         controller.onReady = { [weak self] _ in self?.ready(id) }
@@ -346,47 +342,26 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
         if let file { Viewer.handOff(file) }
     }
 
-    func restore(_ id: Int) {
-        if NSApp.isHidden { NSApp.unhideWithoutActivation() }
-        suspended = false
-        request = id
-        controller.onReady = { [weak self] _ in self?.ready(id) }
-        controller.onDecline = { [weak self] why in self?.decline(id, why) }
-        panel.alphaValue = 1
-        panel.ignoresMouseEvents = false
-        panel.orderFrontRegardless()
-        open = true
-        controller.hostAppeared()
-        announce(id)
-    }
-
-    func suspend() {
-        guard open, !closing else { return }
-        controller.hostSuspending()
-        hide(tell: false, blank: false)
-        suspended = true
-    }
-
-    /// `blank`: the page is emptied, and drawn so, before the window is ordered out, so a reused window never shows the last
-    /// file's content for a frame. A window suspended for `restore` keeps its content.
-    func hide(tell: Bool, blank: Bool = true) {
+    /// The page is emptied, and drawn so, before the window is ordered out, so a reused window never shows the last file's
+    /// content for a frame.
+    func hide(tell: Bool) {
         // A window kept for reuse must not come back as an empty full-screen space, and one ordered out mid-transition can
         // strand one: it leaves full screen first (windowDidExitFullScreen).
         if panel.styleMask.contains(.fullScreen) {
             if hideAfterFullScreen == nil { panel.toggleFullScreen(nil) }
-            hideAfterFullScreen = (tell || hideAfterFullScreen?.tell == true, blank || hideAfterFullScreen?.blank == true)
+            hideAfterFullScreen = tell || hideAfterFullScreen == true
             return
         }
         let id = request
         request = 0
         document = false
-        if blank, open || suspended { controller.hostDisappearing() }
+        if open { controller.hostDisappearing() }
         let was = open || panel.isVisible
         open = false
         popover = false
         textSession = false
         panel.ignoresMouseEvents = true
-        if blank, was || suspended {
+        if was {
             panel.alphaValue = 0
             if !panel.isVisible { panel.orderFrontRegardless() }
             let out = { [weak self] in
@@ -399,7 +374,7 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
         } else {
             panel.orderOut(nil)
         }
-        Viewer.shared.closed(self, request: id, tell: tell && was, kept: !blank)
+        Viewer.shared.closed(self, request: id, tell: tell && was)
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -417,9 +392,9 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
     }
 
     func windowDidExitFullScreen(_ notification: Notification) {
-        guard let h = hideAfterFullScreen else { return }
+        guard let tell = hideAfterFullScreen else { return }
         hideAfterFullScreen = nil
-        hide(tell: h.tell, blank: h.blank)
+        hide(tell: tell)
     }
 
     /// Closing, but still leaving full screen: not a window to reuse yet.
@@ -605,8 +580,6 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
         guard conn != nil else { return }
         conn?.invalidate()
         conn = nil
-        // A restarted helper forgets a suspended window: it is let go, or it would never be a spare again.
-        if let w = current, w.suspended { w.hide(tell: false); w.suspended = false }
         current = nil
         retries += 1
         // Open windows keep the viewer going, and it keeps trying, so Space reaches it again once the helper is back.
@@ -660,15 +633,12 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
         }
     }
 
-    /// A window closed: the helper is told only for the one it follows; spares past `spareLimit` are let go. `kept`: ordered
-    /// out keeping its content (suspended), and still the window the helper's `restore` and `close` reach.
-    func closed(_ w: ViewerWindow, request: Int, tell: Bool, kept: Bool = false) {
+    /// A window closed: the helper is told only for the one it follows; spares past `spareLimit` are let go.
+    func closed(_ w: ViewerWindow, request: Int, tell: Bool) {
         if w === current {
             popoverTold = false
-            if !kept {
-                current = nil
-                if tell { helper()?.panelState(false, requestID: request, windowNumber: w.panel.windowNumber) }
-            }
+            current = nil
+            if tell { helper()?.panelState(false, requestID: request, windowNumber: w.panel.windowNumber) }
         }
         // After its blanking has been drawn and it has been ordered out; counted again then, so two closes drop two.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
@@ -726,15 +696,6 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
                 if w.open { w.focus() }
                 continue
             }
-            // Ordered out for the helper while another app was in front: back as a document, which the helper no longer follows.
-            if let w = windows.first(where: { $0.suspended && !$0.closing && $0.controller.spaced == [url.resolvingSymlinksInPath().path] }) {
-                if w === current { current = nil; popoverTold = false }
-                w.document = true
-                documentID -= 1
-                w.restore(documentID)
-                w.focus()
-                continue
-            }
             let w = freshWindow()
             w.document = true
             documentID -= 1
@@ -748,15 +709,6 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
         guard current !== w else { return }
         if current?.textSession == true, !w.textSession { tellTextSession(false) }
         if w.textSession, current?.textSession != true { tellTextSession(true) }
-        // The helper forgets a suspended window once it follows another, so nothing would restore or close it: it is let go,
-        // after the new window has been presented so the app is never left without one.
-        if let old = current, old.suspended {
-            DispatchQueue.main.async { [weak self] in
-                guard old.suspended, old !== self?.current else { return }
-                old.hide(tell: false)
-                old.suspended = false
-            }
-        }
         current = w
     }
 
@@ -777,20 +729,6 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
         DispatchQueue.main.async {
             guard let w = self.current else { return }
             w.hide(tell: true)
-            w.suspended = false
-        }
-    }
-
-    func suspend() {
-        DispatchQueue.main.async { self.current?.suspend() }
-    }
-
-    func restore(_ requestID: Int, reply: @escaping (Bool) -> Void) {
-        DispatchQueue.main.async {
-            guard let w = self.current, w.suspended, !w.open, w.request == 0 else { return reply(false) }
-            reply(true)
-            w.restore(requestID)
-            self.windowsChanged()
         }
     }
 

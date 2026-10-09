@@ -64,21 +64,6 @@ enum FinderAX {
         return finish()
     }
 
-    /// Finder's selection when it comes back over a hidden panel, within the same budget as a Space.
-    static func resumeRead(finderPid: pid_t) -> Decision.ResumeRead {
-        let trace = AXTrace()
-        let app = AXUIElementCreateApplication(finderPid)
-        var r = Decision.ResumeRead()
-        let focused = trace.element(app, kAXFocusedUIElementAttribute)
-        if let f = focused {
-            r.desktop = trace.element(f, kAXWindowAttribute) == nil
-            r.selection = selection(app: app, focused: f, trace: trace)
-        }
-        r.axErrors = trace.errors
-        r.elapsedMs = trace.elapsedMs
-        return r
-    }
-
     /// Finder's selection through AX only: from the focused element up to 4 ancestors (then its children) for AXSelectedRows or
     /// AXSelectedChildren, each item resolved to a path through AXURL, or AXFilename in its window's folder.
     static func selection(app: AXUIElement, focused: AXUIElement?, trace: AXTrace) -> [String] {

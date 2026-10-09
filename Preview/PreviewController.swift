@@ -697,20 +697,7 @@ class PreviewController: NSViewController {
         // The page forgot both when the host took the preview away (sb.previewClosed).
         if !displaced.isEmpty { sendConflict() }
         if !shownSticky.isEmpty { status(shownSticky, sticky: true) }
-        htmlPane?.view.setAllMediaPlaybackSuspended(false)
-        host.web.setAllMediaPlaybackSuspended(false)
         wantListKeys()
-    }
-
-    /// The host hides the view for a while and will show it again as it is (`hostAppeared`): the keys are let go and media
-    /// paused, but the native views stay.
-    func hostSuspending() {
-        appeared = false
-        stopEdit(notifyWriter: true)
-        stopFilter(notifyWriter: true)
-        mediaPane?.pause()
-        htmlPane?.view.setAllMediaPlaybackSuspended(true)
-        host.web.setAllMediaPlaybackSuspended(true)
     }
 
     /// The host is taking the view away.

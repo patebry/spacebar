@@ -777,7 +777,7 @@ check("the preview can change no Advanced setting", Settings.panelKeys.isDisjoin
 check("every key is in the window, the preview, or the README's settings.json list, or is spacebar's own",
       Settings.allKeys == Settings.windowKeys.union(Settings.advancedKeys).union(Settings.panelKeys)
         .union(["monoFont", "lineHeight", "codeTheme", "minimalChrome", "stats", "toc", "frontMatter", "math", "mermaid", "mdLinks",
-                "folderMode", "folderReadmeFirst", "sidebarKeys", "welcomeShown", "helperOffered", "webLinks"]))
+                "folderMode", "folderReadmeFirst", "sidebarKeys", "welcomeShown", "helperOffered", "openerOffered", "webLinks"]))
 let paneSource = (try? String(contentsOfFile: "App/Panes.swift", encoding: .utf8)) ?? ""
 let paneKeys = Set(paneSource.matches(#"store\.(?:binding\(\\\.\w+, |set\()"(\w+)""#))
 check("the window's controls are exactly the page and Advanced keys (the helper's through its own toggle)",

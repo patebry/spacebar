@@ -36,9 +36,11 @@ NSApp.setActivationPolicy(.accessory)
 let parked = NSRect(x: -20000, y: -20000, width: 1100, height: 760)
 var qlController: PreviewController?
 var qlWindow: NSWindow?
+/// The panel host's window: the spare a Space opens in, kept first among the spares, so every open reuses it.
+var win: ViewerWindow!
 if host == "panel" {
     Viewer.parkedFrame = parked
-    _ = Viewer.shared
+    win = Viewer.shared.freshWindow()
 } else {
     let c = PreviewController()
     let w = NSWindow(contentRect: parked, styleMask: [.borderless], backing: .buffered, defer: false)
@@ -53,15 +55,16 @@ if host == "panel" {
 final class Recorder: NSObject, WKScriptMessageHandler {
     var messages: [[String: Any]] = []
     func userContentController(_ ucc: WKUserContentController, didReceive m: WKScriptMessage) {
-        WebHost.shared.userContentController(ucc, didReceive: m)
+        pageHost.userContentController(ucc, didReceive: m)
         if let b = m.body as? [String: Any] { messages.append(b) }
     }
 }
+let pageHost: WebHost = host == "panel" ? win.host : WebHost.shared
 let rec = Recorder()
-let web = WebHost.shared.web
+let web = pageHost.web
 OffScreen.keepDrawing(web)
-spin(until: 15) { WebHost.shared.ready }
-guard WebHost.shared.ready else { print("FAIL the page never became ready"); exit(1) }
+spin(until: 15) { pageHost.ready }
+guard pageHost.ready else { print("FAIL the page never became ready"); exit(1) }
 web.configuration.userContentController.removeScriptMessageHandler(forName: "sb")
 web.configuration.userContentController.add(rec, name: "sb")
 web.evaluateJavaScript("""
@@ -85,14 +88,15 @@ func jsJSON(_ body: String) -> [String: Any] {
 let finderPid: Int32 = 583
 var route = KeyRoute()
 var misrouted: [String] = []
-func panelOpen() -> Bool { host == "panel" ? Viewer.shared.panel.isVisible : true }
+func panelOpen() -> Bool { host == "panel" ? win.panel.isVisible : true }
 /// Asks the helper's KeyRoute about a key the user types into the edit, with the text session as the viewer last reported it.
+/// The window is an ordinary one: the click into the edit made the viewer frontmost, so its keys carry the viewer's pid.
 /// Anything but .pass means the key would never reach the writer.
 func routeKey(_ name: String, code: Int64, mods: HelperMods = [], chars: String = "") {
     guard host == "panel" else { return }
-    let ctx = PanelContext(open: panelOpen(), finderPid: finderPid, viewerPid: getpid(), textSession: Viewer.shared.textSession)
-    let down = route.route(KeyEvent(code: code, chars: chars, mods: mods, targetPid: finderPid), panel: ctx)
-    _ = route.route(KeyEvent(code: code, chars: chars, down: false, mods: mods, targetPid: finderPid), panel: ctx)
+    let ctx = PanelContext(open: panelOpen(), finderPid: finderPid, viewerPid: getpid(), textSession: win.textSession)
+    let down = route.route(KeyEvent(code: code, chars: chars, mods: mods, targetPid: getpid()), panel: ctx)
+    _ = route.route(KeyEvent(code: code, chars: chars, down: false, mods: mods, targetPid: getpid()), panel: ctx)
     if down != .pass { misrouted.append("\(name)→\(down)") }
 }
 let keyCodes: [String: Int64] = ["return": 36, "enter": 76, "tab": 48, "backspace": 51, "delete": 117, "escape": 53, "space": 49,
@@ -123,13 +127,18 @@ func open(_ url: URL) {
     if host == "panel" {
         request += 1
         let id = request
-        DispatchQueue.global().async { Viewer.shared.show([url.path], requestID: id) { _ in } }
+        // A Space when the panel is closed; with it open, Finder's selection moving to the file, which the panel follows.
+        let follow = Viewer.shared.current === win && win.open
+        DispatchQueue.global().async {
+            if follow { Viewer.shared.show([url.path], requestID: id) { _ in } } else { Viewer.shared.open([url.path], requestID: id) { _ in } }
+        }
     } else {
         qlController!.start(url: url, reason: "prepare")
         qlController!.hostWillAppear()
         qlController!.hostAppeared()
     }
     spin(until: 8) { rendered(url.path, since: from) }
+    if host == "panel", Viewer.shared.current !== win { print("FAIL [panel] the Space opened in another window than the hooked one"); exit(1) }
     spin(0.3)
 }
 func closeHost() {
@@ -183,7 +192,7 @@ func click(_ sel: String, at: String = "end", char: Int = 0) -> [String: Any] {
         r["caret"] = js("editing ? editing.selStart : -1") as? Int ?? -1
     }
     if r["seq"] as? Int == seqBefore { sessionFloor = floorBefore }
-    if host == "panel", r["editing"] as? Bool == true { spin(until: 2) { Viewer.shared.textSession } }
+    if host == "panel", r["editing"] as? Bool == true { spin(until: 2) { win.textSession } }
     spin(0.25)
     return r
 }
@@ -205,7 +214,7 @@ func keys(_ steps: [[String: Any]], gap: Double = 30, settle: Double = 350) -> [
     var dropped = false
     spin(until: 30) {
         // The text session must hold for every key while they are typed, a split's or merge's hold included.
-        if host == "panel", !Viewer.shared.textSession, (js("!!editing") as? Bool) == true { dropped = true }
+        if host == "panel", !win.textSession, (js("!!editing") as? Bool) == true { dropped = true }
         guard let d = try? Data(contentsOf: work.appendingPathComponent("result.json")),
               let r = try? JSONSerialization.jsonObject(with: d) as? [String: Any], r["nonce"] as? String == nonce else { return false }
         result = r

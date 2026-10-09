@@ -38,6 +38,9 @@ final class SystemStatus: ObservableObject {
     @Published private(set) var refreshing = false
     @Published private(set) var editors: [EditorApp] = []
     @Published private(set) var defaultEditorName: String?
+    @Published private(set) var imageApps: [EditorApp] = []
+    /// The app images open in when it is not spacebar's viewer.
+    @Published private(set) var defaultImageAppName: String?
     @Published private(set) var helper = HelperState.off
     /// The app holding secure input while the helper is paused by it, when it can be found.
     @Published private(set) var secureInputOwner: String?
@@ -68,6 +71,7 @@ final class SystemStatus: ObservableObject {
             }
         }
         loadEditors()
+        loadImageApps()
     }
 
     /// A copy dragged into Applications from spacebar.dmg has not had install.sh register it. Launching it registers its
@@ -252,6 +256,26 @@ final class SystemStatus: ObservableObject {
         }
         editors = apps.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         defaultEditorName = ws.urlForApplication(toOpen: Self.markdownType).map(Self.appName)
+    }
+
+    /// The apps that open PNG and Open With would offer, for the window's Open button on an image. Loaded off the main thread:
+    /// it runs on every window-key change.
+    func loadImageApps() {
+        queue.async {
+            let ws = NSWorkspace.shared
+            let browsers = LinkPolicy.browserIDs()
+            var seen = Set<String>()
+            let apps: [EditorApp] = ws.urlsForApplications(toOpen: .png).compactMap { url in
+                guard !DefaultApps.isSpacebar(url), LinkPolicy.offerable(url, type: .png, browsers: browsers),
+                      let id = Bundle(url: url)?.bundleIdentifier, seen.insert(id).inserted else { return nil }
+                return EditorApp(id: id, name: Self.appName(url), icon: Self.icon(url))
+            }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            let name = ws.urlForApplication(toOpen: .png).flatMap { DefaultApps.isSpacebar($0) ? nil : Self.appName($0) }
+            DispatchQueue.main.async {
+                self.imageApps = apps
+                self.defaultImageAppName = name
+            }
+        }
     }
 
     /// An entry for a bundle ID that is not among the apps offered, e.g. one written to settings.json by hand.

@@ -71,8 +71,8 @@
   :root.sb-anim #sidebar { transition: width .2s ease-out, visibility 0s; }
   :root.sb-anim[data-sidebar=collapsed] #sidebar { transition: width .2s ease-out, visibility 0s .2s; }
   #side-toggle { position: fixed !important; top: 8px; left: 12px; z-index: 10 !important; }
-  /* The Space helper's panel: its traffic lights sit over the page's top-left corner, centred in the --bar-h row (ViewerPanel). */
-  :root[data-host=panel] { --titlebar-inset: 56px; }
+  /* The Space helper's window: its three traffic lights sit over the page's top-left corner, centred in the --bar-h row (ViewerPanel). */
+  :root[data-host=panel] { --titlebar-inset: 76px; }
   :root[data-host=panel] #side-toggle { left: var(--titlebar-inset); }
   #main { flex: 1 1 auto; min-width: 0; }
   #doc { max-width: var(--measure); margin: 0 auto; padding: 44px 40px 80px; overflow-x: auto;

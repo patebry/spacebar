@@ -1,6 +1,6 @@
 // Checks the Space helper's routing (Helper/Decision.swift): Decision.space over the contexts the spike recorded live in
-// Finder and other apps (contexts.json, from spike_contexts.py), and over made-up ones; then KeyRoute with the panel closed,
-// open, and open while the viewer's writer panel holds the keyboard for a text session. Build and run with test/helper/run.sh.
+// Finder and other apps (contexts.json, from spike_contexts.py), and over made-up ones; then KeyRoute with the viewer's
+// windows closed and open, and the names KeyRoute gives the keys typed in them. Build and run with test/helper/run.sh.
 // Opens no window and posts no event.
 import Foundation
 
@@ -63,6 +63,27 @@ func key(_ code: Int64, _ chars: String = "", down: Bool = true, rep: Bool = fal
 }
 func routeOnce(_ e: KeyEvent, _ p: PanelContext) -> Route { var r = KeyRoute(); return r.route(e, panel: p) }
 
+// Esc closes a window nobody has clicked into (it follows Finder); one the user has used stays.
+let followingCtx = PanelContext(open: true, finderPid: finder, viewerPid: viewer, following: true)
+check("following: Esc to Finder closes the window", routeOnce(key(KeyCode.escape), followingCtx) == .close)
+do {
+    var r = KeyRoute()
+    _ = r.route(key(KeyCode.escape), panel: followingCtx)
+    check("following: the closing Esc's repeat and key-up are swallowed",
+          r.route(key(KeyCode.escape, rep: true), panel: followingCtx) == .swallow && r.route(key(KeyCode.escape, down: false), panel: followingCtx) == .swallow)
+}
+check("following: a repeated Esc alone passes", routeOnce(key(KeyCode.escape, rep: true), followingCtx) == .pass)
+check("following: ⇧Esc passes", routeOnce(key(KeyCode.escape, mods: .shift), followingCtx) == .pass)
+check("following: Esc to the viewer passes", routeOnce(key(KeyCode.escape, to: viewer), followingCtx) == .pass)
+check("following: Esc in Finder's rename passes", routeOnce(key(KeyCode.escape), PanelContext(open: true, finderPid: finder, viewerPid: viewer, textFocus: true, following: true)) == .pass)
+check("following: ⌘W to Finder closes the window, not Finder's", routeOnce(key(13, "w", mods: .command), followingCtx) == .close)
+check("following: ⌘. to Finder closes the window", routeOnce(key(47, ".", mods: .command), followingCtx) == .close)
+check("following: Space still asks for the AX read", routeOnce(key(KeyCode.space), followingCtx) == .space)
+check("following: ⌘⇧W passes", routeOnce(key(13, "w", mods: [.command, .shift]), followingCtx) == .pass)
+check("clicked into: Esc to Finder passes", routeOnce(key(KeyCode.escape), open) == .pass)
+check("clicked into: ⌘W to Finder passes", routeOnce(key(13, "w", mods: .command), open) == .pass)
+check("closed: Esc passes even marked following", routeOnce(key(KeyCode.escape), PanelContext(open: false, finderPid: finder, viewerPid: viewer, following: true)) == .pass)
+
 // Closed.
 check("closed: a plain Space asks for the AX read", routeOnce(key(KeyCode.space), closed) == .space)
 check("closed: a repeated Space passes", routeOnce(key(KeyCode.space, rep: true), closed) == .pass)
@@ -73,9 +94,11 @@ check("closed: the helper's own re-posted Space passes", routeOnce(key(KeyCode.s
 check("closed: Esc, arrows and Return pass", [KeyCode.escape, KeyCode.down, KeyCode.up, KeyCode.returnKey].allSatisfy { routeOnce(key($0), closed) == .pass })
 check("closed: a key-up nobody took passes", routeOnce(key(KeyCode.space, down: false), closed) == .pass)
 check("closed: Space to another process (a launcher's panel over Finder) passes", routeOnce(key(KeyCode.space, to: 1526), closed) == .pass)
+check("closed: Space to the viewer passes", routeOnce(key(KeyCode.space, to: viewer), closed) == .pass)
 check("closed: Space with no target pid passes", routeOnce(key(KeyCode.space, to: 0), PanelContext(open: false, finderPid: 0, viewerPid: 0)) == .pass)
+check("closed: ⌘C and ⌘F pass (Finder's copy and search)", routeOnce(key(8, "c", mods: .command), closed) == .pass && routeOnce(key(3, "f", mods: .command), closed) == .pass)
 
-// A Space that opened the panel: its repeats and its key-up never reach Finder.
+// A Space that opened a window: its repeats and its key-up never reach Finder.
 var r = KeyRoute()
 check("show: Space asks", r.route(key(KeyCode.space), panel: closed) == .space)
 r.hold(KeyCode.space)
@@ -83,85 +106,46 @@ check("show: the held Space's repeats are swallowed while the show is on its way
 check("show: its key-up is swallowed", r.route(key(KeyCode.space, down: false), panel: open) == .swallow)
 check("show: the next key-up passes", r.route(key(KeyCode.space, down: false), panel: open) == .pass)
 
-// Open, keys to Finder or the viewer.
-for (code, n) in [(KeyCode.space, "Space"), (KeyCode.escape, "Esc")] {
-    for pid in [finder, viewer] {
-        var k = KeyRoute()
-        check("open: \(n) to \(pid == finder ? "Finder" : "the viewer") closes in one press", k.route(key(code, to: pid), panel: open) == .close)
-        check("open: \(n)'s repeat is swallowed", k.route(key(code, rep: true, to: pid), panel: PanelContext(open: false, finderPid: finder, viewerPid: viewer)) == .swallow)
-        check("open: \(n)'s key-up is swallowed", k.route(key(code, down: false, to: pid), panel: closed) == .swallow)
-    }
-}
-check("open: ⌘W closes", routeOnce(key(13, "w", mods: .command), open) == .close)
-check("open: ⌘. closes", routeOnce(key(47, ".", mods: .command), open) == .close)
-check("open: ⌘W by character, on a layout where W is elsewhere", routeOnce(key(6, "w", mods: .command), open) == .close)
-check("open: ⌘Z (W's key on AZERTY) passes", routeOnce(key(13, "z", mods: .command), open) == .pass)
+// A window open. The viewer's windows are ordinary windows: only a plain Space on its way to Finder is the helper's; every
+// other key is Finder's (its arrows move the selection the newest window follows), or the window's it was typed into.
+check("open: a plain Space to Finder asks for the AX read", routeOnce(key(KeyCode.space), open) == .space)
+check("open: a repeated Space passes", routeOnce(key(KeyCode.space, rep: true), open) == .pass)
 check("open: ⌥Space passes", routeOnce(key(KeyCode.space, mods: .option), open) == .pass)
-check("open: ⇧Esc passes", routeOnce(key(KeyCode.escape, mods: .shift), open) == .pass)
-let routed: [(Int64, String)] = [(KeyCode.up, "up"), (KeyCode.down, "down"), (KeyCode.left, "left"), (KeyCode.right, "right"), (KeyCode.home, "home"),
-                                 (KeyCode.end, "end"), (KeyCode.pageUp, "pageup"), (KeyCode.pageDown, "pagedown"), (KeyCode.returnKey, "return"), (KeyCode.enter, "return"),
-                                 (KeyCode.delete, "back")]
-for (code, name) in routed {
-    var k = KeyRoute()
-    check("open: \(name) is routed", k.route(key(code), panel: open) == .forward(name))
-    check("open: \(name) repeats are routed", k.route(key(code, rep: true), panel: open) == .forward(name))
-    check("open: \(name)'s key-up is swallowed", k.route(key(code, down: false), panel: open) == .swallow)
-    check("open: \(name) to the viewer is routed", routeOnce(key(code, to: viewer), open) == .forward(name))
-}
-check("open: every routed name is one the viewer accepts", Set(routed.map(\.1)).isSubset(of: HelperKeys.list))
-let commands: [(KeyEvent, String)] = [(key(31, "o", mods: .command), "open"), (key(3, "f", mods: .command), "find"),
-                                      (key(3, "f", mods: [.command, .option]), "filter"), (key(8, "c", mods: .command), "copy"),
-                                      (key(24, "=", mods: .command), "zoomIn"), (key(24, "+", mods: [.command, .shift]), "zoomIn"),
-                                      (key(KeyCode.keypadPlus, "+", mods: .command), "zoomIn"), (key(27, "-", mods: .command), "zoomOut"),
-                                      (key(29, "0", mods: .command), "zoomReset"), (key(KeyCode.keypad0, "0", mods: .command), "zoomReset")]
-for (e, name) in commands { check("open: \(e.mods.contains(.shift) ? "⌘⇧" : "⌘")\(e.chars) is \(name)", routeOnce(e, open) == .forward(name)) }
-check("open: every command is one the viewer accepts", Set(commands.map(\.1)) == HelperKeys.commands)
-check("open: ⌘⇧C, ⌘⌥C and ⌃⌘C pass", [HelperMods([.command, .shift]), [.command, .option], [.command, .control]].allSatisfy { routeOnce(key(8, "c", mods: $0), open) == .pass })
-check("open: ⌘⇧F and ⌃⌥⌘F pass", routeOnce(key(3, "f", mods: [.command, .shift]), open) == .pass && routeOnce(key(3, "f", mods: [.command, .option, .control]), open) == .pass)
-check("closed: ⌘C and ⌘F pass (Finder's copy and search)", routeOnce(key(8, "c", mods: .command), closed) == .pass && routeOnce(key(3, "f", mods: .command), closed) == .pass)
-check("open: ⌘⌥O passes", routeOnce(key(31, "o", mods: [.command, .option]), open) == .pass)
-check("open: ⌘⇧O passes", routeOnce(key(31, "o", mods: [.command, .shift]), open) == .pass)
-check("open: ⇧↓ passes", routeOnce(key(KeyCode.down, mods: .shift), open) == .pass)
-check("open: ⌥↓ passes", routeOnce(key(KeyCode.down, mods: .option), open) == .pass)
-check("open: ⌘↓ passes", routeOnce(key(KeyCode.down, mods: .command), open) == .pass)
-check("open: a letter passes", routeOnce(key(0, "a"), open) == .pass)
-check("open: Tab passes", routeOnce(key(48), open) == .pass)
 check("open: the helper's own event passes", routeOnce(key(KeyCode.space, tagged: true), open) == .pass)
+let plain: [(Int64, String)] = [(KeyCode.escape, "Esc"), (KeyCode.up, "↑"), (KeyCode.down, "↓"), (KeyCode.left, "←"), (KeyCode.right, "→"),
+                                (KeyCode.home, "Home"), (KeyCode.end, "End"), (KeyCode.pageUp, "Page Up"), (KeyCode.pageDown, "Page Down"),
+                                (KeyCode.returnKey, "Return"), (KeyCode.enter, "keypad Enter"), (KeyCode.delete, "Delete"), (0, "a letter"), (48, "Tab")]
+for (code, n) in plain {
+    var k = KeyRoute()
+    check("open: \(n) to Finder passes, and nothing is held", k.route(key(code), panel: open) == .pass && k.held.isEmpty
+          && k.route(key(code, rep: true), panel: open) == .pass && k.route(key(code, down: false), panel: open) == .pass)
+}
+let shortcuts = [key(13, "w", mods: .command), key(47, ".", mods: .command), key(31, "o", mods: .command), key(3, "f", mods: .command),
+                 key(3, "f", mods: [.command, .option]), key(8, "c", mods: .command), key(24, "=", mods: .command),
+                 key(24, "+", mods: [.command, .shift]), key(27, "-", mods: .command), key(29, "0", mods: .command)]
+check("open: ⌘W ⌘. ⌘O ⌘F ⌥⌘F ⌘C ⌘= ⌘⇧+ ⌘- ⌘0 to Finder pass", shortcuts.allSatisfy { routeOnce($0, open) == .pass })
+check("open: ⇧Esc and ⇧↓ pass", routeOnce(key(KeyCode.escape, mods: .shift), open) == .pass && routeOnce(key(KeyCode.down, mods: .shift), open) == .pass)
+
+// A key to the viewer's pid: the window it was typed into has it, Space too.
+for (code, n) in [(KeyCode.space, "Space")] + plain {
+    check("open, a key to the viewer: \(n) passes", routeOnce(key(code, to: viewer), open) == .pass)
+}
+check("open, a key to the viewer: the shortcuts pass", shortcuts.allSatisfy { var e = $0; e.targetPid = viewer; return routeOnce(e, open) == .pass })
 
 // Open, but a key annotated with another process's pid.
 for (code, n) in [(KeyCode.space, "Space"), (KeyCode.escape, "Esc"), (KeyCode.down, "↓"), (KeyCode.returnKey, "Return")] {
     check("open, a key to another pid: \(n) passes", routeOnce(key(code, to: writer), open) == .pass)
 }
 check("open, a key to another pid: ⌘W passes", routeOnce(key(13, "w", mods: .command, to: writer), open) == .pass)
-check("open, no viewer pid: a target of 0 is not the viewer", routeOnce(key(KeyCode.down, to: 0), PanelContext(open: true, finderPid: finder, viewerPid: 0)) == .pass)
+check("open, no viewer pid: Space to a target of 0 passes", routeOnce(key(KeyCode.space, to: 0), PanelContext(open: true, finderPid: finder, viewerPid: 0)) == .pass)
 
-// The viewer's writer panel holds the keyboard (an edit, the filter or the find field). The window server annotates its keys
-// with the frontmost app's pid, Finder's, so the session, not the target, decides: every key passes, to Finder's pid or the
-// viewer's, Esc and the Command shortcuts too.
+// A text session in the viewer no longer decides anything: its window has its keys.
 let editing = PanelContext(open: true, finderPid: finder, viewerPid: viewer, textSession: true)
-for pid in [finder, viewer] {
-    let to = pid == finder ? "Finder" : "the viewer"
-    for (code, n) in [(KeyCode.space, "Space"), (KeyCode.escape, "Esc"), (KeyCode.down, "↓"), (KeyCode.up, "↑"), (KeyCode.left, "←"),
-                      (KeyCode.right, "→"), (KeyCode.home, "Home"), (KeyCode.returnKey, "Return"), (0, "a letter")] {
-        check("text session, a key to \(to): \(n) passes", routeOnce(key(code, to: pid), editing) == .pass)
-    }
-    let shortcuts = [key(13, "w", mods: .command, to: pid), key(47, ".", mods: .command, to: pid), key(8, "c", mods: .command, to: pid),
-                     key(3, "f", mods: .command, to: pid), key(3, "f", mods: [.command, .option], to: pid), key(31, "o", mods: .command, to: pid),
-                     key(24, "=", mods: .command, to: pid), key(29, "0", mods: .command, to: pid)]
-    check("text session, a key to \(to): ⌘W ⌘. ⌘C ⌘F ⌥⌘F ⌘O ⌘= ⌘0 pass", shortcuts.allSatisfy { routeOnce($0, editing) == .pass })
-    check("text session, a key to \(to): a held Space's repeat passes", routeOnce(key(KeyCode.space, rep: true, to: pid), editing) == .pass)
+for (code, n) in [(KeyCode.space, "Space")] + plain {
+    check("text session, a key to the viewer: \(n) passes", routeOnce(key(code, to: viewer), editing) == .pass)
 }
-do {
-    var r = KeyRoute()
-    _ = r.route(key(KeyCode.down), panel: open)
-    check("text session: a key taken before it began still has its key-up swallowed", r.route(key(KeyCode.down, down: false), panel: editing) == .swallow)
-    _ = r.route(key(KeyCode.down), panel: open)
-    check("text session: a held key pressed again is the typing's, and so is its key-up",
-          r.route(key(KeyCode.down), panel: editing) == .pass && r.route(key(KeyCode.down, down: false), panel: editing) == .pass && r.held.isEmpty)
-    check("text session over: Space closes again", r.route(key(KeyCode.space), panel: open) == .close)
-}
-check("text session with the panel closed: Space still asks for the AX read",
-      routeOnce(key(KeyCode.space), PanelContext(open: false, finderPid: finder, viewerPid: viewer, textSession: true)) == .space)
+check("text session: Esc, ↓ and ⌘W to Finder pass", routeOnce(key(KeyCode.escape), editing) == .pass && routeOnce(key(KeyCode.down), editing) == .pass
+      && routeOnce(key(13, "w", mods: .command), editing) == .pass)
 do {
     var t = TextSession()
     check("text session: starts off", !t.active)
@@ -171,138 +155,95 @@ do {
     _ = t.set(true, panelOpen: true)
     t.clear()
     check("text session: cleared when the panel closes (or the viewer goes, or it suspends)", !t.active)
-    var r = KeyRoute()
-    let ctx = PanelContext(open: true, finderPid: finder, viewerPid: viewer, textSession: t.active)
-    check("text session cleared: Space and Esc close, ↓ is routed", r.route(key(KeyCode.space), panel: ctx) == .close
-          && routeOnce(key(KeyCode.escape), ctx) == .close && routeOnce(key(KeyCode.down), ctx) == .forward("down"))
 }
 check("text session: only the viewer may claim one", Link.permits(.viewer, .textSession) && !Link.permits(.app, .textSession))
-
-// One of the page's popovers is open (a menu, the find bar): Esc goes to the viewer, which closes it; held, its repeats and key-up
-// are swallowed, as any key the helper took. Every other key routes as before, and a text session still passes Esc.
-let popped = PanelContext(open: true, finderPid: finder, viewerPid: viewer, popover: true)
-do {
-    var r = KeyRoute()
-    check("popover: Esc is sent to the viewer", r.route(key(KeyCode.escape), panel: popped) == .forward(HelperKeys.escape))
-    check("popover: its repeats are swallowed", r.route(key(KeyCode.escape, rep: true), panel: popped) == .swallow
-          && r.route(key(KeyCode.escape, rep: true), panel: popped) == .swallow)
-    check("popover: its key-up is swallowed", r.route(key(KeyCode.escape, down: false), panel: popped) == .swallow && r.held.isEmpty)
-    check("popover: Esc to the viewer's pid is sent too", routeOnce(key(KeyCode.escape, to: viewer), popped) == .forward(HelperKeys.escape))
-    check("popover closed meanwhile: a held Esc's repeat still never closes the panel", {
-        var k = KeyRoute(); _ = k.route(key(KeyCode.escape), panel: popped); return k.route(key(KeyCode.escape, rep: true), panel: open) == .swallow }())
-}
-check("popover: Space, ⌘W and ⌘. still close", routeOnce(key(KeyCode.space), popped) == .close
-      && routeOnce(key(13, "w", mods: .command), popped) == .close && routeOnce(key(47, ".", mods: .command), popped) == .close)
-check("popover: ↓ is still routed", routeOnce(key(KeyCode.down), popped) == .forward("down"))
-check("popover: ⇧Esc passes", routeOnce(key(KeyCode.escape, mods: .shift), popped) == .pass)
-check("popover: Esc to another pid passes", routeOnce(key(KeyCode.escape, to: writer), popped) == .pass)
-check("popover in a text session: Esc is the typing's", routeOnce(key(KeyCode.escape), PanelContext(open: true, finderPid: finder, viewerPid: viewer,
-      textSession: true, popover: true)) == .pass)
-check("popover with the panel closed: Esc passes", routeOnce(key(KeyCode.escape), PanelContext(open: false, finderPid: finder, viewerPid: viewer, popover: true)) == .pass)
+check("popover: Esc to Finder passes", routeOnce(key(KeyCode.escape), PanelContext(open: true, finderPid: finder, viewerPid: viewer, popover: true)) == .pass)
 check("popover: the viewer accepts the name", HelperKeys.all.contains(HelperKeys.escape) && !HelperKeys.list.contains(HelperKeys.escape))
 check("popover: only the viewer may say one is open", Link.permits(.viewer, .popover) && !Link.permits(.app, .popover))
-do {
-    var p = TextSession()
-    check("popover: refused with no panel open or on its way", !p.set(true, panelOpen: false) && !p.active)
-    _ = p.set(true, panelOpen: true)
-    p.clear()
-    check("popover: forgotten when the panel closes, and Esc closes again",
-          routeOnce(key(KeyCode.escape), PanelContext(open: true, finderPid: finder, viewerPid: viewer, popover: p.active)) == .close)
-}
 
-// A whole edit as the tap sees it, the session as it really evolves: Space opens the panel, a click starts the edit and the viewer
-// reports the session, every key of the typing passes (down, repeat and up), Esc ends the edit and the viewer reports it over,
-// then Return goes to the sidebar again and Space closes. Return is one of the keys the helper routes, so each press is checked.
+// A whole edit in the viewer's window as the tap sees it: Space opens it, then every key of the typing, down, repeat and up,
+// is the window's, Esc included; Space to Finder afterwards asks again.
 do {
     var r = KeyRoute()
-    var t = TextSession()
     var log: [String] = []
-    func ctx(open: Bool = true) -> PanelContext { PanelContext(open: open, finderPid: finder, viewerPid: viewer, textSession: t.active) }
     func press(_ name: String, _ e: KeyEvent, repeats: Int = 0) -> Route {
-        let down = r.route(e, panel: ctx())
+        let down = r.route(e, panel: open)
         var reps: [Route] = []
-        for _ in 0..<repeats { var x = e; x.isRepeat = true; reps.append(r.route(x, panel: ctx())) }
+        for _ in 0..<repeats { var x = e; x.isRepeat = true; reps.append(r.route(x, panel: open)) }
         var up = e; up.down = false
-        let u = r.route(up, panel: ctx())
+        let u = r.route(up, panel: open)
         if down != .pass || reps.contains(where: { $0 != .pass }) || u != .pass { log.append("\(name): \(down) \(reps) up \(u)") }
         return down
     }
-    check("edit: Space with the panel closed asks for the AX read", r.route(key(KeyCode.space), panel: ctx(open: false)) == .space)
+    func v(_ code: Int64, _ chars: String = "", mods: HelperMods = []) -> KeyEvent { key(code, chars, mods: mods, to: viewer) }
+    check("edit: Space with nothing open asks for the AX read", r.route(key(KeyCode.space), panel: closed) == .space)
     r.hold(KeyCode.space)
-    check("edit: its key-up is swallowed while the show is on its way", r.route(key(KeyCode.space, down: false), panel: ctx()) == .swallow)
-    check("edit: the viewer's session is taken with the panel open", t.set(true, panelOpen: true))
+    check("edit: its key-up is swallowed while the show is on its way", r.route(key(KeyCode.space, down: false), panel: open) == .swallow)
     let typing: [(String, KeyEvent, Int)] = [
-        ("H", key(4, mods: .shift), 0), ("i", key(34), 0), ("Space", key(KeyCode.space), 0), ("Return", key(KeyCode.returnKey), 0),
-        ("Return again", key(KeyCode.returnKey), 0), ("Return held down", key(KeyCode.returnKey), 3), ("Shift-Return", key(KeyCode.returnKey, mods: .shift), 0),
-        ("keypad Enter", key(KeyCode.enter), 0), ("Tab", key(48), 0), ("Shift-Tab", key(48, mods: .shift), 0),
-        ("←", key(KeyCode.left), 0), ("→", key(KeyCode.right), 0), ("↑", key(KeyCode.up), 0), ("↓ held", key(KeyCode.down), 2),
-        ("⌥←", key(KeyCode.left, mods: .option), 0), ("⌘←", key(KeyCode.left, mods: .command), 0), ("⌘→", key(KeyCode.right, mods: .command), 0),
-        ("⇧⌘→", key(KeyCode.right, mods: [.command, .shift]), 0), ("Home", key(KeyCode.home), 0), ("End", key(KeyCode.end), 0),
-        ("Page Down", key(KeyCode.pageDown), 0), ("⌘A", key(0, "a", mods: .command), 0), ("⌘C", key(8, "c", mods: .command), 0),
-        ("⌘X", key(7, "x", mods: .command), 0), ("⌘V", key(9, "v", mods: .command), 0), ("⌘Z", key(6, "z", mods: .command), 0),
-        ("⇧⌘Z", key(6, "z", mods: [.command, .shift]), 0), ("⌥⌫", key(51, mods: .option), 0), ("⌘⌫", key(51, mods: .command), 0),
-        ("Delete", key(117), 0), ("⌘F", key(3, "f", mods: .command), 0), ("⌘W", key(13, "w", mods: .command), 0),
-        ("⌘=", key(24, "=", mods: .command), 0), ("Space held", key(KeyCode.space), 2),
+        ("H", v(4, mods: .shift), 0), ("i", v(34), 0), ("Space", v(KeyCode.space), 0), ("Return", v(KeyCode.returnKey), 0),
+        ("Return held down", v(KeyCode.returnKey), 3), ("Shift-Return", v(KeyCode.returnKey, mods: .shift), 0), ("keypad Enter", v(KeyCode.enter), 0),
+        ("Tab", v(48), 0), ("←", v(KeyCode.left), 0), ("→", v(KeyCode.right), 0), ("↑", v(KeyCode.up), 0), ("↓ held", v(KeyCode.down), 2),
+        ("⌥←", v(KeyCode.left, mods: .option), 0), ("⌘←", v(KeyCode.left, mods: .command), 0), ("Home", v(KeyCode.home), 0), ("End", v(KeyCode.end), 0),
+        ("Page Down", v(KeyCode.pageDown), 0), ("⌘A", v(0, "a", mods: .command), 0), ("⌘C", v(8, "c", mods: .command), 0),
+        ("⌘V", v(9, "v", mods: .command), 0), ("⌘Z", v(6, "z", mods: .command), 0), ("⌥⌫", v(51, mods: .option), 0), ("Delete", v(117), 0),
+        ("⌘F", v(3, "f", mods: .command), 0), ("⌘W", v(13, "w", mods: .command), 0), ("⌘=", v(24, "=", mods: .command), 0), ("Space held", v(KeyCode.space), 2),
     ]
     for (name, e, n) in typing { _ = press(name, e, repeats: n) }
     check("edit: every key of the typing passes, down, repeat and up", log.isEmpty, log.joined(separator: "; "))
-    check("edit: Esc passes to the edit, which ends itself", press("Esc", key(KeyCode.escape)) == .pass && r.held.isEmpty)
-    check("edit: the viewer reports the session over", t.set(false, panelOpen: true) && !t.active)
-    check("edit: after it, Return goes to the sidebar again", r.route(key(KeyCode.returnKey), panel: ctx()) == .forward("return")
-          && r.route(key(KeyCode.returnKey, down: false), panel: ctx()) == .swallow)
-    check("edit: and Space closes", r.route(key(KeyCode.space), panel: ctx()) == .close)
-}
-// The first key of a session, typed before the viewer's word arrives (the click and the report are a few ms apart): Return is
-// the sidebar's then; once the session is on, its repeats and its key-up are the typing's, and so is the next press.
-do {
-    var r = KeyRoute()
-    var t = TextSession()
-    let before = PanelContext(open: true, finderPid: finder, viewerPid: viewer, textSession: t.active)
-    check("first key: Return before the session is reported goes to the sidebar", r.route(key(KeyCode.returnKey), panel: before) == .forward("return"))
-    _ = t.set(true, panelOpen: true)
-    let during = PanelContext(open: true, finderPid: finder, viewerPid: viewer, textSession: t.active)
-    check("first key: its repeat once the session is on is the typing's", r.route(key(KeyCode.returnKey, rep: true), panel: during) == .pass)
-    check("first key: and so is its key-up", r.route(key(KeyCode.returnKey, down: false), panel: during) == .pass && r.held.isEmpty)
-    check("first key: the next Return is the typing's", r.route(key(KeyCode.returnKey), panel: during) == .pass
-          && r.route(key(KeyCode.returnKey, down: false), panel: during) == .pass)
+    check("edit: Esc is the window's", press("Esc", v(KeyCode.escape)) == .pass && r.held.isEmpty)
+    check("edit: afterwards Space to Finder asks again", r.route(key(KeyCode.space), panel: open) == .space)
 }
 
-// Finder's focus in a text field while the panel is open: a rename or the search field keeps its keys.
+// Finder's focus in a text field while a window is open: a rename or the search field keeps its keys, Space too.
 let typing = PanelContext(open: true, finderPid: finder, viewerPid: viewer, textFocus: true)
 for (code, n) in [(KeyCode.space, "Space"), (KeyCode.escape, "Esc"), (KeyCode.down, "↓"), (KeyCode.returnKey, "Return")] {
     check("open, Finder text field focused: \(n) passes", routeOnce(key(code), typing) == .pass)
 }
-check("open, Finder text field focused: keys to the viewer are still routed", routeOnce(key(KeyCode.down, to: viewer), typing) == .forward("down"))
 check("open, Finder text field focused: ⌘C, ⌘F and ⌥⌘F stay the field's", [key(8, "c", mods: .command), key(3, "f", mods: .command),
       key(3, "f", mods: [.command, .option])].allSatisfy { routeOnce($0, typing) == .pass })
+check("closed, a stale text-focus flag: Space still asks (Decision.space reads the focus)",
+      routeOnce(key(KeyCode.space), PanelContext(open: false, finderPid: finder, viewerPid: viewer, textFocus: true)) == .space)
 
-// sidebarKeys off: the arrows move Finder's selection, and the helper follows it.
-let noSidebar = PanelContext(open: true, finderPid: finder, viewerPid: viewer, sidebarKeys: false)
-for code in [KeyCode.up, KeyCode.down, KeyCode.left, KeyCode.right] {
-    var k = KeyRoute()
-    check("sidebarKeys off: arrow \(code) passes", k.route(key(code), panel: noSidebar) == .pass)
-    check("sidebarKeys off: its repeat passes", k.route(key(code, rep: true), panel: noSidebar) == .pass)
-    check("sidebarKeys off: its key-up passes", k.route(key(code, down: false), panel: noSidebar) == .pass)
-}
-check("sidebarKeys off: Home is still routed", routeOnce(key(KeyCode.home), noSidebar) == .forward("home"))
-check("sidebarKeys off: Space still closes", routeOnce(key(KeyCode.space), noSidebar) == .close)
-
-// A key held from before the panel opened is not taken half-way.
-var h = KeyRoute()
-check("held: an arrow pressed while closed passes", h.route(key(KeyCode.down), panel: closed) == .pass)
-check("held: its repeat once the panel is open is routed", h.route(key(KeyCode.down, rep: true), panel: open) == .forward("down"))
-check("held: its key-up is swallowed", h.route(key(KeyCode.down, down: false), panel: open) == .swallow)
+// A held Space is not taken half-way, and a missed key-up does not trap the next press.
 var g = KeyRoute()
-_ = g.route(key(KeyCode.down), panel: open)
-check("held: a routed arrow's repeat after the panel closed is swallowed", g.route(key(KeyCode.down, rep: true), panel: closed) == .swallow)
+g.hold(KeyCode.space)
+check("held: a held Space's repeat after the window closed is swallowed", g.route(key(KeyCode.space, rep: true), panel: closed) == .swallow)
 var m = KeyRoute()
-_ = m.route(key(KeyCode.escape), panel: open)
-check("held: a fresh press after a missed key-up is routed, not swallowed", m.route(key(KeyCode.escape), panel: closed) == .pass)
+m.hold(KeyCode.space)
+check("held: a fresh press after a missed key-up asks again, not swallowed", m.route(key(KeyCode.space), panel: closed) == .space && m.held.isEmpty)
 var n = KeyRoute()
-_ = n.route(key(KeyCode.down), panel: open)
+n.hold(KeyCode.space)
 n.release()
-check("held: release forgets held keys (the tap was off)", n.held.isEmpty && n.route(key(KeyCode.down, down: false), panel: closed) == .pass)
-check("held: nothing stays held after the key-ups", { var k = KeyRoute(); _ = k.route(key(KeyCode.escape), panel: open); _ = k.route(key(KeyCode.escape, down: false), panel: closed); return k.held.isEmpty }())
+check("held: release forgets held keys (the tap was off)", n.held.isEmpty && n.route(key(KeyCode.space, down: false), panel: closed) == .pass)
+check("held: nothing stays held after the key-up", { var k = KeyRoute(); k.hold(KeyCode.space); _ = k.route(key(KeyCode.space, down: false), panel: closed); return k.held.isEmpty }())
+
+// The names the viewer gives keys typed in its window (KeyRoute.forwarded), and the keys that close it (KeyRoute.closes).
+let routed: [(Int64, String)] = [(KeyCode.up, "up"), (KeyCode.down, "down"), (KeyCode.left, "left"), (KeyCode.right, "right"), (KeyCode.home, "home"),
+                                 (KeyCode.end, "end"), (KeyCode.pageUp, "pageup"), (KeyCode.pageDown, "pagedown"), (KeyCode.returnKey, "return"), (KeyCode.enter, "return"),
+                                 (KeyCode.delete, "back")]
+func named(_ e: KeyEvent, sidebar: Bool = true) -> String? { KeyRoute.forwarded(e, sidebarKeys: sidebar) }
+for (code, name) in routed { check("forwarded: \(name) is named", named(key(code)) == name) }
+check("forwarded: every list name is one the viewer accepts", Set(routed.map(\.1)).isSubset(of: HelperKeys.list))
+let commands: [(KeyEvent, String)] = [(key(31, "o", mods: .command), "open"), (key(3, "f", mods: .command), "find"),
+                                      (key(3, "f", mods: [.command, .option]), "filter"), (key(8, "c", mods: .command), "copy"),
+                                      (key(24, "=", mods: .command), "zoomIn"), (key(24, "+", mods: [.command, .shift]), "zoomIn"),
+                                      (key(KeyCode.keypadPlus, "+", mods: .command), "zoomIn"), (key(27, "-", mods: .command), "zoomOut"),
+                                      (key(29, "0", mods: .command), "zoomReset"), (key(KeyCode.keypad0, "0", mods: .command), "zoomReset")]
+for (e, name) in commands { check("forwarded: \(e.mods.contains(.shift) ? "⌘⇧" : "⌘")\(e.chars) is \(name)", named(e) == name) }
+check("forwarded: every command is one the viewer accepts", Set(commands.map(\.1)) == HelperKeys.commands)
+check("forwarded: ⌘⇧C, ⌘⌥C and ⌃⌘C are nothing", [HelperMods([.command, .shift]), [.command, .option], [.command, .control]].allSatisfy { named(key(8, "c", mods: $0)) == nil })
+check("forwarded: ⌘⇧F and ⌃⌥⌘F are nothing", named(key(3, "f", mods: [.command, .shift])) == nil && named(key(3, "f", mods: [.command, .option, .control])) == nil)
+check("forwarded: ⌘⌥O and ⌘⇧O are nothing", named(key(31, "o", mods: [.command, .option])) == nil && named(key(31, "o", mods: [.command, .shift])) == nil)
+check("forwarded: ⇧↓, ⌥↓ and ⌘↓ are nothing", [HelperMods.shift, .option, .command].allSatisfy { named(key(KeyCode.down, mods: $0)) == nil })
+check("forwarded: a letter, Tab and Space are nothing", named(key(0, "a")) == nil && named(key(48)) == nil && named(key(KeyCode.space)) == nil)
+check("forwarded: sidebarKeys off, the arrows and Delete are nothing, Home still is",
+      [KeyCode.up, KeyCode.down, KeyCode.left, KeyCode.right, KeyCode.delete].allSatisfy { named(key($0), sidebar: false) == nil }
+      && named(key(KeyCode.home), sidebar: false) == "home")
+check("closes: Space, Esc, ⌘W and ⌘.", [key(KeyCode.space), key(KeyCode.escape), key(13, "w", mods: .command), key(47, ".", mods: .command)].allSatisfy(KeyRoute.closes))
+check("closes: ⌘W by character, on a layout where W is elsewhere", KeyRoute.closes(key(6, "w", mods: .command)))
+check("closes: not ⌘Z (W's key on AZERTY), ⌥Space, ⇧Esc, a repeated Space or ⌘W",
+      ![key(13, "z", mods: .command), key(KeyCode.space, mods: .option), key(KeyCode.escape, mods: .shift), key(KeyCode.space, rep: true),
+        key(13, "w", rep: true, mods: .command)].contains(where: KeyRoute.closes))
 
 // MARK: panel gate, failed shows, focus reads
 
@@ -348,7 +289,8 @@ check("focus: a role read before the budget ran out still answers", !Decision.te
 
 // MARK: another app in front, and Finder back
 
-check("activation: another app hides an open panel", Decision.activated(isFinder: false, open: true, pending: false, suspendedFor: nil) == .suspend)
+check("activation: another app leaves an open window as it is", Decision.activated(isFinder: false, open: true, pending: false, suspendedFor: nil) == .none
+      && Decision.activated(isFinder: false, open: true, pending: false, suspendedFor: 3) == .none)
 check("activation: another app closes a show still on its way", Decision.activated(isFinder: false, open: false, pending: true, suspendedFor: nil) == .close
       && Decision.activated(isFinder: false, open: true, pending: true, suspendedFor: nil) == .close)
 check("activation: another app with nothing open does nothing", Decision.activated(isFinder: false, open: false, pending: false, suspendedFor: 3) == .none

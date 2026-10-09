@@ -84,6 +84,8 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private var observer: AXObserver?
     private var observedFocus: AXUIElement?
     private var followPending = false
+    /// The open window follows Finder's selection until the user clicks into it (the viewer comes forward).
+    private var following = false
     private var finderTextFocus = false
     private var text = TextSession()
     /// One of the page's popovers is open, as the viewer said; held under a text session's rules, so it ends with the panel.
@@ -146,8 +148,13 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         if let p = pending, Date().timeIntervalSince(p.at) > 5 { fail(p.id, "no panel in 5 s") }
         offscreenMisses = panelOpen && !panelOnScreen(panelWindow) ? offscreenMisses + 1 : 0
         if offscreenMisses >= 2 {
-            log.error("panel window \(self.panelWindow) not on screen: its keys go back to Finder")
-            close("panel not on screen")
+            // Minimized or hidden: the window is the user's to bring back; it just stops following Finder.
+            log.info("panel window \(self.panelWindow) not on screen: no longer followed")
+            panelOpen = false
+            following = false
+            panelWindow = 0
+            offscreenMisses = 0
+            gesturesOff()
         }
     }
 
@@ -272,6 +279,8 @@ final class Helper: NSObject, NSXPCListenerDelegate {
             pending = nil
             if !panelOpen { tallied = false }
             panelOpen = true
+            // A Space on a file whose window was open brings that window forward: clicked into, it follows nothing.
+            following = NSWorkspace.shared.frontmostApplication?.processIdentifier != viewerPid
             panelWindow = windowNumber
             offscreenMisses = 0
             syncGestureTap()
@@ -407,7 +416,8 @@ final class Helper: NSObject, NSXPCListenerDelegate {
             finderTextFocus = Self.textFocus(finderPid)
         }
         let ctx = PanelContext(open: panelOpen || pending != nil, finderPid: finderPid, viewerPid: viewerPid, sidebarKeys: settings.sidebarKeys,
-                               textFocus: finderTextFocus, textSession: text.active, popover: pagePopover.active)
+                               textFocus: finderTextFocus, textSession: text.active, popover: pagePopover.active,
+                               following: panelOpen && following)
         switch route.route(e, panel: ctx) {
         case .pass: return pass
         case .swallow: return nil
@@ -481,6 +491,13 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         }
         route.hold(KeyCode.space)
         finderPid = fpid
+        // Space on what the window already shows brings it forward, as an app's window, rather than closing it.
+        if panelOpen, pending == nil, Set(paths) == Set(lastShown) {
+            following = false
+            viewerProxy()?.focus()
+            log.info("space focus n=\(paths.count)")
+            return true
+        }
         show(paths, finderPid: fpid, space: true)
         log.info("space show n=\(paths.count) decided in \(ms(since: t0), format: .fixed(precision: 1))ms")
         return true
@@ -489,7 +506,9 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     /// Asks the viewer to show `paths`. A viewer that does not answer within 150 ms, or declines, hands a Space back to Finder.
     private func show(_ paths: [String], finderPid: pid_t, space: Bool) {
         if space { suspendedAt = nil }
-        request(finderPid: finderPid, space: space, paths: paths) { proxy, id, reply in proxy.show(paths, requestID: id, reply: reply) }
+        request(finderPid: finderPid, space: space, paths: paths) { proxy, id, reply in
+            if space { proxy.open(paths, requestID: id, reply: reply) } else { proxy.show(paths, requestID: id, reply: reply) }
+        }
     }
 
     /// Makes request `id` pending and sends it with `call`; one not acknowledged within 150 ms, or refused, fails.
@@ -539,6 +558,11 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     private func fail(_ id: Int, _ why: String) {
         guard let p = pending, p.id == id else { return }
         pending = nil
+        // A Space brought a window forward (minimized, full screen, on another space) and the check ran mid-animation: the
+        // window is the user's now, so nothing is closed and Space is not handed to Quick Look.
+        if viewerPid > 0, NSWorkspace.shared.frontmostApplication?.processIdentifier == viewerPid {
+            return log.info("show \(id) not confirmed (\(why, privacy: .public)): viewer in front, left open")
+        }
         if !panelOpen { text.clear(); pagePopover.clear() }
         log.info("show \(id) failed: \(why, privacy: .public)")
         if id == restoring {
@@ -600,7 +624,9 @@ final class Helper: NSObject, NSXPCListenerDelegate {
     /// Another app coming forward hides the panel, as Finder going to the background hides Quick Look's; Finder coming back
     /// brings it back.
     @objc private func appActivated(_ note: Notification) {
-        guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication, app.processIdentifier != viewerPid else { return }
+        guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+        // Clicked into: the window keeps its file from now on.
+        if app.processIdentifier == viewerPid { following = false; return }
         let who = app.bundleIdentifier ?? "another app"
         switch Decision.activated(isFinder: who == finderID, open: panelOpen, pending: pending != nil,
                                   suspendedFor: suspendedAt.map { Date().timeIntervalSince($0) }) {
@@ -701,14 +727,14 @@ final class Helper: NSObject, NSXPCListenerDelegate {
             if panelOpen { checkQuickLook() }
             return
         }
-        guard panelOpen, !settings.sidebarKeys, !followPending else { return }
+        guard panelOpen, following, !followPending else { return }
         followPending = true
         let pid = finderPid
         bg.asyncAfter(deadline: .now() + 0.03) {
             let paths = FinderAX.selection(app: AXUIElementCreateApplication(pid), focused: nil, trace: AXTrace(budgetMs: 100)).filter { $0.hasPrefix("/") }
             DispatchQueue.main.async {
                 self.followPending = false
-                guard self.panelOpen, !paths.isEmpty, paths != (self.pending?.paths ?? self.lastShown) else { return }
+                guard self.panelOpen, self.following, !paths.isEmpty, paths != (self.pending?.paths ?? self.lastShown) else { return }
                 self.show(paths, finderPid: pid, space: false)
             }
         }

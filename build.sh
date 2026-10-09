@@ -141,9 +141,9 @@ compile "$PREVIEW_BIN" -application-extension -module-name "$APPEX_EXE" "${PREVI
 HELPER_BIN=$OBJ/$HELPER_EXE
 compile "$HELPER_BIN" -module-name "$HELPER_EXE" Helper/*.swift Shared/HelperProtocol.swift Shared/Settings.swift
 VIEWER_BIN=$OBJ/$VIEWER_EXE
-compile "$VIEWER_BIN" -module-name "$VIEWER_EXE" "${PREVIEW_SRC[@]}" Shared/HelperProtocol.swift Viewer/*.swift \
+compile "$VIEWER_BIN" -module-name "$VIEWER_EXE" "${PREVIEW_SRC[@]}" Shared/HelperProtocol.swift Helper/Decision.swift Viewer/*.swift \
   -framework QuickLookUI -framework WebKit -framework PDFKit -framework AVKit -framework AVFoundation -framework QuickLookThumbnailing
-compile "$APP/Contents/MacOS/$APP_EXE" -parse-as-library -module-name "$APP_EXE" App/*.swift Shared/HelperProtocol.swift Shared/Settings.swift Shared/Updates.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift Shared/QuickLookClaims.swift Shared/LinkPolicy.swift Shared/SecureInput.swift \
+compile "$APP/Contents/MacOS/$APP_EXE" -parse-as-library -module-name "$APP_EXE" App/*.swift Shared/HelperProtocol.swift Shared/Settings.swift Shared/Updates.swift Shared/WebShell.swift Shared/FolderListing.swift Shared/FolderScan.swift Shared/QuickLookClaims.swift Shared/LinkPolicy.swift Shared/SecureInput.swift Shared/DefaultApps.swift \
   -framework WebKit -framework SwiftUI
 plist App/Info.plist "$APP/Contents/Info.plist"
 cp LICENSE THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/"
@@ -204,6 +204,8 @@ cp "$WRITER_BIN" "$VIEWER_XPC/Contents/MacOS/$WRITER_EXE"
 cp -R Preview/web "$VIEWER_DIR/Contents/Resources/web"
 # What spacebar claims: Apple's previews in the panel are never asked for these (FileTypes.appleQuickLookType).
 cp LICENSE THIRD_PARTY_NOTICES.md scripts/quicklook-types.txt "$VIEWER_DIR/Contents/Resources/"
+# Its windows put it in the Dock and the app switcher.
+if [ -f App/AppIcon.icns ]; then cp App/AppIcon.icns "$VIEWER_DIR/Contents/Resources/AppIcon.icns"; fi
 plist Viewer/Info.plist "$VIEWER_DIR/Contents/Info.plist" "$VIEWER_ID" "$VIEWER_EXE" "$APP_NAME"
 plist Writer/Info.plist "$VIEWER_XPC/Contents/Info.plist" "$VIEWER_ID"
 codesign "${SIGN_ARGS[@]}" "$VIEWER_XPC"

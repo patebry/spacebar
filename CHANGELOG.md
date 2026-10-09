@@ -2,7 +2,26 @@
 
 Each release's notes on GitHub also list its commits. This file keeps what changed for someone using spacebar.
 
-## Unreleased (0.4)
+## 0.5
+
+### Windows that stay
+
+- **Space opens a real window.** With the Space helper on, Space in Finder opens the file in a normal app window: it is in
+  the Dock and ⌘Tab, stays open when you switch apps, resizes, and goes full screen with the green button.
+- **One window per Space, like Finder windows.** Space on another file opens another window; Space on a file that is
+  already open brings its window forward. The newest window follows Finder's arrow keys until you click into it.
+- **Closing.** Esc, ⌘W or ⌘. in Finder close a window you have not clicked into; once you have, ⌘W or the red button
+  closes it.
+
+### Your default app
+
+- **spacebar can open Markdown, images and data files** (JSON, YAML, CSV, logs, property lists) when you double-click
+  them, or follow a link from your editor or terminal. Turn each on in Settings › Default App or in the welcome sheet;
+  turning one off gives it back to the app it had.
+- **Open never loops back.** The window's Open button sends Markdown and data files to your editor (or a text editor) and
+  images to the app chosen in Settings, or your other image app.
+
+## 0.4
 
 ### Search
 

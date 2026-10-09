@@ -2358,7 +2358,7 @@ def panel_host(check):
         page.cmd('@wait:0.3')
         g = page.js("""const r = document.documentElement, t = document.getElementById('side-toggle').getBoundingClientRect();
           return [r.dataset.host, getComputedStyle(r).getPropertyValue('--titlebar-inset').trim(), Math.round(t.left)];""")
-        check(g[0] == 'panel' and g[1] == '56px' and g[2] >= 56, "panel: the host is set at document start, and the sidebar button clears the traffic lights", json.dumps(g))
+        check(g[0] == 'panel' and g[1] == '76px' and g[2] >= 76, "panel: the host is set at document start, and the sidebar button clears the traffic lights", json.dumps(g))
         calm_header(page, check, 'panel')
         # In Finder's order the rows run b.md, c.txt, README.md, sub: from b.md the next row is a file.
         page.render(T('b.md'))

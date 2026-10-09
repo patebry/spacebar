@@ -18,6 +18,8 @@ struct Settings: Codable, Equatable {
     var lineHeight = 1.6
     var width = "medium"
     var editorBundleID: String? = nil
+    /// The app the Open button hands an image to; nil: its default app, never spacebar itself.
+    var imageAppBundleID: String? = nil
     var inlineEditing = true
     var taskToggles = true
     var folderMode = true
@@ -51,6 +53,8 @@ struct Settings: Codable, Equatable {
     var spaceHelper = false
     /// The welcome sheet has offered the helper once; an upgrade that already dismissed the sheet sees only that step.
     var helperOffered = false
+    /// The welcome sheet has offered to make spacebar the default app for Markdown, images and data files once.
+    var openerOffered = false
     /// The preview has shown its one-time "Click to edit" hint.
     var editHintShown = false
     /// What the toolbar's Raw toggle once remembered per kind. Raw now lasts only while the preview stays open, so these are
@@ -102,11 +106,11 @@ struct Settings: Codable, Equatable {
     static let doubleRanges: [String: ClosedRange<Double>] = ["lineHeight": 1.2...2.0]
     static let boolKeys: Set<String> = Set(["customCSS", "inlineEditing", "taskToggles", "folderMode", "folderReadmeFirst", "stats", "math",
                                         "mermaid", "remoteImages", "sidebarCollapsed", "sidebarKeys", "showHiddenFiles", "minimalChrome", "checkUpdates",
-                                        "welcomeShown", "spaceHelper", "helperOffered", "editHintShown"]).union(rawKeys).union(wrapKeys)
+                                        "welcomeShown", "spaceHelper", "helperOffered", "openerOffered", "editHintShown"]).union(rawKeys).union(wrapKeys)
     static let rawKeys: Set<String> = ["rawMarkdown", "rawJSON", "rawNotebook", "rawCSV", "rawXML", "rawCSS"]
     static let wrapKeys: Set<String> = ["wrapText", "wrapMarkdown", "wrapCode"]
     /// Keys whose value is a string or null, each checked by its own pattern.
-    static let optionalKeys: Set<String> = ["userTheme", "editorBundleID"]
+    static let optionalKeys: Set<String> = ["userTheme", "editorBundleID", "imageAppBundleID"]
     static var allKeys: Set<String> { Set(choices.keys).union(intRanges.keys).union(doubleRanges.keys).union(boolKeys).union(optionalKeys) }
     /// The only keys the preview panel may change (its Aa popover and sidebar controls). The page renders an untrusted document,
     /// so even a page that was somehow scripted can restyle the preview but never pick a CSS file, an editor app, or what is
@@ -118,10 +122,10 @@ struct Settings: Codable, Equatable {
         .union(rawKeys).union(wrapKeys)
     /// The keys the settings window shows, on its page and under Advanced. Every other key is changed in the preview (panelKeys),
     /// by spacebar itself, or in settings.json only, and keeps its stored value.
-    static let windowKeys: Set<String> = ["theme", "appearance", "fontSize", "spaceHelper", "editorBundleID", "checkUpdates"]
+    static let windowKeys: Set<String> = ["theme", "appearance", "fontSize", "spaceHelper", "editorBundleID", "imageAppBundleID", "checkUpdates"]
     static let advancedKeys: Set<String> = ["htmlScripts", "rawHTML", "remoteImages", "inlineEditing", "taskToggles", "showHiddenFiles", "userTheme", "customCSS"]
     /// Kept by Reset to Defaults: resetting must not bring the welcome sheet back or change the Space helper behind its Login Items entry.
-    static let keptOnReset = ["welcomeShown", "helperOffered", "spaceHelper", "editHintShown"]
+    static let keptOnReset = ["welcomeShown", "helperOffered", "openerOffered", "spaceHelper", "editHintShown"]
 
     /// Reset to Defaults as a patch: every key at its default, including the ones only settings.json can change. The kept keys
     /// are left out, so the file's own values stand.
@@ -207,7 +211,7 @@ struct Settings: Codable, Equatable {
         take(.customCSS, \.customCSS); take(.bodyFont, \.bodyFont); take(.monoFont, \.monoFont)
         if let n = try? c.decodeIfPresent(Double.self, forKey: .fontSize), let v = Self.sanitize("fontSize", n) as? Int { s.fontSize = v }
         if let n = try? c.decodeIfPresent(Double.self, forKey: .lineHeight), let v = Self.sanitize("lineHeight", n) as? Double { s.lineHeight = v }
-        take(.width, \.width); takeOptional(.editorBundleID, \.editorBundleID)
+        take(.width, \.width); takeOptional(.editorBundleID, \.editorBundleID); takeOptional(.imageAppBundleID, \.imageAppBundleID)
         take(.inlineEditing, \.inlineEditing); take(.taskToggles, \.taskToggles); take(.folderMode, \.folderMode)
         take(.folderReadmeFirst, \.folderReadmeFirst); take(.folderSort, \.folderSort); take(.foldersFirst, \.foldersFirst); take(.frontMatter, \.frontMatter)
         take(.folderViewMedia, \.folderViewMedia); take(.folderViewOther, \.folderViewOther)
@@ -215,7 +219,7 @@ struct Settings: Codable, Equatable {
         if let n = try? c.decodeIfPresent(Double.self, forKey: .sidebarWidth), let v = Self.sanitize("sidebarWidth", n) as? Int { s.sidebarWidth = v }
         take(.toc, \.toc); take(.stats, \.stats); take(.mdLinks, \.mdLinks); take(.webLinks, \.webLinks)
         take(.math, \.math); take(.mermaid, \.mermaid); take(.rawHTML, \.rawHTML); take(.remoteImages, \.remoteImages); take(.checkUpdates, \.checkUpdates); take(.htmlScripts, \.htmlScripts)
-        take(.welcomeShown, \.welcomeShown); take(.spaceHelper, \.spaceHelper); take(.helperOffered, \.helperOffered)
+        take(.welcomeShown, \.welcomeShown); take(.spaceHelper, \.spaceHelper); take(.helperOffered, \.helperOffered); take(.openerOffered, \.openerOffered)
         take(.editHintShown, \.editHintShown)
         take(.rawMarkdown, \.rawMarkdown); take(.rawJSON, \.rawJSON); take(.rawNotebook, \.rawNotebook); take(.rawCSV, \.rawCSV)
         take(.rawXML, \.rawXML); take(.rawCSS, \.rawCSS)
@@ -234,12 +238,13 @@ struct Settings: Codable, Equatable {
     var json: String { String(data: try! JSONSerialization.data(withJSONObject: dictionary, options: [.sortedKeys]), encoding: .utf8)! }
 }
 
-enum WelcomeStep: Equatable { case intro, helper }
+enum WelcomeStep: Equatable { case intro, helper, opener }
 
 extension Settings {
-    /// The welcome sheet's pages: the introduction until it is dismissed once, then the helper's offer once, where there is one.
-    func welcomeSteps(helperAvailable: Bool) -> [WelcomeStep] {
-        (welcomeShown ? [] : [.intro]) + (helperAvailable && !helperOffered ? [.helper] : [])
+    /// The welcome sheet's pages: the introduction until it is dismissed once, then the helper's offer once, where there is one,
+    /// then the default-app offer once, where this copy can make itself the default.
+    func welcomeSteps(helperAvailable: Bool, openerAvailable: Bool) -> [WelcomeStep] {
+        (welcomeShown ? [] : [.intro]) + (helperAvailable && !helperOffered ? [.helper] : []) + (openerAvailable && !openerOffered ? [.opener] : [])
     }
 }
 

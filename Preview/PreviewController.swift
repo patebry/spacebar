@@ -109,6 +109,14 @@ final class WebHost: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
 
     func resendSettings() { settingsChanged(SettingsStore.shared.settings) }
 
+    /// Lets go of the page for good: the content controller holds this host as its message handler, a cycle that would keep
+    /// the web view and its content process alive. Only the viewer, which makes a host per window, lets one go.
+    func tearDown() {
+        web.configuration.userContentController.removeScriptMessageHandler(forName: "sb")
+        web.navigationDelegate = nil
+        web.stopLoading()
+    }
+
     /// Runs `f` once the page is loaded and the remote-image block is in place.
     func whenReady(_ f: @escaping () -> Void) { ready ? remoteImages.whenInPlace(f) : onReady.append { self.remoteImages.whenInPlace(f) } }
 
@@ -262,7 +270,10 @@ class PreviewController: NSViewController {
     var onDecline: (String) -> Void = { _ in }
     lazy var keySource: KeySource = WriterKeySource(controller: self)
 
-    private let host = WebHost.shared
+    /// The page this controller shows in, set before its view loads: the viewer gives each window its own. The Quick Look
+    /// extension uses the process's one.
+    var webHost: WebHost?
+    private lazy var host: WebHost = webHost ?? WebHost.shared
     private var fileURL: URL?
     /// The folder of the item Quick Look asked for (the folder itself in folder mode), symlinks resolved. Markdown links open in
     /// the panel, where they can be edited, only inside it; others open in the default app like any other document. The

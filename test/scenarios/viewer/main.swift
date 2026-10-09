@@ -1,4 +1,4 @@
-// Day-in-the-life scenarios, driven through the Space helper's viewer as the helper drives it over XPC (show, key, close):
+// Day-in-the-life scenarios, driven through the Space helper's viewer as the helper drives it over XPC (open, show, key, close):
 // the real Viewer, PreviewController, page and native panes, with the panel parked off screen. No key or mouse event reaches
 // the system (flow 10's keys are NSEvents inside the stub writer), no window on screen. Build and run with test/scenarios/run.sh.
 //   scenarios <out dir> [<video dir>]      <out dir>: what test/scenarios/corpus_real.py wrote
@@ -77,7 +77,19 @@ _ = NSApplication.shared
 OffScreen.install()
 NSApp.setActivationPolicy(.accessory)
 Viewer.parkedFrame = NSRect(x: -20000, y: -20000, width: 1100, height: 760)
+Viewer.activates = false
+Viewer.shared.started = true
 let viewer = Viewer.shared
+/// The window under test: the first spare, so every Space from a closed window reuses it and its page.
+let win = viewer.freshWindow()
+/// A Space when the window is closed; with it open, Finder's selection moving to `paths`, which it follows.
+/// Sent from another queue, as XPC delivers it.
+func ask(_ paths: [String], _ id: Int) {
+    let follow = viewer.current === win && (win.open || win.request != 0)
+    DispatchQueue.global(qos: .userInteractive).async {
+        if follow { viewer.show(paths, requestID: id) { _ in } } else { viewer.open(paths, requestID: id) { _ in } }
+    }
+}
 
 /// Stands between the page and WebHost on the "sb" handler: every message the page posts, and each render with its path and view.
 final class Recorder: NSObject, WKScriptMessageHandler {
@@ -85,7 +97,7 @@ final class Recorder: NSObject, WKScriptMessageHandler {
     var renders: [(path: String, view: String, at: UInt64)] = []
     var readies = 0
     func userContentController(_ ucc: WKUserContentController, didReceive m: WKScriptMessage) {
-        WebHost.shared.userContentController(ucc, didReceive: m)
+        win.host.userContentController(ucc, didReceive: m)
         guard let b = m.body as? [String: Any] else { return }
         messages.append(b)
         if b["type"] as? String == "ready" { readies += 1 }
@@ -98,10 +110,10 @@ final class Recorder: NSObject, WKScriptMessageHandler {
     }
 }
 let rec = Recorder()
-let web = WebHost.shared.web
+let web = win.host.web
 OffScreen.keepDrawing(web)
-spin(until: 15) { WebHost.shared.ready }
-guard WebHost.shared.ready else { print("FAIL the page never became ready"); exit(1) }
+spin(until: 15) { win.host.ready }
+guard win.host.ready else { print("FAIL the page never became ready"); exit(1) }
 web.evaluateJavaScript("sb.warm && sb.warm(); 0")
 web.configuration.userContentController.removeScriptMessageHandler(forName: "sb")
 web.configuration.userContentController.add(rec, name: "sb")
@@ -186,7 +198,7 @@ struct Natives {
 }
 func natives() -> Natives {
     var n = Natives()
-    var stack = viewer.panel.contentView.map { [$0] } ?? []
+    var stack = win.panel.contentView.map { [$0] } ?? []
     while let v = stack.popLast() {
         // Apple's preview draws with views of its own (a web view for Office files): they are the preview, not another pane.
         if !(v is QLPreviewView) { stack += v.subviews }
@@ -248,7 +260,7 @@ func space(_ paths: [URL], expect: URL? = nil, any: Bool = false, settle: Double
     request += 1
     let id = request, from = rec.renders.count, t0 = now()
     mark("show \(paths.map(\.lastPathComponent).joined(separator: ", "))")
-    DispatchQueue.global(qos: .userInteractive).async { viewer.show(paths.map(\.path), requestID: id) { _ in } }
+    ask(paths.map(\.path), id)
     var target = (expect ?? paths[0]).path
     if any {
         spin(until: timeout) { rec.renders.dropFirst(from).contains { $0.view != "loading" } }
@@ -270,7 +282,7 @@ func hover(_ x: Double, _ y: Double) {
 }
 /// Whether a press at `x`, `y` points from the panel's top left would drag the panel; the press is not sent.
 func pressDrags(_ x: Double, _ y: Double) -> Bool {
-    let p = viewer.panel
+    let p = win.panel
     guard let e = NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: x, y: p.frame.height - y), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                      windowNumber: p.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { return false }
     return p.drags(e)
@@ -301,17 +313,17 @@ if flows.contains("1") {
     let s = space([repo], expect: repo.appendingPathComponent("README.md"), settle: 0.5)
     check("1: the folder opens on its README", s.page.path.hasSuffix("/README.md") && s.view == "markdown", "\(s.page.path) \(s.view)")
     info(String(format: "the folder opened on its README in %.0f ms", s.painted ?? .nan))
-    spin(until: 5) { viewer.keys.session != nil }
-    check("1: the sidebar holds the arrow keys", viewer.keys.session != nil)
+    spin(until: 5) { win.keys.session != nil }
+    check("1: the sidebar holds the arrow keys", win.keys.session != nil)
     let rows = page().fileRows
     // By name as Finder sorts, the README among the files: it is pinned first only with folderReadmeFirst, off by default.
     let finderOrder = (manifest["repo"] as? [String] ?? []).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     check("1: the sidebar lists every file in Finder's order", rows.map { ($0 as NSString).lastPathComponent } == finderOrder && !rows.isEmpty,
           "\(rows.count) rows: \(rows.map { ($0 as NSString).lastPathComponent })")
     // The traffic lights and the sidebar button share the top row's centre line, and the lights are clear of the button.
-    let lights = [NSWindow.ButtonType.closeButton, .zoomButton].compactMap { viewer.panel.standardWindowButton($0).map { $0.convert($0.bounds, to: nil) } }
+    let lights = [NSWindow.ButtonType.closeButton, .zoomButton].compactMap { win.panel.standardWindowButton($0).map { $0.convert($0.bounds, to: nil) } }
     let tg = jsJSON("const r = document.getElementById('side-toggle').getBoundingClientRect(); return { mid: r.top + r.height / 2, left: r.left };")
-    let lightsMid = lights.first.map { viewer.panel.frame.height - $0.midY } ?? .nan, toggleMid = tg["mid"] as? Double ?? .nan
+    let lightsMid = lights.first.map { win.panel.frame.height - $0.midY } ?? .nan, toggleMid = tg["mid"] as? Double ?? .nan
     check("1: the sidebar button is centred on the traffic lights, to their right", lights.count == 2 && abs(lightsMid - toggleMid) <= 2
           && (tg["left"] as? Double ?? 0) >= lights[1].maxX + 8, "lights \(lights) centre \(lightsMid), button \(tg)")
     // The empty top row and the folder heading's margin drag the panel; its controls and the folder's name do not.
@@ -324,10 +336,10 @@ if flows.contains("1") {
     check("1: the empty top row and heading drag the panel; the sidebar button, the folder's name and the page do not", zones == [true, false, true, false, false], "\(zones)")
     hover(300, 20)
     let light = lights.first.map { (Double($0.midX), lightsMid) } ?? (0, 0)
-    check("1: a press on a traffic light is the button's, not a drag", viewer.panel.dragZone && !pressDrags(light.0, light.1) && pressDrags(300, 20))
-    let ctrl = NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 300, y: viewer.panel.frame.height - 20), modifierFlags: .control,
-                                  timestamp: 0, windowNumber: viewer.panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
-    check("1: the window's top edge resizes and a control-click is the page's, not a drag", !pressDrags(300, 2) && ctrl.map { !viewer.panel.drags($0) } == true)
+    check("1: a press on a traffic light is the button's, not a drag", win.panel.dragZone && !pressDrags(light.0, light.1) && pressDrags(300, 20))
+    let ctrl = NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 300, y: win.panel.frame.height - 20), modifierFlags: .control,
+                                  timestamp: 0, windowNumber: win.panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+    check("1: the window's top edge resizes and a control-click is the page's, not a drag", !pressDrags(300, 2) && ctrl.map { !win.panel.drags($0) } == true)
     hover(300, 200)
     // The README sorts after the f-files: the walk starts from the top of the list.
     let homeFrom = rec.renders.count, homeAt = now()
@@ -527,10 +539,10 @@ if flows.contains("4") {
             // Space on a package is declined (Apple's preview takes it); in the sidebar it opens in the panel.
             request += 1
             let id = request, from = rec.renders.count
-            DispatchQueue.global().async { viewer.show([url.path], requestID: id) { _ in } }
+            ask([url.path], id)
             spin(2)
-            check("4: Space on \(name) (a package) is declined, as the README says", rec.renders.count == from && viewer.panel.alphaValue == 0,
-                  "\(rec.renders.count - from) renders, panel alpha \(viewer.panel.alphaValue)")
+            check("4: Space on \(name) (a package) is declined, as the README says", rec.renders.count == from && win.panel.alphaValue == 0,
+                  "\(rec.renders.count - from) renders, panel alpha \(win.panel.alphaValue)")
             _ = space([corpus], any: true, settle: 0.5)
             let rowJS = "[...document.querySelectorAll('#side-list a.row')].find((a) => a.dataset.path === \(String(data: try! JSONSerialization.data(withJSONObject: [url.path]), encoding: .utf8)!)[0])"
             for _ in 0..<40 where (js("!!\(rowJS)") as? Bool) != true { _ = js("(() => { const l = document.getElementById('side-list'); (l.closest('#sidebar') || l).scrollBy(0, 300); l.scrollBy(0, 300); return 0; })()"); spin(0.05) }
@@ -702,7 +714,7 @@ if flows.contains("6") {
     check("6: the first of the selection is shown", s.page.path == picks[0].path && s.view == "markdown", s.page.path)
     check("6: the sidebar lists exactly the 5 selected files", rows == Set(picks.map(\.lastPathComponent)) && s.page.rows.count == 5,
           "\(s.page.rows.count) rows: \(rows.sorted())")
-    spin(until: 5) { viewer.keys.session != nil }
+    spin(until: 5) { win.keys.session != nil }
     var seen: [String] = [s.page.path]
     for key in ["down", "down", "down", "down", "up", "up", "up", "up", "up", "up"] {
         let from = rec.renders.count
@@ -761,12 +773,12 @@ if flows.contains("7") {
         request += 1
         let id = request, from = rec.renders.count, t0 = now()
         mark("show symlink loop")
-        DispatchQueue.global().async { viewer.show([url.path], requestID: id) { _ in } }
-        spin(until: 6) { viewer.panel.alphaValue > 0 || rec.renders.count > from }
+        ask([url.path], id)
+        spin(until: 6) { win.panel.alphaValue > 0 || rec.renders.count > from }
         spin(0.5)
         let p = page(), elapsed = ms(t0, now())
         let said = p.status + " " + p.text
-        info(String(format: "symlink loop: %.0f ms, panel %@, page %@, status '%@'", elapsed, viewer.panel.alphaValue > 0 ? "shown" : "not shown",
+        info(String(format: "symlink loop: %.0f ms, panel %@, page %@, status '%@'", elapsed, win.panel.alphaValue > 0 ? "shown" : "not shown",
                     p.blank ? "blank" : "'\(p.text.prefix(80))'", p.status))
         check("7: a symlink loop does not hang the viewer", elapsed < 6000 && (js("1") as? Int) == 1)
         known("BUG-loop", "7: a symlink loop says, visibly, that it cannot be opened", !p.blank && (said.lowercased().contains("can’t") || said.lowercased().contains("cannot")),
@@ -795,7 +807,7 @@ if flows.contains("7") {
     let mdu = corpus.appendingPathComponent("unreadable.md")
     request += 1
     let id = request, from = rec.renders.count
-    DispatchQueue.global().async { viewer.show([mdu.path], requestID: id) { _ in } }
+    ask([mdu.path], id)
     spin(until: 6) { firstRender(mdu.path, from: from) != nil }
     spin(0.5)
     let mp = page()
@@ -886,35 +898,36 @@ if flows.contains("10") {
     try! "hello\n".write(to: f, atomically: true, encoding: .utf8)
     let finderPid: Int32 = 583
     var route = KeyRoute()
-    func helperRoutes(_ code: Int64) -> Route {
-        let r = route.route(KeyEvent(code: code, targetPid: finderPid), panel: PanelContext(open: viewer.panel.isVisible, finderPid: finderPid,
-                                                                                               viewerPid: getpid(), textSession: viewer.textSession))
+    // `to`: the process the key is on its way to; a window clicked into is key, so its typing goes to the viewer.
+    func helperRoutes(_ code: Int64, to pid: Int32 = getpid(), chars: String = "", mods: HelperMods = []) -> Route {
+        let r = route.route(KeyEvent(code: code, chars: chars, mods: mods, targetPid: pid), panel: PanelContext(open: win.panel.isVisible, finderPid: finderPid,
+                                                                                               viewerPid: getpid(), textSession: win.textSession))
         if r == .close { close() }
         return r
     }
     let s = space([f], settle: 0.4)
     check("10: the text file is shown", s.view == "text" && s.page.text.contains("hello"), "\(s.view) \(s.page.text.prefix(40))")
-    check("10: no text session before the click", !viewer.textSession)
+    check("10: no text session before the click", !win.textSession)
     _ = js("""
       { const p = document.querySelector('#doc pre.code[data-file-text]'), r = p.getBoundingClientRect();
         p.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, clientX: r.left + 2, clientY: r.top + 4 })); } 0
       """)
-    spin(until: 3) { viewer.textSession }
-    check("10: the click starts an edit and the viewer reports a text session", viewer.textSession)
+    spin(until: 3) { win.textSession }
+    check("10: the click starts an edit and the viewer reports a text session", win.textSession)
     check("10: the helper passes the Space typed into the edit", helperRoutes(KeyCode.space) == .pass)
     check("10: and passes Esc, ↓ and ⌘W to the edit too", helperRoutes(KeyCode.escape) == .pass && helperRoutes(KeyCode.down) == .pass
-          && route.route(KeyEvent(code: 13, chars: "w", mods: .command, targetPid: finderPid),
-                         panel: PanelContext(open: true, finderPid: finderPid, viewerPid: getpid(), textSession: viewer.textSession)) == .pass)
+          && helperRoutes(13, chars: "w", mods: .command) == .pass)
     var saved = ""
     spin(until: 5) { saved = (try? String(contentsOf: f, encoding: .utf8)) ?? ""; return saved.contains("a b") }
     check("10: \"a b\" is typed and saved", saved.contains("a b") && saved.contains("hello"), saved)
     check("10: the page shows it", page().text.contains("a b"), String(page().text.prefix(60)))
-    check("10: the panel stays open", viewer.panel.isVisible && viewer.panel.alphaValue > 0)
-    spin(until: 4) { !viewer.textSession }
-    check("10: Esc ends the edit, and the text session with it", !viewer.textSession)
-    check("10: the next Space closes the panel", helperRoutes(KeyCode.space) == .close)
-    spin(until: 2) { !viewer.panel.isVisible }
-    check("10: closed", !viewer.panel.isVisible)
+    check("10: the panel stays open", win.panel.isVisible && win.panel.alphaValue > 0)
+    spin(until: 4) { !win.textSession }
+    check("10: Esc ends the edit, and the text session with it", !win.textSession)
+    check("10: a Space in Finder is the helper's again (it brings the window forward), not a close", helperRoutes(KeyCode.space, to: finderPid) == .space)
+    close()
+    spin(until: 2) { !win.panel.isVisible }
+    check("10: closed", !win.panel.isVisible)
 }
 
 // ================= 9. screenshots of the top-left controls (FLOWS=9 SCEN_SHOTS=<dir>) =================
@@ -923,7 +936,7 @@ if flows.contains("9"), let dir = env["SCEN_SHOTS"] {
     try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
     func shot(_ name: String) {
         spin(0.4)
-        guard let img = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(viewer.panel.windowNumber), [.boundsIgnoreFraming]) else { return info("no image for \(name)") }
+        guard let img = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(win.panel.windowNumber), [.boundsIgnoreFraming]) else { return info("no image for \(name)") }
         let rep = NSBitmapImageRep(cgImage: img)
         try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: "\(dir)/\(name).png"))
     }

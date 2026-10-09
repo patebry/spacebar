@@ -61,7 +61,7 @@ final class ImagePane: NSObject {
 
     override init() {
         view = ImageScrollView(frame: .zero)
-        imageView = NSImageView(frame: .zero)
+        imageView = PaneImageView(frame: .zero)
         super.init()
         view.contentView = CenteringClipView(frame: .zero)
         view.hasVerticalScroller = true
@@ -382,6 +382,11 @@ final class ImagePane: NSObject {
 }
 
 /// Keeps an image smaller than the area in its middle rather than in the bottom-left corner.
+/// The click that brings a window forward also reaches the image (a double-click toggles its size), as it does on the page.
+final class PaneImageView: NSImageView {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 final class CenteringClipView: NSClipView {
     override func constrainBoundsRect(_ proposed: NSRect) -> NSRect {
         var r = super.constrainBoundsRect(proposed)

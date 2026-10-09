@@ -118,7 +118,8 @@ enum Decision {
     /// An app came forward. Another app hides an open panel, as it hides Apple's Quick Look, and closes a show still on its way.
     /// Finder coming back within `suspendLimit` has its selection read (`resumes`) before anything comes back.
     static func activated(isFinder: Bool, open: Bool, pending: Bool, suspendedFor age: TimeInterval?) -> ActivationAction {
-        if !isFinder { return pending ? .close : open ? .suspend : .none }
+        // The window stays, as an app's window does, when another app comes forward; a show still on its way is dropped.
+        if !isFinder { return pending ? .close : .none }
         guard let age, !open, !pending else { return .none }
         return age < suspendLimit ? .check : .forget
     }
@@ -182,6 +183,8 @@ struct PanelContext: Equatable {
     var textSession = false
     /// One of the page's popovers is open (`popover` from the viewer): Esc closes it instead of the panel.
     var popover = false
+    /// The open window still follows Finder's selection: nobody has clicked into it, so Esc in Finder closes it.
+    var following = false
 }
 
 /// The viewer's word that its writer's key panel holds the keyboard. Only the panel it is open for, or on its way, can have one,
@@ -221,8 +224,6 @@ struct KeyRoute {
     mutating func route(_ e: KeyEvent, panel: PanelContext) -> Route {
         if e.tagged { return .pass }
         if !e.down { return held.remove(e.code) != nil ? .swallow : .pass }
-        // Every key is the typing's, Esc too: the session ends itself, and the next Esc or Space closes.
-        if panel.open, panel.textSession { held.remove(e.code); return .pass }
         let mine = panel.open && (e.targetPid == panel.finderPid || (panel.viewerPid > 0 && e.targetPid == panel.viewerPid))
         // A fresh press of a held key means its key-up was missed: route it as new.
         if held.contains(e.code), !e.isRepeat { held.remove(e.code) }
@@ -231,15 +232,17 @@ struct KeyRoute {
             return .swallow
         }
         // Only a Space on its way to Finder: a non-activating panel of another app (a launcher, a password manager) can have
-        // the keys while Finder stays frontmost.
-        guard panel.open else { return Decision.wantsSpace(e) && e.targetPid == panel.finderPid && e.targetPid > 0 ? .space : .pass }
-        guard mine, !(panel.textFocus && e.targetPid == panel.finderPid) else { return .pass }
-        if Self.closes(e) {
+        // the keys while Finder stays frontmost. The viewer's windows are ordinary windows: Finder keeps every other key (its
+        // arrows move the selection, which the newest window follows), and a window clicked into takes its own keys.
+        let toFinder = e.targetPid == panel.finderPid && e.targetPid > 0 && !(panel.open && panel.textFocus)
+        // Esc, ⌘W and ⌘. close a window nobody has clicked into yet, as Quick Look's close, rather than reach Finder, which
+        // still has the keyboard (⌘W would close its window). One the user has used is key and takes them itself.
+        if toFinder, panel.open, panel.following, e.down, !e.isRepeat, e.code != KeyCode.space, Self.closes(e) {
             held.insert(e.code)
-            return panel.popover && e.code == KeyCode.escape ? .forward(HelperKeys.escape) : .close
+            return .close
         }
-        if let name = Self.forwarded(e, sidebarKeys: panel.sidebarKeys) { held.insert(e.code); return .forward(name) }
-        return .pass
+        guard Decision.wantsSpace(e), toFinder else { return .pass }
+        return .space
     }
 
     /// Space, Esc, ⌘W and ⌘. close the panel in one press; Esc closes a popover of the page first, while one is open.

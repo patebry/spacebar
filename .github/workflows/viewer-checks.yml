@@ -1,0 +1,32 @@
+name: viewer checks
+
+# The release's viewer suites on their own, without signing or the release environment, so a change to the viewer or its
+# harnesses is checked in minutes rather than by a full release run.
+on:
+  workflow_dispatch:
+  push:
+    branches: ['release-*']
+    paths: ['Viewer/**', 'Preview/**', 'Helper/Decision.swift', 'test/viewerlatency/**', 'test/scenarios/**', 'test/offscreen.swift', '.github/workflows/viewer-checks.yml']
+
+permissions: {}
+
+jobs:
+  viewer:
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Viewer checks
+        env:
+          LATENCY_TARGETS: '0'
+          RUNS: '5'
+        run: test/viewerlatency/run.sh
+      - name: Scenarios
+        if: ${{ !cancelled() }}
+        env:
+          SCEN_TIMING: '0'
+        run: test/scenarios/run.sh

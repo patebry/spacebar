@@ -2,12 +2,12 @@ import AppKit
 import SwiftUI
 
 /// The first launch's sheet over the settings window: what spacebar does and a sample folder to try it on, then the offer of
-/// the Space helper. The introduction shows until it is dismissed once (welcomeShown); the offer once (helperOffered), so an
-/// upgrade that already dismissed the introduction sees only the offer. SPACEBAR_NO_WELCOME=1 skips both for screenshots of a
+/// the Space helper, then making the viewer the default app. The introduction shows until it is dismissed once (welcomeShown);
+/// each offer once (helperOffered, openerOffered), so an upgrade that already dismissed the introduction sees only the offers. SPACEBAR_NO_WELCOME=1 skips both for screenshots of a
 /// development build.
 enum Welcome {
     static func presentIfNeeded(over window: NSWindow?, store: SettingsStore, system: SystemStatus) {
-        let steps = store.settings.welcomeSteps(helperAvailable: HelperAgent.available)
+        let steps = store.settings.welcomeSteps(helperAvailable: HelperAgent.available, openerAvailable: DefaultApps.available)
         guard let window, let first = steps.first, window.attachedSheet == nil,
               ProcessInfo.processInfo.environment["SPACEBAR_NO_WELCOME"] != "1" else { return }
         let sheet = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 300), styleMask: [.titled], backing: .buffered, defer: false)
@@ -33,12 +33,15 @@ struct WelcomeView: View {
     /// Try It was clicked on the introduction: the sample folder is shown once the helper's offer is answered.
     @State private var tryItAfter = false
     @State private var turnedOn = false
+    @State private var openerPicks = Set(DefaultApps.Group.allCases)
+    @State private var settingOpener = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             switch step {
             case .intro: intro
             case .helper: helper
+            case .opener: opener
             }
         }
         .padding(20)
@@ -93,15 +96,51 @@ struct WelcomeView: View {
             HStack {
                 if turnedOn {
                     Spacer()
-                    Button("Done") { finish() }.keyboardShortcut(.defaultAction)
+                    Button("Done") { advance() }.keyboardShortcut(.defaultAction)
                 } else {
-                    Button("Skip") { finish() }.keyboardShortcut(.cancelAction)
+                    Button("Skip") { advance() }.keyboardShortcut(.cancelAction)
                     Spacer()
                     Button("Turn On") { turnOn() }.keyboardShortcut(.defaultAction)
                 }
             }
         }
         .onAppear { store.set("helperOffered", true) }
+    }
+
+    private var opener: some View {
+        Group {
+            HStack(spacing: 12) {
+                Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 48, height: 48)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Open files in spacebar").font(.title2.weight(.semibold))
+                    Text("Double-click a Markdown file, an image or a data file and it opens in a spacebar window. So do links from your editor or terminal.")
+                        .foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(DefaultApps.Group.allCases) { g in
+                    Toggle(isOn: Binding(get: { openerPicks.contains(g) },
+                                         set: { if $0 { openerPicks.insert(g) } else { openerPicks.remove(g) } })) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(g.title)
+                            Text(g.detail).font(.caption).foregroundColor(.secondary)
+                        }
+                    }
+                    .toggleStyle(.checkbox)
+                }
+            }
+            Text("Change this any time in Settings. Turning one off gives the files back to the app they had.")
+                .foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+            if let problem { Text(problem).foregroundColor(.red).fixedSize(horizontal: false, vertical: true) }
+            HStack {
+                Button("Not Now") { advance() }.keyboardShortcut(.cancelAction).disabled(settingOpener)
+                Spacer()
+                Button("Use spacebar") { useSpacebar() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(openerPicks.isEmpty || settingOpener)
+            }
+        }
+        .onAppear { store.set("openerOffered", true) }
     }
 
     @ViewBuilder private var progress: some View {
@@ -131,6 +170,31 @@ struct WelcomeView: View {
 
     private func next(tryIt: Bool) {
         tryItAfter = tryIt
+        advance()
+    }
+
+    private func useSpacebar() {
+        let picks = DefaultApps.Group.allCases.filter(openerPicks.contains)
+        let group = DispatchGroup()
+        var failed: [DefaultApps.Group] = []
+        settingOpener = true
+        problem = nil
+        for g in picks {
+            group.enter()
+            DefaultApps.set(g, on: true) { ok in
+                if !ok { failed.append(g) }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) {
+            guard step == .opener else { return }
+            settingOpener = false
+            if failed.isEmpty { return advance() }
+            problem = "Couldn’t make spacebar the default for \(failed.map { $0.title.lowercased() }.joined(separator: " and ")). Change it later in Settings, or use Get Info in Finder."
+        }
+    }
+
+    private func advance() {
         if let i = steps.firstIndex(of: step), i + 1 < steps.count {
             step = steps[i + 1]
         } else {

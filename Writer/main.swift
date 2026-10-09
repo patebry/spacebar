@@ -54,6 +54,10 @@ final class Writer: NSObject, SpacebarWriterProtocol {
             return reply(ok)
         }
         guard let opener = LinkPolicy.opener(for: url, allowArchives: archives) else {
+            // Text whose default app is spacebar itself: a text editor, as the viewer's Open does for text.
+            if let o = LinkPolicy.textOpener(for: url, editor: chosenEditor(appBundleID)) {
+                return NSWorkspace.shared.open([o.file], withApplicationAt: o.app, configuration: NSWorkspace.OpenConfiguration()) { _, err in reply(err == nil) }
+            }
             log.error("refused open \(url.path, privacy: .private): no default app")
             return reply(false)
         }
@@ -62,6 +66,11 @@ final class Writer: NSObject, SpacebarWriterProtocol {
         // The caller names the app, but only the editor the user chose in the settings is honoured.
         if let id = appBundleID, id == SettingsFile.load().editorBundleID, let editor = LinkPolicy.application(id), LinkPolicy.isTextEditor(editor) {
             app = editor
+        }
+        // An image opens in the app chosen in the settings, when Open With offers it (never a browser, office suite or spacebar).
+        if let type = LinkPolicy.contentType(target), type.conforms(to: .image), let id = SettingsFile.load().imageAppBundleID,
+           let chosen = LinkPolicy.openWithApps(for: target, allowArchives: archives).first(where: { Bundle(url: $0)?.bundleIdentifier == id }) {
+            app = chosen
         }
         NSWorkspace.shared.open([target], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration()) { _, err in
             log.info("open \(target.absoluteString, privacy: .private) with \(app.lastPathComponent, privacy: .public) -> \(err == nil)")

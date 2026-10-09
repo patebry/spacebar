@@ -399,7 +399,7 @@ final class ViewerWindow: NSObject, NSWindowDelegate {
         } else {
             panel.orderOut(nil)
         }
-        Viewer.shared.closed(self, request: id, tell: tell && was)
+        Viewer.shared.closed(self, request: id, tell: tell && was, kept: !blank)
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -605,6 +605,8 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
         guard conn != nil else { return }
         conn?.invalidate()
         conn = nil
+        // A restarted helper forgets a suspended window: it is let go, or it would never be a spare again.
+        if let w = current, w.suspended { w.hide(tell: false); w.suspended = false }
         current = nil
         retries += 1
         // Open windows keep the viewer going, and it keeps trying, so Space reaches it again once the helper is back.
@@ -658,12 +660,15 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
         }
     }
 
-    /// A window closed: the helper is told only for the one it follows; spares past `spareLimit` are let go.
-    func closed(_ w: ViewerWindow, request: Int, tell: Bool) {
+    /// A window closed: the helper is told only for the one it follows; spares past `spareLimit` are let go. `kept`: ordered
+    /// out keeping its content (suspended), and still the window the helper's `restore` and `close` reach.
+    func closed(_ w: ViewerWindow, request: Int, tell: Bool, kept: Bool = false) {
         if w === current {
-            current = nil
             popoverTold = false
-            if tell { helper()?.panelState(false, requestID: request, windowNumber: w.panel.windowNumber) }
+            if !kept {
+                current = nil
+                if tell { helper()?.panelState(false, requestID: request, windowNumber: w.panel.windowNumber) }
+            }
         }
         // After its blanking has been drawn and it has been ordered out; counted again then, so two closes drop two.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
@@ -743,6 +748,15 @@ final class Viewer: NSObject, SpacebarViewerProtocol {
         guard current !== w else { return }
         if current?.textSession == true, !w.textSession { tellTextSession(false) }
         if w.textSession, current?.textSession != true { tellTextSession(true) }
+        // The helper forgets a suspended window once it follows another, so nothing would restore or close it: it is let go,
+        // after the new window has been presented so the app is never left without one.
+        if let old = current, old.suspended {
+            DispatchQueue.main.async { [weak self] in
+                guard old.suspended, old !== self?.current else { return }
+                old.hide(tell: false)
+                old.suspended = false
+            }
+        }
         current = w
     }
 

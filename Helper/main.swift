@@ -472,7 +472,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
         let c = front?.bundleIdentifier == finderID ? FinderAX.spaceContext(finderPid: front!.processIdentifier) : SpaceContext(frontIsFinder: false)
         let d = Decision.space(c)
         guard case .show(let paths) = d, let fpid = front?.processIdentifier else {
-            if c.frontIsFinder { log.info("space pass \(String(describing: d), privacy: .public) in \(ms(since: t0), format: .fixed(precision: 1))ms errors=\(c.axErrors.joined(separator: ","), privacy: .public) focus=\(c.role ?? "-", privacy: .public)/\(c.subrole ?? "-", privacy: .public)") }
+            if c.frontIsFinder { log.notice("space pass \(String(describing: d), privacy: .public) in \(ms(since: t0), format: .fixed(precision: 1))ms errors=\(c.axErrors.joined(separator: ","), privacy: .public) focus=\(c.role ?? "-", privacy: .public)/\(c.subrole ?? "-", privacy: .public)") }
             return false
         }
         guard viewer != nil else {
@@ -528,7 +528,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
             return log.info("show \(id) not confirmed (\(why, privacy: .public)): viewer in front, left open")
         }
         if !panelOpen { text.clear(); pagePopover.clear() }
-        log.info("show \(id) failed: \(why, privacy: .public)")
+        log.notice("show \(id) failed: \(why, privacy: .public)")
         switch Decision.failed(space: p.space, age: Date().timeIntervalSince(p.at)) {
         case .leave: break
         case .close: viewerProxy()?.close()
@@ -561,7 +561,7 @@ final class Helper: NSObject, NSXPCListenerDelegate {
             ev.postToPid(pid)
         }
         bg.asyncAfter(deadline: .now() + 0.6) {
-            log.info("repost to Finder pid \(pid): Quick Look open after 600 ms: \(FinderAX.quickLookOpen(finderPid: pid))")
+            log.notice("repost to Finder pid \(pid): Quick Look open after 600 ms: \(FinderAX.quickLookOpen(finderPid: pid))")
         }
     }
 

@@ -314,6 +314,11 @@ check("launch: the setting on and the agent not registered (a reinstall that kep
 check("launch: never with the setting off, nor for an agent waiting in Login Items or already registered",
       !HelperState.registersAtLaunch(enabled: false, agent: .notRegistered) && !HelperState.registersAtLaunch(enabled: true, agent: .requiresApproval)
       && !HelperState.registersAtLaunch(enabled: true, agent: .enabled))
+check("launch: a lost agent (not found) with the setting on is reregistered, not registered",
+      HelperState.reregistersAtLaunch(enabled: true, agent: .notFound) && !HelperState.registersAtLaunch(enabled: true, agent: .notFound))
+check("launch: never reregisters with the setting off, nor an agent registered, unregistered or waiting in Login Items",
+      !HelperState.reregistersAtLaunch(enabled: false, agent: .notFound)
+      && [HelperState.Agent.enabled, .notRegistered, .requiresApproval].allSatisfy { !HelperState.reregistersAtLaunch(enabled: true, agent: $0) })
 check("reregister: on, registered, three silent polls", HelperState.shouldReregister(enabled: true, agent: .enabled, answering: false, misses: 3))
 check("reregister: not before three polls", !HelperState.shouldReregister(enabled: true, agent: .enabled, answering: false, misses: 2))
 check("reregister: never while it answers", !HelperState.shouldReregister(enabled: true, agent: .enabled, answering: true, misses: 9))

@@ -110,6 +110,10 @@ extension HelperState {
     /// Whether the settings app registers the agent at launch: the setting is on but the agent is not registered, as after a
     /// reinstall that kept the settings. One waiting for approval in Login Items is left to the user.
     static func registersAtLaunch(enabled: Bool, agent: Agent) -> Bool { enabled && agent == .notRegistered }
+
+    /// Whether the settings app runs `--reregister` at launch: the setting is on but macOS has lost the agent's record (after a
+    /// restart, or another copy with this bundle ID unregistering it), which a plain register does not restore.
+    static func reregistersAtLaunch(enabled: Bool, agent: Agent) -> Bool { enabled && agent == .notFound }
 }
 
 /// Names of the keys the helper routes to the viewer while its panel is open.

@@ -172,6 +172,10 @@ final class SystemStatus: ObservableObject {
                 DispatchQueue.main.async { self.pollHelper() }
                 return
             }
+            if HelperState.reregistersAtLaunch(enabled: settings.spaceHelper, agent: agent) {
+                DispatchQueue.main.async { self.reregister() }
+                return
+            }
             let answering = agent == .enabled && HelperAgent.ask(timeout: 3) != nil
             guard HelperState.shouldReregister(enabled: settings.spaceHelper, agent: agent, answering: answering, misses: answering ? 0 : HelperState.missesBeforeReregister) else { return }
             DispatchQueue.main.async { self.reregister() }
